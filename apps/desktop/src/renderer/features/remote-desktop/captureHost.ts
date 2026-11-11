@@ -29,6 +29,7 @@ import {
 import { nativeCaptureStream } from './nativeCaptureStream';
 import { PortalCaptureStream } from './portalCaptureStream';
 import { nativeAudioStream } from './nativeAudioStream';
+import { liveScreenStream } from './liveScreenStream';
 
 /** Runs exclusively in the isolated capture renderer; never import into the chat entry. */
 export function startDesktopCaptureHost(api: DesktopCaptureApi): () => void {
@@ -43,6 +44,7 @@ export function startDesktopCaptureHost(api: DesktopCaptureApi): () => void {
   let latestCursor: RemoteDesktopCursor | null | undefined;
   let cursorTimer: ReturnType<typeof setInterval> | null = null;
   let native: Awaited<ReturnType<typeof nativeCaptureStream>> | null = null;
+  let live: Awaited<ReturnType<typeof liveScreenStream>> | null = null;
   let audio: Awaited<ReturnType<typeof nativeAudioStream>> | null = null;
   let recoverCapture: (() => void) | null = null;
   let resetAudio: ((resume: boolean) => void) | null = null;
@@ -111,6 +113,8 @@ export function startDesktopCaptureHost(api: DesktopCaptureApi): () => void {
     cursorTimer = null;
     native?.stop();
     native = null;
+    live?.stop();
+    live = null;
     audio?.stop();
     audio = null;
     recoverCapture = null;
@@ -226,7 +230,7 @@ export function startDesktopCaptureHost(api: DesktopCaptureApi): () => void {
       command.op !== 'offer' ||
       !command.lease ||
       !command.sdp ||
-      (!command.sourceId && !command.nativeCapture && !command.portalCapture)
+      (!command.sourceId && !command.nativeCapture && !command.portalCapture && !command.liveScreen)
     )
       return;
     if (!command.portalCapture) portal.stop();
@@ -326,7 +330,20 @@ export function startDesktopCaptureHost(api: DesktopCaptureApi): () => void {
           return result.stream;
         };
         let captured: MediaStream;
-        if (command.portalCapture) captured = await portal.capture(lease);
+        if (command.liveScreen) {
+          if (!api.liveScreenFrames) throw new Error('DESKTOP_VIDEO_UNAVAILABLE');
+          const result = await liveScreenStream(
+            (keyframe) => api.liveScreenFrames!(lease, keyframe),
+            () => current === generation,
+            () => stop(),
+          );
+          if (current !== generation) {
+            result.stop();
+            throw new Error('DESKTOP_VIDEO_STOPPED');
+          }
+          live = result;
+          captured = result.stream;
+        } else if (command.portalCapture) captured = await portal.capture(lease);
         else if (command.cursorOverlay) {
           // Chromium in our runtime exposes no cursor constraint. Use the
           // cursor-free native video while retaining the normal audio track.
@@ -458,6 +475,7 @@ export function startDesktopCaptureHost(api: DesktopCaptureApi): () => void {
             }, 50);
           }
           let pending = 0;
+          let releasing = false;
           let requests = 0;
           let challenge = '';
           heartbeat = setInterval(() => {
@@ -471,7 +489,7 @@ export function startDesktopCaptureHost(api: DesktopCaptureApi): () => void {
             channel.send(JSON.stringify({ type: 'viewPing', challenge }));
           }, 2000);
           channel.onmessage = ({ data }) => {
-            if (current !== generation) return;
+            if (current !== generation || channel.readyState !== 'open') return;
             if (typeof data === 'string' && challenge && data === challenge) {
               challenge = '';
               void api.viewHeartbeat(lease).catch(() => {});
@@ -535,9 +553,7 @@ export function startDesktopCaptureHost(api: DesktopCaptureApi): () => void {
                   });
                 return;
               }
-              // Only input batches count toward the input overflow bound.
               if (
-                pending >= 8 ||
                 !Number.isSafeInteger(message.sequence) ||
                 !Array.isArray(message.events) ||
                 message.events.length > 64 ||
@@ -545,6 +561,20 @@ export function startDesktopCaptureHost(api: DesktopCaptureApi): () => void {
               ) {
                 stop();
                 void api.stop().catch(() => {});
+                return;
+              }
+              if (releasing) return;
+              if (pending >= 8) {
+                // A valid burst is congestion, not a reason to end the lease.
+                // Drop stale input until held keys/buttons are released, but
+                // keep requests and PiP heartbeats on this channel working.
+                releasing = true;
+                void api
+                  .input(lease, message.sequence, [{ kind: 'release' }])
+                  .catch(() => channel.close())
+                  .finally(() => {
+                    releasing = false;
+                  });
                 return;
               }
               pending++;

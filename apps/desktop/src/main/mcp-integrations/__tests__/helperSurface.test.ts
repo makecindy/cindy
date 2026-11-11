@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
-import { classifyHelperSurface } from '../helperSurface.js';
+import { describe, expect, it, vi } from 'vitest';
+import type { DbClient } from '../../localDb/client/DbClient.js';
+import { classifyHelperSurface, resolveHelperSurface } from '../helperSurface.js';
 
 describe('classifyHelperSurface', () => {
   it.each([
@@ -32,5 +33,23 @@ describe('classifyHelperSurface', () => {
     expect(classifyHelperSurface('user', false)).toBe('default');
     expect(classifyHelperSurface(null, false)).toBe('default');
     expect(classifyHelperSurface(undefined, false)).toBe('default');
+  });
+});
+
+
+describe('resolveHelperSurface', () => {
+  const ordinary = { source: 'user', botId: null, botRole: null, status: 'active', remoteHostId: null, pluginOwned: 0, retainedPlugin: 0, isWorker: 0 };
+  function db(row: typeof ordinary) {
+    return { queryOne: vi.fn().mockResolvedValue(row) } as unknown as Pick<DbClient, 'queryOne'>;
+  }
+  it.each([0, 1])('gives plugin-owned tasks and their Workers the default surface (worker=%s)', async (isWorker) => {
+    await expect(resolveHelperSurface(db({ ...ordinary, pluginOwned: 1, retainedPlugin: 1, isWorker }), 'session')).resolves.toBe('default');
+  });
+  it('uses the ordinary surface for a Worker even after its creating plugin loses control', async () => {
+    await expect(resolveHelperSurface(db({ ...ordinary, retainedPlugin: 1, isWorker: 1 }), 'worker')).resolves.toBe('default');
+  });
+  it('does not exclude ordinary user Workers or automation', async () => {
+    await expect(resolveHelperSurface(db({ ...ordinary, isWorker: 1 }), 'worker')).resolves.toBe('default');
+    await expect(resolveHelperSurface(db(ordinary), 'scheduled')).resolves.toBe('default');
   });
 });

@@ -1,9 +1,14 @@
 import {
   getEffectiveAppShortcuts,
+  isAppShortcutId,
   normalizeAppShortcutOverrides,
   type AppShortcutCombo,
   type AppShortcutId,
   type AppShortcutOverrides,
+  normalizeAppShortcutCombo,
+  matchesKeyboardEvent,
+  appShortcutCombosEqual,
+  APP_SHORTCUT_IDS,
 } from '../../shared/appShortcuts';
 import { voiceInputShortcutToAppShortcutCombo } from '../voice-input/appShortcutConflict';
 
@@ -27,8 +32,13 @@ let platform = 'darwin';
 let effective = new Map<AppShortcutId, AppShortcutCombo[]>();
 let overridesSnapshot: AppShortcutOverrides = {};
 let voiceYieldCombos: AppShortcutCombo[] = [];
+let globalFailures: AppShortcutId[] = [];
 const listeners = new Set<() => void>();
 let initialized = false;
+
+function readGlobalFailures(raw: unknown): AppShortcutId[] {
+  return Array.isArray(raw) ? raw.filter(isAppShortcutId) : [];
+}
 
 function recomputeEffective(): void {
   effective = getEffectiveAppShortcuts(overridesSnapshot, platform, voiceYieldCombos);
@@ -54,11 +64,13 @@ function ensureInitialized(): void {
       const state = api.getState();
       platform = state.platform;
       overridesSnapshot = normalizeAppShortcutOverrides(state.overrides, platform);
+      globalFailures = readGlobalFailures(state.globalFailures);
     } catch {
       overridesSnapshot = {};
     }
     api.onChanged((payload) => {
       overridesSnapshot = normalizeAppShortcutOverrides(payload?.overrides, platform);
+      globalFailures = readGlobalFailures(payload?.globalFailures);
       recomputeEffective();
       listeners.forEach((cb) => cb());
     });
@@ -89,6 +101,12 @@ export function getAppShortcutOverrides(): AppShortcutOverrides {
   return { ...overridesSnapshot };
 }
 
+/** 当前生效组合未能注册到系统 (多为被其它应用占用) 的全局快捷键。 */
+export function getAppShortcutGlobalFailures(): AppShortcutId[] {
+  ensureInitialized();
+  return [...globalFailures];
+}
+
 export function getAppShortcutPlatform(): string {
   ensureInitialized();
   return platform;
@@ -99,4 +117,23 @@ export function subscribeAppShortcuts(listener: () => void): () => void {
   ensureInitialized();
   listeners.add(listener);
   return () => listeners.delete(listener);
+}
+
+/** Plugin defaults participate in the existing effective map and yield to user/Core keys. */
+export function matchesPluginAppShortcut(event: KeyboardEvent, shortcut: string): boolean {
+  ensureInitialized();
+  const parts = shortcut.split('+').map(part => part.trim());
+  const key = parts.pop();
+  if (!key || !parts.length || parts.some(part => !['Mod', 'Meta', 'Ctrl', 'Alt', 'Shift'].includes(part))) return false;
+  const combo = normalizeAppShortcutCombo({
+    code: /^[a-z]$/i.test(key) ? `Key${key.toUpperCase()}` : /^\d$/.test(key) ? `Digit${key}` : key,
+    meta: parts.includes('Meta') || parts.includes('Mod') && platform === 'darwin',
+    ctrl: parts.includes('Ctrl') || parts.includes('Mod') && platform !== 'darwin',
+    alt: parts.includes('Alt'), shift: parts.includes('Shift'),
+  });
+  if (!combo || !(combo.meta || combo.ctrl || combo.alt) ||
+      !combo.shift && !combo.alt && ['KeyA', 'KeyC', 'KeyV', 'KeyX', 'KeyY', 'KeyZ'].includes(combo.code)) return false;
+  if (APP_SHORTCUT_IDS.some(id => getAppShortcutCombos(id).some(current => appShortcutCombosEqual(current, combo))) ||
+      voiceYieldCombos.some(current => appShortcutCombosEqual(current, combo))) return false;
+  return matchesKeyboardEvent(event, combo);
 }

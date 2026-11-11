@@ -66,12 +66,13 @@
     "pasteTimeout": "画像の貼り付け処理がタイムアウトしました。もう一度お試しください。",
     "clipboardReadFailed": "クリップボードの画像を読み取れませんでした。もう一度コピーしてから貼り付けてください。",
     "maxAttachments": "添付ファイルは最大 {{count}} 件まで追加できます。",
-    "simulatorNoCamera": "シミュレーターにはカメラがありません。「写真」からライブラリを選択してください。",
+    "simulatorNoCamera": "シミュレーターにはカメラがありません。「写真と動画」からライブラリを選択してください。",
     "cameraPermission": "カメラのアクセスがオフです。システム設定で {{appName}} にカメラの使用を許可してください。",
     "photoPermission": "写真のアクセスがオフです。システム設定で {{appName}} に写真へのアクセスを許可してください。",
     "noFileRead": "アップロードできるファイルを読み取れませんでした。"
   },
   "voice": {
+    "cancelled": "音声入力をキャンセルしました。",
     "recordingEmpty": "録音が空のため、文字起こしできません。",
     "recordingTooLarge": "録音が上限の {{size}}MB を超えています。",
     "invalidUploadUrl": "サーバーから有効な音声のアップロードURLが返されませんでした。",
@@ -97,11 +98,30 @@
     "sessionExpiredOrForbidden": "{{appName}} の音声サービスのログインが失効したか、権限がありません。ログイン状態を確認してからやり直してください（ステータス {{status}}）。",
     "incomplete": "音声入力が完了しませんでした。もう一度お試しください。",
     "missingRefinerTargetProvider": "音声の推敲を利用できません。{{appName}} にもう一度ログインしてから再試行してください。",
-    "emptyTranscript": "聞き取れませんでした。マイクを確認するか、近づいてもう一度お試しください。",
+    "emptyTranscript": "音声認識でテキストを取得できませんでした。もう一度録音してください。",
+    "speakerFiltered": "他の人の声を除外しました",
     "connectionInterrupted": "音声接続が中断されました。ネットワークを確認してからやり直してください。",
     "recognitionStalled": "音声認識の結果が返ってこなくなりました。もう一度お試しください。",
     "transcriptKept": "{{message}}（ここまで認識したテキストは保持しており、そのまま編集できます）",
     "micPermission": "マイクの権限が許可されていません。システム設定で {{appName}} にマイクの使用を許可してください。",
     "realtimeAudioUnavailable": "現在のビルドはリアルタイム音声入力に対応していません。ネイティブ録音モジュールを含むテストビルドをインストールしてください。"
+  },
+  "incomingShare": {
+    "title": "Cindy に送る",
+    "empty": "受け取り待ちの共有はありません",
+    "file": "ファイル",
+    "fileCount": "ファイル {{count}} 件",
+    "hint": "送信先を選び、指示を追加して送信できます。",
+    "search": "タスクとパートナーを検索",
+    "newTask": "新しいタスク",
+    "companions": "パートナー",
+    "tasks": "既存のタスク",
+    "unavailable": "現在共有を受信できません",
+    "noCompanions": "パートナーはまだありません",
+    "noTasks": "タスクはまだありません",
+    "retry": "一部を読み込めませんでした。タップして再試行。",
+    "noMatches": "一致する送信先がありません",
+    "clearSearch": "検索をクリア",
+    "loadingDevices": "コンピュータを読み込み中…"
   }
 }

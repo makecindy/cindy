@@ -20,12 +20,12 @@ import path from 'node:path';
 import { app } from 'electron';
 import type { RemoteHost } from '@cindy/maker-remote-ssh';
 
-import type { CodexHttpBridge } from '../mcp-integrations/codexHttpBridge.js';
+import type { CodexHttpBridge } from '../mcp-integrations/codexHttpBridge.desktop.js';
 import {
   computeRemoteMcpFingerprint,
   selectRemoteInjectableServerNames,
   withMcpRouteIdentity,
-} from '../mcp-integrations/codexHttpBridge.js';
+} from '../mcp-integrations/codexHttpBridge.desktop.js';
 import { getRemoteMcpBridgeToken } from '../mcp-integrations/remoteMcpBridgeToken.js';
 import { isFrozenBuiltinPluginAllowed } from '../mcp-integrations/codexBuiltinToolPolicy.js';
 import { getSessionOrcaRole, getWorkerLink } from '../localDb/orcaTeamStore.js';
@@ -210,7 +210,7 @@ export async function buildCcRemoteHttpMcpServers(
     collabEnabled:
       (deps.isCollabEnabled?.() ?? true) && isFrozenBuiltinPluginAllowed(vendorOptions, 'collab'),
     memoryEnabled: args.makerMemoryEnabled === true,
-    botHelperEnabled: args.botSession === true && !!args.sessionInstanceId
+    botHelperEnabled: !!args.sessionInstanceId
       && isFrozenBuiltinPluginAllowed(vendorOptions, 'xdt_helper'),
   });
   if (names.length === 0) {

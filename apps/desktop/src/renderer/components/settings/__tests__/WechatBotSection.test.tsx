@@ -93,6 +93,21 @@ describe('WechatBotSection', () => {
     expect(mocks.unbind).not.toHaveBeenCalled();
   });
 
+  it("for a teammate on another computer keeps assignment and unbind here but sends authorization to that computer", () => {
+    mocks.state = { phase: 'connected', bound: true, queuedTasks: 0 };
+    mocks.companionBotId = 'bot-cindy';
+    const { rerender } = render(<WechatBotSection expanded onToggle={vi.fn()} companion={{ id: 'bot-cindy', name: 'Cindy' }}
+      host={{ name: 'Studio', api: {} as never }} />);
+    // Re-binding opens a browser on the computer that runs WeChat: not offered here.
+    expect(screen.queryByRole('button', { name: 'settings.wechatBot.actions.rebind' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'settings.wechatBot.actions.unbind' })).toBeTruthy();
+    mocks.state = { phase: 'disconnected', bound: false, queuedTasks: 0 };
+    rerender(<WechatBotSection expanded onToggle={vi.fn()} companion={{ id: 'bot-cindy', name: 'Cindy' }}
+      host={{ name: 'Studio', api: {} as never }} />);
+    expect(screen.queryByRole('button', { name: 'settings.wechatBot.actions.connect' })).toBeNull();
+    expect(screen.getByText('bots.remoteSettings.finishOnHost')).toBeTruthy();
+  });
+
   it('does not expose authorization or unbind controls for another teammate', () => {
     mocks.state = { phase: 'connected', bound: true, queuedTasks: 0 };
     mocks.companionBotId = 'bot-other';

@@ -13,6 +13,21 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
+it('reserves output while the OS mute is pending, and releases only after restoration', async () => {
+  const { SystemAudioMuteGuard } = await import('../SystemAudioMuteGuard');
+  let finish!: (value: boolean) => void;
+  audio.getMuted.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+  const guard = new SystemAudioMuteGuard();
+  expect(guard.hasPendingOrActiveMute).toBe(false);
+  const muting = guard.mute(1);
+  expect(guard.hasPendingOrActiveMute).toBe(true);
+  await vi.waitFor(() => expect(audio.getMuted).toHaveBeenCalledOnce());
+  finish(false); await muting;
+  expect(guard.hasPendingOrActiveMute).toBe(true);
+  await guard.restore(1);
+  expect(guard.hasPendingOrActiveMute).toBe(false);
+});
+
 it.each(['restore', 'restoreAll'] as const)(
   'retains original audio state after failed %s through a new owner',
   async (method) => {

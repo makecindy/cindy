@@ -7,6 +7,11 @@ declare module '*.md?raw' {
   export default content;
 }
 
+declare module 'turndown-plugin-gfm' {
+  import type TurndownService from 'turndown';
+  export const gfm: TurndownService.Plugin;
+}
+
 interface ImportMeta {
   glob<T = unknown>(
     pattern: string | string[],

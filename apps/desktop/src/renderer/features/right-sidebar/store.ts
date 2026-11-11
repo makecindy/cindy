@@ -1262,15 +1262,17 @@ export async function closeAllTabs(sessionId: string): Promise<void> {
 }
 
 /** 切换激活 tab —— 同 id 即 noop。失败回滚。 */
-export async function setActiveTab(sessionId: string, tabId: string | null): Promise<void> {
+export async function setActiveTab(sessionId: string, tabId: string | null, options?: { userInitiated?: boolean }): Promise<void> {
   const prev = getBucket(sessionId);
-  if (tabId === prev.activeTabId) return;
   // 目标页签活在弹出的独立窗口里:侧边栏没有它的 body 可切,「激活它」= 把那扇
   // 窗口叫到前台(用户点单例入口 / agent focus 都走这里)。
   if (tabId !== null && !isSidebarTabWindow() && isTabPoppedOut(tabId)) {
-    await window.electronAPI?.sidebarTabWindow?.focus(tabId);
+    const focus = window.electronAPI?.sidebarTabWindow?.focus;
+    if (options) await focus?.(tabId, options);
+    else await focus?.(tabId);
     return;
   }
+  if (tabId === prev.activeTabId) return;
   // closeTab 已把关闭中的 tab 从 bucket 乐观移除:若此时用户点击该 tab(或
   // 并发命令调 setActiveTab),activeTabId 会指向 tabs 里不存在的 id —— sidebar
   // 无法渲染对应 body;close 落库后 DB 里也没有 active row。提前守门,拒绝激活

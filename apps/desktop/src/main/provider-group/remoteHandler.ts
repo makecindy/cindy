@@ -10,7 +10,7 @@
  *
  * 另有一个只读查询发给任务所在的电脑(不论它有没有组)：手机与远程控制问这台电脑上的某个任务此刻归哪个组(§10)。
  */
-import { PROVIDER_RUNNING_TURNS_FIELD } from '@cindy/device-link';
+import { PROVIDER_METADATA_TRUST_MS, PROVIDER_RUNNING_TURNS_FIELD, readProviderMetadataContinuity } from '@cindy/device-link';
 
 import {
   parseProviderGroupRemoteRequest,
@@ -18,6 +18,7 @@ import {
   providerGroupDeviceCount,
   providerGroupSummaryForWire,
   type ProviderGroupConfig,
+  type ProviderGroupRebalanceSuggestion,
   type ProviderGroupRemotePick,
   type ProviderGroupRemoteSessionGroup,
   type ProviderGroupRemoteUsageRow,
@@ -33,6 +34,9 @@ import { throwIpcError } from '../utils/ipcValidate.js';
 export const PROVIDER_GROUP_MAX_REMOTE_COOLDOWN_MS = 8 * 24 * 60 * 60_000;
 
 export interface ProviderGroupRemoteHandlerDeps {
+  prepareContinuity?(controller: string, request: Extract<ReturnType<typeof parseProviderGroupRemoteRequest>, { action: 'pick' }>,
+    member: import('../../shared/providerGroup.js').ProviderGroupMember): Promise<Extract<ProviderGroupRemotePick, { kind: 'member' }>['continuity']>;
+  bindFastPolicy?(input: { group: string; deviceId?: string | null; sessionId: string; controllerDeviceId?: string }): Promise<void>;
   /** 当前账号的分配器与负载(每个请求开头取一次，整个请求都用这一份)。 */
   scope(): ProviderGroupOwnerScope;
   readGroup(providerId: string): ProviderGroupConfig | null;
@@ -43,6 +47,11 @@ export interface ProviderGroupRemoteHandlerDeps {
   replaceReportedUsage(controller: string, sinceDay: string | null, rows: ProviderGroupRemoteUsageRow[]): void;
   /** 这台电脑上的任务此刻归哪个组(只读本机记录，读不到为 null)。 */
   sessionGroup(sessionId: string): Promise<ProviderGroupSessionGroup>;
+  /** 手机、远程控制发下一条消息前：这台电脑上的任务要不要提议换号(provider-groups.md §6.2「任务进行中换号」)。 */
+  rebalanceSuggestion?(sessionId: string): Promise<ProviderGroupRebalanceSuggestion>;
+  /** 记下用户确认的换号。 */
+  rebalanceDecision?(sessionId: string, memberKey: string, remember: boolean, clientId?: string): Promise<boolean>;
+  rebalancePreference?(sessionId: string, enabled: boolean): Promise<boolean>;
 }
 
 /** 每个账号、每台报告来的电脑最近收下的用量报告序号(乱序到达的旧份丢弃)。按账号的负载对象区分账号。 */
@@ -109,30 +118,89 @@ export async function handleProviderGroupRemote(
   controller: string,
   raw: unknown,
 ): Promise<
-  ProviderGroupRemotePick | ProviderGroupView | ProviderGroupUsagePartAck | ProviderGroupRemoteSessionGroup | Record<string, never>
+  | ProviderGroupRemotePick
+  | ProviderGroupView
+  | ProviderGroupUsagePartAck
+  | ProviderGroupRemoteSessionGroup
+  | ProviderGroupRebalanceSuggestion
+  | { ok: boolean }
+  | Record<string, never>
 > {
   const request = parseProviderGroupRemoteRequest(raw);
   if (request.action === 'session-group') return { group: await deps.sessionGroup(request.sessionId) };
+  if (request.action === 'rebalance-suggestion') {
+    return deps.rebalanceSuggestion ? await deps.rebalanceSuggestion(request.sessionId) : null;
+  }
+  if (request.action === 'rebalance-preference') {
+    return { ok: await deps.rebalancePreference?.(request.sessionId, request.enabled) ?? false };
+  }
+  if (request.action === 'rebalance-decision') {
+    return {
+      ok: deps.rebalanceDecision
+        ? await deps.rebalanceDecision(request.sessionId, request.memberKey, request.remember, request.clientId)
+        : false,
+    };
+  }
   const scope = deps.scope();
   switch (request.action) {
     case 'pick': {
       const { providerId } = request;
       if (!deps.isRemoteAllowed(providerId) || !deps.readGroup(providerId)) return { kind: 'none' };
-      const pick = await scope.router.pick({
-        providerId,
-        agentKind: request.agentKind,
-        model: request.model,
-        exclude: new Set(request.exclude),
-        // 带着这一轮试过的来问：那台电脑试过不行，本机现读最新状态再选(状态以本机为准，2026-10-11)。
-        ...(request.exclude.length > 0 ? { fresh: true } : {}),
-        // 选中的同一步记上临时占用：同时来的几个请求不会读到同一份负载、全落到同一台。
-        onPicked: (memberKey) => scope.externalLoad.recordPick(controller, request.sessionId, providerId, memberKey),
-      });
-      // 等目录期间换了账号：这是上一个账号的组(占用也记在上一个账号那份里，随它作废)，不作数。
-      if (!scope.isCurrent() || pick.kind === 'none') return { kind: 'none' };
-      if (pick.kind === 'unavailable') return { kind: 'unavailable' };
-      const { key, kind, agentDeviceId, providerId: memberProviderId } = pick.member;
-      return { kind: 'member', member: { key, kind, agentDeviceId, providerId: memberProviderId }, label: pick.label };
+      const excluded = new Set(request.exclude);
+      while (true) {
+        const configuration = JSON.stringify(deps.readGroup(providerId));
+        const pick = await scope.router.pick({
+          providerId,
+          agentKind: request.agentKind,
+          model: request.model,
+          exclude: excluded,
+          ...(request.quotaRebalance ? { quotaRebalance: request.quotaRebalance } : {}),
+          // 带着这一轮试过的来问：那台电脑试过不行，本机现读最新状态再选(状态以本机为准，2026-10-11)。
+          ...(excluded.size > 0 ? { fresh: true } : {}),
+          // 选中的同一步记上临时占用：同时来的几个请求不会读到同一份负载、全落到同一台。
+          onPicked: (memberKey) =>
+            scope.externalLoad.recordPick(controller, request.sessionId, providerId, memberKey),
+        });
+        // 等目录期间换了账号：这是上一个账号的组(占用也记在上一个账号那份里，随它作废)，不作数。
+        if (!scope.isCurrent() || pick.kind === 'none') return { kind: 'none' };
+        if (pick.kind === 'unavailable')
+          return {
+            kind: 'unavailable',
+            ...(pick.full ? { full: true as const } : pick.usageLimit ? { usageLimit: pick.usageLimit } : {}),
+          };
+        const { key, kind, agentDeviceId, providerId: memberProviderId } = pick.member;
+        try {
+          await deps.bindFastPolicy?.({
+            group: providerId,
+            deviceId: kind === 'local' ? null : agentDeviceId,
+            sessionId: request.sessionId,
+            controllerDeviceId: controller,
+          });
+        } catch (error) {
+          if (!scope.isCurrent()) return { kind: 'none' };
+          if (
+            !deps.readGroup(providerId)?.autoSwitch ||
+            !/REMOTE_AGENT_PEER_TOO_OLD|REMOTE_AGENT_UNAVAILABLE/.test(String(error))
+          )
+            throw error;
+          if (excluded.has(key)) return { kind: 'unavailable' };
+          excluded.add(key);
+          continue;
+        }
+        if (!scope.isCurrent()) return { kind: 'none' };
+        // Optional new endpoints prepare M before returning an offline-capable route.
+        // A legacy/temporarily unreachable M does not change the normal online pick.
+        const continuity = await deps.prepareContinuity?.(controller, request, pick.member).catch(() => undefined);
+        if (!scope.isCurrent()) return { kind: 'none' };
+        if (!deps.isRemoteAllowed(providerId) || configuration !== JSON.stringify(deps.readGroup(providerId))) return { kind: 'unavailable' };
+        return {
+          kind: 'member',
+          member: { key, kind, agentDeviceId, providerId: memberProviderId },
+          label: pick.label,
+          ...(continuity ? { continuity } : {}),
+          ...(request.quotaRebalance ? { quotaRebalance: true as const } : {}),
+        };
+      }
     }
     case 'cool':
     case 'cool-model': {
@@ -164,8 +232,13 @@ export async function handleProviderGroupRemote(
           : request.model
         : { includeGuestSupport: request.includeGuestSupport === true };
       const view = await scope.router.view(request.providerId, options);
-      return scope.isCurrent() && deps.isRemoteAllowed(request.providerId)
-        ? view : { providerId: request.providerId, config: null, members: [] };
+      if (!scope.isCurrent() || !deps.isRemoteAllowed(request.providerId)) {
+        return { providerId: request.providerId, config: null, members: [] };
+      }
+      // The view is an allowed object-form read. The host, not the caller,
+      // owns the first-hop budget; an existing shorter stamp wins.
+      return { ...view, providerContinuity: readProviderMetadataContinuity(view)
+        ?? { stale: false, remainingMs: PROVIDER_METADATA_TRUST_MS } };
     }
     case 'usage':
     case 'usage-part': {

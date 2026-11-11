@@ -173,6 +173,7 @@ export class OauthTransactions {
       scope: t.id,
       peer: t.peer,
       cancelled: t.lifetime.signal,
+      get expiresAt() { return t.expiresAt; },
       assertCurrent: () => this.assertCurrent(t),
       authorize: (offer, signal) =>
         this.waitForReply(t, {

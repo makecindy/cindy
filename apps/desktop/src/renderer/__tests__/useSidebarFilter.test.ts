@@ -15,6 +15,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  CREATORS_KEY,
+  loadCreators,
+  persistCreators,
+  nextCreatorsAfterToggle,
   STATUS_KEY,
   VENDOR_KEY,
   loadVendor,
@@ -26,6 +30,8 @@ import {
   PROJECT_ORDER_KEY,
   TASK_INFO_KEY,
   MANUAL_PROJECT_ORDER_KEY,
+  DEVICE_GROUP_COLLAPSED_KEY,
+  loadDeviceGroupCollapsedKeys,
   DIALOGUE_GROUP_COLLAPSED_KEY,
   DIALOGUE_GROUP_ALL_KEY,
   loadStatus,
@@ -37,6 +43,8 @@ import {
   loadManualProjectOrder,
   loadDialogueGroupCollapsedKeys,
   persistDialogueGroupCollapsedKeys,
+  loadPinnedSectionCollapsed,
+  persistPinnedSectionCollapsed,
   persistStatus,
   persistProjects,
   persistGroupBy,
@@ -409,6 +417,22 @@ describe('taskInfoFields（任务行右侧信息复选）', () => {
   });
 });
 
+// #6615: component remount tests cover valid device preferences; this unit test
+// protects the storage boundary against malformed values before mounting React.
+describe('deviceGroupCollapsedKeys', () => {
+  beforeEach(() => installMemoryLocalStorage());
+  afterEach(() => uninstallLocalStorage());
+
+  it.each([
+    { raw: '{not-json', expected: [] },
+    { raw: '{"local":true}', expected: [] },
+    { raw: '["local",42,null,"device-1"]', expected: ['local', 'device-1'] },
+  ])('safely restores device collapse preferences from $raw', ({ raw, expected }) => {
+    localStorage.setItem(DEVICE_GROUP_COLLAPSED_KEY, raw);
+    expect([...loadDeviceGroupCollapsedKeys()]).toEqual(expected);
+  });
+});
+
 describe('dialogueGroupCollapsedKeys（对话组按分组 key 独立折叠）', () => {
   beforeEach(() => installMemoryLocalStorage());
   afterEach(() => uninstallLocalStorage());
@@ -439,6 +463,19 @@ describe('dialogueGroupCollapsedKeys（对话组按分组 key 独立折叠）', 
     expect([...loadDialogueGroupCollapsedKeys()]).toEqual([]);
     localStorage.setItem(DIALOGUE_GROUP_COLLAPSED_KEY, JSON.stringify(['local', 42, 'device-1']));
     expect([...loadDialogueGroupCollapsedKeys()]).toEqual(['local', 'device-1']);
+  });
+});
+
+describe('pinnedSectionCollapsed（置顶段收起跨重启保留）', () => {
+  beforeEach(() => installMemoryLocalStorage());
+  afterEach(() => uninstallLocalStorage());
+
+  it('defaults to expanded and restores the last toggle', () => {
+    expect(loadPinnedSectionCollapsed()).toBe(false);
+    persistPinnedSectionCollapsed(true);
+    expect(loadPinnedSectionCollapsed()).toBe(true);
+    persistPinnedSectionCollapsed(false);
+    expect(loadPinnedSectionCollapsed()).toBe(false);
   });
 });
 
@@ -864,5 +901,29 @@ describe('Harness filter persistence', () => {
     expect(loadVendor()).toBe('all');
     localStorage.setItem(VENDOR_KEY, 'unknown');
     expect(loadVendor()).toBe('all');
+  });
+});
+
+describe('creator filter selection and owner persistence', () => {
+  beforeEach(() => installMemoryLocalStorage());
+  afterEach(() => uninstallLocalStorage());
+  it('starts at all, selects one or several, and returns to all when the last choice is removed', () => {
+    expect(loadCreators(OWNER_ID)).toBe('all');
+    expect(nextCreatorsAfterToggle('all', 'a')).toEqual(['a']);
+    expect(nextCreatorsAfterToggle(['a'], 'b')).toEqual(['a', 'b']);
+    expect(nextCreatorsAfterToggle(['a', 'b'], 'a')).toEqual(['b']);
+    expect(nextCreatorsAfterToggle(['b'], 'b')).toBe('all');
+    persistCreators(['a', 'b'], OWNER_ID);
+    expect(loadCreators(OWNER_ID)).toEqual(['a', 'b']);
+    expect(loadCreators('owner-b')).toBe('all');
+    persistCreators('none', OWNER_ID);
+    expect(loadCreators(OWNER_ID)).toBe('none');
+    expect(nextCreatorsAfterToggle('none', 'a')).toEqual(['a']);
+    persistCreators('all', OWNER_ID);
+    expect(loadCreators(OWNER_ID)).toBe('all');
+  });
+  it('recovers from an invalid saved choice', () => {
+    localStorage.setItem(ownerKey(CREATORS_KEY), '{');
+    expect(loadCreators(OWNER_ID)).toBe('all');
   });
 });

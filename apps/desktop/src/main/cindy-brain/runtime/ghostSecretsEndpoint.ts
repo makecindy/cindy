@@ -90,6 +90,8 @@ export async function handleGhostSecretsRequest(args: {
    * 自己有反馈,不额外打扰;DELETE 不报(清除不是值得全局提示的事件)。
    */
   onStored?: (secretKey: string) => void;
+  checkSecretKeys?: string[];
+  checkSecret?: (key: string, value: string) => Promise<GhostSecretsRequestOutcome>;
   log?: { warn(message: string, meta?: Record<string, unknown>): void };
 }): Promise<GhostSecretsRequestOutcome> {
   const { method, pathname, readBodyText, userSecretKeys, vault, ghostId: instanceKey, log } = args;
@@ -109,6 +111,7 @@ export async function handleGhostSecretsRequest(args: {
         // 指纹只在"确实存了"时给(没存过的键即便留有孤儿指纹也不回)。
         const tail = saved ? vault.tail(instanceKey, key) : null;
         const hostState = hostCredentialStates.get(key);
+        const checkFields = args.checkSecretKeys?.includes(key) && args.checkSecret ? { checkSupported: true } : {};
         const hostFields = hostState
           ? {
               hostSource: hostState.source,
@@ -116,7 +119,7 @@ export async function handleGhostSecretsRequest(args: {
               ...(hostState.managedSetup ? { hostManagedSetup: true } : {}),
             }
           : {};
-        return tail ? { key, saved, tail, ...hostFields } : { key, saved, ...hostFields };
+        return tail ? { key, saved, tail, ...hostFields, ...checkFields } : { key, saved, ...hostFields, ...checkFields };
       });
       // 身份凭证:现读登录邮箱只读展示;identityKeys 为空时不碰登录态。
       const email = identityKeys.length > 0 ? (args.getLoginEmail?.()?.trim() ?? '') : '';
@@ -133,6 +136,20 @@ export async function handleGhostSecretsRequest(args: {
       log?.warn('ghost secrets 状态回查失败', { instanceKey, err: String(err) });
       return { status: 500 };
     }
+  }
+
+  const checkMatch = /^\/secrets\/([a-z][a-z0-9_]{0,31})\/check$/.exec(pathname);
+  if (checkMatch) {
+    const key = checkMatch[1];
+    if (!userSecretKeys.includes(key) || !args.checkSecretKeys?.includes(key) || !args.checkSecret) return { status: 404 };
+    if (method !== 'POST') return { status: 405 };
+    let input: unknown;
+    try { input = JSON.parse(await readBodyText()); } catch { return { status: 400 }; }
+    const value = input && typeof input === 'object' && !Array.isArray(input) ? (input as { value?: unknown }).value : undefined;
+    if (typeof value !== 'string' || !value.trim()) return { status: 400 };
+    if (value.length > GHOST_SECRET_VALUE_MAX_CHARS) return { status: 413 };
+    if (args.isCurrent?.() === false) return { status: 403 };
+    return args.checkSecret(key, value.trim());
   }
 
   // /secrets/<key>:key 段不再有子路径(带斜杠 = 非法形态,统一 404)。

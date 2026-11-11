@@ -56,6 +56,13 @@ export const PI_MODEL_APIS = [
 ] as const;
 export type PiModelApi = (typeof PI_MODEL_APIS)[number];
 
+/** Standalone async video APIs a custom connection can opt into, independent of its chat protocol. */
+export const PROVIDER_VIDEO_APIS = ["xai-videos", "minimax-videos", "openai-videos"] as const;
+export type ProviderVideoApi = (typeof PROVIDER_VIDEO_APIS)[number];
+export function isProviderVideoApi(value: unknown): value is ProviderVideoApi {
+  return (PROVIDER_VIDEO_APIS as readonly unknown[]).includes(value);
+}
+
 /**
  * Cindy 自带鉴权的订阅账号家族(ChatGPT / Claude / SuperGrok)。新增订阅家族只在这里加一项:
  * 各端按家族读取账号余量的入口都以 `Record<NativeSubscriptionAuth, …>` 声明,漏接会直接
@@ -184,6 +191,7 @@ export type OAuthProviderDescriptor =
  * 真实上游 + 鉴权 + model id 还原。加新供应商 = 加这份数据，不改路由器代码。
  */
 export interface RoutingDescriptor {
+  modelInterface?: ModelInterfaceSnapshot;
   /**
    * 上游 wire protocol。Claude Code / Codex 缺省保持历史语义；Pi 必须显式声明。
    * Codex 的 openai-chat / anthropic-messages 会分别进入对应的本地 Responses bridge。
@@ -203,7 +211,7 @@ export interface RoutingDescriptor {
   /** Explicit standalone image API; independent of chat wire and Codex hosted tools. */
   imageApi?: "openai-images";
   /** Explicit standalone async video API, independent of the chat protocol. */
-  videoApi?: "xai-videos";
+  videoApi?: ProviderVideoApi;
   /** Enterprise BYOK image model binding used by the Codex Images route. */
   imageModel?: { wireModel: string; litellmModel: string; supportsEdit: boolean };
   /** 真实上游 base URL（direct 时是供应商自家；gateway 时是 XD 网关 base）。 */
@@ -218,6 +226,8 @@ export interface RoutingDescriptor {
   requestPath?: string;
   /** 鉴权策略（见 AuthStrategy）。 */
   authStrategy: AuthStrategy;
+  /** Enterprise BYOK API-key routes force Cindy's Codex originator, including resumed threads. */
+  forceCindyCodexOriginator?: boolean;
   /**
    * 配置保留用于展示/修复，但运行时不得向该上游路由。用于把升级前不再满足安全边界的
    * 历史配置留在设置页，同时让所有路由解析 fail closed。
@@ -305,12 +315,35 @@ export interface ModelCost {
  * per-agent 拆分正是为了表达这种分歧:各 agent 列表里各写各的值。同一 agent 内、同一 id
  * 跨 provider(如 gpt-5.5 同时由 openai 与 xd 提供)则必须元数据一致(见 catalog.ts 校验)。
  */
+/** Non-sensitive, atomic execution selection. Stored with a running task. */
+export interface ModelInterfaceSnapshot {
+  profileId: string;
+  providerId: string;
+  revision: string;
+  api: PiModelApi;
+  wireModelId: string;
+  route: ProviderModelRouteConfig;
+  defaults: ModelMetadata;
+  compatibility: string[];
+  preferred: boolean;
+  nativeApis?: import('./modelAccessBean.js').ModelNativeApi[] | null;
+}
 export interface CatalogModel {
+  opaqueModelId?: true;
+  discoveredSource?: import("./modelSource.js").DiscoveredModelSource;
+  interfaceUnavailable?: boolean;
+  selectedInterface?: ModelInterfaceSnapshot;
+  availableInterfaces?: ModelInterfaceSnapshot[];
+  nativeApis?: import("./modelAccessBean.js").ModelNativeApi[] | null;
+  /** Catalog-recommended engine for this source and model (Registry `recommendedAgents`). */
+  recommendedAgent?: AgentKind;
   /** Same-provider display-only pricing; never inherited through public model metadata. */
   displayPricing?: ModelDisplayPricing;
   currency?: 'USD' | 'CNY';
   costDiscount?: number;
 
+  /** Execution-host derived display identity only; original id remains the request/storage key. */
+  selectionAliasKey?: string;
   supportsToolCalls?: boolean;
   reasoningRequired?: boolean;
   userModelConfig?: ProviderRuntimeModelConfig;
@@ -338,7 +371,7 @@ export interface CatalogModel {
    * 厂商分组 id —— 决定模型在选择器右栏的分组归属（替代渲染层按 id 前缀硬猜）。
    * 当前取值与渲染层 ModelCategory 对齐：'anthropic' | 'gpt' | 'gpt-budget' | 'grok' |
    * 'google' | 'china' | 'ungrouped' | 'image' | 'video' | 'tts' | 'stt' | 'realtime' |
-   * 'embedding' | 'compression' | 'other'。
+   * 'embedding' | 'decision' | 'compression' | 'other'。
    * 缺省时渲染层回退到 id 前缀归类（categorize）。新增未知分组需在渲染层补 i18n 标签。
    */
   group?: string;
@@ -357,6 +390,8 @@ export interface CatalogModel {
   sortOrder?: number;
   /** 上下文窗口（tokens）。该 agent 下的权威值(host 派生进 ModelDescriptor.contextWindow)。 */
   contextWindow: number;
+  /** Host-owned explicit working budget. Kept separate from the catalog default for settings. */
+  contextWindowOverride?: number;
   /** Provider-declared maximum before a per-harness recommended window is applied. */
   contextWindowMax?: number;
   /**
@@ -429,6 +464,8 @@ export interface CatalogModel {
    * 不能读跨 provider 拍平去重后的列表（那只保留首个 provider 的值，会错）。
    */
   supportsFastMode?: boolean;
+  /** Account-discovered Ultrafast access. Never inferred from a model name or plan label. */
+  supportsUltrafastMode?: boolean;
   /** Same-provider, same-harness catalog model used for Fast. null explicitly disables mapping.
    * Unlike a service tier, this changes the upstream model; availability must be checked per account.
    */
@@ -627,6 +664,17 @@ export interface Provider {
  * 并随用户配置持久化，避免已知长上下文模型被错误降级。
  */
 export interface ProviderRuntimeModelConfig extends ModelMetadata {
+  opaqueModelId?: true;
+  /** Transient discovery receipt; normalization excludes it from persistent configuration. */
+  discoverySnapshotId?: string;
+  discoveredSource?: import("./modelSource.js").DiscoveredModelSource;
+  /** User override; absent follows the directory. Never persist derived snapshots. */
+  interfaceId?: string;
+  interfaceUnavailable?: boolean;
+  selectedInterface?: ModelInterfaceSnapshot;
+  availableInterfaces?: ModelInterfaceSnapshot[];
+  /** Current account discovery only; deliberately excluded from inheritable ModelMetadata. */
+  supportsUltrafastMode?: boolean;
   discoveredMetadata?: ModelMetadata;
   discoveredCost?: ModelCost;
   nameExplicit?: boolean;
@@ -785,7 +833,7 @@ export interface CustomProviderRuntimeConfig {
   supportsImageGeneration?: boolean;
   /** Opt-in to standalone OpenAI Images generation/edits on this runtime's connection. */
   imageApi?: "openai-images";
-  videoApi?: "xai-videos";
+  videoApi?: ProviderVideoApi;
   /** 用户模型；contextWindow 可由预设带入，缺省时由 `buildUserProvider` 补保守默认。 */
   models: ProviderRuntimeModelConfig[];
   /**

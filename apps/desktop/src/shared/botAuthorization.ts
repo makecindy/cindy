@@ -1,5 +1,6 @@
 import type { GhostSetupAllowedAction, GhostSetupStepPhase, GhostSetupErrorCode } from './ghost.js';
 import { isValidPluginNamespace } from '@cindy/plugin-protocol';
+import { BOT_IM_CHANNELS, type BotImChannel } from './botImConnection.js';
 export interface AuthorizationSnapshot {
   remoteOauth?: true;
   reopenActionId?: string;
@@ -21,10 +22,21 @@ export interface AuthorizationSnapshot {
   }>;
 }
 
+/** Host connections: Grok login, or a messaging platform the teammate connects to itself. */
+export type BotAuthorizationHostId = 'grok' | `im-${BotImChannel}`;
+export function isBotAuthorizationHostId(value: unknown): value is BotAuthorizationHostId {
+  return value === 'grok' || (typeof value === 'string' && value.startsWith('im-') &&
+    (BOT_IM_CHANNELS as readonly string[]).includes(value.slice(3)));
+}
+/** `im-telegram` → `telegram`; null for every other Host connection. */
+export function botAuthorizationImChannel(id: string): BotImChannel | null {
+  return id !== 'grok' && isBotAuthorizationHostId(id) ? (id.slice(3) as BotImChannel) : null;
+}
+
 /** Stored presentation and opaque target only; never store an OAuth URL or a credential. */
 export type BotAuthorizationTarget =
   | { kind: 'plugin'; id: string; namespace?: string | null; reauthorize?: boolean }
-  | { kind: 'host'; id: 'grok'; reauthorize?: boolean };
+  | { kind: 'host'; id: BotAuthorizationHostId; reauthorize?: boolean };
 export interface BotAuthorizationCard {
   v: 1;
   pluginApprovalToken?: string;
@@ -47,7 +59,7 @@ export function readBotAuthorizationCard(value: unknown): BotAuthorizationCard |
     !v.target ||
     !['plugin', 'host'].includes(v.target.kind) ||
     typeof v.target.id !== 'string' ||
-    (v.target.kind === 'host' && v.target.id !== 'grok') ||
+    (v.target.kind === 'host' && !isBotAuthorizationHostId(v.target.id)) ||
     ('namespace' in v.target &&
       (v.target.kind !== 'plugin' ||
         (v.target.namespace !== null && !isValidPluginNamespace(v.target.namespace)))) ||

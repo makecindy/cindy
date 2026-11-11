@@ -215,6 +215,11 @@ export const HOOK_MESSAGE_TYPES = [
   'task.ack',
   'turn.end',
   'turn.delivery',
+  'x.media.init',
+  'x.media.append',
+  'x.media.finalize',
+  'x.media.abort',
+  'x.media.result',
   'turn.progress',
   'turn.reopen',
   'msg.op',
@@ -225,6 +230,8 @@ export const HOOK_MESSAGE_TYPES = [
   'provider.bind.start',
   'provider.bind.cancel',
   'provider.bind.revoke',
+  'provider.bind.select',
+  'provider.bind.selection',
   'provider.bind.update',
   'provider.bind.state',
   'query.request',
@@ -268,6 +275,17 @@ export interface HookEnvelope<TType extends HookMessageType, TPayload> {
 
 // ── 阶段 1: 连接与身份 ───────────────────────────────────────────────────────
 
+/** Cosmetic status reactions in the current connection's platform-native format.
+ * Client owns the palette; server owns lifecycle, cleanup and API fallbacks.
+ * Limits: 64 chars per name, 1–16 processing variants, 1–64 expressive errors.
+ */
+export interface HookStatusReactions {
+  queued: string;
+  processing: readonly string[];
+  error: string;
+  expressiveError?: readonly string[];
+}
+
 /**
  * hello(desktop -> server): 建连后第一帧, 自报身份与能力。
  * 工作区别名映射变更后, desktop 重发 hello 即时生效(server 以最新一帧为准)。
@@ -305,6 +323,10 @@ export interface HelloPayload {
    * 默认开启处理;新客户端始终显式发送当前有效值。
    */
   lifecycleAnnouncement?: boolean;
+  /** Optional client palette. Old servers ignore it; absent means server defaults.
+   * Re-hello replaces the declaration, including clearing it when omitted.
+   */
+  statusReactions?: HookStatusReactions;
 }
 
 /** welcome(server -> desktop): hello 的应答, 握手完成。 */
@@ -520,11 +542,60 @@ export interface TurnEndPayload {
    */
   attachments?: TaskAttachment[];
   /**
+   * 已经分块转传到 X 的媒体(见 x.media.*)。字节不在帧里, 服务端回帖时直接引用。
+   * 只有声明 HOOK_FEATURE_X_MEDIA_RELAY 的 server 才会收到。
+   */
+  xMediaIds?: string[];
+  /**
    * 客户端终稿发布结果(HOOK_FEATURE_TELEGRAM_FINAL_OPS)。缺席 = 客户端没发布过终稿,
    * 服务端照旧渲染。只适用于不带附件的轮次: 带附件时 desktop 不发布终稿、不带本字段,
    * 附件照常放在 attachments 里由服务端发送(服务端对带附件的 turn.end 也不认本字段)。
    */
   clientFinal?: TurnEndClientFinal;
+}
+
+/**
+ * x.media.*(desktop <-> server): 把视频分块转传给 X, 不经 turn.end 内联。
+ *
+ * 内联受 48 MiB 单帧限制, 用不上 X 自身的上限。desktop 发一段、等一次 x.media.result,
+ * server 每段立刻转给 X, 不落库也不攒内存。finalize 成功返回 mediaId, 随 turn.end.xMediaIds
+ * 回传。上传在回帖前完成, 失败时 desktop 照常发正文并提示附件未发出。
+ */
+export const X_MEDIA_SEGMENT_MAX_BYTES = 4 * 1024 * 1024;
+export const X_MEDIA_STEPS = ['init', 'append', 'finalize'] as const;
+export type XMediaStep = (typeof X_MEDIA_STEPS)[number];
+
+export interface XMediaTarget {
+  /** desktop 生成, 一次上传一个。 */
+  uploadId: string;
+  /** 这次上传所属的任务; server 据此确认任务派给了这台设备。 */
+  requestId: string;
+}
+
+export interface XMediaInitPayload extends XMediaTarget {
+  mimeType: string;
+  totalBytes: number;
+}
+
+export interface XMediaAppendPayload extends XMediaTarget {
+  /** 从 0 开始连续递增。 */
+  segmentIndex: number;
+  /** 解码后不超过 X_MEDIA_SEGMENT_MAX_BYTES。 */
+  dataBase64: string;
+}
+
+export type XMediaFinalizePayload = XMediaTarget;
+export type XMediaAbortPayload = XMediaTarget;
+
+export interface XMediaResultPayload {
+  uploadId: string;
+  step: XMediaStep;
+  /** step 为 append 时是对应分段, 其余为 null。 */
+  segmentIndex: number | null;
+  /** finalize 成功时非 null。 */
+  mediaId: string | null;
+  /** 失败时非 null; 不携带上游响应体、凭证或用户内容。 */
+  error: TurnDeliveryError | null;
 }
 
 /**
@@ -791,7 +862,7 @@ export interface BindStatePayload {
  * capability — an old peer that does not know the new id never negotiates it,
  * and its parse rejects stray frames without dropping the connection.
  */
-export const HOOK_PROVIDERS = ['slack', 'telegram', 'x'] as const;
+export const HOOK_PROVIDERS = ['slack', 'telegram', 'x', 'feishu'] as const;
 export type HookProvider = (typeof HOOK_PROVIDERS)[number];
 
 /**
@@ -815,6 +886,8 @@ export type ProviderBindState = (typeof PROVIDER_BIND_STATES)[number];
 export const PROVIDER_BIND_ACTIONS = [
   'open_connect_url',
   'copy_connect_url',
+  'copy_bind_code',
+  'select_device',
   'cancel',
   'retry',
   'revoke',
@@ -846,12 +919,45 @@ export interface ProviderBindRevokePayload {
   bindingId: string;
 }
 
+export const PROVIDER_BIND_SELECT_TIMEOUT_MS = 10_000;
+
+/** Display-only working computer metadata; never grants binding/task authority. */
+export interface ProviderWorkingDevice { name: string | null; isCurrent: boolean }
+
+/** Select this confirmed binding as the working device; requires the select_device action. */
+export type ProviderBindSelectPayload = ProviderBindRevokePayload;
+/** Acknowledges only the requested selection; does not change any device’s binding state. */
+export interface ProviderBindSelectionPayload extends ProviderBindRevokePayload {
+  ok: boolean;
+  /** Also sent unsolicited to already-bound computers after a selection changes. */
+  workingDevice?: ProviderWorkingDevice;
+}
+
 /**
  * Shared payload for provider.bind.update and provider.bind.state. update is an
  * event/reply; state is an authoritative point-in-time snapshot for one scope.
  * All nullable fields are explicit so an old value cannot survive a snapshot.
  */
+export interface FeishuBotAppInfo {
+  appId: string;
+  brand: 'feishu' | 'lark';
+  appType: 'self_built' | 'store';
+  botName: string | null;
+  organization: string | null;
+  /** Feishu company display name for this application's tenant; omitted by older peers. */
+  tenantName?: string | null;
+}
+
+export interface FeishuApplicationState {
+  app: FeishuBotAppInfo;
+  bindings: ProviderBindStatusPayload[];
+}
+
 export interface ProviderBindStatusPayload {
+  /** Optional Feishu display state; absent on older servers and unconfirmed attempts. */
+  workingDevice?: ProviderWorkingDevice;
+  appInfo?: FeishuBotAppInfo;
+  applications?: FeishuApplicationState[];
   provider: HookProvider;
   /** Request id being answered, or null for an unsolicited state push. */
   replyTo: string | null;
@@ -864,6 +970,13 @@ export interface ProviderBindStatusPayload {
   scopeName: string | null;
   /** One-time provider deep link; present only while state=pending. */
   connectUrl: string | null;
+  /**
+   * One-time short code the user can send to the provider bot instead of
+   * opening connectUrl (Feishu / Lark fallback when web authorization is
+   * unavailable, e.g. users outside the app's tenant). Present only while
+   * state=pending; omitted by peers that predate the field.
+   */
+  bindCode?: string | null;
   /** Unix milliseconds; required for pending/awaiting_confirmation attempts. */
   expiresAt: number | null;
   /** Stable machine-readable reason; required for unsuccessful terminal states. */
@@ -871,6 +984,12 @@ export interface ProviderBindStatusPayload {
   /** Optional safe recovery/provider URL interpreted by the host application. */
   remediationUrl: string | null;
   actions: ProviderBindAction[];
+  /** Store-app multi-account snapshot, only after feishu-store-multi-bind-v1 negotiation. */
+  bindings?: ProviderBindStatusPayload[];
+  /** The exact additive attempt completed by this confirmation. */
+  completedAttemptId?: string;
+  /** Installation tenant, used to distinguish store accounts; not a global person identifier. */
+  tenantKey?: string | null;
 }
 
 export type ProviderBindUpdatePayload = ProviderBindStatusPayload;
@@ -897,6 +1016,12 @@ export interface QueryRequestPayload {
     options?: TaskDispatchOptions;
     source?: TaskSource;
   };
+  /**
+   * 收件身份: 由多个组织共用的服务(官方飞书)发出的查询代表哪个 IM 应用(`scopeId`)的哪个账号
+   * (`principalId`)。桌面端与本机已确认绑定的 `scopeId` / `principalId` 核对一致才回答。可选 ——
+   * 其它服务不发, 旧桌面端忽略。
+   */
+  recipient?: { scopeId: string; principalId: string };
 }
 
 /**
@@ -1296,6 +1421,8 @@ export const HOOK_FEATURE_MULTI_TEAM = 'multi-team';
 
 /** Both peers must advertise this before using provider.bind.* frames. */
 export const HOOK_FEATURE_PROVIDER_BIND = 'provider-bind-v1';
+/** Additive Feishu identities for store apps only; both peers must advertise it. */
+export const HOOK_FEATURE_FEISHU_STORE_MULTI_BIND = 'feishu-store-multi-bind-v1';
 
 /** Both peers must advertise this before using provider.prefs.* frames. */
 export const HOOK_FEATURE_PROVIDER_PREFS = 'provider-prefs-v1';
@@ -1314,6 +1441,9 @@ export const HOOK_FEATURE_PROVIDER_TELEGRAM = 'provider:telegram';
 
 /** Server capability announcing that its provider registry enables X (Twitter). */
 export const HOOK_FEATURE_PROVIDER_X = 'provider:x';
+
+/** Server capability announcing that its provider registry enables Feishu / Lark. */
+export const HOOK_FEATURE_PROVIDER_FEISHU = 'provider:feishu';
 
 /**
  * server 支持 hello.lifecycleAnnouncement 与 lifecycle.preference,可由
@@ -1341,6 +1471,8 @@ export const HOOK_FEATURE_SESSION_RESULT = 'session-result-v1';
  * 不进入本回执与重放链路。
  */
 export const HOOK_FEATURE_TURN_DELIVERY = 'turn-delivery-v1';
+/** server 支持 x.media.* 分块转传与 turn.end.xMediaIds。未声明时 desktop 只内联 10 MiB 以内的视频。 */
+export const HOOK_FEATURE_X_MEDIA_RELAY = 'x-media-relay-v1';
 
 // ── 阶段 20: 消息操作动词(msg.op) —— 内容面上收客户端 ─────────────────────────
 
@@ -1619,6 +1751,26 @@ export const HOOK_FEATURE_TELEGRAM_PROGRESS_OPS = 'telegram-progress-ops-v1';
 export const HOOK_FEATURE_TELEGRAM_FINAL_OPS = 'telegram-final-ops-v1';
 
 /**
+ * 双向能力标识: 官方飞书 / Lark 的**进度卡**由 desktop 用与个人飞书 bot 同一份排版经
+ * msg.op 驱动(须同时协商 HOOK_FEATURE_MESSAGE_OPS)。形状沿用 `purpose: 'turn-progress'`
+ * 的 `send` / `edit`, 但 `action.text` 是序列化后的卡片 JSON(schema 2.0), 不带 `tier` 与
+ * 按钮。服务端只核验这一轮属于该设备、把卡片发在这一轮的回复位置并登记归属; 一轮只有
+ * 一张承载卡, 已存在时 `send` 原地更新它而不新建。turn.progress 照发(续期)。
+ * 缺席时进度照旧由服务端按 turn.progress 排版。
+ */
+export const HOOK_FEATURE_FEISHU_PROGRESS_OPS = 'feishu-progress-ops-v1';
+
+/**
+ * 双向能力标识: 官方飞书 / Lark **不带附件的成功终稿**由 desktop 排版并经
+ * `purpose: 'turn-final'` 的 `send` 发布(须同时协商 HOOK_FEATURE_MESSAGE_OPS)。
+ * `finalPart = 0` 是答案的第一张: 服务端把它落在这一轮已有的进度卡上(没有或改不了时
+ * 新发); `finalPart ≥ 1` 依次新发。`action.text` 同样是卡片 JSON。全部成功后 turn.end 带
+ * `clientFinal.complete = true`, 服务端不再排版; 否则服务端撤掉 desktop 另发的后续卡片并
+ * 照旧发布完整终稿。失败 / 取消 / 带附件的轮次始终由服务端发布。
+ */
+export const HOOK_FEATURE_FEISHU_FINAL_OPS = 'feishu-final-ops-v1';
+
+/**
  * 双向能力标识: 官方 Telegram 执行中交互卡(ask / plan / 权限)由 desktop 用与个人 bot
  * 同一份卡片渲染(@cindy/im `layoutTelegramCard`: 标题 + markdown 正文 → HTML、正文上限、
  * 按钮成对排布)经 `msg.op`(`purpose: 'interaction-card'`)发布与收口; 按钮回调仍由
@@ -1810,6 +1962,14 @@ export interface GroupMessageRecipient {
  * 条目按同一组 id 关联, prompt 缺失上下文时 agent 可按 id 查本地窗口兜底。
  * 一次性凭证(如 Telegram 绑定深链 /start <token>)由 server 过滤, 不转发。
  */
+export interface GroupMessageImageRef {
+  fileId: string;
+  name: string;
+  mimeType: string;
+  /** Recipient-bound proof for POST /telegram/group-image; never a bot token. */
+  downloadToken?: string;
+}
+
 export interface GroupMessagePayload {
   /** IM 平台标识(开放集合, 当前 'telegram')。 */
   provider: string;
@@ -1829,6 +1989,7 @@ export interface GroupMessagePayload {
   text: string;
   /** 附件文件名列表(仅名字, 不携带字节; 桌面窗口行内标注用)。 */
   fileNames?: string[];
+  imageRefs?: GroupMessageImageRef[];
   /** 消息在 IM 平台的发送时刻(unix ms)。 */
   sentAt: number;
 }
@@ -1843,6 +2004,11 @@ export type HookTaskDispatchMessage = HookEnvelope<'task.dispatch', TaskDispatch
 export type HookTaskAckMessage = HookEnvelope<'task.ack', TaskAckPayload>;
 export type HookTurnEndMessage = HookEnvelope<'turn.end', TurnEndPayload>;
 export type HookTurnDeliveryMessage = HookEnvelope<'turn.delivery', TurnDeliveryPayload>;
+export type HookXMediaInitMessage = HookEnvelope<'x.media.init', XMediaInitPayload>;
+export type HookXMediaAppendMessage = HookEnvelope<'x.media.append', XMediaAppendPayload>;
+export type HookXMediaFinalizeMessage = HookEnvelope<'x.media.finalize', XMediaFinalizePayload>;
+export type HookXMediaAbortMessage = HookEnvelope<'x.media.abort', XMediaAbortPayload>;
+export type HookXMediaResultMessage = HookEnvelope<'x.media.result', XMediaResultPayload>;
 export type HookTurnProgressMessage = HookEnvelope<'turn.progress', TurnProgressPayload>;
 export type HookMessageOpMessage = HookEnvelope<'msg.op', MessageOpPayload>;
 export type HookMessageOpResultMessage = HookEnvelope<'msg.op.result', MessageOpResultPayload>;
@@ -1884,6 +2050,8 @@ export type HookProviderBindRevokeMessage = HookEnvelope<
   'provider.bind.revoke',
   ProviderBindRevokePayload
 >;
+export type HookProviderBindSelectMessage = HookEnvelope<'provider.bind.select', ProviderBindSelectPayload>;
+export type HookProviderBindSelectionMessage = HookEnvelope<'provider.bind.selection', ProviderBindSelectionPayload>;
 export type HookProviderBindUpdateMessage = HookEnvelope<
   'provider.bind.update',
   ProviderBindUpdatePayload
@@ -1936,6 +2104,11 @@ export type HookMessage =
   | HookTaskAckMessage
   | HookTurnEndMessage
   | HookTurnDeliveryMessage
+  | HookXMediaInitMessage
+  | HookXMediaAppendMessage
+  | HookXMediaFinalizeMessage
+  | HookXMediaAbortMessage
+  | HookXMediaResultMessage
   | HookTurnProgressMessage
   | HookTurnReopenMessage
   | HookBindStartMessage
@@ -1957,6 +2130,8 @@ export type HookMessage =
   | HookProviderBindStartMessage
   | HookProviderBindCancelMessage
   | HookProviderBindRevokeMessage
+  | HookProviderBindSelectMessage
+  | HookProviderBindSelectionMessage
   | HookProviderBindUpdateMessage
   | HookProviderBindStateMessage
   | HookProviderPrefsGetMessage
@@ -1973,3 +2148,6 @@ export type HookMessage =
 
 /** parseHookMessage 的结果 —— 不抛异常, 坏帧以 error 字符串描述具体原因。 */
 export type HookParseResult = { ok: true; message: HookMessage } | { ok: false; error: string };
+
+/** Multiple independently enabled Feishu apps on one connection; each app keeps its own identities. */
+export const HOOK_FEATURE_FEISHU_MULTI_APP = 'feishu-multi-app-v1';

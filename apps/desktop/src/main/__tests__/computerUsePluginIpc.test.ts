@@ -4,6 +4,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { refreshCodexMcpEnvironment } from '../maker-ipc/codexMcpRefresh.js';
 
+// The live computer/android provider snapshot is covered through the real
+// createDesktopMcpProviders entry in collabSendOutcome.test.ts, not source text.
 describe('computer use plugin IPC invariants', () => {
   it('stops the shared Codex host before shutting down its MCP bridge', async () => {
     const calls: string[] = [];
@@ -116,20 +118,6 @@ describe('computer use plugin IPC invariants', () => {
       );
       expect(body).not.toContain('await shutdownCodexEnvironment();');
     }
-  });
-
-  it('preserves the live Codex bridge plugin gate while refresh is deferred', () => {
-    const providersSource = fs.readFileSync(
-      path.resolve(__dirname, '../mcp-integrations/mcp-providers.ts'),
-      'utf-8',
-    );
-
-    expect(providersSource).toContain(
-      "context?.agentKind === 'codex' || pluginRegistry.isEnabled('android')",
-    );
-    expect(providersSource).toContain(
-      "context?.agentKind === 'codex' || pluginRegistry.isEnabled('computer')",
-    );
   });
 
   it('keeps the @ desktop-window gate machine-scoped', () => {
@@ -328,15 +316,8 @@ describe('computer use platform copy invariants', () => {
       'utf-8',
     );
     expect(sectionSource).toContain("nextStatus.permissionState?.platform === 'macos'");
-    const macPermissionBlockStart = sectionSource.indexOf(
-      "{window.electronAPI.platform === 'darwin' ? (",
-    );
-    const permissionTitle = sectionSource.indexOf(
-      "t('settings.computerUse.directControl.permissions.title')",
-      macPermissionBlockStart,
-    );
-    expect(macPermissionBlockStart).toBeGreaterThanOrEqual(0);
-    expect(permissionTitle).toBeGreaterThan(macPermissionBlockStart);
+    // Actual permission-row visibility is verified by the component tests in
+    // ComputerUseSection.driverUpdate.test.tsx, independent of translation syntax.
 
     for (const locale of ['en', 'ja', 'ko', 'zh-CN']) {
       const messages = JSON.parse(

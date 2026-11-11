@@ -215,6 +215,63 @@ describe('analyzePreviousRuns classification', () => {
   });
 });
 
+// 实测 Windows 用户日志:10-14 写下的标记 pid 被别的进程复用,连续 9 天每次启动都报
+// 「another instance appears to be running」,误导「旧进程残留」的排查,真实退出结论也丢了。
+describe('resolveReusedPids', () => {
+  const markerStartedAt = '2026-07-07T10:00:00.000Z';
+  const startTimesOf = (entries: Array<[number, number]>) => async () => new Map(entries);
+  const reusedAt = Date.parse('2026-07-16T08:00:00.000Z');
+
+  it('PID 已被更晚启动的进程占用 → 按标记状态补出退出结论并清掉标记', async () => {
+    const file = writeMarker({ pid: 2184, state: 'running', startedAt: markerStartedAt });
+    const store = makeStore({ alivePids: [2184] });
+    const stillRunning = store.analyzePreviousRuns();
+
+    const resolved = await store.resolveReusedPids(stillRunning, startTimesOf([[2184, reusedAt]]));
+
+    expect(resolved).toEqual([
+      expect.objectContaining({ kind: 'abnormal', pidReusedSince: '2026-07-16T08:00:00.000Z' }),
+    ]);
+    expect(fs.existsSync(file)).toBe(false);
+  });
+
+  it.each([
+    ['PID 已被复用', [[2186, reusedAt]] as Array<[number, number]>],
+    ['启动时刻读不到', [] as Array<[number, number]>],
+    [
+      '占用者仍是旧实例本身',
+      [[2186, Date.parse(markerStartedAt) - 1_000]] as Array<[number, number]>,
+    ],
+  ])('核对前旧实例已正常退出(%s)→ 按重读的 exited 标记判 clean 并清掉标记', async (_label, entries) => {
+    writeMarker({ pid: 2186, state: 'running', startedAt: markerStartedAt });
+    const store = makeStore({ alivePids: [2186] });
+    const stillRunning = store.analyzePreviousRuns();
+    const file = writeMarker({ pid: 2186, state: 'exited', exitCode: 0, startedAt: markerStartedAt });
+
+    const resolved = await store.resolveReusedPids(stillRunning, startTimesOf(entries));
+
+    expect(resolved).toEqual([expect.objectContaining({ kind: 'clean' })]);
+    expect(fs.existsSync(file)).toBe(false);
+  });
+
+  it.each([
+    ['启动时刻读不到', [] as Array<[number, number]>],
+    [
+      '占用者早于标记启动(就是写标记的实例)',
+      [[2185, Date.parse(markerStartedAt) - 1_000]] as Array<[number, number]>,
+    ],
+  ])('%s → 保持 still-running,标记保留', async (_label, entries) => {
+    const file = writeMarker({ pid: 2185, state: 'running', startedAt: markerStartedAt });
+    const store = makeStore({ alivePids: [2185] });
+
+    const resolved = await store.resolveReusedPids(store.analyzePreviousRuns(), startTimesOf(entries));
+
+    expect(resolved).toEqual([expect.objectContaining({ kind: 'still-running' })]);
+    expect(resolved[0].pidReusedSince).toBeUndefined();
+    expect(fs.existsSync(file)).toBe(true);
+  });
+});
+
 describe('scanCrashDumps', () => {
   it('finds nested .dmp files within window, sorted by mtime desc; ignores old and non-dmp', () => {
     const reportsDir = path.join(tmpDir, 'reports');

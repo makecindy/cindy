@@ -1,6 +1,86 @@
 {
   "semantic": {
     "defaults": {
+      "plugin-identity-official-text": {
+        "light": {
+          "$type": "color",
+          "$value": "{reference.defaults.plugin-identity-official-text.light}"
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{reference.defaults.plugin-identity-official-text.dark}"
+        }
+      },
+      "plugin-identity-official-bg": {
+        "light": {
+          "$type": "color",
+          "$value": "{reference.defaults.plugin-identity-official-bg.light}"
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{reference.defaults.plugin-identity-official-bg.dark}"
+        }
+      },
+      "plugin-identity-community-text": {
+        "light": {
+          "$type": "color",
+          "$value": "{reference.defaults.plugin-identity-community-text.light}"
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{reference.defaults.plugin-identity-community-text.dark}"
+        }
+      },
+      "plugin-identity-community-bg": {
+        "light": {
+          "$type": "color",
+          "$value": "{reference.defaults.plugin-identity-community-bg.light}"
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{reference.defaults.plugin-identity-community-bg.dark}"
+        }
+      },
+      "plugin-identity-team-text": {
+        "light": {
+          "$type": "color",
+          "$value": "{reference.defaults.plugin-identity-team-text.light}"
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{reference.defaults.plugin-identity-team-text.dark}"
+        }
+      },
+      "plugin-identity-team-bg": {
+        "light": {
+          "$type": "color",
+          "$value": "{reference.defaults.plugin-identity-team-bg.light}"
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{reference.defaults.plugin-identity-team-bg.dark}"
+        }
+      },
+      "plugin-identity-custom-text": {
+        "light": {
+          "$type": "color",
+          "$value": "{reference.defaults.plugin-identity-custom-text.light}"
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{reference.defaults.plugin-identity-custom-text.dark}"
+        }
+      },
+      "plugin-identity-custom-bg": {
+        "light": {
+          "$type": "color",
+          "$value": "{reference.defaults.plugin-identity-custom-bg.light}"
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{reference.defaults.plugin-identity-custom-bg.dark}"
+        }
+      },
       "surface": {
         "light": {
           "$type": "color",
@@ -229,8 +309,8 @@
             "com.cindy.governance": {
               "protected": {
                 "family": "u2-secondary-info",
-                "owner": "DESIGN.md §15.5",
-                "rule": "U2 二级信息色，never darken unilaterally",
+                "owner": "DESIGN.md §15.16",
+                "rule": "文字次要档：改值须用户裁决（2026-10-22 起墨水文字阶梯取代 U2，保护延续到整条阶梯）",
                 "mode": "semantic-modeled"
               }
             }
@@ -243,8 +323,8 @@
             "com.cindy.governance": {
               "protected": {
                 "family": "u2-secondary-info",
-                "owner": "DESIGN.md §15.5",
-                "rule": "U2 二级信息色，never darken unilaterally",
+                "owner": "DESIGN.md §15.16",
+                "rule": "文字次要档：改值须用户裁决（2026-10-22 起墨水文字阶梯取代 U2，保护延续到整条阶梯）",
                 "mode": "semantic-modeled"
               }
             }
@@ -259,8 +339,8 @@
             "com.cindy.governance": {
               "protected": {
                 "family": "u2-secondary-info",
-                "owner": "DESIGN.md §15.5",
-                "rule": "U2 二级信息色，never darken unilaterally",
+                "owner": "DESIGN.md §15.16",
+                "rule": "文字次要档：改值须用户裁决（2026-10-22 起墨水文字阶梯取代 U2，保护延续到整条阶梯）",
                 "mode": "semantic-modeled"
               }
             }
@@ -273,8 +353,8 @@
             "com.cindy.governance": {
               "protected": {
                 "family": "u2-secondary-info",
-                "owner": "DESIGN.md §15.5",
-                "rule": "U2 二级信息色，never darken unilaterally",
+                "owner": "DESIGN.md §15.16",
+                "rule": "文字次要档：改值须用户裁决（2026-10-22 起墨水文字阶梯取代 U2，保护延续到整条阶梯）",
                 "mode": "semantic-modeled"
               }
             }
@@ -1471,6 +1551,26 @@
         "dark": {
           "$type": "color",
           "$value": "{reference.defaults.login-overlay-secondary-pressed.dark}"
+        }
+      },
+      "login-overlay-apple-pressed": {
+        "light": {
+          "$type": "color",
+          "$value": "{reference.defaults.login-overlay-apple-pressed.light}"
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{reference.defaults.login-overlay-apple-pressed.dark}"
+        }
+      },
+      "login-overlay-apple-hover": {
+        "light": {
+          "$type": "color",
+          "$value": "{reference.defaults.login-overlay-apple-hover.light}"
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{reference.defaults.login-overlay-apple-hover.dark}"
         }
       },
       "login-apple-circle-bg": {

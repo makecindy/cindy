@@ -1,7 +1,7 @@
 /**
  * errorDiagnosisPrompt — 错误卡「诊断」：把错误和出错任务链接预填进新任务草稿。
  *
- * 沿用 contacts / issue 预填入口的「不预创建会话」模式：只写 New Maker 草稿并复位
+ * 沿用 issue 预填入口的「不预创建会话」模式：只写 New Maker 草稿并复位
  * 工作区目标，调用方随后 navigate('/cc-agent/new')。不自动发送，用户确认后再发。
  */
 import type { TFunction } from 'i18next';
@@ -25,11 +25,11 @@ export interface ErrorDiagnosisSource {
 
 export function buildErrorDiagnosisPrompt(
   t: TFunction,
-  sessionUrl: string,
+  sessionUrl: string | null,
   source: ErrorDiagnosisSource,
 ): string {
   const details = redactSensitiveText(source.details).trim();
-  return t('chat.errorBanner.diagnosePrompt', {
+  return t(sessionUrl ? 'chat.errorBanner.diagnosePrompt' : 'chat.errorBanner.diagnosePromptWithoutSession', {
     sessionUrl,
     message: redactSensitiveText(source.message).trim(),
     details: source.reason

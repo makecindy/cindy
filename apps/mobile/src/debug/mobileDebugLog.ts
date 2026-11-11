@@ -1,5 +1,7 @@
 /** Phone-local instrumentation only. Never pass session bodies, request payloads or credentials. */
 export type MobileDebugScope =
+  | "auth"
+  | "network"
   | "device-link"
   | "recovery"
   | "lifecycle"

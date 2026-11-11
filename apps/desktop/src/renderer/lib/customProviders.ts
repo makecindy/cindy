@@ -88,11 +88,14 @@ export function customProviderModelConfigFromCatalogModel(
       : [];
   return {
     ...capabilities,
+    ...(model.selectedInterface ? { interfaceId: "auto" } : {}),
     ...(model.api ? { api: model.api } : {}),
     id: model.id,
     name: model.name,
     discoveredMetadata: model.discoveredMetadata,
     discoveredCost: model.discoveredCost,
+    ...(model.discoveredSource ? { discoveredSource: model.discoveredSource } : {}),
+    ...(model.opaqueModelId ? { opaqueModelId: true as const } : {}),
     nameExplicit: model.nameExplicit,
     ...(agent === 'pi' && model.piApi ? { piApi: model.piApi } : {}),
     ...(model.route ? { route: { ...model.route } } : {}),
@@ -206,6 +209,34 @@ export async function readCustomProviderKey(
     customProviderSecretStorageKey(storedCustomProviderId(providerId), agent),
   );
   return value && value.length > 0 ? value : null;
+}
+
+/** Saved Hinoki refresh must overlap its reads to use Main's in-flight coalescer. */
+export async function fetchCustomProviderModelsForRefresh(
+  provider: ProviderView,
+  config: CustomProviderConfig,
+) {
+  if (provider.auth.native || provider.auth.method !== 'apiKey' || !provider.agents.every(agent => {
+    const rt = config.runtimes[agent];
+    return rt?.baseUrl && (rt.modelsUrl ?? rt.baseUrl.replace(/\/+$/, '') + '/models')
+      === 'https://inference.hinoki.security/v1/models';
+  })) return null;
+  // Prepare every stored key before network work; slow key reads must not turn
+  // this back into disjoint requests. Main isolates unequal saved headers/keys.
+  const requests = await Promise.all(provider.agents.map(async agent => {
+    const rt = config.runtimes[agent]!;
+    return {
+      agent, baseUrl: rt.baseUrl, authMethod: 'apiKey' as const,
+      apiKey: await readCustomProviderKey(provider.id, agent),
+      ...(rt.wireProtocol ? { wireProtocol: rt.wireProtocol } : {}),
+      modelsUrl: rt.modelsUrl ?? null,
+      // Saved encrypted headers and owner checks remain Main-only per agent.
+      savedProviderId: provider.id,
+    };
+  }));
+  return Promise.all(requests.map(async request => ({
+    agent: request.agent, result: await window.electronAPI.maker.fetchProviderModels(request),
+  })));
 }
 
 // 鉴权请求头是 main-only 密文(isRendererAccessibleSafeStorageKey 明确拒 provider_headers_

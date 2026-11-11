@@ -16,8 +16,9 @@ describe('注入接线(源码级守卫)', () => {
       'deps.isMobileClientInvoke?.() === true || so.fromMobileClient === true',
     );
     // 注入链:normalized → withHandoff → withPlanReconcile → withGoalInactiveNote
-    // → 来源说明 → 客户端说明(元信息都在交接段之前)。
-    expect(source).toContain('prependNoteToWireUserMessage(withGoalInactiveNote as HandoffWireMessage, messageSourceNote)');
+    // → 引用说明 → 来源说明 → 客户端说明(元信息都在交接段之前)。
+    expect(source).toContain('prependNoteToWireUserMessage(withGoalInactiveNote as HandoffWireMessage, replyQuoteNote)');
+    expect(source).toContain('prependNoteToWireUserMessage(withReplyQuoteNote as HandoffWireMessage, messageSourceNote)');
     // 环境说明经 wireNoteMemory 去重后再前置(内容没变就不重复),链路位置不变。
     expect(source).toContain("prependNoteToWireUserMessage(withSourceNote as HandoffWireMessage, plannedNotes['client-environment'])");
     expect(source).toContain('deps.planRepeatableWireNotes?.(sessionId, repeatableNotes, { force: pendingHandoff !== null })');
@@ -77,16 +78,18 @@ describe('排队 / 插入两条路径的接线(源码级守卫)', () => {
 
   it('enqueue 与 steer 两个 IPC 边界都盖章,编辑时按编辑者重新盖章', () => {
     // 手机会话页所有发送都走这两条,只在 invoke context 里读来源实际读不到(review P1)。
-    // 第三处是排队编辑(两个编辑入口共用 stampQueuedEditProvenance)。
+    // 第三处是排队编辑(两个编辑入口共用 stampQueuedEditProvenance)；
+    // 第四处是异步问题答案入队(asyncQuestionInputDispatcher)。
     const stamps = register.match(/stampMobileClientOrigin\(/g) ?? [];
-    expect(stamps.length).toBe(3);
+    expect(stamps.length).toBe(4);
     expect(register.match(/stampQueuedEditProvenance\(sid, updated, remote, editor\)/g)?.length).toBe(2);
     expect(register).toContain('isMobileControllerInvoke(),');
   });
 
   it('device-link provenance is stamped at both queue input boundaries', () => {
+    // Plus the async question answer enqueue (asyncQuestionInputDispatcher).
     const stamps = register.match(/stampTrustedDeviceLinkQueuedOrigin\(/g) ?? [];
-    expect(stamps.length).toBe(3);
+    expect(stamps.length).toBe(4);
     expect(register).toContain('deviceLinkInvoke,');
     // 设备来源与 device-link 标记同点盖章(两处 IPC 边界)。
     expect(register.match(/deviceLinkInvoke,\r?\n\s+readDeviceLinkInvokeSourceDevice\(\),/g)?.length).toBe(2);
@@ -119,14 +122,17 @@ describe('排队 / 插入两条路径的接线(源码级守卫)', () => {
   });
 
   it('steer 投递也注入说明,且只进 wire payload', () => {
-    expect(register).toContain("isMobileControllerInvoke() || so.fromMobileClient === true");
-    expect(register).toContain('shouldPrependMobileClientPromptNote(normalized, sess.agentKind)');
-    expect(register).toContain('prependNoteToWireUserMessage(normalized as HandoffWireMessage, steerSourceNote)');
+    const steer = readFileSync(resolve(process.cwd(), 'src/main/maker-ipc/makerSteerTransaction.ts'), 'utf8');
+    expect(steer).toContain("isMobileControllerInvoke() || so.fromMobileClient === true");
+    expect(steer).toContain('shouldPrependMobileClientPromptNote(normalized, sess.agentKind)');
+    // 插话同样先接引用说明,再接来源说明(与 send 事务同序)。
+    expect(steer).toContain('prependNoteToWireUserMessage(normalized as HandoffWireMessage, steerReplyQuoteNote)');
+    expect(steer).toContain('prependNoteToWireUserMessage(withSteerReplyQuoteNote as HandoffWireMessage, steerSourceNote)');
     // steer 与 send 事务共用同一份环境说明去重记忆,投递成功后才记为已发送。
-    expect(register).toContain("prependNoteToWireUserMessage(withSteerSourceNote as HandoffWireMessage, steerPlannedNotes['client-environment'])");
-    expect(register).toContain('steerNotePlan?.commit()');
-    expect(register).toContain('readWireSourceDevice(so.sourceDevice)');
-    expect(register).toContain('await sess.steer(steerPayload as never');
+    expect(steer).toContain("prependNoteToWireUserMessage(withSteerSourceNote as HandoffWireMessage, steerPlannedNotes['client-environment'])");
+    expect(steer).toContain('steerNotePlan?.commit()');
+    expect(steer).toContain('readWireSourceDevice(so.sourceDevice)');
+    expect(steer).toContain('await sess.steer(steerPayload as never');
   });
 
   it('直连 maker:send 的 wire sendOpts 必须消毒', () => {

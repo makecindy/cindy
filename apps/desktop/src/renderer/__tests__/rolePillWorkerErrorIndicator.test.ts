@@ -13,7 +13,7 @@ const source = readFileSync(
  *  - error 用带 "ERR" 字样的药丸徽章(WorkerErrorBadge)+ tab 整体描红表达, 不用红点
  *    (红点在多数 app 里=下级有新消息, 与"出错"语义不符)。
  *  - 绿色"完成未读"点保留(点=有新结果, 语义正确)。
- *  - 信号统一走 worker.status === 'error'(持久终态), 不依赖 attention store。
+ *  - 信号统一走 resolveWorkerListAttention，本机只读任务 error，远程保留运行态 error。
  */
 describe('RolePillDropdown worker error indicator', () => {
   it('WorkerErrorBadge 是带 ERR 文案的实心药丸(i18n + error token), 不是红点', () => {
@@ -29,19 +29,20 @@ describe('RolePillDropdown worker error indicator', () => {
     expect(badgeBlock).toContain('text-[var(--error-bg)]');
   });
 
-  it('WorkerAvatar 只保留绿色完成未读点, error 不再叠红点', () => {
+  it('WorkerAvatar 保留等待确认与完成未读点, error 不叠红点', () => {
     const avatarBlock = extractBetween(
       source,
       'function WorkerAvatar({',
       'function WorkerErrorBadge({',
     );
     // 绿点保留(done 未读)。
-    expect(avatarBlock).toContain('var(--card-status-done)');
+    expect(avatarBlock).toContain("attentionKind === 'done'");
+    expect(avatarBlock).toContain('<AttentionDot tone={dotTone} size={6} />');
     // error 不再用状态点表达(不出现红色状态点 token / showErrorDot 逻辑)。
     expect(avatarBlock).not.toContain('var(--card-status-error)');
     expect(avatarBlock).not.toContain('showErrorDot');
     // 图标染红作为背景强化仍保留。
-    expect(avatarBlock).toContain("status === 'error' ? 'text-[var(--error-flat)]'");
+    expect(avatarBlock).toContain("isError ? 'text-[var(--error-flat)]'");
   });
 
   it('tabs 布局: 出错 tab 整体描红 + ERR 徽章', () => {
@@ -50,7 +51,8 @@ describe('RolePillDropdown worker error indicator', () => {
       'function WorkerTabsList({',
       'export function WorkerListToolbar({',
     );
-    expect(tabsBlock).toContain("const isError = worker.status === 'error';");
+    expect(tabsBlock).toContain('resolveWorkerListAttention(');
+    expect(tabsBlock).toContain("const isError = attentionKind === 'error';");
     // 整体描红。
     expect(tabsBlock).toContain('var(--error-bg)');
     expect(tabsBlock).toContain('var(--error-border)');
@@ -60,18 +62,20 @@ describe('RolePillDropdown worker error indicator', () => {
 
   it('dropdown 布局: 出错行整体描红 + ERR 徽章', () => {
     const dropdownBlock = source.slice(source.indexOf('export function RolePillDropdown({'));
-    expect(dropdownBlock).toContain("const isError = w.status === 'error';");
+    expect(dropdownBlock).toContain('resolveWorkerListAttention(');
+    expect(dropdownBlock).toContain("const isError = attentionKind === 'error';");
     expect(dropdownBlock).toContain('border-l-2 border-[var(--error-fg)]');
     expect(dropdownBlock).toContain('<WorkerErrorBadge');
   });
 
   it('dropdown 折叠态 trigger: focused 自身出错或有隐藏出错 worker 都显 ERR 徽章(内联防裁切)', () => {
     const dropdownBlock = source.slice(source.indexOf('export function RolePillDropdown({'));
-    // 聚合信号: 存在非当前显示的出错 worker(排除当前 worker, 它已由药丸描红表达)。
-    expect(dropdownBlock).toContain('const hasHiddenWorkerError = workers.some(');
-    expect(dropdownBlock).toContain("w.status === 'error' && w.workerId !== worker.workerId");
+    // 聚合信号包含隐藏 Worker，且三种布局共用任务提醒与运行状态的判定。
+    expect(dropdownBlock).toContain('const workerAttention = workers.map(');
+    expect(dropdownBlock).toContain('resolveWorkerListAttention(item, taskAttention.get(item.sessionId)');
     // trigger 内联徽章: 当前 worker 出错 或 有隐藏出错 worker 都显示。
-    expect(dropdownBlock).toContain("worker.status === 'error' || hasHiddenWorkerError");
+    expect(dropdownBlock).toContain("currentAttention === 'error' || workerAttention.includes('error')");
+    expect(dropdownBlock).toMatch(/triggerAttention === 'error' && \(\s*<WorkerErrorBadge/);
     // 全组件不再用 attention 红点表达 error。
     expect(source).not.toContain('tone="error"');
   });

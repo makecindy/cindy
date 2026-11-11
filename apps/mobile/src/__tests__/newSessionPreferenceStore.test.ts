@@ -1,5 +1,4 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { captureNewSessionOwner } from '@/session/newSessionForm';
 import { accountVaultKey } from '@cindy/auth-client';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -86,26 +85,13 @@ describe('newSessionPreferenceStore', () => {
 
   it('keeps the bare owner ID accepted by both live creation guards and recovery namespaces', () => {
     setMobileAuthOwner('shared-member', 'cn');
-    // These are the actual normal/goal creation predicates, not a copied guard.
-    const source = readFileSync(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
-    const guards = [...source.matchAll(/const isCurrentOwner = \(\) => \(([\s\S]*?)\n    \);/g)];
-    if (guards.length !== 2) throw new Error('Missing production creation guards');
-    for (const [, predicate] of guards) {
-      const accepts = new Function('authOwnerAtCreate', 'accountIdAtCreate', 'isMobileAuthOwnerCurrent', `return (${predicate});`);
-      const currentOwner = getMobileAuthOwner();
-      expect(accepts(currentOwner, 'shared-member', isMobileAuthOwnerCurrent)).toBe(true);
-      setMobileAuthOwner('shared-member', 'global');
-      expect(accepts(currentOwner, 'shared-member', isMobileAuthOwnerCurrent)).toBe(false);
-      setMobileAuthOwner('shared-member', 'cn');
-    }
-    // Existing recovery entries are namespaced by the bare membership ID.
-    expect(getMobileAuthOwner().accountId).toBe('shared-member');
-    const namespaces = [...source.matchAll(/const worktreeAccountId = ([^;]+);/g)];
-    if (namespaces.length !== 2) throw new Error('Missing production recovery namespaces');
-    for (const [, expression] of namespaces) {
-      const recoveryNamespace = new Function('authOwnerAtCreate', `return (${expression});`);
-      expect(recoveryNamespace(getMobileAuthOwner())).toBe('shared-member');
-    }
+    const currentOwner = getMobileAuthOwner();
+    const creation = captureNewSessionOwner(currentOwner, 'shared-member');
+    expect(creation.isCurrentOwner()).toBe(true);
+    expect(creation.worktreeAccountId).toBe('shared-member');
+    setMobileAuthOwner('shared-member', 'global');
+    expect(creation.isCurrentOwner()).toBe(false);
+    expect(captureNewSessionOwner(getMobileAuthOwner(), 'another-member').isCurrentOwner()).toBe(false);
   });
 
   it('stores the last selected device and agent for new sessions', async () => {

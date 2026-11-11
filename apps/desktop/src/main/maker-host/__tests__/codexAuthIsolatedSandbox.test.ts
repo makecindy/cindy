@@ -1,3 +1,4 @@
+import { configureOwnerContext } from '../../ownerContext.js';
 /**
  * dev 沙箱凭证隔离(XDT_ISOLATED_AUTH=1)回归锁。
  *
@@ -18,6 +19,7 @@ import {
   getCodexAuthInvalidationMarkerPath,
   writeInvalidatedSystemCodexAuthMarker,
 } from '../codex-auth-invalidation.js';
+import { getPreferredSharedCodexAuthPath } from '../codex-shared-auth.js';
 
 const dirs: string[] = [];
 const h = vi.hoisted(() => ({
@@ -26,6 +28,13 @@ const h = vi.hoisted(() => ({
   isPackaged: false,
   dataOwnerId: null as string | null,
 }));
+
+// Mirror this fixture's changing profile/owner through the Host-neutral ports.
+vi.mock('../../userDataPath.js', () => ({ getUserDataDir: () => h.userDataDir, userDataPath: (...parts: string[]) => path.join(h.userDataDir, ...parts) }));
+configureOwnerContext({
+  read: () => ({ dataOwnerId: h.dataOwnerId, generation: 1, boundaryPending: false }),
+  fallbackBaseDir: () => h.userDataDir,
+});
 
 vi.mock('electron', () => ({
   app: {
@@ -40,6 +49,13 @@ vi.mock('electron', () => ({
 vi.mock('../managed-skills.js', () => ({
   listCindyManagedSkills: async () => [],
   cindyManagedSkillRoots: async () => [],
+}));
+// Subscription discovery is outside this local auth-file ownership fixture.
+vi.mock('../model-discovery/xai.js', () => ({ discardXaiModelsDiskCache: vi.fn(async () => {}) }));
+// This file exercises local auth ownership, not remote share revocation. Do not
+// initialize the authenticated server transport (and the full app) to read files.
+vi.mock('../../device-link/providerShareAvailabilityTransport.js', () => ({
+  disableShareAvailability: vi.fn(async () => { throw new Error('Unexpected share revocation in auth fixture'); }),
 }));
 vi.mock('@cindy/maker-core', () => ({}));
 
@@ -59,6 +75,10 @@ vi.mock('../../appSessionState.js', async (importOriginal) => {
     }),
   };
 });
+
+// Load the adapter once during collection; keep cold transforms outside isolation deadlines.
+import { DesktopCodexAuthAdapter, readCodexOneShotCreds } from '../auth-adapters.js';
+import { readPool, updatePool } from '../../subscription-accounts/store.js';
 
 function fixture(): {
   codexHome: string;
@@ -141,7 +161,6 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     const { localAuth, systemAuth } = fixture();
     trustIsolatedAuthSandbox();
     h.dataOwnerId = 'owner-a';
-    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
     const adapter = new DesktopCodexAuthAdapter();
     // getState 内部按需 reconcile;隔离下不得把系统凭证呈现为已登录。
     await expect(adapter.getState()).resolves.toMatchObject({ authenticated: false });
@@ -157,7 +176,6 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     expect(fs.statSync(systemAuth).nlink).toBe(2);
     trustIsolatedAuthSandbox();
     h.dataOwnerId = 'owner-a';
-    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
     const adapter = new DesktopCodexAuthAdapter();
     await adapter.getState();
     expect(fs.existsSync(localAuth)).toBe(false);
@@ -180,7 +198,6 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
 
       trustIsolatedAuthSandbox();
       h.dataOwnerId = 'owner-a';
-      const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
       const adapter = new DesktopCodexAuthAdapter();
       await expect(adapter.getState()).resolves.toMatchObject({ authenticated: false });
       expect(() => fs.lstatSync(localAuth)).toThrow();
@@ -204,7 +221,6 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     fs.writeFileSync(localAuth, JSON.stringify({ tokens: { access_token: 'orphan-token' } }));
     trustIsolatedAuthSandbox();
     h.dataOwnerId = 'owner-a';
-    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
     const adapter = new DesktopCodexAuthAdapter();
 
     await adapter.getState();
@@ -226,7 +242,6 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
   it('开关关(默认):reconcile 照常建共享硬链', async () => {
     const { localAuth, systemAuth } = fixture();
     h.dataOwnerId = 'owner-a';
-    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
     const adapter = new DesktopCodexAuthAdapter();
     await expect(adapter.getState()).resolves.toMatchObject({ authenticated: true });
     const sysStat = fs.statSync(systemAuth);
@@ -250,7 +265,6 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     const releaseStat = fs.statSync(releaseAuth);
     const releaseBindingBytes = fs.readFileSync(releaseBinding);
     h.dataOwnerId = 'owner-a';
-    const { DesktopCodexAuthAdapter, readCodexOneShotCreds } = await import('../auth-adapters.js');
     const adapter = new DesktopCodexAuthAdapter();
     // This fixture owns credentials only; asset preparation has separate boundary tests.
     vi.spyOn(adapter, 'ensureGlobalCodexAssets').mockResolvedValue();
@@ -297,9 +311,15 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     expect(fs.existsSync(getCodexAuthInvalidationMarkerPath(codexHome))).toBe(true);
   });
 
-  it('共享 Dev 直接使用 Release 登录态，不重链接或改 binding', async () => {
-    const { releaseAuth, systemAuth } = fixture();
-    h.userDataDir = path.join(h.appDataDir, 'CindyGlobal');
+  // 测试价值（unit）：Release 凭证上挂着升级前 profile 留下的残留硬链(nlink>1)时,只读
+  // Dev 的 mode:'local' 重连也不能去清 —— 清残留硬链 = 换掉 Release 的 inode(写操作),
+  // 违背「Release 凭证的字节与 inode 都不变」的边界(上面的契约用例);本地 Codex 消费的
+  // 是快照副本,Release 那份的 nlink 与这个进程无关(#9316 review 第十二轮)。现有覆盖只
+  // 验证了「Release 文件上没有残留硬链」的场景。最小失败输入:Release auth.json 带一条
+  // 残留硬链 + 只读 Dev 的 mode:'local' 重连。
+  it('只读 Dev 的本地重连不清 Release 凭证上的残留硬链', async () => {
+    const { localAuth, releaseAuth, systemAuth } = fixture();
+    fs.rmSync(systemAuth);
     fs.mkdirSync(path.dirname(releaseAuth), { recursive: true });
     fs.writeFileSync(
       releaseAuth,
@@ -308,11 +328,52 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
         tokens: { access_token: 'release-token', account_id: 'acct-release' },
       }),
     );
-    const releaseBinding = bindReleaseOpenAi(releaseAuth);
+    // 升级前的 profile 留下的残留硬链:Codex 0.165+ 拒绝写 nlink>1,可读 Dev 也不该管。
+    const residualLink = path.join(path.dirname(releaseAuth), 'auth.json.legacy-hardlink');
+    fs.linkSync(releaseAuth, residualLink);
+    bindReleaseOpenAi(releaseAuth);
+    const releaseBytes = fs.readFileSync(releaseAuth);
     const releaseStat = fs.statSync(releaseAuth);
-    const releaseBindingBytes = fs.readFileSync(releaseBinding);
     h.dataOwnerId = 'owner-a';
-    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+    vi.spyOn(adapter, 'ensureGlobalCodexAssets').mockResolvedValue();
+
+    await expect(adapter.triggerLogin({ mode: 'local' })).resolves.toMatchObject({
+      authenticated: true,
+      credentialScope: 'system-shared',
+    });
+
+    // Release 凭证的字节与 inode 都不变;本地拿到的是独立快照副本。
+    expect(fs.readFileSync(releaseAuth)).toEqual(releaseBytes);
+    expect(fs.statSync(releaseAuth).ino).toBe(releaseStat.ino);
+    expect(fs.statSync(localAuth).ino).not.toBe(releaseStat.ino);
+    fs.rmSync(residualLink);
+  });
+
+  // 测试价值（unit）：2026-10-23 实例反复复制已过期的 Release 授权，重新检测持续 401。
+  // 现有覆盖只区分文件缺失、owner 和失效标记，没有过期 Release + 有效本机授权的输入。
+  // 通过真实 getState/getAccessToken 验证选中的授权及落盘结果；下方矩阵保护共享目录与账号边界。
+  // 整文件实测：6.65s（Windows，含既有 adapter 依赖图加载）；未新增模块重置或真实等待。
+  it('普通 Dev 在 Release 授权过期后使用同账号的有效本机授权', async () => {
+    const { localAuth, releaseAuth, systemAuth } = fixture();
+    const now = Math.floor(Date.now() / 1000);
+    const token = (exp: number) =>
+      `header.${Buffer.from(JSON.stringify({ exp })).toString('base64url')}.signature`;
+    const releaseToken = token(now - 3600);
+    const systemToken = token(now + 3600);
+    fs.mkdirSync(path.dirname(releaseAuth), { recursive: true });
+    fs.writeFileSync(
+      releaseAuth,
+      JSON.stringify({ tokens: { access_token: releaseToken, account_id: 'acct-1' } }),
+    );
+    fs.writeFileSync(
+      systemAuth,
+      JSON.stringify({ tokens: { access_token: systemToken, account_id: 'acct-1' } }),
+    );
+    bindReleaseOpenAi(releaseAuth);
+    const releaseBytes = fs.readFileSync(releaseAuth);
+    const systemBytes = fs.readFileSync(systemAuth);
+    h.dataOwnerId = 'owner-a';
     const adapter = new DesktopCodexAuthAdapter();
 
     await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({
@@ -320,11 +381,101 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
       credentialScope: 'system-shared',
       oauthWritesBlocked: true,
     });
-    await expect(adapter.getAccessToken()).resolves.toBe('release-token');
-    expect(fs.statSync(releaseAuth).ino).toBe(releaseStat.ino);
-    expect(fs.readFileSync(releaseBinding)).toEqual(releaseBindingBytes);
-    expect(fs.readFileSync(systemAuth, 'utf8')).toContain('system-token');
+    await expect(adapter.getAccessToken()).resolves.toBe(systemToken);
+    expect(fs.readFileSync(localAuth)).toEqual(systemBytes);
+    expect(fs.readFileSync(releaseAuth)).toEqual(releaseBytes);
+    expect(fs.readFileSync(systemAuth)).toEqual(systemBytes);
   });
+
+  it.each([
+    { label: 'Release 授权仍有效', releaseOffset: 3600, cliOffset: 7200, cliAccount: 'acct-1', shared: false },
+    { label: '本机授权也已过期', releaseOffset: -3600, cliOffset: -1800, cliAccount: 'acct-1', shared: false },
+    { label: '本机授权有效期未知', releaseOffset: -3600, cliOffset: null, cliAccount: 'acct-1', shared: false },
+    { label: '本机授权属于其他账号', releaseOffset: -3600, cliOffset: 3600, cliAccount: 'acct-other', shared: false },
+    { label: 'Dev 与 Release 共用目录', releaseOffset: -3600, cliOffset: 3600, cliAccount: 'acct-1', shared: true },
+  ])('$label 时保持 Release 授权来源', ({ releaseOffset, cliOffset, cliAccount, shared }) => {
+    const { releaseAuth, systemAuth } = fixture();
+    const now = Math.floor(Date.now() / 1000);
+    const token = (offset: number | null) => offset === null
+      ? 'opaque-token'
+      : `header.${Buffer.from(JSON.stringify({ exp: now + offset })).toString('base64url')}.signature`;
+    fs.mkdirSync(path.dirname(releaseAuth), { recursive: true });
+    fs.writeFileSync(
+      releaseAuth,
+      JSON.stringify({ tokens: { access_token: token(releaseOffset), account_id: 'acct-1' } }),
+    );
+    fs.writeFileSync(
+      systemAuth,
+      JSON.stringify({ tokens: { access_token: token(cliOffset), account_id: cliAccount } }),
+    );
+    bindReleaseOpenAi(releaseAuth);
+    if (shared) h.userDataDir = path.dirname(path.dirname(releaseAuth));
+
+    expect(getPreferredSharedCodexAuthPath('owner-a')).toBe(releaseAuth);
+  });
+
+  // 同一恢复入口也支持旧 auth.json 的 id_token workspace；sub 不能证明 workspace 一致。
+  it.each([
+    { label: '缺少 account_id 时使用嵌套 workspace', accountId: undefined, claims: { 'https://api.openai.com/auth': { chatgpt_account_id: 'acct-1' } }, useCli: true },
+    { label: '空 account_id 时使用顶层 workspace', accountId: '', claims: { chatgpt_account_id: 'acct-1' }, useCli: true },
+    { label: '只有 sub 时不能确认 workspace', accountId: undefined, claims: { sub: 'acct-1' }, useCli: false },
+    { label: '不同 workspace 时不切换', accountId: undefined, claims: { chatgpt_account_id: 'acct-other', sub: 'acct-1' }, useCli: false },
+    { label: '非空 account_id 优先于 id_token workspace', accountId: 'acct-other', claims: { chatgpt_account_id: 'acct-1' }, useCli: false },
+  ])('$label', ({ accountId, claims, useCli }) => {
+    const { releaseAuth, systemAuth } = fixture();
+    const now = Math.floor(Date.now() / 1000);
+    const token = (payload: unknown) =>
+      `header.${Buffer.from(JSON.stringify(payload)).toString('base64url')}.signature`;
+    fs.mkdirSync(path.dirname(releaseAuth), { recursive: true });
+    fs.writeFileSync(releaseAuth, JSON.stringify({ tokens: {
+      access_token: token({ exp: now - 3600 }), account_id: accountId, id_token: token(claims),
+    } }));
+    fs.writeFileSync(systemAuth, JSON.stringify({ tokens: {
+      access_token: token({ exp: now + 3600 }), account_id: useCli ? accountId : 'acct-1', id_token: token(claims),
+    } }));
+    bindReleaseOpenAi(releaseAuth);
+
+    expect(getPreferredSharedCodexAuthPath('owner-a')).toBe(useCli ? systemAuth : releaseAuth);
+  });
+
+  // #9316 / unit: a junction to the Release profile must preserve the same-entry
+  // read-only exception; making a snapshot there would replace Release auth itself.
+  it.each([false, true])(
+    '共享 Dev 直接使用 Release 登录态，不重链接或改 binding (alias=%s)',
+    async (alias) => {
+      const { releaseAuth, systemAuth } = fixture();
+      fs.mkdirSync(path.dirname(releaseAuth), { recursive: true });
+      if (alias) {
+        fs.symlinkSync(path.dirname(releaseAuth), path.join(h.userDataDir, 'codex-home'), 'junction');
+      } else {
+        h.userDataDir = path.join(h.appDataDir, 'CindyGlobal');
+      }
+      fs.writeFileSync(
+        releaseAuth,
+        JSON.stringify({
+          account: { email: 'release@example.test' },
+          tokens: { access_token: 'release-token', account_id: 'acct-release' },
+        }),
+      );
+      const releaseBinding = bindReleaseOpenAi(releaseAuth);
+      if (alias)
+        fs.copyFileSync(releaseBinding, path.join(h.userDataDir, 'native-provider-auth.json'));
+      const releaseStat = fs.statSync(releaseAuth);
+      const releaseBindingBytes = fs.readFileSync(releaseBinding);
+      h.dataOwnerId = 'owner-a';
+      const adapter = new DesktopCodexAuthAdapter();
+
+      await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({
+        authenticated: true,
+        credentialScope: 'system-shared',
+        oauthWritesBlocked: true,
+      });
+      await expect(adapter.getAccessToken()).resolves.toBe('release-token');
+      expect(fs.statSync(releaseAuth).ino).toBe(releaseStat.ino);
+      expect(fs.readFileSync(releaseBinding)).toEqual(releaseBindingBytes);
+      expect(fs.readFileSync(systemAuth, 'utf8')).toContain('system-token');
+    },
+  );
 
   it('共享 Dev 遇到未绑定的 Release 残留时不覆盖或回落', async () => {
     const { releaseAuth, systemAuth } = fixture();
@@ -341,7 +492,6 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     const releaseStat = fs.statSync(releaseAuth);
     const releaseBinding = path.join(h.userDataDir, 'native-provider-auth.json');
     h.dataOwnerId = 'owner-a';
-    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
     const adapter = new DesktopCodexAuthAdapter();
 
     await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({
@@ -367,7 +517,6 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     );
     bindReleaseOpenAi(releaseAuth, 'owner-other');
     h.dataOwnerId = 'owner-a';
-    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
     const adapter = new DesktopCodexAuthAdapter();
 
     await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({
@@ -403,7 +552,6 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
       ),
     ).toBe(true);
     h.dataOwnerId = 'owner-a';
-    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
     const adapter = new DesktopCodexAuthAdapter();
 
     await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({
@@ -423,7 +571,6 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
   it('dev 默认只读共享:断开只停用 Cindy，重启不复活，显式本机连接可恢复', async () => {
     const { codexHome, localAuth, systemAuth } = fixture();
     h.dataOwnerId = 'owner-a';
-    const { DesktopCodexAuthAdapter, readCodexOneShotCreds } = await import('../auth-adapters.js');
     const adapter = new DesktopCodexAuthAdapter();
     const onLogout = vi.fn();
     const onInvalidated = vi.fn();
@@ -485,7 +632,6 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     fs.mkdirSync(codexHome, { recursive: true });
     fs.linkSync(systemAuth, localAuth);
     const before = fs.readFileSync(systemAuth);
-    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
     const adapter = new DesktopCodexAuthAdapter();
     await expect(adapter.triggerLogin({ mode: 'local' })).resolves.toMatchObject({ authenticated: true });
     await adapter.logout();
@@ -515,7 +661,6 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     fixture();
     h.isPackaged = true;
     h.dataOwnerId = 'owner-a';
-    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
     const { CodexAgent } = await import('../../../../../../packages/maker-core/src/agents/codex/index.js');
     const adapter = new DesktopCodexAuthAdapter();
     await adapter.logout();
@@ -556,7 +701,6 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     h.isPackaged = true;
     h.dataOwnerId = 'owner-a';
     const before = fs.readFileSync(systemAuth);
-    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
     const adapter = new DesktopCodexAuthAdapter();
     let release!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
@@ -611,7 +755,6 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     h.dataOwnerId = 'owner-a';
     fs.mkdirSync(codexHome, { recursive: true });
     if (existing) fs.writeFileSync(localAuth, JSON.stringify({ tokens: { access_token: 'old-copy' } }));
-    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
     const adapter = new DesktopCodexAuthAdapter();
     await expect(adapter.triggerLogin({ mode: 'local' })).resolves.toMatchObject({ authenticated: true });
     const renewed = JSON.stringify({ tokens: { access_token: 'renewed-native-token', account_id: 'acct-1' } });
@@ -629,7 +772,6 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     fs.writeFileSync(releaseAuth, JSON.stringify({ tokens: { access_token: 'release-token', account_id: 'release-account' } }));
     bindReleaseOpenAi(releaseAuth);
     const before = fs.readFileSync(releaseAuth);
-    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
     const adapter = new DesktopCodexAuthAdapter();
     await adapter.logout();
     expect(fs.readFileSync(releaseAuth)).toEqual(before);
@@ -642,9 +784,10 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
   it('keeps a user disconnect durable when read-only invalidation cleanup is already running', async () => {
     const { systemAuth } = fixture();
     h.dataOwnerId = 'owner-a';
-    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
     const adapter = new DesktopCodexAuthAdapter();
     await adapter.getState();
+    // An explicit disconnect must also retire the pool when it upgrades an in-flight invalidation.
+    await updatePool('openai', pool => ({ ...pool, disconnected: false }));
     const before = fs.readFileSync(systemAuth);
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
@@ -655,6 +798,7 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     const disconnect = adapter.logout();
     release();
     await Promise.all([invalidation, disconnect]);
+    expect(readPool('openai')?.disconnected).toBe(true);
     await expect(new DesktopCodexAuthAdapter().getAccessToken()).resolves.toBeNull();
     expect(fs.readFileSync(systemAuth)).toEqual(before);
   });
@@ -663,7 +807,6 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     const { systemAuth } = fixture();
     h.dataOwnerId = 'owner-a';
     const before = fs.readFileSync(systemAuth);
-    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
     const adapter = new DesktopCodexAuthAdapter();
     await adapter.getState();
     let release!: () => void;
@@ -685,7 +828,6 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
   it('dev 默认只读的 unproven 失效只保留内存边界', async () => {
     const { codexHome, localAuth, systemAuth } = fixture();
     h.dataOwnerId = 'owner-a';
-    const { DesktopCodexAuthAdapter, readCodexOneShotCreds } = await import('../auth-adapters.js');
     const adapter = new DesktopCodexAuthAdapter();
     const onInvalidated = vi.fn();
     adapter.setOnInvalidatedBroadcast(onInvalidated);
@@ -735,7 +877,6 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
   it('dev 只读失效以内存指纹等待系统凭证换代,不泄漏旧 token 或写共享文件', async () => {
     const { codexHome, localAuth, systemAuth } = fixture();
     h.dataOwnerId = 'owner-a';
-    const { DesktopCodexAuthAdapter, readCodexOneShotCreds } = await import('../auth-adapters.js');
     const adapter = new DesktopCodexAuthAdapter();
 
     await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({
@@ -809,7 +950,6 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
   it('dev 只读系统换代先于迟到失效时记录本地旧代并恢复系统新代', async () => {
     const { codexHome, localAuth, systemAuth } = fixture();
     h.dataOwnerId = 'owner-a';
-    const { DesktopCodexAuthAdapter, readCodexOneShotCreds } = await import('../auth-adapters.js');
     const adapter = new DesktopCodexAuthAdapter();
 
     await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({
@@ -834,11 +974,13 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     fs.renameSync(replacement, systemAuth);
     const renewedSystemBytes = fs.readFileSync(systemAuth);
     const renewedSystemStat = fs.statSync(systemAuth);
-    if (process.platform === 'win32') {
+    // 「系统文件被整体替换」后本地看到什么，取决于共享方式：文件软链跟随系统
+    // 路径（#9277 起 Windows 与 POSIX 都是软链），只有独立副本才留在旧代。
+    if (fs.lstatSync(localAuth).isSymbolicLink()) {
+      expect(fs.readFileSync(localAuth)).toEqual(renewedSystemBytes);
+    } else {
       expect(fs.readFileSync(localAuth)).toEqual(oldLocalBytes);
       expect(fs.readFileSync(localAuth)).not.toEqual(renewedSystemBytes);
-    } else {
-      expect(fs.readFileSync(localAuth)).toEqual(renewedSystemBytes);
     }
 
     const chmod = vi.spyOn(fs.promises, 'chmod');
@@ -877,7 +1019,6 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     vi.stubEnv('XDT_ALLOW_DEV_OAUTH_WRITE', '1');
     h.dataOwnerId = 'owner-a';
     const chmod = vi.spyOn(fs.promises, 'chmod');
-    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
     const adapter = new DesktopCodexAuthAdapter();
 
     await expect(adapter.getState()).resolves.toMatchObject({
@@ -910,7 +1051,6 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     vi.stubEnv('XDT_ALLOW_DEV_OAUTH_WRITE', '1');
     h.dataOwnerId = 'owner-a';
     const chmod = vi.spyOn(fs.promises, 'chmod');
-    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
     const adapter = new DesktopCodexAuthAdapter();
 
     await expect(adapter.getState()).resolves.toMatchObject({
@@ -938,7 +1078,6 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     trustIsolatedAuthSandbox();
     h.dataOwnerId = 'owner-a';
     const chmod = vi.spyOn(fs.promises, 'chmod');
-    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
 
     const state = await new DesktopCodexAuthAdapter().getState();
     expect(state).toMatchObject({ authenticated: false });
@@ -960,7 +1099,6 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     const systemBytes = fs.readFileSync(systemAuth);
     trustIsolatedAuthSandbox();
     h.dataOwnerId = 'owner-a';
-    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
     const adapter = new DesktopCodexAuthAdapter();
     let finishLogout!: () => void;
     vi.spyOn(adapter, 'ensureGlobalCodexAssets').mockResolvedValue();
@@ -1005,7 +1143,6 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     fs.writeFileSync(proofPath, `${JSON.stringify(proof)}\n`, { mode: 0o600 });
     h.dataOwnerId = 'owner-a';
     const chmod = vi.spyOn(fs.promises, 'chmod');
-    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
 
     await expect(new DesktopCodexAuthAdapter().getState()).resolves.toMatchObject({
       oauthWritesBlocked: true,

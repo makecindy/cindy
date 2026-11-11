@@ -3,6 +3,9 @@ import { resolve } from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { createEffortChangeCoordinator, enqueueEffortChange } from '../../renderer/components/new-chat/effortChangeQueue';
+import { supportsSubscriptionFastPolicy, type ProviderView } from '@cindy/model-providers';
+import { withFastModePolicy } from '../../../../../packages/maker-core/src/agents/shared/fast-mode-policy';
+import { commitRuntimeAxisAfterPersistence } from '../maker-ipc/runtimeSelectionAxes';
 
 const mainRoot = resolve(__dirname, '..');
 const bootstrapSource = readFileSync(resolve(mainRoot, 'bootstrap-electron.ts'), 'utf8').replace(
@@ -31,6 +34,10 @@ const deviceLinkHostSource = readFileSync(
 ).replace(/\r\n?/g, '\n');
 const makerSendSource = readFileSync(
   resolve(mainRoot, 'maker-ipc/makerSendTransaction.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
+const queuedInputOriginSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/queuedInputOrigin.ts'),
   'utf8',
 ).replace(/\r\n?/g, '\n');
 
@@ -100,6 +107,12 @@ describe.each([
       sessionId: 'archived-task', effort: 'high', enabled: true,
       sessions: {}, eq: vi.fn(), getDbClient: () => ({ drizzle: { select: () => query } }),
       remoteResponse: response, persistSessionFields: persist, agentSwitchPending: pending,
+      readSessionRuntimeProfiles: async () => ({ effective: { providerId: 'next-provider', agentDeviceId: null } }),
+      getSessionProvider: () => 'next-provider',
+      createSubscriptionFastPolicy: () => ({ isAllowed: () => true }),
+      // These archived fixtures have no saved automation model scope.
+      updateSavedScheduledAxis: vi.fn(async () => false),
+      updateScheduledPreference: vi.fn(async () => {}),
       assertOwnerCurrent: vi.fn(), assertSharedTaskCurrent: { admit: vi.fn() },
       markRemoteSettingPersistedInsideHandler: vi.fn(), maker: { getSession },
       isUserPendingAgentSwitchIntent, projectPendingAgentSwitchIntent: (intent: unknown) => intent,
@@ -200,12 +213,77 @@ describe.each([
   });
 });
 
+// Review R11: run the production IPC closure with the real runtime policy
+// wrapper. Policy-only tests cannot catch an IPC branch that bypasses it.
+// Guard tier shares this file's compiled Electron closure fixture; the minimal
+// sequence is deny -> allow -> explicit enable on an active Claude task.
+describe('active Claude subscription Fast setting', () => {
+  it.each([
+    { id: 'anthropic', auth: { method: 'oauth', native: 'claude' } },
+    { id: 'openai', auth: { method: 'oauth', native: 'codex' } },
+    { id: 'custom-api', auth: { method: 'apiKey' } },
+  ])('updates the live subscription handle while preserving API behavior ($id)', async provider => {
+    let allowed = true;
+    let fast: boolean | 'ultrafast' = true;
+    let enforce!: () => Promise<void>;
+    const onFastModeChanged = vi.fn();
+    const handle = withFastModePolicy({
+      setFastMode: async (next: boolean | 'ultrafast') => { fast = next; },
+      getFastMode: () => fast,
+      close: async () => {},
+    } as Parameters<typeof withFastModePolicy>[0], {
+      isAllowed: () => allowed,
+      subscribe: listener => { enforce = listener; return () => {}; },
+      onFastModeChanged,
+    });
+    const profile = { providerId: provider.id, agentDeviceId: null };
+    const query = { from: () => query, where: () => query, limit: async () => [{ status: 'active' }] };
+    const persistFastMode = vi.fn(async () => {});
+    const bindings = {
+      sessionId: 'active-claude-task', enabled: true, sessions: {}, eq: vi.fn(),
+      getDbClient: () => ({ drizzle: { select: () => query } }),
+      agentSwitchPending: new Map(), readSessionRuntimeProfiles: async () => ({ effective: profile }),
+      createSubscriptionFastPolicy: () => ({ isAllowed: () => allowed }), supportsSubscriptionFastPolicy,
+      getSessionProvider: () => provider.id,
+      getActiveCatalog: () => ({ providers: [provider as ProviderView] }),
+      assertOwnerCurrent: vi.fn(), assertSharedTaskCurrent: { admit: vi.fn() },
+      isUserPendingAgentSwitchIntent, updateSavedScheduledAxis: async () => false,
+      resolvePendingRuntimeAxisPatch: async (_id: string, patch: object) => ({ ...patch }),
+      recordUserSessionRuntimeAxisMutation: vi.fn(), setSessionFastMode: vi.fn(),
+      maker: { getSession: () => ({ agentKind: 'claude-code', setFastMode: handle.setFastMode, getFastMode: handle.getFastMode }) },
+      persistFastMode, commitRuntimeAxisAfterPersistence, pendingCredentialSwitchHolder: null,
+      remoteResponse: undefined, log: { debug: vi.fn() },
+    };
+    const run = new Function(...Object.keys(bindings), axisHandlers.get('applyFastMode')!)(...Object.values(bindings));
+    try {
+      allowed = false;
+      await enforce();
+      expect(handle.getFastMode!()).toBe(false);
+      allowed = true;
+      await enforce();
+      expect(handle.getFastMode!()).toBe(false); // relaxation alone must never enable
+      onFastModeChanged.mockClear();
+      await run();
+      expect(persistFastMode).toHaveBeenCalledOnce();
+      if (provider.auth.method === 'oauth') {
+        expect(handle.getFastMode!()).toBe(true);
+        expect(onFastModeChanged).toHaveBeenCalledWith(true);
+      } else {
+        expect(handle.getFastMode!()).toBe(false);
+        expect(onFastModeChanged).not.toHaveBeenCalled();
+      }
+    } finally {
+      await handle.close();
+    }
+  });
+});
+
 describe('session runtime control wiring', () => {
   it('replays Windows attention after the main window is shown independently of inventory loading', () => {
     const body = handlerBody(
       bootstrapSource,
       "mainWindow.once('ready-to-show'",
-      'void runComputerUseSmokeIfRequested();',
+      'void runComputerUseSmokeIfRequested(',
     );
     const shown = body.indexOf('showMainWindowAndRestoreFullscreen(');
     const badge = body.indexOf('refreshWindowsAppBadge();');
@@ -216,13 +294,15 @@ describe('session runtime control wiring', () => {
       /if \(!app.isPackaged \|\| isCindyVersionLaunchPending\(\)\)\s+markDesktopDevWindowReady\(mainWindow.webContents.getOSProcessId\(\)\);/,
     );
   });
-  it('advertises host-side model-window protection to remote controllers', () => {
+  it('advertises host-side model-window protection and Orca relocation to remote controllers', () => {
     const capabilities = handlerBody(
       registerSource,
       'ipcMain.handle(MAKER_INVOKE.GET_CAPABILITIES',
       'ipcMain.handle(MAKER_INVOKE.GET_NEW_MAKER_DEFAULTS',
     );
     expect(capabilities).toContain('supportsModelWindowSwitchGuard: true');
+    // Controllers only offer moving a controlled Orca Lead / local Worker's Agent when this is declared.
+    expect(capabilities).toContain('supportsOrcaAgentRelocation: true');
   });
 
   it('authenticates Desktop package-command entry points before minting Main context', () => {
@@ -237,11 +317,8 @@ describe('session runtime control wiring', () => {
     expect(registerSource).toContain('persisted?.autoResume === true');
     expect(registerSource).toContain('persisted?.origin !== undefined');
 
-    const steerDispatch = handlerBody(
-      registerSource,
-      'const steerToAgentAccepted = async (',
-      'registerMakerSessionSendHandler(',
-    );
+    const steerDispatch = readFileSync(resolve(mainRoot, 'maker-ipc/makerSteerTransaction.ts'), 'utf8');
+    expect(registerSource).toContain('const steerToAgentAccepted = createMakerSteerTransaction(');
     expect(steerDispatch).toContain('[MAIN_OWNED_SEND_CONTEXT]: so[MAIN_OWNED_SEND_CONTEXT]');
     expect(registerSource).toContain('trustedDesktopSteerText.run(queued.text, runSteer)');
     expect(registerSource).toContain(
@@ -256,9 +333,9 @@ describe('session runtime control wiring', () => {
       expect(body).toContain('if (!deviceLinkInvoke) assertTrustedAppRendererEvent(event);');
       expect(body).toContain('stampTrustedDesktopQueuedOrigin(');
     }
-    expect(makerSendSource).toContain('clientId: explicitUserItem.clientId');
-    expect(makerSendSource).toContain('persistedContent: explicitUserItem.persistedContent');
-    expect(makerSendSource).toContain(
+    expect(queuedInputOriginSource).toContain('clientId: explicitUserItem.clientId');
+    expect(queuedInputOriginSource).toContain('persistedContent: explicitUserItem.persistedContent');
+    expect(queuedInputOriginSource).toContain(
       'if (deviceLinkInvoke || !canTrustDesktopPiCommand(item)) return explicitUserItem',
     );
     expect(makerSendSource).toContain('TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT');
@@ -547,7 +624,7 @@ describe('session runtime control wiring', () => {
     expect(setModel).not.toContain('ipcMain.handle(MAKER_INVOKE.SET_MODEL, handleSetModel)');
   });
 
-  it('accepts local user null effort at the selection gate; ranked models still fail in catalog', () => {
+  it('passes user null effort through catalog normalization before model side effects', () => {
     const setModel = handlerBody(
       registerSource,
       'const handleSetModel = async (',
@@ -555,7 +632,7 @@ describe('session runtime control wiring', () => {
     );
     const confirmation = setModel.indexOf('const confirmedContextWindow =');
     const selectionValidation = setModel.indexOf('!isSupportedRuntimeEffort(selectionEffort)');
-    const fixedEffortValidation = setModel.indexOf('atomicSelection.effort === null');
+    const axisResolution = setModel.indexOf('const axes = resolveSessionRuntimeAxes({');
     const prepare = setModel.indexOf('prepareModelWindowSwitch(');
     const apply = setModel.indexOf('applyRuntimeSetModelChange({');
 
@@ -567,12 +644,11 @@ describe('session runtime control wiring', () => {
     expect(setModel).not.toContain(
       "selectionEffort === null &&\n            (internalOptions.source !== 'user' ||\n              isDeviceLinkInvoke() ||\n              confirmedContextWindow !== undefined)",
     );
-    expect(setModel).toContain('catalogModel.efforts.length > 0');
-    expect(setModel).toContain(
-      "internalOptions.source === 'user' &&\n          atomicSelection.effort === null &&\n          catalogModel.efforts.length > 0",
-    );
-    expect(fixedEffortValidation).toBeGreaterThan(selectionValidation);
-    expect(fixedEffortValidation).toBeLessThan(prepare);
+    // #7449: a null wire axis must reach catalog normalization, otherwise the
+    // pending selection fails again on every queued-send retry.
+    expect(setModel).not.toContain('`effort "null" is unavailable for model "${model}"`');
+    expect(axisResolution).toBeGreaterThan(selectionValidation);
+    expect(axisResolution).toBeLessThan(prepare);
     expect(prepare).toBeLessThan(apply);
     expect(setModel).toContain(
       '!isDeviceLinkInvoke() && confirmedContextWindow === targetContextWindow',
@@ -659,7 +735,6 @@ describe('session runtime control wiring', () => {
       normalWakeGuard,
     );
 
-    expect(setModel).toContain('atomicSelection.effort === null');
     expect(setModel).toContain('isDeviceLinkInvoke() ||');
     expect(setModel).toContain("(atomicSelection?.effort === null && runtimeAgentKind !== 'pi')");
     expect(setModel).toContain('!rebuildLiveOrcaWorker && !atomicSelection');
@@ -675,6 +750,19 @@ describe('session runtime control wiring', () => {
     expect(persistSelection).toBeGreaterThan(patchFast);
     expect(normalWakeGuard).toBeGreaterThan(persistSelection);
     expect(wakeQueue).toBeGreaterThan(normalWakeGuard);
+  });
+
+  it('persists a send-time renamed model inside the shared route transaction', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    expect(setModel).toContain('persistRenamedSessionModel: true');
+    const persistGate = setModel.indexOf('internalOptions.persistRenamedSessionModel === true');
+    const persist = setModel.indexOf('await persistSessionFields(sessionId, patch);', persistGate);
+    expect(persistGate).toBeGreaterThan(-1);
+    expect(persist).toBeGreaterThan(persistGate);
   });
 
   it('uses current runtime window facts but still requires a verified target before rebuilding', () => {
@@ -977,6 +1065,49 @@ describe('session runtime control wiring', () => {
     );
   });
 
+  it('carries the Pi thinking intent through every staged selection replay', () => {
+    const body = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    const early = body.slice(body.indexOf('// A picker click'), body.indexOf('const axisPatch:'));
+    // 点选暂存：intent 必须带上思考意图，否则发送时回放会丢档位。
+    expect(early).toContain('{ thinking: atomicSelection.thinking }');
+    // 发送回放 / deferred 结算另两条重建链也不能丢。
+    expect(registerSource).toContain('{ thinking: intent.thinking }');
+    expect(registerSource).toContain('{ thinking: pending.thinking }');
+    expect(
+      registerSource.split('{ thinking: atomicSelection.thinking }').length,
+    ).toBeGreaterThanOrEqual(3);
+    // 回合中延期（deferLockedSelection）的两条登记都要暂存思考意图：只靠结算侧回放
+    // pending.thinking 不够，登记时不写就恒为 undefined，原症状会在「回合中切模」
+    // 场景原样复现。
+    const defer = body.slice(
+      body.indexOf('const deferLockedSelection = async () =>'),
+      body.indexOf('if (runtimeStatus.remoteHostId && isSessionInTurn(sessionId)) {'),
+    );
+    expect(defer).toContain('acceptSessionRuntimeMutation({');
+    expect(defer).toContain('deferSessionRuntimeAxisMutation({');
+    expect(
+      defer.split('{ thinking: atomicSelection.thinking }').length - 1,
+    ).toBeGreaterThanOrEqual(2);
+    // 非 Pi 引擎绝不能收到 thinkingEnabled（只有 Pi 的 set_model 会消费它）。
+    expect(registerSource).toContain(
+      "runtimeAgentKind === 'pi' && atomicSelection?.thinking !== undefined",
+    );
+    // 提交写入镜像后同步本机 renderer 记忆：renderer 的全量快照才会带上该选择，
+    // 镜像里的钉子得以撤销（否则会长期压住被控端后来的显式改动）。
+    const rememberThinking = registerSource.slice(
+      registerSource.indexOf('rememberThinkingIntent: ({'),
+      registerSource.indexOf('bootstrapSwitchedSession: async (sessionId, opts)'),
+    );
+    expect(rememberThinking).toContain(
+      'setThinkingEnabledInMemory(agentKind, providerId, model, thinking)',
+    );
+    expect(rememberThinking).toContain('DRAFT_PREF_APPLY');
+  });
+
   it('only relinks retained cross-host writers without rewriting native history', () => {
     const body = handlerBody(registerSource, 'const handleSetModel = async (', 'const recoverRemoteRuntimeAxisPersistence');
     expect(body).toContain('requiresCodexThreadRelink: () => maker.requiresCodexThreadHostTransfer(');
@@ -1064,7 +1195,7 @@ describe('session runtime control wiring', () => {
     expect(registerSource).toContain(
       'shouldPreserveSessionRuntimeFallbackAutoResume(session, closeReason)',
     );
-    expect(registerSource).toContain('autoResumeBookkeeping.hasSchedule(session.id)');
+    expect(registerSource).toContain('autoResumeBookkeeping.hasLiveSchedule(session.id, attemptToken)');
     expect(registerSource).toContain(
       'decision.episodeAttempt,\n                decision.attemptToken,',
     );
@@ -1334,6 +1465,21 @@ describe('session runtime control wiring', () => {
     const liveUsageRead = setModel.indexOf('getSessionLastLiveUsage(sessionId)');
     expect(liveUsageRead).toBeGreaterThan(-1);
     expect(liveUsageRead).toBeLessThan(pressurePreflight);
+    // 预算必须在预检之前读到，且预检比较的目标窗口必须带预算：否则小预算任务会拿
+    // 目录默认大窗证明「有余量」，跳过冷启动核实和切换后的最终窗口校验，既有上下文
+    // 直接落进过载窗口（Greptile P1，2026-09-22）。
+    const budgetRead = setModel.indexOf('await readStoredSessionContextWindowBudget(sessionId)');
+    const targetWindowResolve = setModel.indexOf('const coldPiTargetContextWindow');
+    expect(budgetRead).toBeGreaterThan(-1);
+    expect(budgetRead).toBeLessThan(targetWindowResolve);
+    expect(targetWindowResolve).toBeLessThan(pressurePreflight);
+    expect(
+      setModel.slice(targetWindowResolve, pressurePreflight).includes('sessionContextWindowBudget'),
+    ).toBe(true);
+    // 预算只读一次，预检与后续的缩窗闸门共用同一个值（同一锁内不可能变化）。
+    expect(
+      setModel.split('await readStoredSessionContextWindowBudget(sessionId)').length - 1,
+    ).toBe(1);
     expect(setModel).toContain('set-model: skipped cold Pi window verification');
     expect(setModel).toContain('coldPiRouteWithoutLiveWindowCheck = true;');
     // 终态活进程核验必须同步跳过，否则只是换成 'Pi target runtime could not be verified'。

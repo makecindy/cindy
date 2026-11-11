@@ -50,7 +50,7 @@ describe('remote Agent catalogs', () => {
       keepDeviceIds: [],
       revokedDeviceIds: new Set(['revoked']),
     })).toEqual([
-      { deviceId: 'unnamed', name: 'unnamed', canOpen: true },
+      { deviceId: 'unnamed', name: 'another computer', canOpen: true },
       { deviceId: 'office', name: 'Office PC', canOpen: true },
       { deviceId: 'studio', name: 'Studio Mac', canOpen: true },
     ]);
@@ -72,6 +72,17 @@ describe('remote Agent catalogs', () => {
       { id: 'legacy' },
     ] as unknown as ProviderView[];
     expect(remoteAgentProviders(providers).map((provider) => provider.id)).toEqual(['allowed']);
+  });
+
+  // Remote-only policy must narrow the picker without mutating the catalog used by same-account remote control.
+  it('applies model grants only to remote Agent choices and keeps old hosts compatible', () => {
+    const localModels = [{ id: 'small' }, { id: 'large' }];
+    const provider = { id: 'allowed', remoteInvocationEnabled: true, models: { codex: localModels } } as unknown as ProviderView;
+    expect(remoteAgentProviders([provider])[0]).toBe(provider);
+    const restricted = { ...provider, remoteModelIds: ['small'] };
+    expect(remoteAgentProviders([restricted])[0].models.codex).toEqual([{ id: 'small' }]);
+    expect(restricted.models.codex).toBe(localModels);
+    expect(remoteAgentProviders([{ ...restricted, remoteModelIds: [] }])[0].models.codex).toEqual([]);
   });
 
   it('groups source choices into one block per computer', () => {
@@ -138,6 +149,15 @@ describe('provider shares in the remote Agent catalogs', () => {
     expect(isProviderShareAgentDeviceId(null)).toBe(false);
   });
 
+  it('carries the share and member identity used to favorite the shared provider', () => {
+    const favoriteSource = {
+      shareId: 'one', memberId: 'member-1', providerId: 'anthropic', owner: { region: 'global' as const },
+    };
+    const [catalog] = build({ shares: [share('one', { favoriteSource })] });
+    expect(catalog.favoriteSource).toEqual(favoriteSource);
+    expect(build({ shares: [share('one')] })[0].favoriteSource).toBeUndefined();
+  });
+
   it('lists each reachable share as one more computer with only the shared provider', () => {
     const [catalog] = build({ shares: [share('one')] });
     expect(catalog).toEqual({
@@ -166,6 +186,14 @@ describe('provider shares in the remote Agent catalogs', () => {
     expect(build({ shares: [share('one'), share('two')], keepOnly: true, keepDeviceIds: ['share:two', 'studio'] })
       .map((item) => item.deviceId)).toEqual(['share:two']);
     expect(build({ shares: [share('one')], keepOnly: true })).toEqual([]);
+  });
+  it('keeps an active share with a host-verified bounded catalog visible while signaling is offline, but never a paused share', () => {
+    const cached = { providers, providerContinuity: { stale: true, remainingMs: 60_000 } };
+    const catalogs = build({ shares: [share('cached', { hostOnline: false, payload: cached }),
+      share('paused', { status: 'paused', hostOnline: false, payload: cached })] });
+    expect(catalogs.map(row => row.deviceId)).toEqual(['share:cached']);
+    expect(catalogs[0].offline).not.toBe(true);
+    expect(build({ shares: [share('expired', { hostOnline: false, payload: null })] })).toEqual([]);
   });
 
   it('keeps a removed share the task still points at, once the list is authoritative', () => {

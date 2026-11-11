@@ -352,6 +352,9 @@ function createOutState() {
     lastBoundCreds: null as BotCredentials | null,
     accountEpoch: 0,
     laneAnchors: new Map<string, LaneAnchorState>(),
+    // 被飞书拒过 reply_in_thread 的回复根(聚合消息/不支持话题的单聊): 记住后
+    // 后续出站直接普通回复, 不再每次先失败一次再降级(#9313 review)。
+    threadReplyUnsupported: new Set<string>(),
     patchableOpeners: new Map<string, string>(),
     openerTriggers: new Map<string, string>(),
     deferredOpenerConsumes: [] as DeferredOpenerConsume[],
@@ -379,6 +382,7 @@ function clearAccountScopedOutboundState(): void {
   S().laneAnchors.clear();
   S().patchableOpeners.clear();
   S().openerTriggers.clear();
+  S().threadReplyUnsupported.clear();
   clearDeferredOpenerConsumes();
   S().accountEpoch += 1;
 }
@@ -615,6 +619,35 @@ type SendTarget =
   | { kind: 'reply'; messageId: string; replyInThread?: boolean };
 
 /**
+ * reply 目标: 被飞书拒过 reply_in_thread 的根直接普通回复, 不再重复那次
+ * 注定失败的写。
+ */
+function replyTarget(messageId: string, wantInThread: boolean): SendTarget {
+  const inThread = wantInThread === true && threadReplyAllowed(messageId);
+  return inThread
+    ? { kind: 'reply', messageId, replyInThread: true }
+    : { kind: 'reply', messageId };
+}
+
+/**
+ * 记住被飞书拒过 reply_in_thread 的回复根: 该根再出站时直接普通回复, 不必
+ * 每次先失败一次再降级(聚合消息 / 不支持话题的单聊是确定性的拒绝)。
+ * 账号替换时随账号态一起清掉。
+ *
+ * 账号在途被替换时不能写: 旧账号的拒绝结论进了新账号的缓存, 新账号对同一条
+ * 消息就会莫名丢掉 reply_in_thread, 话题回复落进群主流(#9313 review)。
+ */
+function markThreadReplyUnsupported(messageId: string): void {
+  const pin = pinnedAccount.getStore();
+  if (pin && pin.epoch !== S().accountEpoch) return;
+  S().threadReplyUnsupported.add(messageId);
+}
+
+function threadReplyAllowed(messageId: string): boolean {
+  return !S().threadReplyUnsupported.has(messageId);
+}
+
+/**
  * userId → 本次出站目标。
  *
  * advanceRound = true(流式建卡 — 每个 agent 回合的首条出站)时强制从 FIFO
@@ -626,7 +659,7 @@ function resolveSendTarget(userId: string, opts?: { advanceRound?: boolean; thre
   const lane = decodeLaneUserId(userId);
   if (!lane && opts?.threadTs) {
     if (!opts.threadTs.startsWith('om_')) throw new Error('Invalid Feishu reply message id');
-    return { kind: 'reply', messageId: opts.threadTs, replyInThread: true };
+    return replyTarget(opts.threadTs, true);
   }
   if (!lane) return { kind: 'open_id', id: userId };
 
@@ -653,7 +686,7 @@ function resolveSendTarget(userId: string, opts?: { advanceRound?: boolean; thre
     // 消息发进群主流(位置错误比丢失更糟)。held 是回拨的群主流触发消息时
     // 带 reply_in_thread 回复才能落回话题。
     return state.held
-      ? { kind: 'reply', messageId: state.held, replyInThread: state.inThreadReply || undefined }
+      ? replyTarget(state.held, state.inThreadReply)
       : null;
   }
   if (state.held && !state.quotedHeld) {
@@ -661,6 +694,24 @@ function resolveSendTarget(userId: string, opts?: { advanceRound?: boolean; thre
     return { kind: 'reply', messageId: state.held };
   }
   return { kind: 'chat_id', id: lane.chatId };
+}
+
+/**
+ * 飞书 230072: 聚合消息(合并转发根)和不能开话题的单聊拒绝 reply_in_thread。
+ * 业务码可能在 2xx 响应体里(SDK 不抛), 也可能在抛出的 HTTP 错误上。
+ */
+const REPLY_IN_THREAD_UNSUPPORTED_CODE = 230072;
+
+function responseBusinessCode(res: { code?: number }): number | undefined {
+  return typeof res.code === 'number' ? res.code : undefined;
+}
+
+function thrownBusinessCode(err: unknown): number | undefined {
+  if (!err || typeof err !== 'object') return undefined;
+  const direct = (err as { code?: unknown }).code;
+  if (typeof direct === 'number') return direct;
+  const nested = (err as { response?: { data?: { code?: unknown } } }).response?.data?.code;
+  return typeof nested === 'number' ? nested : undefined;
 }
 
 /** 统一出站: target 三形态 → message.create(open_id/chat_id) 或 message.reply。 */
@@ -672,15 +723,41 @@ async function createMessage(
 ): Promise<{ messageId: string; chatId?: string }> {
   const c = ensureClient();
   if (target.kind === 'reply') {
-    const res = await c.im.v1.message.reply({
+    // 每次发送重新 ensureClient:账号在途被替换时 pin epoch 拒绝,绝不把提示
+    // 发到旧 bot(#9313 review)。
+    const sendReply = (inThread: boolean) => ensureClient().im.v1.message.reply({
       path: { message_id: target.messageId },
       data: {
         content,
         msg_type: msgType,
         // 回拨到群主流触发消息的锚点: 必须 reply_in_thread 才落回话题。
-        ...(target.replyInThread ? { reply_in_thread: true } : {}),
+        ...(inThread ? { reply_in_thread: true } : {}),
       },
     });
+    const inThread = target.replyInThread === true;
+    let res: { code?: number; data?: { message_id?: string } };
+    let retriedWithoutThread = false;
+    try {
+      res = await sendReply(inThread);
+    } catch (err) {
+      // 话题回复被拒时改成普通回复再发一次, 否则「不支持」提示会跟这次失败一起被吞(#9245)。
+      if (!inThread || thrownBusinessCode(err) !== REPLY_IN_THREAD_UNSUPPORTED_CODE) throw err;
+      getLog().warn('[feishu/outbound] reply_in_thread rejected (230072); retrying as a normal reply');
+      // 这个根确定不支持话题回复: 记住它, 后续出站直接普通回复(#9313 review)。
+      markThreadReplyUnsupported(target.messageId);
+      retriedWithoutThread = true;
+      res = await sendReply(false);
+    }
+    if (
+      !retriedWithoutThread &&
+      inThread &&
+      responseBusinessCode(res) === REPLY_IN_THREAD_UNSUPPORTED_CODE &&
+      !res.data?.message_id
+    ) {
+      getLog().warn('[feishu/outbound] reply_in_thread rejected (230072); retrying as a normal reply');
+      markThreadReplyUnsupported(target.messageId);
+      res = await sendReply(false);
+    }
     const id = res.data?.message_id ?? '';
     if (!id) throw new Error('[feishu/outbound] reply: no message_id in response');
     return { messageId: id };
@@ -1219,7 +1296,7 @@ export async function patchCardRaw(messageId: string, cardJson: unknown): Promis
 export async function sendCardRaw(
   userId: string,
   cardJson: unknown,
-  opts?: { threadTs?: string },
+  opts?: { threadTs?: string; advanceRound?: boolean },
 ): Promise<{ messageId: string }> {
   return withSendTarget(userId, { advanceRound: true, ...opts }, (target) => createMessage(
     target,
@@ -1764,6 +1841,7 @@ export async function uploadImage(absPath: string): Promise<string | null> {
 
 export interface ResolvedReplyMessage {
   replyContext: NonNullable<IMMessageEvent['replyContext']>;
+  attachments?: AttachmentRef[];
 }
 
 function renderReplyMessageText(
@@ -1793,13 +1871,8 @@ function replaceFetchedMentions(
 }
 
 /**
- * 精确读取一条飞书普通回复所引用的原消息。全程 pin 到开始时的 client;
- * 账号换代后调用方会用 connection generation 丢弃结果, 不会串进新账号。
- *
- * 任何读取、解析失败都降级为 null, 当前 turn 继续走既有群历史上下文路径。
- * 跨群 parent_id fail closed, 防止异常事件带出别处内容。被引附件只渲染
- * [图片]/[文件] 占位, 不在 transport 层提前下载或并入当前消息附件:正文要先
- * 经 host 的注入扫描, 且引用附件不应按触发消息语义落库。
+ * Fetch a quote (including merge-forward descendants) from the originating chat.
+ * Keep resource ownership for the host to download after screening the text.
  */
 export async function resolveReplyMessage(
   messageId: string,
@@ -1807,8 +1880,19 @@ export async function resolveReplyMessage(
 ): Promise<ResolvedReplyMessage | null> {
   const c = S().client;
   if (!c) return null;
+  return resolveReplyWithClient(c, messageId, expectedChatId);
+}
+
+async function resolveReplyWithClient(
+  c: Lark.Client,
+  messageId: string,
+  expectedChatId: string,
+  readBudget = { remaining: 21 },
+): Promise<ResolvedReplyMessage | null> {
   const log = getLog();
   try {
+    if (readBudget.remaining <= 0) return null;
+    readBudget.remaining--;
     const res = await c.im.v1.message.get({
       params: { user_id_type: 'open_id', with_sender_name: true },
       path: { message_id: messageId },
@@ -1818,32 +1902,64 @@ export async function resolveReplyMessage(
       log.warn(`[feishu/outbound] reply context fetch rejected: ${rejected}`);
       return null;
     }
-    const item = res.data?.items?.[0];
-    if (!item || item.deleted) return null;
-    if (item.chat_id !== expectedChatId) {
-      log.warn('[feishu/outbound] reply context dropped: parent message belongs to another chat');
-      return null;
-    }
-
-    const parsed = parseIncoming(item.msg_type ?? '', item.body?.content ?? '');
-    const text = replaceFetchedMentions(
-      renderReplyMessageText(parsed),
-      item.mentions,
-    );
+    const items = res.data?.items ?? [];
+    const root = items.find((item) => item.message_id === messageId);
+    if (!root || root.deleted || root.chat_id !== expectedChatId) return null;
+    const authorOf = (item: typeof root): string =>
+      (item.sender?.sender_name || (item.sender?.sender_type === 'app' ? 'bot' : 'user'))
+        .replace(/[\p{Cc}\p{Cf}]/gu, ' ').trim().slice(0, 64);
+    const attachments: AttachmentRef[] = [];
+    const visited = new Set<string>();
+    const render = async (item: typeof root): Promise<string> => {
+      if (!item.message_id || item.deleted || visited.has(item.message_id)) return '';
+      // The envelope is checked against the triggering chat above. Forwarded
+      // children belong through upper_message_id, even when their original chat differs.
+      visited.add(item.message_id);
+      if (item.msg_type === 'merge_forward') {
+        let children = items.filter((child) => child.upper_message_id === item.message_id);
+        // Some responses include only the immediate level. Fetch deeper envelopes
+        // with the same client; never follow arbitrary message IDs from body text.
+        if (!children.length && item !== root && readBudget.remaining > 0) {
+          try {
+            readBudget.remaining--;
+            const nested = await c.im.v1.message.get({
+              params: { user_id_type: 'open_id', with_sender_name: true },
+              path: { message_id: item.message_id },
+            });
+            if (!feishuBusinessRejectReason(nested)) {
+              const extra = nested.data?.items ?? [];
+              for (const child of extra) {
+                if (!items.some((known) => known.message_id === child.message_id)) items.push(child);
+              }
+              children = items.filter((child) => child.upper_message_id === item.message_id);
+            }
+          } catch {
+            // Preserve a visible unreadable marker and all readable siblings.
+          }
+        }
+        const lines: string[] = [];
+        for (const child of children) {
+          const text = await render(child);
+          if (text) lines.push(`[${authorOf(child)}] ${text}`);
+        }
+        return lines.length ? `[合并转发消息]\n${lines.join('\n')}`
+          : readBudget.remaining <= 0 ? '[合并转发消息：读取预算已用完]' : '[合并转发消息：未能读取子消息]';
+      }
+      const parsed = parseIncoming(item.msg_type ?? '', item.body?.content ?? '');
+      attachments.push(...parsed.attachments.map((ref) => ({ ...ref, messageId: item.message_id })));
+      return replaceFetchedMentions(renderReplyMessageText(parsed), item.mentions);
+    };
+    const text = await render(root);
     if (!text) return null;
-
-    const isBot = item.sender?.sender_type === 'app';
-    const author = item.sender?.sender_name?.trim() || (isBot ? 'bot' : 'user');
     return {
       replyContext: {
-        author,
+        messageId: root.message_id,
+        ...(root.create_time ? { sentAt: Number(root.create_time) } : {}),
+        author: authorOf(root),
         text,
-        ...(parsed.attachments.length ? {
-          unavailableAttachments: parsed.attachments.map((attachment) =>
-            `引用${attachment.kind === 'image' ? '图片' : attachment.fileName}：仅提供原消息记录，未下载文件内容`),
-        } : {}),
-        ...(isBot ? { isBot: true } : {}),
+        ...(root.sender?.sender_type === 'app' ? { isBot: true } : {}),
       },
+      ...(attachments.length ? { attachments } : {}),
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -1875,8 +1991,7 @@ export interface ChatHistoryPage {
 
 /**
  * 按页拉群/话题历史(群 lane 触发时 adapter 拼上下文用)。倒序拉一页, 返回
- * 页内升序。话题 lane 传 threadId 走 thread 容器, 只回本话题消息; 群主流
- * 不传, 调用方自行按 thread_id 过滤(chat 容器会混入话题消息)。
+ * 页内升序。展开转发前按 threadId 筛选; 缺省只保留群主流。
  *
  * 需要「获取群组中所有消息」权限。**失败(权限不足/网络)直接抛错** — 调用方
  * 需要区分「真的没有历史」与「拉取失败」来做降级提示, 不能吞成空数组。
@@ -1887,6 +2002,9 @@ export async function fetchChatHistoryPage(args: {
   threadId?: string;
   pageToken?: string;
   pageSize?: number;
+  excludeMessageId?: string;
+  /** Mutable per-turn allowance, shared by every page and nested message.get. */
+  mergeForwardReadBudget?: { remaining: number };
 }): Promise<ChatHistoryPage> {
   const c = S().client;
   if (!c) throw new Error('feishu client not bound');
@@ -1905,13 +2023,20 @@ export async function fetchChatHistoryPage(args: {
   }
   const items = res.data?.items ?? [];
   const out: RecentChatMessage[] = [];
+  const readBudget = args.mergeForwardReadBudget ?? { remaining: 20 };
   for (const item of items) {
     if (!item.message_id || item.deleted) continue;
+    if (item.message_id === args.excludeMessageId || (item.thread_id ?? '') !== (args.threadId ?? '')) continue;
     const msgType = item.msg_type ?? '';
     const rawContent = item.body?.content ?? '';
     let text = '';
     let attachments: AttachmentRef[] = [];
-    if (
+    if (msgType === 'merge_forward') {
+      const exhausted = readBudget.remaining <= 0;
+      const resolved = exhausted ? null : await resolveReplyWithClient(c, item.message_id, args.chatId, readBudget);
+      text = resolved?.replyContext.text ?? (exhausted ? '[合并转发消息：读取预算已用完]' : '[合并转发消息：读取失败]');
+      attachments = resolved?.attachments ?? [];
+    } else if (
       msgType === 'text' ||
       msgType === 'post' ||
       msgType === 'image' ||

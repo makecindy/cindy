@@ -16,6 +16,8 @@ interface MockSdkOptions {
   };
   onReady?: () => void;
   onError?: (error: Error) => void;
+  onReconnecting?: () => void;
+  onReconnected?: () => void;
 }
 
 type EventHandler = (data: unknown) => Promise<unknown> | unknown;
@@ -24,6 +26,7 @@ const mocks = {
   options: [] as MockSdkOptions[],
   start: vi.fn(async () => undefined),
   close: vi.fn(),
+  connectionStatus: vi.fn(() => ({ state: 'connected' })),
   bindClient: vi.fn(),
   unbindClient: vi.fn(),
   getBoundClient: vi.fn(() => null),
@@ -48,6 +51,7 @@ vi.doMock('@larksuiteoapi/node-sdk', () => ({
   WSClient: class {
     readonly start = mocks.start;
     readonly close = mocks.close;
+    readonly getConnectionStatus = mocks.connectionStatus;
 
     constructor(options: MockSdkOptions) {
       mocks.options.push(options);
@@ -111,6 +115,7 @@ beforeEach(async () => {
   mocks.options.length = 0;
   mocks.eventHandlers = {};
   vi.clearAllMocks();
+  mocks.connectionStatus.mockReturnValue({ state: 'connected' });
   mocks.firstAllowed.mockReturnValue(null);
   mocks.readOwnerOpenId.mockReturnValue(null);
 });
@@ -132,6 +137,114 @@ afterAll(() => {
 });
 
 describe('Feishu WebSocket conflict handling', () => {
+  it('does not treat an SDK ready log as recovery while its socket is retrying', async () => {
+    vi.useFakeTimers();
+    try {
+      const connecting = wsClient.start(credentials, { announceLifecycle: false });
+      mocks.connectionStatus.mockReturnValue({ state: 'reconnecting' });
+      latestClient().logger.info('[ws]', 'ws client ready');
+      expect(wsClient.getCurrentStatus()).not.toBe('connected');
+      await vi.advanceTimersByTimeAsync(8_000);
+      await expect(connecting).resolves.toBe('error');
+    } finally {
+      await wsClient.stop({ announceOffline: false });
+      vi.useRealTimers();
+    }
+  });
+
+  // PR #7291: SDK can report a generic error after rejecting start or exhausting retries.
+  // Unit: the accepted retry must survive that later error, while stop/ready still cancel it.
+  it('retries a rejected SDK start even after a later ordinary error', async () => {
+    vi.useFakeTimers();
+    mocks.start.mockRejectedValueOnce(new Error('network down'));
+    try {
+      await expect(wsClient.start(credentials, { announceLifecycle: false })).resolves.toBe('error');
+      latestClient().options.onError?.(new Error('socket closed'));
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(mocks.start).toHaveBeenCalledTimes(2);
+      latestClient().options.onReady?.();
+      expect(wsClient.getCurrentStatus()).toBe('connected');
+    } finally {
+      await wsClient.stop({ announceOffline: false });
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['recover', 'stop', 'auth'])('handles exhausted SDK retries: %s', async (outcome) => {
+    vi.useFakeTimers();
+    try {
+      const connecting = wsClient.start(credentials, { announceLifecycle: false });
+      const client = latestClient();
+      client.options.onError?.(new Error(outcome === 'auth'
+        ? 'pullConnectConfig failed: code=514, msg=invalid credentials'
+        : 'WebSocket reconnect exhausted after 3 attempts'));
+      if (outcome !== 'auth') client.options.onError?.(new Error('socket closed'));
+      await connecting;
+      if (outcome === 'stop') await wsClient.stop({ announceOffline: false });
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(mocks.start).toHaveBeenCalledTimes(outcome === 'recover' ? 2 : 1);
+      if (outcome === 'recover') {
+        client.options.onReady?.();
+        expect(wsClient.getCurrentStatus()).toBe('connected');
+      }
+    } finally {
+      await wsClient.stop({ announceOffline: false });
+      vi.useRealTimers();
+    }
+  });
+
+  // Regression: the one-shot startup verdict used to pin the visible status to error.
+  // Unit tier: drive real start() with SDK callbacks and fake time; existing cases
+  // cover conflicts, but not a successful connection after the startup deadline.
+  it.each(['onReady', 'onReconnected'] as const)(
+    'recovers after startup timeout via %s and ignores callbacks after stop',
+    async (callback) => {
+      vi.useFakeTimers();
+      const onStatus = vi.fn();
+      feishuEvents.on('status', onStatus);
+      try {
+        const connecting = wsClient.start(credentials, {
+          announceLifecycle: false,
+        });
+        const sdkClient = latestClient();
+        await vi.advanceTimersByTimeAsync(8000);
+        await expect(connecting).resolves.toBe('error');
+        expect(wsClient.getCurrentStatus()).toBe('error');
+        expect(wsClient.getCurrentError()).toContain('Timed out');
+
+        sdkClient.options.onReconnecting?.();
+        expect(wsClient.getCurrentStatus()).toBe('reconnecting');
+        sdkClient.options[callback]?.();
+        expect(wsClient.getCurrentStatus()).toBe('connected');
+        expect(wsClient.getCurrentError()).toBeUndefined();
+        expect(onStatus).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            status: 'connected',
+            error: undefined,
+          }),
+        );
+
+        await wsClient.stop({ announceOffline: false });
+        sdkClient.options[callback]?.();
+        expect(wsClient.getCurrentStatus()).toBe('idle');
+      } finally {
+        feishuEvents.off('status', onStatus);
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it('does not overwrite a ready callback with an earlier failed startup verdict', async () => {
+    const connecting = wsClient.start(credentials, {
+      announceLifecycle: false,
+    });
+    const sdkClient = latestClient();
+    sdkClient.options.onError?.(new Error('connect ETIMEDOUT'));
+    sdkClient.options.onReady?.();
+    await expect(connecting).resolves.toBe('connected');
+    expect(wsClient.getCurrentStatus()).toBe('connected');
+  });
+
   it('maps exceed_conn_limit during initial connection to conflict and closes the socket', async () => {
     const onConflict = vi.fn();
     feishuEvents.on('conflict', onConflict);

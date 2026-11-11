@@ -92,7 +92,7 @@ describe('官方 bot ack 表情', () => {
 
   it.each(PROCESSING_REACTION_POOL)('processing uses %s and completion clears it', (emoji) => {
     const index = PROCESSING_REACTION_POOL.indexOf(emoji);
-    const h = harness([HOOK_FEATURE_MESSAGE_OPS], 'minimal', () => index / 4);
+    const h = harness([HOOK_FEATURE_MESSAGE_OPS], 'minimal', () => index / PROCESSING_REACTION_POOL.length);
     h.reactions.onAccepted(TASK, h.send);
     h.reactions.onStarted(TASK, h.send);
     h.reactions.onFinished(TASK, 'ok', h.send);
@@ -180,7 +180,7 @@ describe('官方 bot ack 表情', () => {
       h.reactions.onAccepted(TASK, h.send);
       h.reactions.onStarted(TASK, h.send);
       h.reactions.onResult({ opId: 'req-1:processing', ok: false, error: 'REACTION_INVALID' }, () => h.send);
-      expect(h.sent.map(m => opOf(m).action.emoji)).toEqual(['👀', '🤓', '👨‍💻']);
+      expect(h.sent.map(m => opOf(m).action.emoji)).toEqual(['👀', '🤓', '🤔']);
       expect(opOf(h.sent[2]).opId).toBe('req-1:processing-fallback');
       h.reactions.onResult({ opId: 'req-1:processing', ok: false, error: 'REACTION_INVALID' }, () => h.send);
       h.reactions.onResult({ opId: 'req-1:processing-fallback', ok: false, error: 'REACTION_INVALID' }, () => h.send);

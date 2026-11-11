@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   describeTextPreviewFailure,
+  formatByteSize,
   isHtmlFilePreviewCandidate,
   isTextFilePreviewCandidate,
   nonTextFilePreviewStatusText,
@@ -118,5 +119,31 @@ describe('file preview shared model', () => {
   it('keeps the state union intentionally narrow', () => {
     const state: TextFilePreviewState = { status: 'ready', data: 'ok', size: 2 };
     expect(textPreviewStatusText(state, true)).toContain('已加载文本预览');
+  });
+
+  it('picks the byte unit from the rounded label, not from the raw byte count', () => {
+    // 1048575 B 属于 MB 档:停在 KB 档会四舍五入成 "1024.0 KB",那一档的合法最大值是 1023。
+    expect(formatByteSize(1024 * 1024 - 1)).toBe('1.0 MB');
+    expect(formatByteSize(1024 * 1024 * 1024 - 1)).toBe('1.0 GB');
+    // 边界两侧的常规取值不变。
+    expect(formatByteSize(1023)).toBe('1023 B');
+    expect(formatByteSize(1024)).toBe('1.0 KB');
+    expect(formatByteSize(1024 * 1023)).toBe('1023.0 KB');
+    expect(formatByteSize(1024 * 1024)).toBe('1.0 MB');
+    expect(formatByteSize(18700)).toBe('18.3 KB');
+    expect(formatByteSize(0)).toBe('');
+    expect(formatByteSize(-5)).toBe('');
+    expect(formatByteSize(Number.NaN)).toBe('');
+  });
+
+  it('keeps the remote preview failure text on the carried unit', () => {
+    expect(describeTextPreviewFailure({
+      success: false,
+      reason: 'oversize',
+      size: 1024 * 1024 - 1,
+      limitMb: 1,
+    })).toBe('文件超过远程预览上限 · 1 MB · 当前 1.0 MB');
+    expect(textPreviewStatusText({ status: 'ready', data: 'x', size: 1024 * 1024 * 1024 - 1 }, true))
+      .toBe('已加载文本预览 · 1.0 GB');
   });
 });

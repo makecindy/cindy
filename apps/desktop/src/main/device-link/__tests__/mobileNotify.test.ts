@@ -11,8 +11,8 @@ describe('buildSessionNotifyPayload', () => {
     expect(first.sender?.id).toMatch(/^[a-f0-9]{64}$/);
     expect(buildSessionNotifyPayload({ ...opts, selfDeviceId: 'd2' }).sender?.id).not.toBe(first.sender?.id);
     expect(buildSessionNotifyPayload({ ...opts, sessionId: 's2' }).sender?.id).toBe(first.sender?.id);
-    expect(buildSessionNotifyPayload({ ...opts, kind: 'needs-reply' }).sender).toBeUndefined();
-    expect(buildSessionNotifyPayload({ ...opts, kind: 'error' }).sender).toBeUndefined();
+    expect(buildSessionNotifyPayload({ ...opts, kind: 'needs-reply' }).sender).toEqual(first.sender);
+    expect(buildSessionNotifyPayload({ ...opts, kind: 'error' }).sender).toEqual(first.sender);
     expect(buildSessionNotifyPayload({ ...opts, teammateBotId: undefined }).sender).toBeUndefined();
   });
   const base = {
@@ -38,6 +38,15 @@ describe('buildSessionNotifyPayload', () => {
     expect(buildSessionNotifyPayload({ ...base, kind: 'needs-reply' }).category).toBe(
       'session-needs-reply',
     );
+  });
+
+  it('routes a remote task to its execution host and scopes collapse/sender to that host', () => {
+    const remote = buildSessionNotifyPayload({ ...base, targetDeviceId: 'execution-host', teammateBotId: 'bot-1' });
+    const local = buildSessionNotifyPayload({ ...base, teammateBotId: 'bot-1' });
+    expect(remote.deepLink).toBe('/sessions/session-1234?deviceId=execution-host&resourceCollectionId=teammates&resourceId=bot-1&resourceKind=bot');
+    expect(remote.collapseId).toBe(createHash('sha256').update('execution-host:session-1234').digest('hex').slice(0, 32));
+    expect(remote.collapseId).not.toBe(local.collapseId);
+    expect(remote.sender?.id).not.toBe(local.sender?.id);
   });
 
   it('detail 摘要作为正文:折叠空白、超协议上限截断;缺省回退终态文案', () => {
@@ -155,7 +164,7 @@ it('uses final-message identity for completed replies, allowing distinct replies
 it('sends plain text to APNs, not Markdown or image paths', () => {
   const payload = { sessionId: 'bot', title: 'Cindy', kind: 'done' as const, selfDeviceId: 'home', fallbackBody: 'New reply' };
   expect(buildSessionNotifyPayload({ ...payload, detail: '**Report** [ready](https://example.com) `a_b`' }).body).toBe('Report ready a_b');
-  expect(buildSessionNotifyPayload({ ...payload, detail: '![private](/private/file.png)' }).body).toBe('New reply');
+  expect(buildSessionNotifyPayload({ ...payload, detail: '![private](/private/file.png)' }).body).toBe('private');
 });
 
 describe('buildBotGroupNotifyPayload', () => {

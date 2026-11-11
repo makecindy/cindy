@@ -191,7 +191,7 @@ export interface RowSelectionResult {
   model: string;
   providerId: string;
   effort: string;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
 }
 
 /**
@@ -202,7 +202,7 @@ export interface RowSelectionResult {
  *   - **换模型**:精确记忆 → 沿用当前档(仍受支持时)→ 模型默认。
  *     手机差异注记:桌面第 3 档 provider-agnostic per-model 记忆手机没有,恒 miss(不传)。
  *   - **fast**:fastEditable(agent hasFastMode × 该 (供应商, 模型) supportsFastMode)门控,
- *     恢复该行记忆,缺省 false。
+ *     恢复该行记忆,超快另要求目标 Codex 模型明确支持,缺省 false。
  */
 export function resolveRowSelection(args: {
   row: ProviderModelRow;
@@ -240,11 +240,10 @@ export function resolveRowSelection(args: {
         providerEffort,
       });
 
-  const fastEditable =
-    args.hasFastModeCap && modelSupportsFastMode(row.provider, row.model.id, agentKind);
-  const fastMode = fastEditable
-    ? memory?.getFast(agentKind, row.provider.id, row.model.id) ?? false
-    : false;
+  const rememberedFast = memory?.getFast(agentKind, row.provider.id, row.model.id) ?? false;
+  const fastMode = isFastRestorable(
+    agentKind, row.provider.id, row.model.id, [row], args.hasFastModeCap, rememberedFast,
+  ) ? rememberedFast : false;
 
   return { model: row.model.id, providerId: row.provider.id, effort, fastMode };
 }
@@ -252,8 +251,8 @@ export function resolveRowSelection(args: {
 /**
  * 记忆的 fastMode 恢复前重验(codex review P2):恢复值必须与手动选行同款
  * `fastEditable` 门控对齐——行必须仍在目录中,且 agent 有 Fast 能力、该 (供应商,
- * 模型) 支持 Fast;任一不满足即不可恢复(置 false),避免恢复出「UI 显示关、
- * 实际创建发 true」的矛盾态。
+ * 模型) 支持所恢复的速度档位;超快另要求 Codex 模型明确声明支持。
+ * 任一不满足即不可恢复(置 false),避免 UI 与实际创建速度不一致。
  */
 export function isFastRestorable(
   agentKind: AgentKind,
@@ -261,7 +260,9 @@ export function isFastRestorable(
   modelId: string,
   modelRows: readonly ProviderModelRow[],
   hasFastModeCap: boolean,
+  fastMode: boolean | 'ultrafast',
 ): boolean {
   const row = modelRows.find((r) => r.provider.id === providerId && r.model.id === modelId);
-  return !!row && hasFastModeCap && modelSupportsFastMode(row.provider, row.model.id, agentKind);
+  return !!row && hasFastModeCap && modelSupportsFastMode(row.provider, row.model.id, agentKind)
+    && (fastMode !== 'ultrafast' || (agentKind === 'codex' && row.model.supportsUltrafastMode === true));
 }

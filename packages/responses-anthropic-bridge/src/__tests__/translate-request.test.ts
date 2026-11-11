@@ -134,6 +134,37 @@ describe('Responses → Anthropic request translation', () => {
     })).toThrowError('input[0].content');
   });
 
+  it('skips empty assistant messages with null content without dropping other input', () => {
+    const result = translateResponsesRequest({
+      model: 'claude',
+      input: [
+        {
+          type: 'message',
+          id: 'msg_empty',
+          role: 'assistant',
+          status: 'completed',
+          phase: 'final',
+          content: null,
+        },
+        { role: 'assistant', content: null },
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'continue' }] },
+      ],
+    });
+
+    expect(result.request.messages).toEqual([{
+      role: 'user',
+      content: [{ type: 'text', text: 'continue' }],
+    }]);
+    expect(() => translateResponsesRequest({
+      model: 'claude',
+      input: [{ type: 'message', role: 'assistant', content: null, encrypted_content: 'opaque' }],
+    })).toThrowError('message.content');
+    expect(() => translateResponsesRequest({
+      model: 'claude',
+      input: [{ type: 'message', role: 'user', content: null }],
+    })).toThrowError('message.content');
+  });
+
   it('keeps collab text inside a valid tool-use round', () => {
     const result = translateResponsesRequest({
       model: 'claude',

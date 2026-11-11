@@ -1,16 +1,41 @@
+import { groupTeammateProcess } from '@cindy/maker-shared/message-render';
 import { hasRichAnswer } from '@cindy/maker-shared/rich-answer';
 import { botTaskResultKey, readBotTaskResults } from '@cindy/maker-shared/botCollaboration';
 import { HISTORY_GAP_SPLIT_MS } from '@cindy/maker-shared/history-gap';
-import { collectMobileMarkdownImages } from './messageMarkdown';
+import { collectBotTurnContinuations } from '@cindy/maker-shared/botTimeline';
 import type { MobileMessageRenderItem, MobileWorkGroupItem, MobileWorkChildItem } from './messageRenderModel';
 
-const isDelivery = (item: MobileMessageRenderItem) => (item.type === 'message' && !item.message.failedSamplingAttempt && item.message.kind === 'assistant' && hasRichAnswer(item.message.body)) || item.type === 'tool_media' && item.tools.some(tool => !!tool.media?.length || !!tool.files?.length)
-  || item.type === 'message' && !item.message.failedSamplingAttempt && (item.message.companion?.kind === 'task' && item.message.companion.meta.role === 'delegation-result'
-    || !!item.message.attachments?.length || !!item.message.media?.length
-    || !!item.message.files?.length || collectMobileMarkdownImages(item.message.body).length > 0);
+export function companionTurnContinuations(items: readonly MobileMessageRenderItem[]): ReadonlySet<string> {
+  return collectBotTurnContinuations(items, item => {
+    const start = item.type === 'work_group' ? item.startedAtMs
+      : 'message' in item ? Date.parse(item.message.createdAt) : undefined;
+    return {
+      kind: item.type === 'work_group' ? 'process'
+        : item.type === 'message' && item.message.kind === 'assistant' && !item.message.systemCardType
+          && !item.message.companion ? 'reply'
+        : item.type === 'message' && item.message.companion ? 'artifact'
+        : item.type === 'message' || item.type === 'pending_send' || item.type === 'fork_origin' ? 'boundary' : 'artifact',
+      completed: item.type === 'message' && item.message.turnCompleted === true,
+      start,
+      end: item.type === 'work_group' && start !== undefined ? start + (item.durationMs ?? 0) : start,
+    };
+  });
+}
 
 const expandWorkGroups = (items: readonly MobileMessageRenderItem[]): MobileMessageRenderItem[] =>
   items.flatMap(item => item.type === 'work_group' ? expandWorkGroups(item.children) : [item]);
+
+/** Match Desktop: keep internal model prose in storage, with traces and work still accessible. */
+function withoutPrivateProse<T extends MobileMessageRenderItem>(items: readonly T[]): T[] {
+  return items.filter(item => !(item.type === 'message' && item.message.kind === 'assistant'
+    && !item.message.systemCardType && !item.message.companion
+    && item.message.source.agentMeta?.botPrivateReply === true)).map(item => {
+    if (item.type !== 'work_group') return item;
+    const children = withoutPrivateProse(item.children);
+    return children.length === item.children.length && children.every((child, index) => child === item.children[index])
+      ? item : { ...item, children };
+  });
+}
 
 /** Lift addressed replies without destroying the process tree or its lazy loader. */
 function liftReplies(group: MobileWorkGroupItem, isReply: (item: MobileMessageRenderItem) => boolean): MobileMessageRenderItem[] {
@@ -47,13 +72,15 @@ function liftReplies(group: MobileWorkGroupItem, isReply: (item: MobileMessageRe
 
 /** Presentation only. The host's persisted messages and lazy history remain intact. */
 export function companionConversationItems(items: readonly MobileMessageRenderItem[]): MobileMessageRenderItem[] {
+  items = withoutPrivateProse(items);
   // The main timeline folds earlier background-wake seals into work groups; teammate chats
   // still show every sealed reply, so find sealed runs with tools/thinking as boundaries.
   const sealed = new Set<string>();
   let sealedRun = false;
   let nextAssistantAt: number | null = null;
   for (const item of expandWorkGroups(items).reverse()) {
-    if (item.type !== 'message' || item.message.kind !== 'assistant' || item.message.failedSamplingAttempt || !item.message.body.trim() || item.message.systemCardType) {
+    if (item.type !== 'message' || item.message.kind !== 'assistant' || item.message.failedSamplingAttempt || !item.message.body.trim() || item.message.systemCardType
+      || item.message.source.agentMeta?.assistantPhase === 'commentary') {
       sealedRun = false;
       nextAssistantAt = null;
     } else {
@@ -75,27 +102,10 @@ export function companionConversationItems(items: readonly MobileMessageRenderIt
     && (item.message.source.agentMeta?.assistantPhase === 'final_answer' || item.message.turnCompleted
       || sealed.has(item.key) || Boolean(item.message.sourceGroup) || item.message.explicitDelivery || hasRichAnswer(item.message.body));
   const flattened = items.flatMap(item => item.type === 'work_group' ? liftReplies(item, isAddressedReply) : [item]);
-  // A later delivery is already the result. Do not restore its unsealed preamble.
-  const deliveredAfter = new Set<string>();
-  let delivery = false;
-  let nextMessageAt: number | null = null;
-  for (const item of [...flattened].reverse()) {
-    if (item.type === 'message') {
-      const createdAt = Date.parse(item.message.createdAt);
-      if (Number.isFinite(createdAt)) {
-        // A receipt in a newer loaded window cannot suppress an older reply.
-        if (nextMessageAt !== null && nextMessageAt - createdAt > HISTORY_GAP_SPLIT_MS) delivery = false;
-        nextMessageAt = createdAt;
-      }
-    }
-    if (item.type === 'message' && item.message.kind === 'user') delivery = false;
-    else if (isDelivery(item)) delivery = true;
-    else if (delivery) deliveredAfter.add(item.key);
-  }
   const attached = new Set(flattened.flatMap(item => item.type === 'message'
     && item.message.kind === 'assistant' && !item.message.failedSamplingAttempt && item.message.turnCompleted === true && item.message.body.trim()
     ? readBotTaskResults(item.message.source.agentMeta?.botTaskResults).map(botTaskResultKey) : []));
-  return flattened.filter(item => {
+  const visible = flattened.filter(item => {
     if (item.type === 'message' && item.message.companion?.kind === 'task'
       && item.message.companion.meta.role === 'delegation-result'
       && attached.has(botTaskResultKey(item.message.companion.meta))) return false;
@@ -111,9 +121,46 @@ export function companionConversationItems(items: readonly MobileMessageRenderIt
     }
     if (message.systemCardType) return true;
     if (message.kind === 'thinking' || message.kind === 'tool') return false;
-    if (message.kind === 'assistant' && message.source.agentMeta?.assistantPhase === 'commentary'
-      && !message.explicitDelivery && !isDelivery(item)) return false;
-    return message.kind !== 'assistant' || isAddressedReply(item) || isDelivery(item)
-      || message.isTurnFinalAssistant && !deliveredAfter.has(item.key);
+    // Ordinary task grouping owns when prose enters the completed work fold.
+    // Metadata arriving after a text delta must not hide a still-visible row.
+    return true;
+  });
+  return visible;
+}
+
+export function companionProcessItems(items: readonly MobileMessageRenderItem[], isStreaming: boolean): MobileMessageRenderItem[] {
+  const visible = companionConversationItems(items);
+  const addressed = new Set<MobileMessageRenderItem>();
+  let sealed = false;
+  for (let i = visible.length - 1; i >= 0; i--) {
+    const item = visible[i]!;
+    if (item.type !== 'message' || item.message.kind !== 'assistant' || item.message.systemCardType
+      || item.message.source.agentMeta?.assistantPhase === 'commentary') { sealed = false; continue; }
+    sealed ||= item.message.turnCompleted === true || item.message.source.agentMeta?.assistantPhase === 'final_answer';
+    if (sealed || item.message.sourceGroup || item.message.explicitDelivery || hasRichAnswer(item.message.body)) addressed.add(item);
+  }
+  const lastUser = visible.findLastIndex(item => item.type === 'message' && item.message.kind === 'user'
+    && !item.message.isSyntheticTrigger && !item.message.systemCardType);
+  const time = (item: MobileMessageRenderItem): number | null => {
+    if (item.type === 'work_group') return item.startedAtMs ?? null;
+    const at = 'message' in item ? Date.parse(item.message.createdAt) : 'createdAt' in item && typeof item.createdAt === 'string' ? Date.parse(item.createdAt) : NaN;
+    return Number.isFinite(at) ? at : null;
+  };
+  const lastCompleted = visible.findLastIndex(item => item.type === 'message' && item.message.turnCompleted === true);
+  const liveItems = new Set(isStreaming ? visible.slice(Math.max(lastUser, lastCompleted) + 1) : []);
+  return groupTeammateProcess(visible, {
+    children: item => item.type === 'work_group' ? item.children : undefined,
+    isProgress: item => item.type === 'message' && item.message.kind === 'assistant' && !item.message.systemCardType
+      && !addressed.has(item) && (item.message.source.agentMeta?.assistantPhase === 'commentary'
+        || (liveItems.has(item))),
+    isRecovery: item => item.type === 'message' && ['agent-switch', 'auto-resume', 'context-rebuild'].includes(item.message.systemCardType ?? ''),
+    start: time,
+    end: item => item.type === 'work_group' && item.startedAtMs !== undefined
+      ? item.startedAtMs + (item.durationMs ?? 0) : time(item),
+    streaming: item => item.type === 'work_group' ? item.isStreaming === true : liveItems.has(item),
+    create: (children, key, streaming, start, end) => ({ type: 'work_group', teammateJournal: true, key,
+      children: children as MobileWorkChildItem[], isStreaming: streaming,
+      ...(start !== null ? { startedAtMs: start } : {}),
+      ...(start !== null && end !== null ? { durationMs: Math.max(0, end - start) } : {}) }),
   });
 }

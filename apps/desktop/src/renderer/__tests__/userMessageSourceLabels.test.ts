@@ -20,9 +20,11 @@ describe('UserMessage share-image privacy boundary', () => {
     );
   });
 
+  // A teammate DM bubble that also holds attachments is content, not an annotation;
+  // HookTaskCard.test.tsx covers that share-image path through the real component.
   it('marks a bubble containing only a plugin annotation for stripping', () => {
     expect(source).toMatch(
-      /\{\.\.\.\(inlineQuoteCount === 0 && !displayBubbleBody\.trim\(\)\s*\? \{ \[SHARE_SOURCE_ATTR\]: '' \}\s*: \{\}\)\}/,
+      /\{\.\.\.\(inlineQuoteCount === 0 && !displayBubbleBody\.trim\(\) && !attachmentsInBubble\s*\? \{ \[SHARE_SOURCE_ATTR\]: '' \}\s*: \{\}\)\}/,
     );
   });
 });

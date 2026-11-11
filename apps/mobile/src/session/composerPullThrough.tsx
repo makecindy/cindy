@@ -1,5 +1,6 @@
+import type { ViewInstance, ScrollViewInstance } from 'react-native';
 import { useCallback, useMemo, useRef, useState, type Ref } from 'react';
-import { Animated, Platform, type ScrollView, type ScrollViewProps, type View } from 'react-native';
+import { Animated, Platform, type ScrollView, type ScrollViewProps } from 'react-native';
 import { measure, runOnJS, useAnimatedReaction, useAnimatedRef, useSharedValue, type AnimatedRef, type SharedValue } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from '@/platform/gestureHandler';
 
@@ -28,13 +29,13 @@ export interface ComposerPullEvent {
 export interface ComposerPullThroughBridge {
   armed: SharedValue<boolean>;
   event: SharedValue<ComposerPullEvent>;
-  grabberRef: AnimatedRef<View>;
+  grabberRef: AnimatedRef<ViewInstance>;
 }
 
 export function useComposerPullThroughBridge(): ComposerPullThroughBridge {
   const armed = useSharedValue(false);
   const event = useSharedValue<ComposerPullEvent>({ id: 0, active: false, startY: 0, y: 0, successful: false });
-  const grabberRef = useAnimatedRef<View>();
+  const grabberRef = useAnimatedRef<ViewInstance>();
   return useMemo(() => ({ armed, event, grabberRef }), [armed, event, grabberRef]);
 }
 
@@ -69,7 +70,7 @@ const PHASE_HANDED_OFF = 2;
 
 type PullThroughScrollViewProps = ScrollViewProps & {
   bridge: ComposerPullThroughBridge;
-  ref?: Ref<ScrollView>;
+  ref?: Ref<ScrollViewInstance>;
 };
 
 /**
@@ -87,13 +88,13 @@ type PullThroughScrollViewProps = ScrollViewProps & {
  * 另外编排器只在起手（ACTION_DOWN）时认领手势，拖动中途 armed 才变 true 的那次拖动不会接手。
  */
 export function ComposerPullThroughScrollView({ bridge, ref, ...props }: PullThroughScrollViewProps) {
-  const scrollRef = useRef<ScrollView | null>(null);
+  const scrollRef = useRef<ScrollViewInstance | null>(null);
   const scrollEnabledRef = useRef(props.scrollEnabled !== false);
   scrollEnabledRef.current = props.scrollEnabled !== false;
-  const setRef = useCallback((node: ScrollView | null) => {
+  const setRef = useCallback((node: ScrollViewInstance | null) => {
     scrollRef.current = node;
     if (typeof ref === 'function') ref(node);
-    else if (ref) (ref as { current: ScrollView | null }).current = node;
+    else if (ref) (ref as { current: ScrollViewInstance | null }).current = node;
   }, [ref]);
   const setFrozen = useCallback((frozen: boolean) => {
     scrollRef.current?.setNativeProps({ scrollEnabled: frozen ? false : scrollEnabledRef.current });
@@ -135,14 +136,22 @@ export function ComposerPullThroughScrollView({ bridge, ref, ...props }: PullThr
     // composer blocks edge-back. Manual observes touches without a competing pan.
     const tracker = Gesture.Manual()
       .enabled(attach)
-      .onTouchesDown((touches) => {
+      .onTouchesDown((touches, manager) => {
         'worklet';
         phase.value = PHASE_IDLE;
-        if (touches.numberOfTouches !== 1 || !armed.value) return;
+        // A passive Manual recognizer must still leave BEGAN. Keeping it pending
+        // makes AVPlayer's native play/seek controls wait indefinitely on iOS.
+        if (touches.numberOfTouches !== 1 || !armed.value) {
+          manager.fail();
+          return;
+        }
         const frame = measure(grabberRef);
         const y = touches.allTouches[0]?.absoluteY;
         // 只从输入框上方的聊天记录起手；按在输入框上的触摸本就归输入框。
-        if (!frame || y === undefined || y >= frame.pageY) return;
+        if (!frame || y === undefined || y >= frame.pageY) {
+          manager.fail();
+          return;
+        }
         composerTop.value = frame.pageY;
         previousY.value = y;
         phase.value = PHASE_TRACKING;
@@ -167,9 +176,10 @@ export function ComposerPullThroughScrollView({ bridge, ref, ...props }: PullThr
         const current = event.value;
         event.value = { id: current.id, active: true, startY: current.startY, y, successful: false };
       })
-      .onTouchesUp((touches) => {
+      .onTouchesUp((touches, manager) => {
         'worklet';
         end(touches.changedTouches[0]?.absoluteY ?? NaN, true);
+        manager.fail();
       })
       .onTouchesCancelled(() => {
         'worklet';

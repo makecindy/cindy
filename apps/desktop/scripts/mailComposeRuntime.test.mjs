@@ -533,6 +533,88 @@ test("local storage is labeled honestly and still flushes edits before send", as
   assert.equal(f.writes.at(-1).fields.body, "Local edit");
 });
 
+test('mailbox autosave waits for two idle seconds while publishing local edits immediately', async () => {
+  const f = fixture({ write: async () => {
+    assert.equal(f.cards.at(-1).draft.state, 'syncing');
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'First' });
+  await f.advance(1500);
+  await f.card('change', { ...f.values(), body: 'Latest' });
+  const pending = f.cards.at(-1).draft;
+  assert.equal(pending.fields.find(field => field.name === 'body').value, 'Latest');
+  assert.equal(pending.state, 'draft');
+  assert.equal(pending.status, '修改已保留，等待同步');
+  await f.advance(1999);
+  assert.equal(f.writes.length, 0);
+  await f.advance(1);
+  assert.equal(f.writes.length, 1);
+  assert.equal(f.current().editor.body, 'Latest');
+  assert.equal(f.cards.at(-1).draft.state, 'draft');
+  assert.ok(f.cards.at(-1).draft.status.includes('已同步到'));
+});
+
+test('typing during an autosave gets a new idle period instead of an immediate second write', async () => {
+  let release, started;
+  const ready = new Promise(resolve => { started = resolve; });
+  const wait = new Promise(resolve => { release = resolve; });
+  const f = fixture({ write: async (_, number) => {
+    if (number === 1) { started(); await wait; }
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'First' });
+  const saving = f.advance(2000);
+  await ready;
+  await f.card('change', { ...f.values(), body: 'Still typing' });
+  release();
+  await saving;
+  assert.equal(f.writes.length, 1);
+  assert.equal(f.current().editor.body, 'First');
+  assert.equal(f.cards.at(-1).draft.status, '修改已保留，等待同步');
+  await f.advance(1999);
+  assert.equal(f.writes.length, 1);
+  await f.advance(1);
+  assert.equal(f.writes.length, 2);
+  assert.equal(f.current().editor.body, 'Still typing');
+});
+
+test('explicit send flushes pending edits without waiting for the autosave timer', async () => {
+  const f = fixture();
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Ready to send' });
+  assert.equal(f.writes.length, 0);
+  assert.equal((await f.tool('send')).ok, true);
+  assert.deepEqual(f.writes.map(request => [request.send, request.fields.body]), [
+    [false, 'Ready to send'], [true, 'Ready to send'],
+  ]);
+  await f.advance(2000);
+  assert.equal(f.writes.length, 2);
+});
+
+test('an autosave queued behind a slow write cannot bypass newer typing debounce', async () => {
+  let release, started;
+  const ready = new Promise(resolve => { started = resolve; });
+  const wait = new Promise(resolve => { release = resolve; });
+  const f = fixture({ write: async (_, number) => {
+    if (number === 1) { started(); await wait; }
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'First' });
+  const saving = f.advance(2000);
+  await ready;
+  await f.card('change', { ...f.values(), body: 'Second' });
+  const queued = f.advance(2000);
+  await f.card('change', { ...f.values(), body: 'Third' });
+  release();
+  await Promise.all([saving, queued]);
+  assert.equal(f.writes.length, 1);
+  await f.advance(1999);
+  assert.equal(f.writes.length, 1);
+  await f.advance(1);
+  assert.equal(f.writes.length, 2);
+  assert.equal(f.current().editor.body, 'Third');
+});
+
 test("a newer edit during IMAP save is saved to the replacement UID before send", async () => {
   let release, started;
   const ready = new Promise((resolve) => {
@@ -716,6 +798,52 @@ test('HTML style and typing changes merge while preview-only attachment changes 
   assert.equal(f.current().editor.body, 'Dear Original');
   assert.equal(f.current().attachments.length, 1);
   assert.equal(f.cards.at(-1).draft.state, 'draft');
+});
+
+// The whole-body editor emits a document; outgoing mail uses a fragment.
+// Saving between keystrokes must not look like a concurrent body replacement.
+test('typing across autosaves merges document HTML against its outgoing fragment', async () => {
+  const f = fixture({ richText: true }); await f.present();
+  const values = f.values();
+  for (const text of ['Original.', 'Original..', 'Original...']) {
+    await f.card('change', { ...values, body: text,
+      bodyHtml: `<html><head></head><body><p style="color:red">${text}</p></body></html>` });
+    await f.flush();
+    assert.equal(f.current().editor.body, text);
+    assert.equal(f.current().editor.bodyHtml, `<div><p style="color:red">${text}</p></div>`);
+    assert.equal(f.cards.at(-1).draft.state, 'draft');
+  }
+  assert.equal(f.writes.length, 3);
+});
+
+test('restoring a formatting-only conflict preserves unsaved typing without sending', async () => {
+  const f = fixture({ richText: true }); await f.present();
+  const base = { ...f.values(), body: 'Original.',
+    bodyHtml: '<html><head></head><body><p>Original.</p></body></html>' };
+  const local = { ...base, body: 'Original...', bodyHtml: base.bodyHtml.replace('Original.', 'Original...') };
+  const card = f.cards.at(-1).draft;
+  card.baseValues = base;
+  card.fields.forEach(field => { field.value = local[field.name]; });
+  card.state = 'error'; card.status = 'Conflict';
+  f.externalEdit({ body: base.body, bodyHtml: '<div><p>Original.</p></div>' });
+  f.restart();
+  await f.card('change', local); await f.flush();
+  assert.equal(f.current().editor.bodyHtml, '<div><p>Original...</p></div>');
+  assert.equal(f.cards.at(-1).draft.state, 'draft');
+  assert.equal(f.writes.some(w => w.send), false);
+});
+
+test('normalizing HTML still refuses overlapping mailbox edits and preserves the local card', async () => {
+  const f = fixture({ richText: true }); await f.present();
+  const values = f.values();
+  await f.card('change', { ...values, body: 'Local',
+    bodyHtml: '<html><body><p style="color:red">Local</p></body></html>' });
+  f.externalEdit({ body: 'Remote', bodyHtml: '<p style="color:red">Remote</p>' });
+  await f.flush();
+  assert.equal(f.current().editor.body, 'Remote');
+  assert.equal(f.cards.at(-1).draft.state, 'error');
+  assert.equal(f.cards.at(-1).draft.fields.find(f => f.name === 'body').value, 'Local');
+  assert.equal(f.writes.length, 1); // Rejected precondition, no overwrite/retry.
 });
 
 

@@ -1,9 +1,10 @@
 import { randomUUID, createHash } from 'node:crypto';
 import { reconcileOutboundReasoningEffort } from './outbound-reasoning-effort.js';
 import { withOpenCodeGoSessionHeader } from './opencode-go-session.js';
+import { withProviderAppAttribution } from './provider-app-attribution.js';
 import { once } from 'node:events';
 import type { ServerResponse } from 'node:http';
-import { ChatSseTranslator, translateResponsesRequestWithContext, type ResponsesRequest } from '@cindy/responses-chat-bridge';
+import { ChatSseTranslator, translateResponsesRequestWithContext, isUnsupportedResponsesFeatureError, unsupportedFeatureErrorBody, type ResponsesRequest } from '@cindy/responses-chat-bridge';
 import type { Api, Model, Context, AssistantMessage, TextContent, ImageContent, ThinkingLevel, ProviderStreams } from '@earendil-works/pi-ai';
 import * as openaiCompletions from '@earendil-works/pi-ai/api/openai-completions';
 import * as openaiResponses from '@earendil-works/pi-ai/api/openai-responses';
@@ -18,7 +19,7 @@ import { PI_REASONING_EFFORTS, PROVIDER_MODEL_CATALOG, providerEndpointBindings,
 export function invocationModelRecord(model: CatalogModel, upstream: string, api?: PiModelApi): ProviderModelRecord | undefined {
   const selected = model.api ?? api;
   const known = providerModelRecord(model.id, upstream, selected)
-    ?? (selected ? providerPresetModelRecord(model.catalogPresetId, model.id, selected) : undefined)
+    ?? (selected ? providerPresetModelRecord(model.catalogPresetId, model.id, selected, upstream) : undefined)
     ?? providerModelGenerationRecord(model.id, upstream, selected, model.catalogPresetId);
   if (!selected && !known) return undefined;
   // The active catalog is authoritative; unknown capability must not silently
@@ -215,13 +216,13 @@ function nativeInvocationModel(options: PiProviderTransportOptions, modelId: str
       [level, row.efforts?.includes(level) ? row.execution.pi.thinkingLevelMap?.[level] ?? level : null])) },
     compat: row.execution.pi.compat,
     samplingParams: row.execution.pi.samplingParams,
-    headers: row.execution.pi.headers,
+    headers: withProviderAppAttribution(destination, options.headers, row.execution.pi.headers),
   };
   return model;
 }
 
 /** Use the same SDK, model identity and destination as chat, with a bounded probe. */
-export async function probePiProvider(options: PiProviderTransportOptions, signal: AbortSignal): Promise<AssistantMessage> {
+export async function probePiProvider(options: PiProviderTransportOptions, signal: AbortSignal, maxTokens?: number): Promise<AssistantMessage> {
   const model = nativeInvocationModel(options, options.row.id);
   const adapter = adapters[model.api];
   if (!adapter) throw new Error('Native API is not supported by the bundled Pi adapter');
@@ -229,10 +230,12 @@ export async function probePiProvider(options: PiProviderTransportOptions, signa
   return adapter.streamSimple(model, { messages: [{ role: 'user', content: 'ping', timestamp: 0 }] }, {
     apiKey: cloudflare ? undefined : options.apiKey,
     env: options.env,
-    headers: cloudflare ? cloudflareGatewayHeaders(options.apiKey, options.headers) : options.headers,
+    headers: cloudflare ? cloudflareGatewayHeaders(options.apiKey, options.headers)
+      : withProviderAppAttribution(model.baseUrl, options.headers),
     ...(!['google-generative-ai', 'google-vertex', 'bedrock-converse-stream'].includes(model.api)
       ? { fetch: options.fetchImpl } : {}),
-    signal, maxRetries: 0, maxTokens: Math.min(16, model.maxTokens),
+    signal, maxRetries: 0, maxTokens: Math.min(maxTokens ?? 16, model.maxTokens),
+    ...(maxTokens !== undefined ? { reasoning: nativeThinkingLevel(undefined, options.row, model) } : {}),
   }).result();
 }
 
@@ -307,7 +310,7 @@ export function createPiProviderFetch(options: PiProviderTransportOptions): type
     // `x-opencode-session`; without an inbound identity the route falls back to the helper's
     // one-shot (per-request) value rather than inventing a shared or pseudo-stable id.
     const sessionId = nativeBridgeSessionId(init);
-    const routeHeaders = withOpenCodeGoSessionHeader(options.headers, {
+    const routeHeaders = withOpenCodeGoSessionHeader(withProviderAppAttribution(model.baseUrl, options.headers), {
       providerId: options.providerId, catalogPresetId: options.catalogPresetId, upstream: model.baseUrl, sessionId,
     });
     const events = adapter.streamSimple(model, context, {
@@ -430,5 +433,14 @@ export async function handlePiProviderRequest(
       }
       if (!res.destroyed) res.end();
     } finally { await reader.cancel().catch(() => undefined); }
+  } catch (error) {
+    // 「协议特性不支持」是确定性错误:必须落成终态 400,不能冒泡出去让代理兜底包成
+    // 502 —— Codex 把 502 当成瞬态网关故障,会反复重提同一个失败请求(自动续跑死循环,#9344)。
+    if (isUnsupportedResponsesFeatureError(error) && !res.headersSent) {
+      res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify(unsupportedFeatureErrorBody(error)));
+      return;
+    }
+    throw error;
   } finally { res.off('close', closed); abort.abort(); }
 }

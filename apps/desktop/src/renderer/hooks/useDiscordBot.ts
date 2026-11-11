@@ -28,6 +28,7 @@ export interface UseDiscordBotReturn {
   isDisconnecting: boolean;
   canConnect: boolean;
   connect: () => Promise<boolean>;
+  reconnect: () => Promise<void>;
   disconnect: () => Promise<void>;
 }
 
@@ -45,6 +46,8 @@ export function useDiscordBot(): UseDiscordBotReturn {
   const [isSaving, setIsSaving] = useState(false);
   const [isDisconnecting, setIsDisconnecting] = useState(false);
   const lifecycleRequestVersionRef = useRef(0);
+  const statusVersionRef = useRef(0);
+  const latestStatusRef = useRef(status);
 
   useEffect(() => {
     let cancelled = false;
@@ -80,6 +83,8 @@ export function useDiscordBot(): UseDiscordBotReturn {
 
   useEffect(() => {
     const unsub = window.electronAPI.discordBot.onStatusChange((update) => {
+      statusVersionRef.current += 1;
+      latestStatusRef.current = update.status;
       setStatus(update.status);
       cachedState = {
         ownerUserId: cachedState?.ownerUserId ?? '',
@@ -170,6 +175,33 @@ export function useDiscordBot(): UseDiscordBotReturn {
     }
   }, [isSaving, lifecycleAnnouncement, ownerUserId, t, token]);
 
+  const reconnect = useCallback(async () => {
+    if (isSaving || isDisconnecting) return;
+    setIsSaving(true);
+    setValidationError(null);
+    setStatus({ kind: 'connecting' });
+    latestStatusRef.current = { kind: 'connecting' };
+    const version = statusVersionRef.current;
+    try {
+      const result = await window.electronAPI.discordBot.reconnect();
+      if (version === statusVersionRef.current) {
+        setStatus(result.status);
+        if (cachedState) cachedState = { ...cachedState, status: result.status };
+      }
+    } catch (err) {
+      log.error('reconnect failed:', err instanceof Error ? err.message : String(err));
+      if (version === statusVersionRef.current || latestStatusRef.current.kind === 'connecting') {
+        const failed: DiscordBotTransportStatus = {
+          kind: 'error', reason: t('logic.toasts.discordBotConnectFailed'),
+        };
+        setStatus(failed);
+        if (cachedState) cachedState = { ...cachedState, status: failed };
+      }
+    } finally {
+      setIsSaving(false);
+    }
+  }, [isSaving, isDisconnecting, t]);
+
   const disconnect = useCallback(async () => {
     if (isDisconnecting) return;
     setIsDisconnecting(true);
@@ -213,6 +245,7 @@ export function useDiscordBot(): UseDiscordBotReturn {
     isDisconnecting,
     canConnect,
     connect,
+    reconnect,
     disconnect,
   };
 }

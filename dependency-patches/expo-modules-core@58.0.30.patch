@@ -1,0 +1,117 @@
+diff --git a/ios/Core/Views/SwiftUI/SwiftUIHostingView.swift b/ios/Core/Views/SwiftUI/SwiftUIHostingView.swift
+index 147d85e..72087a5 100644
+--- a/ios/Core/Views/SwiftUI/SwiftUIHostingView.swift
++++ b/ios/Core/Views/SwiftUI/SwiftUIHostingView.swift
+@@ -227,46 +227,83 @@ extension ExpoSwiftUI {
+       }
+       #endif
+ 
+-      guard window != nil else {
++      #if os(iOS) || os(tvOS)
++      // Fabric can mount during UIKit child enumeration; defer containment to avoid mutation crashes.
++      if window != nil {
++        addSubview(hostingController.view)
++        setupHostingViewConstraints()
++      } else {
+         hostingController.view.removeFromSuperview()
+-        hostingController.removeFromParent()
+-        return
+       }
+-
+-      let parentController = reactViewController()
+-      #if os(macOS)
+-      // An `NSHostingController` view renders without a parent controller, and a React root view used
+-      // directly as `NSWindow.contentView` has none in its responder chain, so don't require one.
+-      parentController?.addChild(hostingController)
++      scheduleContainmentSync()
+       #else
+-      guard let parentController else {
++      if window != nil {
++        reactViewController()?.addChild(hostingController)
++        addSubview(hostingController.view)
++        setupHostingViewConstraints()
++      } else {
+         hostingController.view.removeFromSuperview()
+         hostingController.removeFromParent()
++      }
++      #endif
++    }
++
++    #if os(iOS) || os(tvOS)
++    private var containmentSyncScheduled = false
++
++    private func scheduleContainmentSync() {
++      guard !containmentSyncScheduled else {
+         return
+       }
+-      // `reactViewController()` walks the responder chain, which may not match the view hierarchy:
+-      // UIKit makes an input accessory view's `nextResponder` the text input that owns it. UIKit throws
+-      // when a child controller's view is outside its parent's view, so skip containment in that case.
+-      if !(parentController.viewIfLoaded.map(isDescendant(of:)) ?? false) {
+-        hostingController.removeFromParent()
+-        addSubview(hostingController.view)
+-        setupHostingViewConstraints()
++      containmentSyncScheduled = true
++      // Capture the controller strongly: if this view is released before the block runs, the
++      // controller must still leave its parent instead of staying behind as a stale child.
++      let controller = hostingController
++      DispatchQueue.main.async { [weak self] in
++        guard let self else {
++          Self.moveHostingController(controller, to: nil)
++          return
++        }
++        self.containmentSyncScheduled = false
++        let parent = self.containmentParent()
++        Self.moveHostingController(controller, to: parent)
++        if let parent { self.forwardAppearanceIfMissed(parentController: parent) }
++      }
++    }
++
++    /**
++     The controller that should contain the hosting controller right now, or `nil` when the view is
++     off-window or UIKit manages containment itself (navigation and tab bar controllers only take
++     screens and tabs as children).
++     */
++    private func containmentParent() -> UIViewController? {
++      guard window != nil, let parentController = reactViewController() else {
++        return nil
++      }
++      if parentController is UINavigationController || parentController is UITabBarController {
++        return nil
++      }
++      // UIKit throws when a child controller's view is outside its parent's view.
++      guard parentController.viewIfLoaded.map({ isDescendant(of: $0) }) ?? false else {
++        return nil
++      }
++      return parentController
++    }
++
++    private static func moveHostingController(_ controller: UIViewController, to parent: UIViewController?) {
++      if controller.parent === parent {
+         return
+       }
+-      if parentController as? UINavigationController == nil && parentController as? UITabBarController == nil {
+-        // Swift automatically adds the hostingController in the correct place when the parentController
+-        // is UINavigationController, since its children are supposed to be only screens.
+-        // Similarly, for UITabBarController we expect its children to be only tabs.
+-        parentController.addChild(hostingController)
++      if controller.parent != nil {
++        controller.willMove(toParent: nil)
++        controller.removeFromParent()
++      }
++      if let parent {
++        parent.addChild(controller)
++        controller.didMove(toParent: parent)
+       }
+-      #endif
+-      addSubview(hostingController.view)
+-      #if os(iOS) || os(tvOS)
+-      hostingController.didMove(toParent: parentController)
+-      forwardAppearanceIfMissed(parentController: parentController)
+-      #endif
+-      setupHostingViewConstraints()
+     }
++    #endif
+ 
+     #if os(iOS) || os(tvOS)
+     // A child added during a transition after its parent appeared never appears, so it gets no safe area (#51288).

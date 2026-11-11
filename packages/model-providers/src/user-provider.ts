@@ -4,7 +4,7 @@ import { nativeModelAgents } from './modelProtocol.js';
 import { isMimoTokenPlanProvider } from './mimoPresentation.js';
 import { resolveCatalogModelNativeApi, resolveModelNativeApi } from './modelRegistry.js';
 import { providerEndpointBindings, bindProviderEndpoint, bindProviderPresetRuntime, canonicalProviderEndpoint } from './providerEndpointTemplate.js';
-import { PI_MODEL_APIS } from "./types.js";
+import { PI_MODEL_APIS, isProviderVideoApi } from "./types.js";
 import { providerModelRecord, providerModelGenerationRecord, providerPresetModelRecord, providerModelMetadata } from "./providerModelCatalog.js";
 import { BUNDLED_CATALOG, BUILTIN_PROVIDERS } from './builtin.js';
 import { providerMediaField } from "./providerMediaModels.js";
@@ -14,6 +14,7 @@ import {
   applyModelMetadata,
   mergeModelMetadata,
   pickModelMetadata,
+  catalogModelMetadata,
   runtimeUserModelMetadata,
   findBaseModel,
   type ModelMetadata,
@@ -286,7 +287,10 @@ function toCatalogModel(
   providerDefaults?: ModelMetadata,
   metadataProviderId = providerId,
   generationDefaults?: ModelMetadata,
+  liveMetadata?: ModelMetadata,
 ): CatalogModel {
+  const discoveredMetadata = liveMetadata
+    ? mergeModelMetadata(m.discoveredMetadata, liveMetadata) : m.discoveredMetadata;
   // 显式 runtime 能力优先：reasoning:true 才导出 efforts；false = 明确无思考档。
   // 新代际缺项可沿同系列/变体/协议继承；本型号目录、实报和用户配置优先。
   // 空档位只表示不指定推理强度，不代表要求供应商关闭思考。
@@ -313,7 +317,9 @@ function toCatalogModel(
   const model: CatalogModel = {
     userModelConfig: { ...m },
     id: m.id,
-    discoveredMetadata: m.discoveredMetadata,
+    discoveredMetadata,
+    ...(m.discoveredSource ? { discoveredSource: m.discoveredSource } : {}),
+    ...(m.opaqueModelId ? { opaqueModelId: true as const } : {}),
     ...(m.discoveredCost ? { cost: m.discoveredCost } : {}),
     nameExplicit: m.nameExplicit,
     name: m.name,
@@ -340,18 +346,19 @@ function toCatalogModel(
   const user = runtimeUserModelMetadata(m);
   const resolved =
     (modelRegistry?.schemaVersion ?? 0) >= 4 ||
-    m.discoveredMetadata ||
+    m.discoveredMetadata || liveMetadata || m.selectedInterface ||
     providerDefaults || (generationDefaults && Object.keys(generationDefaults).length > 0)
       ? resolveModelMetadata(
           modelRegistry ?? undefined,
           metadataProviderId,
           m.id,
-          m.discoveredMetadata,
+          discoveredMetadata,
           pickModelMetadata(user),
           agent,
           providerDefaults,
           undefined,
           generationDefaults,
+          m.selectedInterface?.defaults,
         )
       : pickModelMetadata(user);
   // 「未声明」与「明确无档位」要分开（#5535）：用户/运行时 reasoning、目录继承、发现或用户
@@ -369,7 +376,7 @@ function toCatalogModel(
   return effortsDeclared ? projected : { ...projected, effortsUnknown: true };
 }
 
-function defaultWireProtocol(agent: AgentKind): ProviderWireProtocol {
+export function defaultWireProtocol(agent: AgentKind): ProviderWireProtocol {
   // pi 默认 openai-chat:BYOM 本地端点(Ollama/vLLM 的 /v1/chat/completions)最常见。
   // 注:pi 走原生 provider 直连,routing.pi 不被 native 路径消费——此默认仅影响(未用的)
   // 路由描述符里是否显式记 wireProtocol,pi 实际 api 由 pi-host resolvePiNativeProviders 定。
@@ -432,6 +439,12 @@ function toRouting(
 export interface BuildUserProviderOptions {
   modelRegistry?: ModelRegistry | null;
   presets?: readonly import("./types.js").ProviderPreset[];
+  /** Host-owned live reports. Merge as discovery, below force/user overrides; never save as edits. */
+  getDiscoveredModelMetadata?: (
+    agent: AgentKind,
+    model: ProviderRuntimeModelConfig,
+    routing: RoutingDescriptor,
+  ) => ModelMetadata | undefined;
 }
 
 export function buildUserProvider(
@@ -477,7 +490,7 @@ export function buildUserProvider(
       rt.supportsImageGeneration,
     );
     if (rt.imageApi === "openai-images") routing[agent]!.imageApi = rt.imageApi;
-    if (rt.videoApi === "xai-videos") routing[agent]!.videoApi = rt.videoApi;
+    if (isProviderVideoApi(rt.videoApi)) routing[agent]!.videoApi = rt.videoApi;
     const followsPreset =
       presetRuntime &&
       withoutTrailingSlashes(resolvedBaseUrl) ===
@@ -501,7 +514,7 @@ export function buildUserProvider(
     models[agent] = rt.models.map((storedModel) => {
       // Old ID-only imports must pick up newly known per-model interfaces too.
       // An explicit model API/path remains a user choice, not a preset default.
-      const interfaceDefault = followsPreset && !storedModel.api && !storedModel.piApi && !storedModel.route
+      const interfaceDefault = (options.modelRegistry?.schemaVersion ?? 0) < 6 && followsPreset && !storedModel.api && !storedModel.piApi && !storedModel.route
         ? presetRuntime.models.find(model => model.id === storedModel.id) : undefined;
       const configuredModel = interfaceDefault ? { ...storedModel,
         ...(interfaceDefault.api ? { api: interfaceDefault.api } : {}),
@@ -516,7 +529,7 @@ export function buildUserProvider(
         } }
         : configuredModel;
       const m = rt.requestPath ? boundConfiguredModel : alignModelApiRoute(
-        providerInterfaceModelRoute(boundConfiguredModel, agent, rt.catalogPresetId, resolvedBaseUrl),
+        providerInterfaceModelRoute(boundConfiguredModel, agent, rt.catalogPresetId, resolvedBaseUrl, false, options.modelRegistry ?? BUNDLED_CATALOG.modelRegistry),
         resolvedBaseUrl, rt.wireProtocol ?? defaultWireProtocol(agent),
       );
       const presetModel = followsPreset
@@ -555,10 +568,10 @@ export function buildUserProvider(
         ? providerModelRecord(m.id, m.route?.baseUrl ?? resolvedBaseUrl,
             m.api ?? (agent === 'pi' ? m.piApi ?? wire : wire),
             !m.api && !m.piApi && !m.route)
-          ?? (hasDeclaredProviderInterface(m, agent, rt.catalogPresetId, resolvedBaseUrl)
-            ? providerPresetModelRecord(rt.catalogPresetId, m.id) : undefined)
+          ?? (hasDeclaredProviderInterface(m, agent, rt.catalogPresetId, resolvedBaseUrl, options.modelRegistry ?? BUNDLED_CATALOG.modelRegistry)
+            ? providerPresetModelRecord(rt.catalogPresetId, m.id, undefined, m.route?.baseUrl ?? resolvedBaseUrl) : undefined)
           ?? (followsPreset && sameRoute && m.api && presetModel?.api === m.api
-            ? providerPresetModelRecord(preset?.id, m.id, m.api) : undefined)
+            ? providerPresetModelRecord(preset?.id, m.id, m.api, m.route?.baseUrl ?? resolvedBaseUrl) : undefined)
           ?? providerModelGenerationRecord(m.id, m.route?.baseUrl ?? resolvedBaseUrl, m.api ?? m.piApi ?? wire, followsPreset ? preset?.id : undefined)
         : undefined;
       // Existing catalog identities keep their established execution path. A
@@ -620,12 +633,13 @@ export function buildUserProvider(
       };
       const projected = toCatalogModel(
         m,
-        followsPreset && sameRoute ? preset!.id : config.id,
+        m.selectedInterface?.providerId ?? (followsPreset && sameRoute ? preset!.id : config.id),
         agent,
-        options.modelRegistry,
+        options.modelRegistry ?? (m.selectedInterface ? BUNDLED_CATALOG.modelRegistry : undefined),
         defaults,
         nativeCodex ? 'openai' : undefined,
         generationDefaults,
+        options.getDiscoveredModelMetadata?.(agent, m, routing[agent]!),
       );
       const currentDeclaration = resolveDeclaration(registry);
       // Apply current Server identity after capability projection, including an
@@ -640,6 +654,13 @@ export function buildUserProvider(
       return {
         ...(imported?.cost ? { cost: imported.cost } : {}),
         ...projected,
+        ...(m.interfaceUnavailable ? { interfaceUnavailable: true, availableInterfaces: m.availableInterfaces } : {}),
+        ...(m.selectedInterface ? { selectedInterface: { ...m.selectedInterface, defaults: catalogModelMetadata(projected) }, availableInterfaces: m.availableInterfaces,
+          ...(m.selectedInterface.nativeApis !== undefined ? { nativeApis: m.selectedInterface.nativeApis } : {}) } : {}),
+        // Only this native account's latest discovery grants Ultrafast. Public
+        // defaults, same-name API connections and other engines cannot inherit it.
+        ...(nativeCodex && agent === 'codex'
+          ? { supportsUltrafastMode: storedModel.supportsUltrafastMode === true } : {}),
         ...(nativeApi !== undefined ? { nativeApi } : {}),
         // Projection is not a user edit. Save only the original configuration.
         userModelConfig: structuredClone(storedModel),
@@ -712,7 +733,7 @@ export function buildUserProvider(
     >
   > = {};
   const imageAgents = agents.filter((agent) => routing[agent]?.imageApi === "openai-images");
-  const videoAgents = agents.filter((agent) => routing[agent]?.videoApi === "xai-videos");
+  const videoAgents = agents.filter((agent) => routing[agent]?.videoApi !== undefined);
   for (const [agent, list] of Object.entries(models)) {
     for (const model of list ?? []) {
       const field = providerMediaField(model.mode);
@@ -733,6 +754,7 @@ export function buildUserProvider(
           id: model.id,
           name: model.name,
           mode: model.mode,
+          defaultEnabled: model.defaultEnabled,
           discoveredMetadata: model.discoveredMetadata,
           sourceAgent: agent as AgentKind,
           ...(model.modalities ? { modalities: model.modalities } : {}),

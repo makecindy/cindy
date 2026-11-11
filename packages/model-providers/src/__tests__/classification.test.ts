@@ -10,6 +10,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   CHATGPT_MODEL_PREFIX,
+  CHAT_VENDOR_CATEGORY_ORDER,
+  CATEGORY_ORDER,
   SUBSCRIPTION_DIRECT_MODEL_PREFIXES,
   XAI_MODEL_PREFIX,
   categorize,
@@ -317,6 +319,10 @@ describe('groupOf — 数据优先,前缀兜底', () => {
 
 describe('classifyModel — mode 权威,缺省时回退 groupOf(issue #882)', () => {
   const NON_CHAT_MODE_CASES: Array<{ id: string; mode: string; category: ModelCategory }> = [
+    { id: 'typesafe/jev', mode: 'evaluation', category: 'decision' },
+    { id: 'edit-model', mode: 'image_edit', category: 'image' },
+    { id: 'ocr-model', mode: 'ocr', category: 'other' },
+    { id: 'rerank-model', mode: 'rerank', category: 'other' },
     { id: 'gemini-3.1-flash-image', mode: 'image_generation', category: 'image' },
     { id: 'gemini-3-pro-image', mode: 'image_generation', category: 'image' },
     { id: 'gpt-image-1.5', mode: 'image_generation', category: 'image' },
@@ -594,4 +600,16 @@ describe('formatContextWindow(下沉自 ModelSelector,输出逐字一致)', () =
   it('<1000 原样', () => {
     expect(formatContextWindow(512)).toBe('512');
   });
+});
+
+// Unit contract: evaluation is a Decisions endpoint, never an Agent chat model.
+// Existing cases did not cover evaluation or the newly recognized decision group without mode.
+it('keeps decision after embedding and outside all chat selection paths', () => {
+  expect(CATEGORY_ORDER.slice(CATEGORY_ORDER.indexOf('embedding'), CATEGORY_ORDER.indexOf('compression') + 1)).toEqual(['embedding', 'decision', 'compression']);
+  expect(CHAT_VENDOR_CATEGORY_ORDER).not.toContain('decision');
+  for (const value of [{ id: 'typesafe/jev', mode: 'evaluation' }, { id: 'typesafe/jev', group: 'decision' }]) {
+    expect(isChatEligible(value)).toBe(false);
+    expect(isAgentSelectableModel(value, { userProvider: true })).toBe(false);
+    expect(isModelSelectableForNewRoute(value)).toBe(false);
+  }
 });

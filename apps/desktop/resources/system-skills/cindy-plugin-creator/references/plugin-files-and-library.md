@@ -191,3 +191,60 @@ await cindy.library({
 
 `write`/`writeCommit`/`read` 都回 `sha256`(宿主对实字节计算)——
 外自称的哈希只当对账参考,不是凭证。
+
+### 4.10.2 同账号电脑间的插件资料同步
+
+声明 `"deviceSync": true`，使用 `cindy.deviceSync(req)`。这是通用加密传输，不是数据库自动同步；
+合并、持久化、幂等和删除标记由插件负责。需要自动接收时声明 `"launch": "resident"`。
+先检查 `typeof cindy.deviceSync === 'function'`，旧 Host 保留本地功能，不伪报已同步。
+
+- `{op:'status'}` 返回 `{ok:true, version:1, online, peers:[{deviceId,deviceName}], maxBytes}`。
+- `{op:'request', peer, data}` 向同一插件发一个有界 JSON 请求，成功返回 `{ok:true,data}`。
+- 对端收到 `{type:'device-sync-request', requestId, peer, data}`；实际持久化后用
+  `{op:'reply',requestId,data}` 回复。requestId 由 Host 生成并绑定对端、插件实例和批准版本。
+- 单个加密前 envelope（含协议字段）最多 64 KiB，每个插件最多 2 个并发请求，整机 32 个，
+  30 秒无应用回执返回 `SYNC_RESULT_UNKNOWN`。它可能已经执行；先对账，只有幂等同步才可重发。
+- `SYNC_CONNECTING` 表示密钥握手中，`SYNC_OFFLINE` 表示目前不可达；退出账号、停用、卸载或
+  替换插件使旧请求失效。未知错误保留本地资料，并展示可行动状态。
+- 双方必须已登录同一账号、在线、是未撤权的电脑，并安装启用 namespace 已确认、声明该能力的
+  同一插件（namespace + id）。手机是执行电脑的控制端，不保存独立同步副本；共享任务访客和
+  供应商分享不能使用此通道。Node Worker 不获得账号凭证或设备密钥。
+- Host 复用 owner-scoped safeStorage 的设备密钥和首次公钥固定机制，采用 X25519 / AES-GCM。
+  Device Link relay 只搬运密文；离线没有云端存储，不承诺两台从不同时在线的电脑能够交换。
+
+### 4.10.3 对话里交给插件的文件（cindy_handoff_files）
+
+用户在对话里发 CSV、XLSX 等非媒体文件，页面要等用户点按钮才处理时使用。在工具参数表里
+声明保留参数 `cindy_handoff_files`（`{"type":"array"}`），模型就会把这类文件放进 ghost_call
+的 attachments；宿主保存一份副本，插件收到
+`args.cindy_handoff_files=[{ref:'handoff:<uuid>',name,mimeType,size,sha256,createdAt,expiresAt}]`。
+未声明时非媒体文件照旧要求改用 dir。不需要声明 library。在这个工具自己的说明里写明「用户在对话里发的
+文件，用 ghost_call 的 attachments 交给本工具」：工具说明离模型的调用决定最近，模型才不会误用 dir。
+
+- 这个参数只由宿主填写：模型或页面自带的同名值会被删掉。页面回传引用请用你自己的参数名。
+- 一次最多 4 个文件，单个 64 MiB、一批 128 MiB；每个插件最多保存 512 MiB / 200 个，满了新交接
+  会被拒绝。工作目录外的文件按当前权限档确认。
+- 处理文件只有两条路：发给后端用 `cindy.fetch({method:'POST',upload:{handoff:[ref]},...})`
+  （与 hashes / library 三选一，文件名是净化后的原名，另附 `filename*`）；本机处理则由页面从
+  `hostContext.toolInfo.tool._meta['cindy/attachments']` 找到同一 `uri` 的项，用
+  `_meta['cindy/file'].url` 读取，在页面里解析后再调用你的 app-only 工具保存结果。
+- 插件拿不到字节和路径，也不能删除副本；副本连续 7 天未使用后宿主自动删除（卡片签发地址、
+  页面读取、`upload.handoff` 上传成功都算使用，会顺延），用户也可以在插件详情页逐个删除。
+  之后上传返回 `errorCode:'HANDOFF_UNAVAILABLE'`，页面上该项没有 `url`；请提示用户重新发送。
+  `expiresAt` 是收到时的当前到期时间，使用时会顺延，不要把它当成固定截止时间。
+- 手机和其他电脑暂时打不开带这类文件的卡片；Node 工作进程不能使用这个能力。
+- 需要 `minCindyVersion: 0.1.122-beta`；旧宿主不认识这个参数，非媒体文件仍会要求改用 dir。
+
+```js
+// main.js 里 app-only 的 confirm_import：页面把 ref 作为 file 传回
+const reply = await cindy.fetch({ url: 'https://api.example.com/import', method: 'POST',
+  upload: { handoff: [msg.args.file] }, callId: msg.callId });
+```
+
+### 在交互页面里使用文件
+
+工具返回 resource_link，uri 使用 Library 相对引用或本插件媒体引用；页面从该内容块的
+_meta['cindy/file'].url 取临时只读地址。不要拼地址、传本机路径或长期保存页面 URL。
+大文件优先由 cindy.pick 写入 Library，再由工具上传；页面不搬运完整文件字节。
+参数、限额、拖放和下载写法统一见[§4.23 文件参考](examples/interactive-pages/REFERENCE.md#文件)，
+完整代码见[files 示例](examples/interactive-pages/files/)。

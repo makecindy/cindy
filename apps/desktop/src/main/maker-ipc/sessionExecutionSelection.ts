@@ -7,7 +7,7 @@ export interface SessionModelSelection {
   model?: string;
   providerId?: string | null;
   effort?: string;
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
 }
 type Selection = SessionModelSelection;
 type Admission = Parameters<typeof resolveSendToSessionExecutionConfig>[0];
@@ -20,6 +20,7 @@ export function resolveSessionExecutionSelection(params: {
   availableModels: Admission['availableModels'];
   providerRouting: Admission['providerRouting'];
   hasCindyAiApiKey: boolean;
+  locationChanged?: boolean;
 }): SessionExecutionSelection {
   const { selection, source, providerRouting } = params;
   const agentKind = selection.agentKind === 'cc' ? 'claude-code' : selection.agentKind ?? source?.agentKind;
@@ -44,8 +45,9 @@ export function resolveSessionExecutionSelection(params: {
   const result = resolveSendToSessionExecutionConfig({
     source: candidate, overrides: { effort: candidate.effort, fastMode: candidate.fastMode },
     availableModels: params.availableModels, providerRouting, hasCindyAiApiKey: params.hasCindyAiApiKey,
+    locationChanged: params.locationChanged,
   });
-  if (!result.ok) throw new Error(`${result.message} ${recover}不会自动更换模型或供应商。`);
+  if (!result.ok) throw Object.assign(new Error(`${result.message} ${recover}不会自动更换模型或供应商。`), { code: result.errorCode });
   return result.config;
 }
 
@@ -62,7 +64,7 @@ export interface SessionExecutionResolverDeps {
 /** sourceSessionId is Host-resolved from an authenticated call, never plugin-supplied. */
 export function createSessionExecutionResolver(deps: SessionExecutionResolverDeps) {
   return async (selection: Selection, sourceSessionId?: string,
-    existing?: { agentKind: string; model: string; providerId?: string | null; effort?: string | null; fastMode?: boolean },
+    existing?: { agentKind: string; model: string; providerId?: string | null; effort?: string | null; fastMode?: boolean | 'ultrafast' },
   ): Promise<SessionExecutionSelection> => {
     const assertOwner = deps.captureOwner();
     assertOwner();
@@ -71,7 +73,7 @@ export function createSessionExecutionResolver(deps: SessionExecutionResolverDep
       if (!['cc', 'claude-code', 'codex', 'pi'].includes(existing.agentKind)) throw new Error('任务 Agent 不可用，请重新选择模型');
       source = { agentKind: (existing.agentKind === 'cc' ? 'claude-code' : existing.agentKind) as AgentKind,
         model: existing.model, providerId: existing.providerId,
-        effort: (existing.effort || undefined) as Effort | undefined, fastMode: existing.fastMode === true };
+        effort: (existing.effort || undefined) as Effort | undefined, fastMode: (existing.fastMode === 'ultrafast' ? 'ultrafast' : existing.fastMode === true) };
     } else if (!(selection.agentKind && selection.model && selection.providerId)) {
       source = sourceSessionId ? await deps.readCaller(sourceSessionId) : deps.readDefault();
       assertOwner();

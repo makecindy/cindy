@@ -32,6 +32,7 @@ const interruptedPendingMock = vi.fn<() => Promise<string[]>>();
 const createdListeners: Array<
   (payload: { sessionId: string; message: { role?: string; agentMeta?: unknown } }, ownerStamp?: unknown) => void
 > = [];
+const patchedListeners: Array<(payload: { sessionId: string; patch: Record<string, unknown> }) => void> = [];
 
 /** 驱动一次错误尾行重算并等它收敛完成。 */
 async function reconcile(ids: string[]): Promise<void> {
@@ -43,6 +44,7 @@ describe('usePendingAlertAttention (派生收敛)', () => {
   beforeEach(() => {
     _resetPendingAlertAttentionForTests();
     createdListeners.length = 0;
+    patchedListeners.length = 0;
     (window as unknown as { electronAPI: unknown }).electronAPI = {
       localDb: {
         sessions: {
@@ -50,7 +52,10 @@ describe('usePendingAlertAttention (派生收敛)', () => {
           interruptedPending: interruptedPendingMock,
         },
         sessionsPush: {
-          onPatched: () => () => {},
+          onPatched: (cb: typeof patchedListeners[number]) => {
+            patchedListeners.push(cb);
+            return () => {};
+          },
         },
         messages: {
           onErrorPersisted: () => () => {},
@@ -322,5 +327,44 @@ describe('usePendingAlertAttention (派生收敛)', () => {
     noteSessionTurnStartedForAlerts('other');
     await Promise.resolve();
     expect(errorTailPendingMock).not.toHaveBeenCalled();
+  });
+
+  // 回归：批量续跑没有打开任务视图，启动时同时认领中断和错误尾行的红点可能残留。
+  // 生产入口 usePendingAlertAttention；现有用例没有覆盖 dispatch ack 后的双账本收敛。
+  // 最小输入为一次 lastTurnEndedAt patch；unit，成功清点，新错误和未恢复任务仍保留。
+  it.each([false, true])('批量续跑确认后复核旧错误尾行，新错误保留=%s', async (newError) => {
+    interruptedPendingMock.mockResolvedValue(['resumed', 'waiting']);
+    errorTailPendingMock.mockResolvedValue(['resumed']);
+    renderHook(() => usePendingAlertAttention());
+    await vi.waitFor(() => expect(addMock).toHaveBeenCalledWith('waiting', 'error'));
+    clearMock.mockClear();
+    errorTailPendingMock.mockClear();
+    errorTailPendingMock.mockResolvedValue(newError ? ['resumed'] : []);
+
+    patchedListeners[0]!({ sessionId: 'resumed', patch: { lastTurnEndedAt: Date.now() } });
+    await vi.waitFor(() => expect(errorTailPendingMock).toHaveBeenCalled());
+    await refreshPendingAlerts();
+
+    if (newError) expect(clearMock).not.toHaveBeenCalledWith('resumed', expect.anything());
+    else expect(clearMock).toHaveBeenCalledWith('resumed', { intent: 'explicit' });
+    expect(clearMock).not.toHaveBeenCalledWith('waiting', expect.anything());
+  });
+
+  // 同一回归的启动时序：旧首拉结果迟于续跑回执返回，不得把已经恢复的任务重新打红点。
+  it('首拉尚未返回时收到续跑确认，也会复核并丢弃过期错误尾行', async () => {
+    let finishInitial!: (ids: string[]) => void;
+    interruptedPendingMock.mockResolvedValue(['resumed', 'waiting']);
+    errorTailPendingMock.mockReturnValueOnce(new Promise<string[]>((resolve) => {
+      finishInitial = resolve;
+    }));
+    renderHook(() => usePendingAlertAttention());
+    errorTailPendingMock.mockResolvedValue([]);
+
+    patchedListeners[0]!({ sessionId: 'resumed', patch: { lastTurnEndedAt: Date.now() } });
+    await vi.waitFor(() => expect(errorTailPendingMock).toHaveBeenCalledTimes(2));
+    await refreshPendingAlerts();
+    finishInitial(['resumed']);
+    await vi.waitFor(() => expect(addMock).toHaveBeenCalledWith('waiting', 'error'));
+    expect(addMock).not.toHaveBeenCalledWith('resumed', 'error');
   });
 });

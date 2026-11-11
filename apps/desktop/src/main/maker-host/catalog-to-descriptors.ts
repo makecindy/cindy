@@ -62,6 +62,7 @@ function toDescriptor(m: CatalogModel): ModelDescriptor {
   d.effortsUnknown = m.effortsUnknown === true;
   if (m.effortDisplayNames !== undefined) d.effortDisplayNames = m.effortDisplayNames;
   if (m.supportsFastMode !== undefined) d.supportsFastMode = m.supportsFastMode;
+  if (m.supportsUltrafastMode !== undefined) d.supportsUltrafastMode = m.supportsUltrafastMode;
   if (m.group !== undefined) d.group = m.group;
   if (m.sortOrder !== undefined) d.sortOrder = m.sortOrder;
   if (m.mode !== undefined) d.mode = m.mode;
@@ -250,6 +251,20 @@ export function resolveModelDefaultContextWindow(
   const model = (provider.models[agent] ?? []).find((entry) => entry.id === modelId);
   return model && Number.isSafeInteger(model.contextWindow) && model.contextWindow > 0
     ? model.contextWindow : null;
+}
+
+/** Resolve output capacity on the selected connection, without borrowing a same-name route. */
+export function resolveModelMaxOutputTokens(
+  catalog: Pick<Catalog, 'providers'>,
+  agent: AgentKind,
+  providerId: string | null | undefined,
+  modelId: string,
+): number | null {
+  if (!providerId) return null;
+  const provider = catalog.providers.find((entry) => entry.id === providerId);
+  if (!provider || provider.routing[agent]?.disabled === true) return null;
+  const value = provider.models[agent]?.find((entry) => entry.id === modelId)?.maxOutput;
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : null;
 }
 
 /**

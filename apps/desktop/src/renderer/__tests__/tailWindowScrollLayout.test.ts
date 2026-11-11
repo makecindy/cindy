@@ -33,6 +33,7 @@ function fixture(following: boolean, delta: number, distance = 0, coversEnd = tr
   const isNearBottomRef = { current: following };
   const bindings = {
     scrollRef: { current: { scrollTop: 10_000, scrollHeight: 10_600 + distance, clientHeight: 600 } },
+    contentRef: { current: null },
     prevScrollTopRef: { current: 10_000 - delta },
     isNearBottomRef, setIsNearBottom: vi.fn(), setUnreadKeys, NO_UNREAD_KEYS,
     restoringRef: { current: false }, scrollbarDragStartTopRef: { current: null },
@@ -40,8 +41,7 @@ function fixture(following: boolean, delta: number, distance = 0, coversEnd = tr
     prevScrollHeightRef: { current: 0 }, saveRafRef: { current: 1 },
     firstVisibleItemKey: 'msg-qa5406-340', windowCoversEnd: coversEnd,
     setFirstVisibleItemKey, anchoredForwardItems: 160, setAnchoredForwardItems,
-    jumpDownIdleTimerRef: { current: null }, setShowJumpDown: vi.fn(),
-    window: { setTimeout: vi.fn(), clearTimeout: vi.fn() }, JUMP_DOWN_IDLE_MS: 1500,
+    updateJumpDown: vi.fn(),
     SCROLL_DIRECTION_DEAD_ZONE_PX: 1, RENDER_WINDOW_GROWTH_ITEMS: 80,
     TOP_HISTORY_TRIGGER_PX: 50, onLoadMore, expandWindow,
     resolveNearBottomOnScroll, resolveEffectiveNearBottom,

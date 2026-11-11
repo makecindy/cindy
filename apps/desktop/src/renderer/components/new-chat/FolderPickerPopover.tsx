@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
 
 import { cn } from '@/lib/utils';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -109,24 +110,29 @@ export function addRecentFolder(folderPath: string): void {
   }
 }
 
-function normalizeWheelDeltaY(e: React.WheelEvent): number {
+function normalizeWheelDeltaY(e: WheelEvent): number {
   if (e.deltaMode === WheelEvent.DOM_DELTA_LINE) return e.deltaY * WHEEL_LINE_HEIGHT;
   if (e.deltaMode === WheelEvent.DOM_DELTA_PAGE) return e.deltaY * window.innerHeight;
   return e.deltaY;
 }
 
-function handleFolderPickerWheel(e: React.WheelEvent<HTMLElement>) {
+function handleFolderPickerWheel(e: WheelEvent) {
   e.stopPropagation();
 
   const current = e.currentTarget;
-  const target = e.target instanceof HTMLElement ? e.target : null;
-  const scrollRoot =
-    target?.closest<HTMLElement>('[data-folder-picker-scroll="true"]') ??
-    current.querySelector<HTMLElement>('[data-folder-picker-scroll="true"]');
+  if (!(current instanceof HTMLElement)) return;
+  const target = e.target instanceof Element ? e.target : null;
+  // Keep native wheel/trackpad scrolling inside the list (including SVG icons).
+  // Its overscroll-contain prevents scrolling the page at either boundary.
+  if (target?.closest('[data-folder-picker-scroll="true"]')) return;
 
+  // Heading, search and footer forward to the list. Cancel first so the browser
+  // cannot also scroll an ancestor; a non-cancelable event must not be forwarded.
+  if (!e.cancelable || e.defaultPrevented) return;
+  e.preventDefault();
+  const scrollRoot = current.querySelector<HTMLElement>('[data-folder-picker-scroll="true"]');
   if (!scrollRoot || scrollRoot.scrollHeight <= scrollRoot.clientHeight) return;
 
-  e.preventDefault();
   scrollRoot.scrollTop += normalizeWheelDeltaY(e);
 }
 
@@ -139,6 +145,8 @@ interface FolderPickerPopoverProps {
     option?: FolderPickerOption,
   ) => void | Promise<void>;
   projectOptions?: readonly FolderPickerOption[];
+  allowDialogue?: boolean;
+  allowRemove?: boolean;
   /**
    * 非空 = 项目区列的是这台对端设备的项目(本机时不传)。只用于空态文案与「浏览文件夹」
    * 的目标设备,行本身的归属仍看每个 option 的 remoteDevice。
@@ -163,6 +171,8 @@ export function FolderPickerPopover({
   onOpenChange,
   onSelect,
   projectOptions,
+  allowDialogue = true,
+  allowRemove = true,
   deviceScope,
   onRemoveRemoteProject,
   onAddRemoteProject,
@@ -174,12 +184,26 @@ export function FolderPickerPopover({
 }: FolderPickerPopoverProps) {
   const { t } = useTranslation();
   const isProjectPicker = projectOptions !== undefined;
-  const effectiveProjectOptions = projectOptions ?? [];
-  const recentFolders = open && !isProjectPicker ? getRecentFolders() : [];
+  // A teammate's project is reached from the teammate, not offered as a place for new work.
+  const effectiveProjectOptions = useMemo(
+    () => (projectOptions ?? []).filter((option) => !isTeammateProjectPath(option.path)),
+    [projectOptions],
+  );
+  const recentFolders = (open && !isProjectPicker ? getRecentFolders() : [])
+    .filter((folder) => !isTeammateProjectPath(folder.path));
   const selectionPendingRef = useRef(false);
   const [selectionPending, setSelectionPending] = useState(false);
   const [projectQuery, setProjectQuery] = useState('');
+  const [browseFailed, setBrowseFailed] = useState(false);
   const projectSearchRef = useRef<HTMLInputElement>(null);
+  const [popoverEl, setPopoverEl] = useState<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!popoverEl) return;
+    // React onWheel is passive. Track the actual portal node so late mounting
+    // and closing/reopening both attach and remove the cancelable listener.
+    popoverEl.addEventListener('wheel', handleFolderPickerWheel, { passive: false });
+    return () => popoverEl.removeEventListener('wheel', handleFolderPickerWheel);
+  }, [popoverEl]);
   // 用 state 持有列表元素:内容经 Radix Portal 渲染,首个 commit 时还没挂进 DOM,
   // 普通 ref 配依赖数组的 effect 会在元素出现前测量一次,之后列表不变就再也不测。
   const [projectScrollEl, setProjectScrollEl] = useState<HTMLDivElement | null>(null);
@@ -194,7 +218,10 @@ export function FolderPickerPopover({
 
   // 每次打开都从完整列表开始,不残留上次的搜索词。
   useEffect(() => {
-    if (!open) setProjectQuery('');
+    if (!open) {
+      setProjectQuery('');
+      setBrowseFailed(false);
+    }
   }, [open]);
 
   // 项目异步到达(远程设备首读、本机首次加载)时搜索框晚于弹层出现,onOpenAutoFocus 已错过。
@@ -261,7 +288,7 @@ export function FolderPickerPopover({
   };
 
   const renderProject = (project: FolderPickerOption, index: number) => {
-    const canRemove = !project.remoteDevice || onRemoveRemoteProject !== undefined;
+    const canRemove = allowRemove && (!project.remoteDevice || onRemoveRemoteProject !== undefined);
     // 有搜索词时首个结果常亮:回车选中的就是它。
     const isEnterTarget = activeProjectQuery !== '' && index === 0;
     return (
@@ -362,7 +389,12 @@ export function FolderPickerPopover({
       onOpenChange(false);
       return;
     }
-    const result = await window.electronAPI.showOpenDirectoryDialog();
+    setBrowseFailed(false);
+    const result = await window.electronAPI.showOpenDirectoryDialog().catch(() => {
+      setBrowseFailed(true);
+      return undefined;
+    });
+    if (!result) return;
     if (!result.canceled && result.path) {
       await handleSelectPath(result.path, 'browse');
     }
@@ -373,6 +405,7 @@ export function FolderPickerPopover({
     <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>{children}</PopoverTrigger>
       <PopoverContent
+        ref={setPopoverEl}
         side={side}
         align={align}
         sideOffset={sideOffset}
@@ -382,7 +415,6 @@ export function FolderPickerPopover({
           'bg-[var(--folder-picker-bg)]',
           'border border-[var(--folder-picker-border)]',
         )}
-        onWheel={handleFolderPickerWheel}
         onOpenAutoFocus={(e) => {
           // 项目多到需要搜索时,打开后的下一个动作多半是输入:直接聚焦搜索框。
           const input = projectSearchRef.current;
@@ -405,26 +437,30 @@ export function FolderPickerPopover({
       >
         {isProjectPicker && (
           <>
-            <div className="px-3 py-2">
-              <span className="text-xs font-normal text-[var(--folder-label)]">
-                {t('newChat.folderPicker.dialogueOrSelectProject')}
-              </span>
-            </div>
-            <button
-              type="button"
-              disabled={selectionPending}
-              onClick={() => handleSelectPath('', 'dialogue')}
-              className={cn(
-                'flex w-full items-center gap-3 rounded-[8px] px-3 py-[10px] text-left',
-                'transition-colors outline-none',
-                'hover:bg-[var(--folder-item-hover)]',
-              )}
-            >
-              <MessageCircle size={20} className="shrink-0 text-[var(--folder-item-icon)]" />
-              <span className="relative top-px text-sm font-medium text-[var(--folder-item-name)]">
-                {t('newChat.folderPicker.dialogue')}
-              </span>
-            </button>
+            {allowDialogue && (
+              <>
+                <div className="px-3 py-2">
+                  <span className="text-xs font-normal text-[var(--folder-label)]">
+                    {t('newChat.folderPicker.dialogueOrSelectProject')}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  disabled={selectionPending}
+                  onClick={() => handleSelectPath('', 'dialogue')}
+                  className={cn(
+                    'flex w-full items-center gap-3 rounded-[8px] px-3 py-[10px] text-left',
+                    'transition-colors outline-none',
+                    'hover:bg-[var(--folder-item-hover)]',
+                  )}
+                >
+                  <MessageCircle size={20} className="shrink-0 text-[var(--folder-item-icon)]" />
+                  <span className="relative top-px text-sm font-medium text-[var(--folder-item-name)]">
+                    {t('newChat.folderPicker.dialogue')}
+                  </span>
+                </button>
+              </>
+            )}
             <div className="px-3 pb-1 pt-3">
               <span className="text-xs font-normal text-[var(--folder-label)]">
                 {t('newChat.folderPicker.projects')}
@@ -592,6 +628,13 @@ export function FolderPickerPopover({
           </>
         )}
 
+        {browseFailed && (
+          <ErrorNotice
+            role="alert"
+            className="mx-1"
+            message={t('newChat.folderPicker.browseFailed')}
+          />
+        )}
         {/* Choose a different folder */}
         <button
           type="button"

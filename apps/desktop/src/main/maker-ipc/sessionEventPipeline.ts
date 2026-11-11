@@ -1,4 +1,3 @@
-import { projectCoordinationOutput } from './coordinationOutput.js';
 import { observeBotLearningTurn } from './botLearningFeedback.js';
 import { projectQuietScheduledOutput } from '../scheduler-host/silent-output.js';
 import type { AgentEvent, Session } from '@cindy/maker-core';
@@ -45,10 +44,7 @@ export function handleSessionEvent(
 ): void {
   const prepared = prepareSessionEvent(deps, session, event);
   if (!prepared) return;
-  const project = (input: AgentEvent) => {
-    const scheduled = projectQuietScheduledOutput(input);
-    return scheduled && projectCoordinationOutput(scheduled, prepared.taskCoordination);
-  };
+  const project = projectQuietScheduledOutput;
   const projected = project(prepared.event);
   if (!projected) return;
   if (projected !== prepared.event) {

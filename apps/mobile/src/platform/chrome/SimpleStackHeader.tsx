@@ -49,6 +49,7 @@ export const simpleScrollInsetProps = Platform.OS === "ios"
 export function SimpleStackHeader({
   action,
   right,
+  rightToolbar,
   backTestID,
   onBack,
   title,
@@ -58,6 +59,8 @@ export function SimpleStackHeader({
 }: {
   action?: MainWindowAction;
   right?: ReactNode;
+  /** Native toolbar elements, rendered beside Stack.Screen rather than inside headerRight. */
+  rightToolbar?: ReactNode;
   backTestID?: string;
   /**
    * @deprecated 两端都不渲染(iOS 系统顶栏无此槽,Android 跟随 iOS)。
@@ -117,6 +120,7 @@ export function SimpleStackHeader({
           : undefined,
       }}
     />
+    {rightToolbar}
     {onBack ? <Stack.Toolbar placement="left">
       <Stack.Toolbar.Button icon="chevron.backward" onPress={onBack} accessibilityLabel={t('shared.back')} />
     </Stack.Toolbar> : null}

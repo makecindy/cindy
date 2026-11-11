@@ -1215,3 +1215,56 @@ describe('V5 display pricing extension', () => {
     expect(parseListModelsResponse({ ...VALID_V4_RESPONSE, models: [{ ...VALID_V4_RESPONSE.models[0], displayPricing }] }).ok).toBe(false);
   });
 });
+
+// Tier: unit. Reject an entire malformed V6 snapshot before cache/route activation.
+describe('V6 interface contract', () => {
+  const registry = (): ModelRegistry => ({ schemaVersion: 6, updatedAt: '2099-01-01T00:00:00.000Z',
+    interfaceProfiles: [{ id: 'messages', providerId: 'vendor', api: 'anthropic-messages',
+      baseUrl: 'https://vendor.example/messages', inputBaseUrls: ['https://vendor.example/v1'] }],
+    models: [{ id: 'model', name: 'Model', nativeApis: ['anthropic-messages', 'openai-responses'],
+      routes: [{ providerId: 'vendor', modelId: 'model', agents: ['codex'],
+        interfaces: [{ profileId: 'messages' }], preferredInterfaces: { codex: ['messages'] } }] }],
+  });
+  it.each([
+    (value: ModelRegistry) => { value.interfaceProfiles![0].baseUrl = 'https://other.example'; },
+    (value: ModelRegistry) => { value.interfaceProfiles![0].requestPath = '/%2e%2e/private'; },
+    (value: ModelRegistry) => { value.interfaceProfiles!.push(value.interfaceProfiles![0]); },
+    (value: ModelRegistry) => { value.models[0].routes[0].interfaces![0].profileId = 'missing'; },
+    (value: ModelRegistry) => { value.models[0].routes[0].preferredInterfaces!.codex = ['missing']; },
+  ])('rejects malformed references or credential scope', mutate => {
+    const value = registry(); mutate(value);
+    expect(parseModelRegistry(value).ok).toBe(false);
+  });
+  it('retains unknown required capabilities as data for execution-time exclusion', () => {
+    const value = registry(); value.interfaceProfiles![0].requires = ['future-runtime-v99'];
+    expect(parseModelRegistry(value)).toEqual({ ok: true, value });
+  });
+  // Recommendations are capability-gated: capable clients accept them, released parsers never see them.
+  it('accepts recommended engines only as exact-or-prefix rules and strips them for older clients', async () => {
+    const { withoutRecommendedAgents, projectRegistryV5 } = await import('../modelInterfaceContract.js');
+    const { resolveRecommendedAgent } = await import('../modelRegistry.js');
+    const value = registry();
+    value.recommendedAgents = [
+      { providerId: 'vendor', modelIdPrefix: 'mod', agent: 'pi' },
+      { providerId: 'vendor', modelIdPrefix: 'model', agent: 'codex' },
+      { providerId: 'vendor', modelId: 'model', agent: 'claude-code' },
+    ];
+    expect(parseModelRegistry(value)).toEqual({ ok: true, value });
+    expect(resolveRecommendedAgent(value, 'vendor', 'model')).toBe('claude-code');
+    expect(resolveRecommendedAgent(value, 'vendor', 'model-2')).toBe('codex');
+    expect(resolveRecommendedAgent(value, 'other', 'model')).toBeUndefined();
+    expect(withoutRecommendedAgents(value)).not.toHaveProperty('recommendedAgents');
+    expect(projectRegistryV5(value)).not.toHaveProperty('recommendedAgents');
+    for (const bad of [
+      { providerId: 'vendor', agent: 'pi' },
+      { providerId: 'vendor', modelId: 'model', modelIdPrefix: 'm', agent: 'pi' },
+      { providerId: 'vendor', modelId: 'model', agent: 'gemini' },
+      { providerId: 'vendor', modelId: 'model', agent: 'pi', reason: 'x' },
+    ]) {
+      expect(parseModelRegistry({ ...value, recommendedAgents: [bad] } as unknown as ModelRegistry).ok).toBe(false);
+    }
+    expect(parseModelRegistry({ ...value, recommendedAgents: [value.recommendedAgents[2], value.recommendedAgents[2]] }).ok).toBe(false);
+    expect(parseModelRegistry({ ...value, schemaVersion: 5, recommendedAgents: value.recommendedAgents } as unknown as ModelRegistry).ok).toBe(false);
+    expect(parseModelRegistry({ ...value, recommendedAgents: null } as unknown as ModelRegistry).ok).toBe(false);
+  });
+});

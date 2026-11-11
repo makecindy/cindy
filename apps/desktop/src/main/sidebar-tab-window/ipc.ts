@@ -174,10 +174,14 @@ export function registerSidebarTabWindowIpc(opts: {
     }
   });
 
-  ipcMain.handle(MAKER_INVOKE.SIDEBAR_TAB_WINDOW_FOCUS, (event, tabId: unknown) => {
+  ipcMain.handle(MAKER_INVOKE.SIDEBAR_TAB_WINDOW_FOCUS, (event, tabId: unknown, options?: unknown) => {
     assertTrustedAppRendererEvent(event);
     const id = requireId(tabId, 'tabId');
-    controller.focus(id);
+    const opts = options === undefined ? {} : requireObject(options, 'options');
+    if (opts.userInitiated !== undefined && typeof opts.userInitiated !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'userInitiated must be a boolean');
+    }
+    controller.focus(id, { userInitiated: opts.userInitiated !== false });
   });
 
   ipcMain.handle(MAKER_INVOKE.SIDEBAR_TAB_WINDOW_RETURN_TAB, (event, tabId: unknown) => {

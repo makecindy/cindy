@@ -4,13 +4,14 @@ import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProviderView } from '@cindy/model-providers';
 import { toast } from '@/lib/toast';
+import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 
 import type { ProviderGroupConfig } from '../../../../shared/providerGroup';
 import type { ProviderOwnUsageView, ProviderShareOwnerState, ProviderUsageHistoryView } from '../../../../shared/providerShare';
 import { __testing as localGroupsTesting } from '../../provider-group/useLocalProviderGroups';
 import { ProviderShareVisibilitySection } from '../ProviderShareVisibilitySection';
 import { ProviderShareManagePage } from '../ProviderShareManagePage';
-import { RemoteAgentIdleReleaseSection } from '../RemoteAgentIdleReleaseSection';
+import { SubscriptionFastSetting } from '../SubscriptionFastSetting';
 import {
   getProviderSharePendingRequests,
   getProviderSharePendingReshares,
@@ -198,6 +199,7 @@ beforeEach(() => {
   vi.mocked(toast.success).mockClear();
   command.mockReset();
   command.mockImplementation(async (cmd: { action: string }) => {
+    if (cmd.action === 'get-model-access') return { version: 1, models: null, providerModels: null, availableModels: [] };
     if (cmd.action === 'get-visibility') return { quota: false, usage: false };
     if (cmd.action === 'owned') return owned();
     if (cmd.action === 'own-usage') return ownUsage();
@@ -207,7 +209,6 @@ beforeEach(() => {
       value: { perDevice: 16, total: 64 }, defaults: { perDevice: 16, total: 64 },
       isCustomized: false, customizedKeys: [], usage: { total: 0, devices: 0, largestDevice: 0 },
     };
-    if (cmd.action === 'get-idle-release') return { value: { idleMinutes: 0 }, defaults: { idleMinutes: 0 }, isCustomized: false };
     if (cmd.action === 'received-snapshot') return { ownerStamp: { dataOwnerId: null, ownerGeneration: 0 }, received: [], confirmedRegions: [] };
     if (cmd.action === 'set-member' || cmd.action === 'approve' || cmd.action === 'reject') return { ok: true };
     throw new Error(`unexpected ${cmd.action}`);
@@ -241,6 +242,46 @@ beforeEach(() => {
 
 afterEach(() => cleanup());
 
+// Review R12: real setting + management IPC adapter, using this page's host
+// fixture. Prior page cases do not interleave a catalog push with save failure.
+// Unit tier: defer the IPC, refresh allowFast, then reject; the warning must
+// survive value refresh while identity/owner/unmount boundaries still discard it.
+describe('SubscriptionFastSetting save feedback', () => {
+  const subscription = (id = 'openai', allowFast = true) => ({
+    id, subscriptionFastPolicy: { allowFast },
+  } as ProviderView);
+
+  it('keeps the native failure warning after the committed catalog value arrives', async () => {
+    vi.mocked(toast.error).mockClear();
+    let reject!: (error: Error) => void;
+    command.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
+    const view = render(<SubscriptionFastSetting provider={subscription()} />);
+    expect(screen.getByRole('switch').getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(screen.getByRole('switch'));
+    expect(command).toHaveBeenCalledWith({ action: 'set-fast-policy', providerId: 'openai', allowFast: false });
+    view.rerender(<SubscriptionFastSetting provider={subscription('openai', false)} />);
+    await act(async () => { reject(new Error('native busy')); });
+    expect(screen.getByRole('switch').getAttribute('aria-checked')).toBe('false');
+    expect(vi.mocked(toast.error)).toHaveBeenCalledExactlyOnceWith('subscriptionFastPolicy.saveFailed');
+    expect((screen.getByRole('switch') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it.each(['provider', 'device', 'owner', 'unmount'])('discards a late failure across the %s boundary', async boundary => {
+    vi.mocked(toast.error).mockClear();
+    setDataOwnerGeneration('fast-owner-a');
+    let reject!: (error: Error) => void;
+    command.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
+    const view = render(<SubscriptionFastSetting provider={subscription()} />);
+    fireEvent.click(screen.getByRole('switch'));
+    if (boundary === 'provider') view.rerender(<SubscriptionFastSetting provider={subscription('anthropic')} />);
+    if (boundary === 'device') view.rerender(<SubscriptionFastSetting provider={subscription()} deviceId="other-computer" />);
+    if (boundary === 'owner') setDataOwnerGeneration('fast-owner-b');
+    if (boundary === 'unmount') view.unmount();
+    await act(async () => { reject(new Error('old native busy')); });
+    expect(vi.mocked(toast.error)).not.toHaveBeenCalled();
+  });
+});
+
 /** 「你自己」一行先出来；分享的人等分享读到后才有。 */
 async function findMemberRow(memberId = 'mem-1'): Promise<HTMLElement> {
   return waitFor(() => {
@@ -271,6 +312,25 @@ function renderPage(
 }
 
 describe('ProviderShareManagePage', () => {
+  // Verify the person's row opens a grant for that member, rather than editing the provider-wide policy.
+  it('opens and saves the selected person’s model grant from their row menu', async () => {
+    const respond = command.getMockImplementation()!;
+    const models = { version: 1, models: null, providerModels: null,
+      availableModels: [{ id: 'small', name: 'Small' }, { id: 'large', name: 'Large' }] };
+    command.mockImplementation(async (cmd) => {
+      if (cmd.action === 'get-model-access' || cmd.action === 'set-model-access') return models;
+      return respond(cmd);
+    });
+    renderPage();
+    fireEvent.click(within(await findMemberRow()).getByRole('button', { name: 'providerShare.modelAccess.memberTitle' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(await within(dialog).findByRole('checkbox', { name: 'Large' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'settings.providers.custom.save' }));
+    await waitFor(() => expect(command).toHaveBeenCalledWith({
+      action: 'set-model-access', providerId: 'xd', memberId: 'mem-1', models: ['small'],
+    }));
+  });
+
   /* 测试价值：2026-10-19 用户备注；生产页面的新增入口、保存/清空、原用户名与筛选同步显示。
    * 现有测试只有暂停/删除。最小输入：一个成员，分别在本机和 studio 管理。tier: unit。
    * 单文件实测 17.21 秒，其中导入 7.16 秒、30 用例 8.61 秒；复用既有页面与完整用量图表 fixture，
@@ -365,19 +425,6 @@ describe('ProviderShareManagePage', () => {
     expect(command).toHaveBeenCalledWith({ action: 'owned', range: 'all' });
     expect(getProviderSharePendingRequests().map((item) => item.request.requestId)).toEqual(['req-1']);
     expect(screen.getByText(/providerShare\.manage\.members\.statusRunning/)).toBeTruthy();
-  });
-
-  // 闲置释放只对这台电脑生效：管理另一台电脑时不显示，免得以为改的是那台。
-  it('shows the idle release setting only when managing this computer', async () => {
-    renderPage();
-    expect(await screen.findByTestId('remote-agent-idle-release')).toBeTruthy();
-    expect(command).toHaveBeenCalledWith({ action: 'get-idle-release' });
-    cleanup();
-    command.mockClear();
-    renderPage('on', { deviceId: 'studio' });
-    await screen.findByTestId('remote-agent-limits');
-    expect(screen.queryByTestId('remote-agent-idle-release')).toBeNull();
-    expect(command).not.toHaveBeenCalledWith({ action: 'get-idle-release' });
   });
 
   /*
@@ -490,7 +537,8 @@ describe('ProviderShareManagePage', () => {
   // 2026-10-17 用户确认原型：与设置 → 用量同一套，默认合计，可以只看一个人或一台电脑。
   // 测试价值：经真实管理页验证 2026-10-19 用户要求的单卡切换与移出电脑隐藏；原覆盖同时渲染三张表，
   // 没有「当前组只有本机、历史仍有另一台」输入。最小失败输入为 xdGroup + 一条已移出电脑的用量，tier: unit。
-  // 本机整文件实测 19.23s（收集 8.02s、27 项执行 9.63s）；新增回归 395ms。复用原有管理页 fixture，避免另开同入口的小文件。
+  // 本机整文件实测 20.13s（收集 7.87s、42 项执行 10.93s）；真实管理页加载多个设置组件，整体超过 10s。
+  // 复用原有管理页 fixture，避免另开同入口的小文件。
   it('switches one breakdown card between people, current computers and models without losing historical totals', async () => {
     localGroups = { xd: { ...xdGroup, members: [xdGroup.members[0]!] } };
     renderPage();
@@ -512,9 +560,101 @@ describe('ProviderShareManagePage', () => {
     expect(screen.getAllByTestId('provider-usage-model').map((row) => row.textContent))
       .toEqual(expect.arrayContaining([expect.stringContaining('Opus 5.5')]));
     expect(screen.getByTestId('provider-usage-summary').textContent).toBe(summary);
+    // 已移出电脑的历史在按电脑分色柱图里也归入「更早的记录」，不单独暴露电脑分段。
+    const stack = screen.getByRole('radiogroup', { name: 'providerGroup.usage.stack.aria' });
+    fireEvent.click(within(stack).getByRole('radio', { name: 'providerGroup.usage.stack.computer' }));
+    for (const day of ['2026-10-16', '2026-10-15']) {
+      const bar = document.querySelector<HTMLElement>(`[data-day="${day}"]`);
+      const descriptionId = bar?.getAttribute('aria-describedby');
+      const description = descriptionId ? document.getElementById(descriptionId)?.textContent : null;
+      expect(description).toContain('providerGroup.usage.unattributed');
+      expect(description).not.toContain('Studio');
+    }
     pickUsageBreakdown('party');
     expect(usageRowText(0)).toContain('52.0k');
     expect(usageRowText(1)).toContain('1.5M');
+  });
+
+  // 测试价值：真实管理页把仅有 cache 的用量显示在概览、按人/电脑/模型和柱图中（provider-groups.md §7），
+  // 并保留只有金额、没有 token 的记录在按人/按电脑表里的估算金额。
+  // 原覆盖的 input/output 都非零，漏掉 cache 仍能显示用量；最小输入为 cacheRead=1000、其余三类为 0。
+  // tier: unit，复用管理页 IPC fixture，不访问真实账号或设备。
+  it('counts cache-only usage in the overview, breakdowns and daily chart without losing estimated cost', async () => {
+    localGroups = { xd: xdGroup };
+    const history = usageHistory();
+    history.self.days = [
+      { ...usageDay(TODAY, 'claude-sonnet-5', 0, 2.5), outputTokens: 0, cacheReadTokens: 100 },
+      { ...usageDay('2026-10-16', 'claude-fable-5-1', 0, 1.25, 'device:studio:xd-2'), outputTokens: 0, cacheCreateTokens: 200 },
+    ];
+    history.members[0]!.days = [
+      { ...usageDay(TODAY, 'claude-opus-5-5', 0, 31.2, 'device:studio:xd-2'), outputTokens: 0, cacheReadTokens: 1_000 },
+    ];
+    // 只有 SDK 金额、没有 token 的记录：概览与模型表合计金额，按人/按电脑也不能把金额藏成 —。
+    history.relays = [{
+      deviceId: 'cost-only', deviceName: null, lastUsedAt: 1,
+      days: [{ ...usageDay(TODAY, 'claude-sonnet-5', 0, 0.5, 'share:share-9:xd'), outputTokens: 0, turns: 0 }],
+    }];
+    const respond = command.getMockImplementation()!;
+    command.mockImplementation(async (cmd: { action: string }) => cmd.action === 'usage-history' ? history : respond(cmd));
+
+    renderPage();
+    await findMemberRow();
+    const summary = within(screen.getByTestId('provider-usage-summary'));
+    expect(summary.getByText('1.1k')).toBeTruthy(); // 今日 100 + 1000。
+    expect(summary.getByText('1.3k')).toBeTruthy(); // 所选范围再加昨天的 200。
+    expect(summary.getByText('$35.45')).toBeTruthy();
+    expect(usageRowText(0)).toContain('300');
+    expect(usageRowText(1)).toContain('1.0k');
+    expect(usageRowText(1)).toContain('76.9%');
+    // cache-only 成员仍算用过一台组内电脑。
+    expect(within(screen.getAllByTestId('provider-usage-row')[1]!).getAllByRole('cell')[5]!.textContent).toBe('1');
+    expect(usageRowText(2)).toContain('$0.50');
+
+    pickUsageBreakdown('computer');
+    const computers = screen.getAllByTestId('provider-usage-computer');
+    expect(computers[0]!.textContent).toContain('100');
+    expect(computers[1]!.textContent).toContain('1.2k');
+    // Studio 上只有 cache 的两条记录仍算两个使用方。
+    expect(within(computers[1]!).getAllByRole('cell')[5]!.textContent).toBe('2');
+    expect(computers[2]!.textContent).toContain('$0.50');
+
+    pickUsageBreakdown('model');
+    const models = screen.getAllByTestId('provider-usage-model');
+    expect(models.map((row) => within(row).getAllByRole('cell')[1]!.textContent)).toEqual(['1.0k', '200', '100']);
+    expect(within(models[0]!).getAllByRole('cell').map((cell) => cell.textContent))
+      .toEqual(expect.arrayContaining(['1.0k', '76.9%', '0', '0', '1.0k', '0', '100%', '$31.20']));
+    const dailyBar = document.querySelector<HTMLElement>(`[data-day="${TODAY}"]`);
+    expect(dailyBar?.getAttribute('aria-label')).toContain('"tokens":"1.1k"');
+  });
+
+  // 测试价值：真实管理页在只有 SDK 金额、没有 token/turns 时，概览、按人、按电脑（含更早的记录）
+  // 与按模型都保留该金额；providerShareRuntime 明确保留这类行。原覆盖只查按人/按电脑，未查按模型与移出电脑。
+  // 最小失败输入：单行 turns=0、四类 token=0、amount=0.5 USD，memberKey 为已移出电脑。tier: unit。
+  it('keeps amount-only records visible in model and earlier-computer breakdowns', async () => {
+    localGroups = { xd: xdGroup };
+    const history = usageHistory();
+    history.self.days = [{
+      ...usageDay(TODAY, 'claude-haiku-4-5', 0, 0.5, 'device:retired:xd-2'),
+      outputTokens: 0, turns: 0,
+    }];
+    history.members = [];
+    const respond = command.getMockImplementation()!;
+    command.mockImplementation(async (cmd: { action: string }) => cmd.action === 'usage-history' ? history : respond(cmd));
+
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('provider-usage-summary').textContent).toContain('$0.50'));
+    expect(usageRowText(0)).toContain('$0.50');
+
+    pickUsageBreakdown('computer');
+    const earlier = screen.getAllByTestId('provider-usage-computer').find((row) => row.getAttribute('data-computer-key') === '');
+    expect(earlier?.textContent).toContain('$0.50');
+
+    pickUsageBreakdown('model');
+    const model = screen.getAllByTestId('provider-usage-model').find((row) => row.textContent?.includes('Haiku 4.5'));
+    expect(model).toBeTruthy();
+    const cells = within(model!).getAllByRole('cell').map((cell) => cell.textContent);
+    expect(cells[1]).toBe('—');
+    expect(cells[8]).toBe('$0.50');
   });
 
   it('splits usage by computer in the group and narrows everything to one person when their row is picked', async () => {
@@ -651,12 +791,19 @@ describe('ProviderShareManagePage', () => {
 
   // 那台电脑还没更新、不认识按天明细：退回所有时间的合计，时间固定为所有时间，不显示两张图。
   it('falls back to all-time totals when the provider computer has not been updated', async () => {
+    const legacyOwn = ownUsage();
+    legacyOwn.local!.models[0]!.cacheReadTokens = 100_000;
+    legacyOwn.local!.models[0]!.cacheCreateTokens = 20_000;
+    const legacyOwned = owned();
+    legacyOwned.shares[0]!.members[0]!.models[0]!.cacheReadTokens = 2_000_000;
+    legacyOwned.shares[0]!.members[0]!.models[0]!.cacheCreateTokens = 100_000;
     const remoteCommand = vi.spyOn(window.electronAPI.providerGroup, 'command');
     remoteCommand.mockImplementation(async (cmd) => {
       if (cmd.action === 'remote-manage' && cmd.request.action === 'manage-share') {
         const action = cmd.request.command.action;
         if (action === 'usage-history') throw new Error('[UNSUPPORTED_CAPABILITY] Provider management requires an update');
-        if (action === 'own-usage') return ownUsage();
+        if (action === 'own-usage') return legacyOwn;
+        if (action === 'owned') return legacyOwned;
         return command(cmd.request.command);
       }
       return { providerId: 'xd', config: null, members: [] };
@@ -668,9 +815,12 @@ describe('ProviderShareManagePage', () => {
       request: { action: 'manage-share', command: { action: 'own-usage', providerId: 'xd', range: 'all' } },
     }));
     expect(await screen.findByText(/providerGroup\.usage\.legacyNote/)).toBeTruthy();
-    await waitFor(() => expect(usageRowText(0)).toContain('52.0k'));
+    // 旧回包已经带了 cache：不需要更新协议就能在展示时计入，输入分项与金额不变。
+    await waitFor(() => expect(usageRowText(0)).toContain('172.0k'));
+    expect(usageRowText(0)).toContain('$3.75');
     // 分享的人所有时间的合计来自 owned。
-    expect(usageRowText(1)).toContain('1.5M');
+    expect(usageRowText(1)).toContain('3.6M');
+    expect(usageRowText(1)).toContain('$31.20');
     // 选不了时间：不摆出时间范围与日期。
     expect(screen.queryByRole('combobox', { name: 'usageHistory.range.ariaLabel' })).toBeNull();
     expect(screen.queryByLabelText('usageHistory.range.date')).toBeNull();
@@ -896,54 +1046,5 @@ describe('share visibility switches', () => {
       await act(async () => { finish({ quota: false, usage: false }); });
       expect(screen.getByRole('switch', { name: 'providerShare.insights.allowQuota' }).getAttribute('aria-checked')).toBe('true');
     } finally { vi.useRealTimers(); }
-  });
-});
-
-/*
- * 测试价值
- * - 生产入口与可观察结果：RemoteAgentIdleReleaseSection 读、存、恢复默认这台电脑的闲置释放分钟数，非法值不能保存。
- * - Bug／规则依据：protocol-compatibility.md「控制端连接池」，设置 0～120、默认 0 = 从不让出。
- * - 现有覆盖缺口：页面用例只断言显示与否；主进程校验见 providerShareManagement.test.ts，界面这一侧的输入拦截与命令没有覆盖。
- * - 最小失败输入：输入 121 / -1 / 1.5 / 空；保存 0 与默认值相同时也要按用户改过记下。
- * - tier：unit(jsdom)，并入同一功能的页面测试文件，共用宿主 mock。
- */
-const idleView = (idleMinutes = 0, isCustomized = false) => ({ value: { idleMinutes }, defaults: { idleMinutes: 0 }, isCustomized });
-const idleInput = () => screen.getByTestId('remote-agent-idle-release-minutes') as HTMLInputElement;
-const idleButton = (key: 'save' | 'reset') => screen.getByRole('button', { name: `providerShare.idleRelease.${key}` }) as HTMLButtonElement;
-
-describe('RemoteAgentIdleReleaseSection', () => {
-  beforeEach(() => {
-    command.mockImplementation(async (cmd: { action: string; value?: { idleMinutes: number } }) => (
-      cmd.action === 'set-idle-release' ? idleView(cmd.value!.idleMinutes, true) : idleView()
-    ));
-  });
-
-  it('reads and saves the setting on this computer, including 0 and an explicit default', async () => {
-    render(<RemoteAgentIdleReleaseSection />);
-    await waitFor(() => expect(idleInput().value).toBe('0'));
-    expect(command).toHaveBeenCalledWith({ action: 'get-idle-release' });
-    expect(screen.getByText('providerShare.idleRelease.hint')).toBeTruthy();
-    expect(idleButton('save').disabled).toBe(true);
-    fireEvent.change(idleInput(), { target: { value: '10' } });
-    fireEvent.click(idleButton('save'));
-    await waitFor(() => expect(command).toHaveBeenLastCalledWith({ action: 'set-idle-release', value: { idleMinutes: 10 } }));
-    await waitFor(() => expect(idleButton('reset').disabled).toBe(false));
-    fireEvent.change(idleInput(), { target: { value: '0' } });
-    fireEvent.click(idleButton('save'));
-    await waitFor(() => expect(command).toHaveBeenLastCalledWith({ action: 'set-idle-release', value: { idleMinutes: 0 } }));
-  });
-
-  it('rejects values outside 0–120 and restores the default', async () => {
-    command.mockImplementation(async (cmd: { action: string }) => (cmd.action === 'reset-idle-release' ? idleView() : idleView(30, true)));
-    render(<RemoteAgentIdleReleaseSection />);
-    await waitFor(() => expect(idleInput().value).toBe('30'));
-    for (const value of ['121', '-1', '1.5', '']) {
-      fireEvent.change(idleInput(), { target: { value } });
-      expect(idleButton('save').disabled).toBe(true);
-    }
-    expect(screen.getByRole('alert').textContent).toContain('providerShare.idleRelease.invalid');
-    fireEvent.click(idleButton('reset'));
-    await waitFor(() => expect(command).toHaveBeenLastCalledWith({ action: 'reset-idle-release' }));
-    await waitFor(() => expect(idleInput().value).toBe('0'));
   });
 });

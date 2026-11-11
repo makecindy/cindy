@@ -40,7 +40,7 @@ export interface DeviceLinkCreateParams {
   model: string;
   effort: Effort | null;
   permissionMode: PermissionMode;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
   planModeEnabled?: boolean;
   /**
    * 附加只读引用目录(草稿期用户选的)。控制端选的是**本机路径**(extraDirs picker 走本机
@@ -73,7 +73,7 @@ export interface DeviceLinkCreateArgs {
   model: string;
   effort: Effort | '';
   permissionMode: PermissionMode;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
   planMode?: boolean;
   /** 仅当草稿有非空 extraDirs 时出现;被控端 bootstrapSession 再校验(单一真相源)。 */
   extraDirs?: string[];
@@ -121,7 +121,7 @@ export interface DeviceLinkSubmissionCandidate {
   model: string;
   effort: Effort | null;
   permissionMode: PermissionMode;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
   planModeEnabled?: boolean;
   /** 用户显式选中的被控端来源;null / 省略 = 跟随被控端默认路由。 */
   providerId?: string | null;

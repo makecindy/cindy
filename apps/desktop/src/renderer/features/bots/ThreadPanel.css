@@ -1,0 +1,21 @@
+/* Both reply runtimes use the same narrow-panel presentation. Controls stay in
+   flow below the content, leaving the full message column available for reading. */
+.thread-panel {
+  --chat-bubble-gutter: 0px;
+}
+
+.thread-panel .chat-bubble-toolbar {
+  position: relative;
+  inset: auto;
+  margin: 8px 0 0 auto;
+  max-width: 100%;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* The existing Markdown table scroller owns wide columns. Don't reduce dates,
+   numbers and domains to individual characters to make them fit the panel. */
+.thread-panel :is(th, td) {
+  overflow-wrap: normal;
+  word-break: normal;
+}

@@ -1,4 +1,5 @@
 import type { OpenAiAccountProvider } from './sessionControls';
+import { normalizeUsageCostRows, type UsageCostRow } from '@cindy/maker-shared/usage-cost-details';
 import { useCallback, useEffect, useState } from "react";
 import type { MobileMakerTransport } from "@/device-link/mobileMakerTransport";
 import { normalizeRemoteMoney, type RemoteMoney } from "@/session/remoteMoney";
@@ -28,6 +29,7 @@ export type SessionMenuUsageReader = SessionMenuAccountReader &
   Pick<MobileMakerTransport, "getSessionEstimatedValue">;
 
 interface UsageState {
+  costBreakdown?: UsageCostRow[] | null;
   account: SessionMenuAccountUsage | null;
   estimate: RemoteMoney | null;
   accountFailed: boolean;
@@ -124,9 +126,10 @@ export function useSessionMenuUsage(
                 : {}),
             }),
         ),
-        reader.getSessionEstimatedValue(session.id).then(
+        reader.getSessionEstimatedValue(session.id, { includeBreakdown: true }).then(
           (snapshot) =>
             update({
+              costBreakdown: Array.isArray(snapshot.costBreakdown) ? normalizeUsageCostRows(snapshot.costBreakdown) : null,
               estimate:
                 normalizeRemoteMoney(snapshot.totalValueMoney) ??
                 (typeof snapshot.totalValueUsd === "number" &&

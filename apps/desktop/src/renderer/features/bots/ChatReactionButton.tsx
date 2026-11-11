@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { BotAvatar } from './BotAvatar';
 import type { BotGroupMemberView, BotGroupMessageView, ChatReactor } from '../../../shared/botGroupChat';
@@ -35,8 +36,10 @@ function reactorNames(reactors: ChatReactor[], t: TFunction, language: string) {
  * badge shows their avatars instead of a number; avatars come from the group member projection,
  * and actors without one fall back to an initial, never an invented identity.
  */
-export function ChatReactionButton({ groupId, messageId, reaction, revision = 0, members, disabled, onToggle }: {
+export function ChatReactionButton({ groupId, messageId, reaction, revision = 0, members, disabled, onToggle, corner = false }: {
   groupId?: string; messageId: string; reaction: Reaction; revision?: string | number; members?: readonly BotGroupMemberView[]; disabled: boolean; onToggle: () => void;
+  /** Pinned to a bubble's corner: a small card-colored badge, your own reaction marked by a stronger outline. */
+  corner?: boolean;
 }) {
   const { t, i18n } = useTranslation();
   const [loaded, setLoaded] = useState<Loaded | null>(null);
@@ -82,10 +85,14 @@ export function ChatReactionButton({ groupId, messageId, reaction, revision = 0,
   const label = reactors?.length
     ? t(key('reactionWho'), { emoji: reaction.emoji, count: reaction.count, names: reactorNames(reactors, t, i18n.language) })
     : countLabel;
+  const ringClass = corner ? 'ring-2 ring-[var(--surface-elevated)]' : 'ring-2 ring-[var(--button-face-bg)]';
   return (
-    <Button ref={badgeRef} variant={reaction.me ? 'primary' : 'secondary'} size="sm" compact
+    <Button ref={badgeRef} variant={reaction.me && !corner ? 'primary' : 'secondary'} size="sm" compact
       disabled={disabled} aria-pressed={reaction.me} aria-label={label}
-      className={showAvatars ? 'pr-1' : undefined} onClick={onToggle}>
+      // Corner badges paint through the shared face variables; your own reaction gets a stronger outline.
+      className={cn(showAvatars && 'pr-1', corner && cn('h-7 gap-1 px-1.5 text-13 [--button-face-bg:var(--surface-elevated)]',
+        reaction.me ? '[--button-face-border:var(--text-tertiary)]' : '[--button-face-border:var(--border-default)]'))}
+      onClick={onToggle}>
       <span>{reaction.emoji}</span>
       {showAvatars ? (
         // Fixed slots sized by the count, so loading and remote updates never shift the row.
@@ -94,11 +101,11 @@ export function ChatReactionButton({ groupId, messageId, reaction, revision = 0,
             const reactor = reactors?.[index];
             const member = reactor && members?.find(m => m.actorId === reactor.actorId);
             return reactor ? (
-              <BotAvatar key={reactor.actorId} size="xs" className="ring-2 ring-[var(--button-face-bg)]" bot={{
+              <BotAvatar key={reactor.actorId} size="xs" className={ringClass} bot={{
                 name: reactor.name ?? '', avatar: member?.avatar ?? null, avatarUrl: member?.avatarUrl, avatarColor: member?.avatarColor ?? null,
               }} />
             ) : (
-              <span key={`slot-${index}`} className="h-5 w-5 rounded-full bg-[var(--surface-hover)] ring-2 ring-[var(--button-face-bg)]" />
+              <span key={`slot-${index}`} className={cn('h-5 w-5 rounded-full bg-[var(--surface-hover)]', ringClass)} />
             );
           })}
         </span>

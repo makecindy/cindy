@@ -673,6 +673,13 @@ function buildProviderBrandingEntries() {
       url: "https://github.com/BerriAI/litellm-docs/blob/main/static/img/logo.svg",
       licenseText: MIT_TEXT("MIT License\n\nCopyright (c) 2026 Berri AI"),
     }),
+    bundledComponent({
+      name: "Magpie SVG mark (adapted)",
+      version: "adapted",
+      license: "MIT",
+      url: "https://github.com/yetone/magpie/blob/main/site/public/img/magpie-small.svg",
+      licenseText: MIT_TEXT("MIT License\n\nCopyright (c) 2026 yetone"),
+    }),
   ];
   return entries.sort(
     (a, b) =>
@@ -952,6 +959,16 @@ function buildDesktopCommonEntries(apacheText, sharpPackageNames) {
 
   // Workspace packages are skipped by npm closure discovery. The vendored
   // OpenCodex helpers are also bundled into Desktop main, not only the SSH proxy.
+  const opencli = readJson(path.join(REPO_ROOT, "packages/opencli-vendor/UPSTREAM.json"));
+  entries.push(
+    bundledComponent({
+      name: "OpenCLI browser recipes (adapted)",
+      version: opencli.revision,
+      license: "Apache-2.0",
+      url: `${opencli.repository}/tree/${opencli.revision}`,
+      licenseText: readBundledLicense("packages/opencli-vendor/LICENSE"),
+    }),
+  );
   const opencodex = readJson(path.join(REPO_ROOT, "packages/model-compat/UPSTREAM.json"));
   entries.push(
     bundledComponent({

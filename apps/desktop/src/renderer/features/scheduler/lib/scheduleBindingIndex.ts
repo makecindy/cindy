@@ -5,7 +5,7 @@ export type ScheduleBinding = Pick<
   Schedule,
   'id' | 'name' | 'status' | 'targetSessionId' | 'cronExpr' | 'manual' | 'intervalMs'
 > &
-  Partial<Pick<Schedule, 'recurring'>>;
+  Partial<Pick<Schedule, 'recurring' | 'persistentSession'>>;
 
 let lastInput: readonly ScheduleBinding[] | null = null;
 let lastMap: ReadonlyMap<string, ScheduleBinding[]> = new Map();
@@ -61,6 +61,8 @@ export function parseScheduleBindings(raw: unknown): ScheduleBinding[] {
       manual: s.manual === true,
       recurring: s.recurring as boolean | undefined,
       intervalMs: s.intervalMs as number | undefined,
+      // 保留运行模式；持续与手动绑定的自动任务都会恢复已归档的普通任务。
+      ...(s.persistentSession === true ? { persistentSession: true } : {}),
     });
   }
   return result;

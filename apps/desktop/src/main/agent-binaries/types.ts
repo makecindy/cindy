@@ -1,3 +1,5 @@
+import type { Manifest } from '../manifestService.js';
+
 /**
  * apps/desktop/src/main/agent-binaries/types.ts
  *
@@ -56,6 +58,9 @@ export interface VendorRuntimeState {
 // ===== §5.2 BinaryProvisioner =====
 /** @frozen v1.0 */
 export interface BinaryProvisioner {
+  /** Download only; never selects a new runtime or removes the running version. */
+  prefetch(opts?: { manifest?: Manifest; signal?: AbortSignal }): Promise<boolean>;
+
   /** 不触发下载，仅返回当前状态。Renderer 用来决定是否需要触发 prepare */
   getState(): Promise<VendorRuntimeState>;
 
@@ -63,6 +68,8 @@ export interface BinaryProvisioner {
   prepare(opts?: {
     onProgress?: (p: VendorRuntimeState) => void;
     checkForUpdates?: boolean;
+    /** false when a usable Linux fallback only needs an already downloaded update. */
+    allowDownload?: boolean;
     /** 取消排队、下载或重试等待；已完成的本地命中不受影响。 */
     signal?: AbortSignal;
   }): Promise<{ ready: boolean; binaryPath: string; error?: string }>;
@@ -82,6 +89,8 @@ export interface BinaryProvisioner {
 
 export interface PrepareOpts {
   checkForUpdates?: boolean;
+  /** Internal cache adoption path; never prevents normal first-install repair. */
+  allowDownload?: boolean;
   /** D 场景顺序下载阶段标记，会写进 IPC payload 给 splash 显示 (x/y) 文案。 */
   step?: 1 | 2 | 3;
   /** D 场景 = 本次需要下载的 vendor 数(2 或 3);B/C 场景缺省。 */

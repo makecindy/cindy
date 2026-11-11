@@ -17,6 +17,7 @@
  */
 
 import { createAttachmentRecovery } from './oversized-attachment-recovery.js';
+import { getSessionSubscriptionAccount } from '../subscription-accounts/session.js';
 import {
   createAnthropicCompatProxy,
   createActiveStripTransform,
@@ -24,9 +25,11 @@ import {
   createEmptyAssistantMessageRecoveryRule,
   createEmptyTextRecoveryRule,
   createEmptyThinkingRecoveryRule,
+  createAnthropicContextManagementRecoveryRule,
   createEncryptedContentRecoveryRule,
   createToolExchangeAdjacencyRecoveryRule,
   createToolUseProviderSpecificFieldsRecoveryRule,
+  createToolReferenceRecoveryRule,
   createXaiModelInputRecoveryRule,
   createXaiModelInputSanitizeTransform,
   createAnthropicEffortCompatibilityRule,
@@ -48,11 +51,12 @@ import { buildVisionBridgeProxyTransform } from '../vision-bridge/vision-bridge-
 
 import { CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY, anthropicCatalogModelIds, isAnthropicWireModel } from './claude-gateway-config.js';
 import { getActiveCatalog } from './active-catalog.js';
-import { providerModelRecord } from '@cindy/model-providers';
-import { outboundFetch } from './outbound-fetch.js';
+import { providerModelRecord, modelWithInterface, type Provider } from '@cindy/model-providers';
+import { outboundFetch } from './outbound-fetch.desktop.js';
 import { invocationModelRecord, requiresNativeProviderAuth } from './pi-provider-transport.js';
 import { createClaudeProviderBridge } from './claude-provider-bridge.js';
-import { isOpenAiSubscriptionProviderId } from './codex-account-auth.js';
+import { isOpenAiSubscriptionProviderId } from './codex-account-auth.desktop.js';
+import { createPiWebSocketRequestPreparer, resolvePiWebSocketUpstream, piWebSocketTransforms } from './pi-subscription-websocket.js';
 import { isClaudeSubscriptionProviderId, isXaiSubscriptionProviderId } from './subscription-account-auth.js';
 import {
   getPiNativeSubscriptionHandler,
@@ -63,6 +67,7 @@ import {
   isOwnerBoundaryPendingError,
 } from './owner-boundary-error.js';
 import { getSessionEffort, getSessionFastMode } from './session-effort-store.js';
+import { subscriptionRequestAllowsFast, withSubscriptionFastRequestPolicy } from './subscription-fast-request-policy.js';
 import {
   isExclusiveXaiModelId,
   isSubscriptionDirectRoute,
@@ -80,10 +85,12 @@ import {
 } from './claude-session-route-registry.js';
 import { createClaudeGatewayErrorObserver } from './claude-gateway-error-observer.js';
 import { shouldApplyExclusiveProviderReroute } from './model-route-guard.js';
-import { getSessionProvider } from './session-provider-store.js';
+import { getSessionProvider, hasHostedSessionModelAccess } from './session-provider-store.js';
 import {
   GUEST_ROUTE_HEADER,
   guestProviderOffersModel,
+  guestProviderModelDenial,
+  hostedProviderOffersModel,
   guestProviderRouteForSession,
   guestProviderRouteForToken,
   type GuestProviderRoute,
@@ -91,14 +98,18 @@ import {
 import {
   buildRouteDecision,
   providerRoutingForModel,
+  sessionProviderRoutingForModel,
   gatewayDefaultRouteDecision,
   getUserProviderIdForSession,
+  inferProviderIdForModel,
   resolveImplicitLocalBridgeRouteResolution,
   resolveImplicitProviderOAuthRouteDecision,
   resolvePendingSessionRouteDecision,
   resolveProviderRouteDecision,
   resolveSessionRouteDecision,
+  rewriteRequestBodyModel,
 } from './provider-route.js';
+import { configuredCustomModelId, routeLookupModelId } from './claude-model-id.js';
 import { createProviderUpstreamErrorObserver } from './provider-upstream-error-observer.js';
 import { createClaudeAutoClassifierFailureObserver } from './claude-auto-permission-fallback.js';
 import {
@@ -123,11 +134,13 @@ import { claudeUpstreamEndpoint } from './runtime-configs.js';
 import { readSilentEncryptedRetrySettings } from './silent-encrypted-retry-store.js';
 import {
   createClaudeSessionActivityResponseObserver,
+  isClaudeContextUsageProbeUrl,
   recordClaudeApiActivity,
 } from './claude-session-background-activity.js';
 import {
   authenticatePiProxySession,
   getPiProxySessionProvider,
+  getPiProxySubscriptionAccount,
   isPiProxySubagentRoute,
 } from './pi-proxy-session-auth.js';
 import { createXdToolResultImageNoticeTransform } from './xd-tool-result-image-notice.js';
@@ -148,8 +161,10 @@ let _readGatewayKey: () => string | null = () => null;
 function attachClaudeProviderBridge(route: RoutingDecision, providerId: string, wireModel: string, sessionId?: string): RoutingDecision {
   if (route.localHandler) return route;
   const provider = getActiveCatalog().providers.find(p => p.id === providerId);
-  const model = provider?.models['claude-code']?.find(m => m.id === wireModel);
-  const routing = provider ? providerRoutingForModel(provider, 'claude-code', wireModel) : null;
+  const lookupModel = routeLookupModelId(provider, wireModel);
+  const catalogModel = provider?.models['claude-code']?.find(m => m.id === lookupModel);
+  const routing = provider ? (sessionId ? sessionProviderRoutingForModel(sessionId, provider, 'claude-code', lookupModel) : providerRoutingForModel(provider, 'claude-code', lookupModel)) : null;
+  const model = catalogModel && modelWithInterface(catalogModel, routing?.modelInterface);
   // Adapter identity belongs to the declared route. An OAuth account can select
   // another host without becoming a different provider (e.g. Copilot Business).
   const nativeRow = model && routing && model.api ? invocationModelRecord(model, routing.upstream) : undefined;
@@ -176,11 +191,15 @@ function attachClaudeProviderBridge(route: RoutingDecision, providerId: string, 
       fetchImpl: outboundFetch,
     });
     return { ...route, localHandler: args => handler.handle({ ...args,
+      ...(routing.modelInterface && isPlainObject(args.parsedBody) ? { parsedBody: { ...args.parsedBody, model: routing.modelInterface.wireModelId } } : {}),
       prefs: { reasoningEffort: (sessionId ? getSessionEffort(sessionId) : null) ?? model.defaultEffort ?? undefined,
         fast: sessionId ? getSessionFastMode(sessionId) : false },
     }) };
   }
-  return route;
+  // model-interface routes already pin their wire model; only plain custom routes need restoring
+  const configured = provider?.source === 'user' && !route.transformRequestBody
+    ? configuredCustomModelId(provider, wireModel) : null;
+  return configured ? { ...route, transformRequestBody: rewriteRequestBodyModel(configured) } : route;
 }
 
 export function setClaudeProxyGatewayKeyReader(fn: () => string | null): void {
@@ -597,13 +616,14 @@ function unavailablePiProviderRoute(providerId: string): RoutingDecision {
  * chip 用全局活性状态重算会与 child 真实路由发散。export 仅供单测。
  */
 export function createModelRoutingTransform(): RoutingTransform {
+  const fastIdentities = new WeakMap<Readonly<Record<string, string>>, { sessionId?: string | null; providerId?: string | null }>();
   // guest：供应商分享受邀者的 Claude Code 请求(带路由令牌，已核对模型)，按其会话显式来源路由，
   // 不走隐式推断与默认网关(分享的就是网关时除外)。缺省 = 本机用户自己的请求，路由不变。
-  const route = (
+  const route = async (
     body: unknown,
     ctx: RequestTransformCtx,
     guest?: GuestProviderRoute,
-  ): RoutingDecision | null | Promise<RoutingDecision | null> => {
+  ): Promise<RoutingDecision | null> => {
     const claimedPiSessionId = headerValue(ctx.headers, 'x-cindy-pi-session-id');
     const claimedPiSessionToken = headerValue(ctx.headers, 'x-cindy-pi-session-token');
     if (
@@ -687,12 +707,49 @@ export function createModelRoutingTransform(): RoutingTransform {
     if (piGuest && !piRequestStaysOnGuestProvider(piGuest, piProviderId, registeredPiProviderId)) {
       return refuseGuestProviderRoute(403, 'shared_provider_only', 'This request is outside the provider shared with you.');
     }
+    // Pi's native ChatGPT transport sends zstd JSON. The generic proxy keeps
+    // those bytes opaque; the native handler decodes and checks the live grant
+    // before forwarding. An unparsed compressed body is not a missing model.
+    const nativeCompressedPiRequest = piSessionId && piProviderId
+      && isOpenAiSubscriptionProviderId(piProviderId)
+      && ctx.headers['content-encoding']?.toLowerCase() === 'zstd'
+      && !isPlainObject(body);
+    if ((piGuest || hasHostedSessionModelAccess(piSessionId)) && !nativeCompressedPiRequest) {
+      const providerId = piGuest?.providerId ?? piProviderId ?? selectedPiProviderId;
+      // Check the live member grant before native handlers and all other Pi routing branches.
+      // Google's native API puts the authoritative model in the URL instead of body.model.
+      const requestModels: string[] = [];
+      if (isPlainObject(body)) {
+        if (typeof body.model === 'string' && body.model) requestModels.push(body.model);
+        // Subscription forwarders use body.model and rebuild their own URL; a forged Google
+        // path cannot stand in for a missing/opaque subscription request body.
+        if (!isOpenAiSubscriptionProviderId(providerId) && !isXaiSubscriptionProviderId(providerId)) {
+          const pathname = new URL(ctx.url, 'http://127.0.0.1').pathname;
+          const pathModel = /\/models\/(.+):(?:streamGenerateContent|generateContent|countTokens)$/.exec(pathname);
+          if (pathModel) requestModels.push(decodeURIComponent(pathModel[1]));
+        }
+      }
+      let deniedModel: string | undefined;
+      for (const model of requestModels) {
+        const allowed = piGuest
+          ? await guestProviderOffersModel(piGuest.providerId, 'pi', model, piGuest.sessionId)
+          : hostedProviderOffersModel(piSessionId, providerId, 'pi', model);
+        if (!allowed) { deniedModel = model; break; }
+      }
+      if (requestModels.length === 0 || deniedModel !== undefined) {
+        const denial = piGuest && deniedModel ? guestProviderModelDenial(piGuest.sessionId, deniedModel, 'pi') : null;
+        if (denial) return refuseGuestProviderRoute(403, denial.code, denial.message);
+        return piGuest ? refuseGuestForeignRoute(deniedModel ?? '')
+          : refuseGuestProviderRoute(403, 'remote_model_not_allowed', 'This model is not available for this remote task.');
+      }
+    }
     if (piSessionId && piProviderId && (isOpenAiSubscriptionProviderId(piProviderId) || isXaiSubscriptionProviderId(piProviderId))) {
       return {
         // PI has already built the provider-native request. The local handler
         // authenticates and forwards it; the xAI forwarder also restores its
         // provider server tools, but no Claude protocol bridge runs.
-        localHandler: getPiNativeSubscriptionHandler(piProviderId, piSessionId),
+        localHandler: getPiNativeSubscriptionHandler(piProviderId, piSessionId, undefined,
+          getPiProxySubscriptionAccount(piSessionId, claimedPiSessionToken)),
       };
     }
     const isPiGatewayRequest = Boolean(
@@ -712,13 +769,16 @@ export function createModelRoutingTransform(): RoutingTransform {
     // 都记一笔活动时刻。routingTransform 会处理无 body 控制面请求与 JSON 请求；
     // 非 JSON 的 POST/PUT/PATCH 不经过这里,由响应侧 observer 兜底观察活动。
     // 开销 = 一次 header 读 + 一次活跃会话表反解 + Map.set,非 per-token 路径。
+    // count_tokens 上下文用量探测不算活动(#8671):/context 卡片触发的计量请求
+    // 不生成 token,计入会把查用量误点亮成「后台子任务运行中」;判据与响应侧
+    // observer 用同一处导出,两边必须一致。
     const sdkSessionId = ctx.headers['x-claude-code-session-id'];
     const ccSessionId = sdkSessionId && _resolveCcSessionId
       ? _resolveCcSessionId(sdkSessionId)
       : null;
     // 受邀者的托管会话不在活跃会话表里：会话由路由令牌的登记给出。
     const sessionId = piSessionId ?? (guest ? guest.sessionId : ccSessionId);
-    if (sdkSessionId) {
+    if (sdkSessionId && !isClaudeContextUsageProbeUrl(ctx.url)) {
       recordClaudeApiActivity(
         sdkSessionId,
         ccSessionId,
@@ -733,6 +793,13 @@ export function createModelRoutingTransform(): RoutingTransform {
     if (pendingRoute) return pendingRoute;
 
     const selectedProviderId = sessionId ? getSessionProvider(sessionId) : null;
+    fastIdentities.set(ctx.headers, { sessionId, providerId: piSessionId ? piProviderId : selectedProviderId });
+    // CC may resolve a different provider for this request (subscriptions and
+    // implicit child routes). Check the grant where the actual route is known.
+    const authorizeClaudeRoute = (providerId: string | null | undefined, model = wireModel): RoutingDecision | null =>
+      !piSessionId && !hostedProviderOffersModel(sessionId, providerId, 'claude-code', model)
+        ? refuseGuestProviderRoute(403, 'remote_model_not_allowed', 'This model is not available for this remote task.')
+        : null;
     if (guest && selectedProviderId !== guest.providerId) return refuseGuestForeignRoute(wireModel);
     const applyExclusiveReroute = shouldApplyExclusiveProviderReroute(
       selectedProviderId,
@@ -772,7 +839,14 @@ export function createModelRoutingTransform(): RoutingTransform {
       if (guest && !isOpenAiSubscriptionProviderId(selectedProviderId) && !isXaiSubscriptionProviderId(selectedProviderId)) {
         return refuseGuestForeignRoute(wireModel);
       }
-      const bridgeHandler = getResponsesBridgeHandler((isOpenAiSubscriptionProviderId(selectedProviderId) || isXaiSubscriptionProviderId(selectedProviderId)) ? selectedProviderId! : undefined);
+      const bridgeProviderId = isExclusiveXaiModelId(wireModel)
+        ? (isXaiSubscriptionProviderId(selectedProviderId) ? selectedProviderId : 'xai')
+        : (isOpenAiSubscriptionProviderId(selectedProviderId) ? selectedProviderId : 'openai');
+      fastIdentities.set(ctx.headers, { sessionId, providerId: bridgeProviderId });
+      const denied = authorizeClaudeRoute(bridgeProviderId, bridgedSubscriptionModel(wireModel));
+      if (denied) return denied;
+      const bridgeHandler = getResponsesBridgeHandler((isOpenAiSubscriptionProviderId(selectedProviderId) || isXaiSubscriptionProviderId(selectedProviderId)) ? selectedProviderId! : undefined,
+        bridgeProviderId === 'openai' ? getSessionSubscriptionAccount(sessionId) : undefined);
       if (!bridgeHandler) {
         if (isExclusiveXaiModelId(wireModel)) {
           log.warn('exclusive xAI model but responses handler unavailable; refusing default gateway', {
@@ -781,6 +855,7 @@ export function createModelRoutingTransform(): RoutingTransform {
           return refuseExclusiveXaiDefaultGateway(wireModel);
         }
         if (guest) return refuseGuestForeignRoute(wireModel);
+        if (hasHostedSessionModelAccess(sessionId)) return retryableLocalRoute('provider_route_unavailable', 'The selected provider route is unavailable; check its configuration and retry.');
         log.warn('订阅前缀模型但 responses handler 不可用,passthrough(该请求预期会 400)', { wireModel });
         return null;
       }
@@ -796,7 +871,12 @@ export function createModelRoutingTransform(): RoutingTransform {
           }
           return bridgeHandler.handle({
             ...args,
-            prefs: { reasoningEffort: effort ?? undefined, fast },
+            prefs: {
+              reasoningEffort: effort ?? undefined,
+              // The bridge reads this after awaiting authentication. Keep the
+              // request's preference, but recheck the live host restriction.
+              get fast() { return fast && subscriptionRequestAllowsFast(sessionId, bridgeProviderId); },
+            },
           });
         },
       };
@@ -842,8 +922,15 @@ export function createModelRoutingTransform(): RoutingTransform {
       // wireModel 传给 scope 门:cc 内部辅助调用(权限 auto 分类器等 claude-* 小模型请求)
       // 不在订阅直连供应商(xai / openai-cc)声明的 modelPrefixes 范围内 → 返回 null,
       // 落到下方 ② 段 spawn 默认路由,分类器照常走网关/直连(issue #886)。
-      const perSession = resolveSessionRouteDecision(sessionId, requestAgent, gatewayKey, wireModel);
+      const routeModel = requestAgent === 'claude-code'
+        ? routeLookupModelId(getActiveCatalog().providers.find(p => p.id === selectedProviderId), wireModel)
+        : wireModel;
+      const perSession = resolveSessionRouteDecision(sessionId, requestAgent, gatewayKey, routeModel);
       const recordSelectedRoute = (route: RoutingDecision | null): RoutingDecision | null => {
+        if (route) {
+          const denied = authorizeClaudeRoute(selectedProviderId);
+          if (denied) return denied;
+        }
         // A missing descriptor is not permission to use the default upstream.
         // Keep builtin subscription scope fallbacks, but pin explicit custom
         // requests even while their catalog/runtime is temporarily unavailable.
@@ -911,6 +998,8 @@ export function createModelRoutingTransform(): RoutingTransform {
         // 用户 Anthropic 兼容上游在目录里省略 wireProtocol(buildUserProvider 约定)。
         const bridgeWire = bridgeRoute?.routing.wireProtocol ?? 'anthropic-messages';
         if (bridgeRoute && bridgeRoute.providerId !== 'xd' && ['anthropic-messages', 'openai-chat', 'openai-responses', 'google-generative-ai'].includes(bridgeWire)) {
+          const denied = authorizeClaudeRoute(bridgeRoute.providerId);
+          if (denied) return denied;
           const bridged = buildRouteDecision(
             bridgeRoute.routing,
             gatewayKey,
@@ -922,16 +1011,21 @@ export function createModelRoutingTransform(): RoutingTransform {
             bridged && bridgeRoute.routing.requestPath
               ? { ...bridged, pathOverride: bridgeRoute.routing.requestPath }
               : bridged;
-          if (withRequestPath) return attachClaudeProviderBridge(withRequestPath, bridgeRoute.providerId, wireModel, sessionId ?? undefined);
+          if (withRequestPath) {
+            fastIdentities.set(ctx.headers, { sessionId, providerId: bridgeRoute.providerId });
+            return attachClaudeProviderBridge(withRequestPath, bridgeRoute.providerId, wireModel, sessionId ?? undefined);
+          }
         }
         const implicitOAuth = resolveImplicitProviderOAuthRouteDecision(
           wireModel,
           'claude-code',
           gatewayKey,
         );
+        const authorizeImplicitOAuth = (decision: RoutingDecision | null): RoutingDecision | null =>
+          decision ? authorizeClaudeRoute(inferProviderIdForModel(wireModel, 'claude-code')) ?? decision : decideDefaultRoute();
         return implicitOAuth instanceof Promise
-          ? implicitOAuth.then((decision) => decision ?? decideDefaultRoute())
-          : (implicitOAuth ?? decideDefaultRoute());
+          ? implicitOAuth.then(authorizeImplicitOAuth)
+          : authorizeImplicitOAuth(implicitOAuth);
       });
     }
     return decideDefaultRoute();
@@ -939,6 +1033,9 @@ export function createModelRoutingTransform(): RoutingTransform {
     // ② 未显式选供应商 → 据请求凭证判定 spawn 形态(见上方注释)。
     // 函数声明提升:①.5 的回落分支在自身解析落空时复用本段,行为与引入 ①.5 前一致。
     function decideDefaultRoute(): RoutingDecision | null {
+      fastIdentities.delete(ctx.headers);
+      const denied = authorizeClaudeRoute('xd');
+      if (denied) return denied;
       // 计费路由旁路只记「未显式选供应商」的会话(registry 声明的语义,消费方也只在
       // providerId=null 时读)——显式选了供应商但被 scope 门放下来的辅助请求(如 xai 会话
       // 的 claude-* 分类器调用)不该往表里写死记录。
@@ -1036,6 +1133,7 @@ export function createModelRoutingTransform(): RoutingTransform {
       // pending 与 activeOwnerScopeKey 合成同一条 ownerBoundDispatchUnsafe:
       // 切换在 await 里完整完成时两端 pending 都是 false。
       if (ownerBoundDispatchUnsafe(ctx)) return ownerBoundaryPendingRoute();
+      resolved = withSubscriptionFastRequestPolicy(resolved, fastIdentities.get(ctx.headers) ?? {}, ctx);
       return withOwnerBoundaryDispatchGate(
         refuseUnsafePlaceholderPassthrough(stripGuestRouteHeader(stripInternalPiHeaders(resolved)), ctx),
         ctx,
@@ -1052,7 +1150,7 @@ export function createModelRoutingTransform(): RoutingTransform {
         headerDelete: [...new Set([...(resolved?.headerDelete ?? []), GUEST_ROUTE_HEADER])],
       };
     };
-    const routeGuest = (token: string): ReturnType<typeof route> => {
+    const routeGuest = async (token: string): ReturnType<typeof route> => {
       const guest = guestProviderRouteForToken(token);
       if (!guest) {
         return refuseGuestProviderRoute(401, 'invalid_guest_route', 'Invalid or expired shared-provider session.');
@@ -1066,7 +1164,10 @@ export function createModelRoutingTransform(): RoutingTransform {
           : refuseGuestProviderRoute(403, 'shared_provider_only', 'This request is outside the provider shared with you.');
       }
       const wireModel = typeof body.model === 'string' ? body.model : '';
-      if (!guestProviderOffersModel(guest.providerId, 'claude-code', wireModel)) return refuseGuestForeignRoute(wireModel);
+      if (!await guestProviderOffersModel(guest.providerId, 'claude-code', wireModel, guest.sessionId)) {
+        const denial = guestProviderModelDenial(guest.sessionId, wireModel, 'claude-code');
+        return denial ? refuseGuestProviderRoute(403, denial.code, denial.message) : refuseGuestForeignRoute(wireModel);
+      }
       return route(body, ctx, guest);
     };
     try {
@@ -1095,6 +1196,9 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
       // 函数形态:model-access 凭据同步可能在 proxy 启动(splash)后才把 endpoint
       // 换成下发值;每请求现取才能保证与当前 key 同租户(proxy 内部按值 memoize)。
       upstream: () => claudeUpstreamEndpoint(),
+      resolveWebSocketUpstream: resolvePiWebSocketUpstream,
+      prepareWebSocketRequest: createPiWebSocketRequestPreparer(),
+      webSocketTransforms: piWebSocketTransforms,
       oversizedRequestRecovery: createAttachmentRecovery(headers => {
         const piSessionId = headerValue(headers, 'x-cindy-pi-session-id');
         if (piSessionId) {
@@ -1236,6 +1340,7 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
           onRetry: (threadId, model) => emptyAssistantStripController.markActive(threadId, model),
         }),
         createToolUseProviderSpecificFieldsRecoveryRule(),
+        createToolReferenceRecoveryRule(),
         // tool 配对断裂 400(moonshot `tool_call_id is not found` / Anthropic
         // `unexpected tool_use_id` / `tool_use ids were found without tool_result`
         // / OpenAI 系 wording)→ 组合结构修复重发,always-on。
@@ -1254,6 +1359,7 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
         // output_config.effort 重发一次。只在该文本命中时生效,官方 Claude / 订阅直连
         // 不会返回它;能力未声明的模型本就不该收到客户端偏好(#4860 出站不变量)。
         createAnthropicEffortCompatibilityRule(),
+        createAnthropicContextManagementRecoveryRule(),
       ],
       logger: log,
       // 请求体 dump 默认关(dev trace 级别 + agent 高并发会刷爆 main event loop

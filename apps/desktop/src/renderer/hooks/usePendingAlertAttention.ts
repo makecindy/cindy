@@ -247,6 +247,11 @@ export function usePendingAlertAttention(): void {
       if (!isDataOwnerPushCurrent(ownerStamp)) return;
       if (patch && typeof patch === 'object' && 'lastTurnEndedAt' in patch) {
         noteInterruptedAck(sessionId);
+        // 批量恢复不必打开任务视图。旧错误尾行可能仍在启动账本里，
+        // 不能仅因它还被认领就永远保留红点；在 durable ack 后复核真源。
+        // 首拉尚未应用时也复核，让过期结果被代数守卫挡住。新的错误仍由查询
+        // 认领，未恢复任务的中断点也不会被清掉。
+        if (_errorTailOwned.has(sessionId) || _appliedGen === 0) void refreshPendingAlerts();
       }
     });
   }, []);

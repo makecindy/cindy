@@ -70,7 +70,7 @@ export interface McpProvider {
   capability?: {
     title: string;
     description: string;
-    source: 'builtin' | 'plugin' | 'custom';
+    source: 'builtin' | 'plugin' | 'custom' | 'harness';
     discovery?: { tool: string; args?: Record<string, unknown> };
   };
   /** 按 session 上下文决定是否启用，例如飞书 bot MCP 只给 source='feishu' 会话。 */

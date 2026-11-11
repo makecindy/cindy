@@ -56,17 +56,83 @@ function compactMessageLinkLabel(text: string): string {
   return `${compact.slice(0, MESSAGE_LINK_LABEL_MAX - 1)}…`;
 }
 
-export function SessionLinkChip({ href, label }: SessionLinkChipProps) {
-  const { t } = useTranslation();
+/** Shared task navigation for chat links and inert plugin-card links. */
+export function useSessionLinkTarget(href: string) {
   const navigate = useNavigate();
   const localDeviceId = useOptionalAuthDeviceId();
   const navigationMode = useSessionNavigationMode();
   const reportSessionNavigation = useSessionNavigationIntent();
   const target = useMemo(() => parseSessionDeepLinkHref(href), [href]);
+  const navigationRequestVersionRef = useRef(0);
+  const sessionId = target?.sessionId ?? null;
+  const messageClientId = target?.messageClientId ?? null;
+  const targetDeviceId = target?.deviceId ?? null;
+  useEffect(
+    () => () => {
+      navigationRequestVersionRef.current += 1;
+    },
+    [sessionId, messageClientId, targetDeviceId, navigationMode],
+  );
+  const openTarget = async (separate: boolean) => {
+    if (!target || !sessionId) return;
+    // 只在点击时读一次远程镜像快照：不订阅整份远程任务列表，避免每个链接/来源标签
+    // 在列表变化时重渲染并各自扫描（来源标签随长聊天大量挂载）。
+    const remoteSession = remoteProjectsStore.getVisibleMergedRemoteSessions().find((s) =>
+      s.id === sessionId && (!targetDeviceId || s.deviceLinkDeviceId === targetDeviceId)) ?? null;
+    const navigationRequestVersion = ++navigationRequestVersionRef.current;
+    const resolveTargetRoute = async () => {
+      let deviceId = targetDeviceId ?? remoteProjectsStore.getSessionDeviceId(sessionId);
+      if (deviceId) {
+        const selfDeviceId = localDeviceId ?? (await window.electronAPI.getDeviceId());
+        if (navigationRequestVersionRef.current !== navigationRequestVersion) return null;
+        // 归档任务可能尚未进入远程镜像；先登记链接的归属，再由现有传输层按设备读取。
+        if (deviceId !== selfDeviceId) {
+          remoteProjectsStore.pinSessionOrigin(deviceId, sessionId);
+        } else {
+          deviceId = undefined;
+        }
+      }
+      if (separate) {
+        await window.electronAPI.maker.openSessionInNewWindow(sessionId, deviceId, messageClientId);
+        return null;
+      }
+      return resolveSessionRoute(sessionId, remoteSession, { remote: !!deviceId });
+    };
+    // device-link 远程会话本地无 row,resolveSessionRoute 内部的 sessionService.get
+    // 会 miss → 远程 Orca 会话被当普通会话路由,后续 redirect 会丢 searchJump 锚点。
+    // 把远程镜像里的 session 对象直接传入,让 Orca 路由一步到位(Codex review P2)。
+    await resolveTargetRoute().then((route) => {
+      if (!route || navigationRequestVersionRef.current !== navigationRequestVersion) return;
+      reportSessionNavigation?.(sessionId, getSessionRouteOwnerId(route) ?? sessionId);
+      navigate(
+        route,
+        target.messageClientId
+          ? {
+              state: {
+                searchJump: {
+                  kind: 'conversation-search',
+                  sessionId,
+                  messageId: target.messageClientId,
+                  messageIdKind: 'clientId',
+                  messageClientId: target.messageClientId,
+                },
+              },
+            }
+          : undefined,
+      );
+    });
+  };
+  return { openTarget, navigationMode };
+}
+
+export function SessionLinkChip({ href, label }: SessionLinkChipProps) {
+  const { openTarget, navigationMode } = useSessionLinkTarget(href);
+  const { t } = useTranslation();
+  const localDeviceId = useOptionalAuthDeviceId();
+  const target = useMemo(() => parseSessionDeepLinkHref(href), [href]);
   const remoteSessions = useRemoteProjectSessions();
   const [fetchedTitle, setFetchedTitle] = useState<string | null>(null);
   const [messageText, setMessageText] = useState<string | null>(null);
-  const navigationRequestVersionRef = useRef(0);
 
   const sessionId = target?.sessionId ?? null;
   const messageClientId = target?.messageClientId ?? null;
@@ -74,12 +140,6 @@ export function SessionLinkChip({ href, label }: SessionLinkChipProps) {
   const targetsOtherDevice = !!targetDeviceId && targetDeviceId !== localDeviceId;
   const explicitLabel = label?.trim() || null;
 
-  useEffect(
-    () => () => {
-      navigationRequestVersionRef.current += 1;
-    },
-    [sessionId, messageClientId, targetDeviceId, navigationMode],
-  );
 
   useEffect(() => {
     // 先清旧值:同一实例被复用渲染另一个 href(虚拟列表 / 消息 patch)时,
@@ -116,52 +176,13 @@ export function SessionLinkChip({ href, label }: SessionLinkChipProps) {
     };
   }, [sessionId, messageClientId]);
 
-  const remoteSession = remoteSessions.find((s) => s.id === sessionId) ?? null;
+  const remoteSession = remoteSessions.find((s) =>
+    s.id === sessionId && (!targetDeviceId || s.deviceLinkDeviceId === targetDeviceId)) ?? null;
   const remoteTitle = fetchedTitle ? null : remoteSession?.title?.trim() || null;
-  const openTarget = async (separate: boolean) => {
-    if (!target || !sessionId) return;
-    const navigationRequestVersion = ++navigationRequestVersionRef.current;
-    const resolveTargetRoute = async () => {
-      let deviceId = targetDeviceId ?? remoteProjectsStore.getSessionDeviceId(sessionId);
-      if (deviceId) {
-        const selfDeviceId = localDeviceId ?? (await window.electronAPI.getDeviceId());
-        if (navigationRequestVersionRef.current !== navigationRequestVersion) return null;
-        // 归档任务可能尚未进入远程镜像；先登记链接的归属，再由现有传输层按设备读取。
-        if (deviceId !== selfDeviceId) {
-          remoteProjectsStore.pinSessionOrigin(deviceId, sessionId);
-        } else {
-          deviceId = undefined;
-        }
-      }
-      if (separate) {
-        await window.electronAPI.maker.openSessionInNewWindow(sessionId, deviceId, messageClientId);
-        return null;
-      }
-      return resolveSessionRoute(sessionId, remoteSession);
-    };
-    // device-link 远程会话本地无 row,resolveSessionRoute 内部的 sessionService.get
-    // 会 miss → 远程 Orca 会话被当普通会话路由,后续 redirect 会丢 searchJump 锚点。
-    // 把远程镜像里的 session 对象直接传入,让 Orca 路由一步到位(Codex review P2)。
-    await resolveTargetRoute().then((route) => {
-      if (!route || navigationRequestVersionRef.current !== navigationRequestVersion) return;
-      reportSessionNavigation?.(sessionId, getSessionRouteOwnerId(route) ?? sessionId);
-      navigate(
-        route,
-        target.messageClientId
-          ? {
-              state: {
-                searchJump: {
-                  kind: 'conversation-search',
-                  sessionId,
-                  messageId: target.messageClientId,
-                  messageIdKind: 'clientId',
-                  messageClientId: target.messageClientId,
-                },
-              },
-            }
-          : undefined,
-      );
-    });
+  const handleMouseDown = (event: MouseEvent<HTMLElement>) => {
+    // Shift extends the text selection on mousedown, before click opens the window.
+    // Cancel only that gesture so ordinary text selection and copying still work.
+    if (event.button === 0 && event.shiftKey) event.preventDefault();
   };
   const handleClick = (event: MouseEvent<HTMLElement>) => {
     event.preventDefault();
@@ -221,6 +242,7 @@ export function SessionLinkChip({ href, label }: SessionLinkChipProps) {
           aria-label={visibleMessageLabel}
           title={display}
           onClick={handleClick}
+          onMouseDown={handleMouseDown}
           onAuxClick={(event) => {
             if (event.button === 1) handleClick(event);
           }}
@@ -243,6 +265,7 @@ export function SessionLinkChip({ href, label }: SessionLinkChipProps) {
         tooltip={display}
         ariaLabel={display}
         onClick={handleClick}
+        onMouseDown={handleMouseDown}
         onAuxClick={(event) => {
           if (event.button === 1) handleClick(event);
         }}

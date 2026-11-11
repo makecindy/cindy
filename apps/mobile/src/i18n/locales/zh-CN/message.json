@@ -9,6 +9,8 @@
     }
   },
   "renderer": {
+    "sourceLocalApp": "由本机应用「{{name}}」发送",
+    "sourceLocalAppId": "应用 ID：{{id}}",
     "failedSamplingAttempt": "此回复未完成，内容仅供参考。",
     "moreActions": "更多消息操作",
     "reply": "回复",
@@ -62,13 +64,15 @@
       "discord": "Discord",
       "wechat": "微信",
       "wecom": "企业微信",
-      "dingtalk": "钉钉"
+      "dingtalk": "钉钉",
+      "imessage": "iMessage"
     },
     "modelMismatch": "本轮由 {{actual}} 响应，而非所选的 {{selected}}（服务端临时降级）",
     "copyStateCopying": "复制中",
     "copyStateCopied": "已复制",
     "copyStateFailed": "复制失败",
     "copyStateCopy": "复制",
+    "copyCode": "复制代码",
     "thinkingHidden": "思考内容已隐藏",
     "thinkingDone": "思考 {{duration}}",
     "thinkingActive": "思考中 {{elapsed}}",
@@ -103,6 +107,7 @@
     "subagentSummary": "Subagent 小结",
     "agentSwitchLabel": "已从 {{from}} 切换到 {{to}}",
     "agentSwitchViewHandoff": "{{label}}，查看交接内容",
+    "sessionFallbackPill": "已用摘要接续",
     "sessionResumedPill": "已续接原任务",
     "handoffContentDesc": "交接内容——切换时发送给新引擎的上下文摘要（不计入对话记录，仅在此展示）",
     "handoffContentDescEnglishSource": "交接内容——切换时发送给新引擎的上下文摘要，原文为英文（不计入对话记录，仅在此展示）",
@@ -158,6 +163,7 @@
     "mediaErrorLine": "错误：{{message}}",
     "mediaDeviceLinkHint": "打开前，手机会先请远程设备上传这个媒体。",
     "controlDelete": "删除消息",
+    "controlEdit": "编辑",
     "controlRewind": "回到此处",
     "controlFork": "从这里开启新任务",
     "markdownDocAriaLabel": "消息正文",
@@ -171,7 +177,9 @@
     "diffEditCount": "{{n}} 处编辑",
     "groupSentNamed": "从群聊「{{name}}」发送",
     "groupSent": "从群聊发送",
-    "sourceGroupId": "群聊 ID：{{id}}"
+    "sourceGroupId": "群聊 ID：{{id}}",
+    "selectText": "选择文字",
+    "you": "你"
   },
   "actions": {
     "attachmentsPrefix": "附件：{{names}}",
@@ -232,6 +240,10 @@
     "cancel": "取消",
     "edit": "编辑",
     "steer": "插话",
+    "steerQueued": "暂未送达，消息仍保留在队列中。",
+    "moveUp": "提前一位",
+    "moveDown": "延后一位",
+    "cancelSend": "取消发送",
     "collapseQueued": "收起排队消息",
     "expandRemainingQueued": "展开剩余 {{n}} 条排队消息",
     "collapse": "收起",
@@ -240,9 +252,25 @@
     "sendingMessage": "发送中的消息：{{text}}",
     "uploadingAttachments": "附件上传中 {{uploaded}}/{{total}}",
     "delete": "删除",
-    "retry": "重试"
+    "retry": "重试",
+    "notSent": "未发送",
+    "imagesNotUploaded_one": "{{count}} 张图片没传上去",
+    "imagesNotUploaded_other": "{{count}} 张图片没传上去",
+    "waitingForComputer": "等电脑连上后发送",
+    "waitingForNetwork": "等网络恢复后发送",
+    "queued": "排队中",
+    "retryImage": "重新上传这张图片",
+    "waitingMessage": "等待发送的消息：{{text}}"
   },
   "systemCard": {
+    "pluginModelRoute": {
+      "routed": "{{plugin}} 为这个任务选了 {{model}}",
+      "kept": {
+        "no-opinion": "{{plugin}} 这次没有改模型，这个任务用 {{model}}",
+        "failed": "{{plugin}} 没有及时回应，这个任务用 {{model}}",
+        "unavailable-route": "{{plugin}} 选的模型现在用不了，这个任务用 {{model}}"
+      }
+    },
     "contextRebuild": {
       "labelOverflow": "已整理上下文并继续",
       "labelTimeout": "上一轮没有响应，已整理后继续",
@@ -294,6 +322,7 @@
     "agentSwitchLocation": "Agent 改到 {{device}} 运行",
     "agentSwitchLocationThisComputer": "Agent 改回这台电脑运行",
     "agentSwitchLocationOtherComputer": "Agent 改到另一台电脑运行",
+    "agentSwitchLocationQuotaRebalance": "这个账号的配额更该先用",
     "learnStarted": "技能学习已启动",
     "learnStartedBody": "蒸馏在电脑端后台进行，完成后请到电脑端查看并评审技能草案。",
     "learnFailed": "技能学习未能启动",
@@ -396,9 +425,55 @@
     "skillUpdated": "已更新技能：{{title}}"
   },
   "richAnswer": {
+    "send": "发送消息",
+    "sending": "正在发送…",
+    "sent": "已提交",
+    "sendFailed": "消息未提交，已保留填写内容",
     "playVideo": "播放视频",
+    "downloadVideo": "下载视频",
     "openVideoSource": "打开原视频",
     "calculationUnavailable": "此项暂时无法计算。",
     "incomplete": "部分内容未能显示。"
+  },
+  "usageCost": {
+    "title": "费用明细",
+    "conversation": "对话",
+    "additional": "附加费用",
+    "unknownModel": "未记录模型",
+    "estimate": "估算价值",
+    "charged": "按量费用",
+    "loading": "正在读取明细…",
+    "unavailable": "这条记录暂无明细。",
+    "explanation": "按模型和渠道汇总。订阅价值是估算，不是额外扣费。仅包含已记录的费用，历史记录的明细可能不完整。",
+    "source": {
+      "subscription": "订阅账户",
+      "cindy-ai": "Cindy AI",
+      "provider": "API 供应商",
+      "unknown": "未记录渠道"
+    }
+  },
+  "attachmentPreview": {
+    "more": "更多操作",
+    "retry": "重试",
+    "image": "图片",
+    "video": "视频",
+    "file": "文件",
+    "close": "关闭",
+    "reset": "重置视角",
+    "open": "打开预览",
+    "actualSize": "原始尺寸（1:1）",
+    "save": "保存原件",
+    "share": "分享",
+    "previous": "上一个附件",
+    "next": "下一个附件",
+    "password": "输入 PDF 密码",
+    "find": "在文档中查找",
+    "matches": "{{count}} 页匹配",
+    "previousPage": "上一页",
+    "nextPage": "下一页",
+    "redo": "重做",
+    "wrap": "自动换行",
+    "lineNumbers": "行号",
+    "rendered": "查看文稿"
   }
 }

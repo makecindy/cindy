@@ -29,6 +29,8 @@ vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => bus.auth }));
 vi.mock('@/lib/remoteCatalogSnapshot', () => ({ refreshRemoteCatalogSnapshot: vi.fn(async () => undefined) }));
 vi.mock('@/hooks/useDeviceProviders', () => ({
   getCachedDeviceProviders: () => null,
+  isSubscriptionShareCatalogStale: () => false,
+  hasSubscriptionShareCatalog: () => false,
   useDeviceProviders: () => remoteCatalog,
 }));
 vi.mock('@/hooks/useProviders', () => ({ useProviders: () => localCatalog }));

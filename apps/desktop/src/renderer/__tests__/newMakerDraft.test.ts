@@ -811,6 +811,219 @@ describe('newMakerDraft store', () => {
     expect(m2.getPersistedVendorModel('cc')).toBe('claude-opus-4-8');
   });
 
+  it('patchVendorPrefsFromTaskModelSwitch:新建默认在另一个来源上时,任务内只换模型不改写', async () => {
+    const m1 = await loadModule();
+    m1.patchVendorPrefs('cc', { model: 'claude-opus-5-5', providerId: 'anthropic', effort: 'high' });
+
+    const written = m1.patchVendorPrefsFromTaskModelSwitch(
+      'cc',
+      { model: 'anthropic/claude-sonnet-5-5', providerId: 'xd', effort: 'medium' },
+      'xd',
+    );
+
+    expect(written).toBe(false);
+    expect(m1.getDraft().lastByVendor.cc).toMatchObject({
+      model: 'claude-opus-5-5',
+      providerId: 'anthropic',
+      effort: 'high',
+    });
+  });
+
+  it('patchVendorPrefsFromTaskModelSwitch:来源一致时照常写回并打标', async () => {
+    const m1 = await loadModule();
+    m1.patchVendorPrefs('cc', { model: 'claude-opus-5-5', providerId: 'anthropic' });
+
+    const written = m1.patchVendorPrefsFromTaskModelSwitch(
+      'cc',
+      { model: 'claude-sonnet-5-5', providerId: 'anthropic', effort: 'xhigh' },
+      'anthropic',
+    );
+
+    expect(written).toBe(true);
+    expect(m1.getDraft().lastByVendor.cc).toMatchObject({
+      model: 'claude-sonnet-5-5',
+      providerId: 'anthropic',
+      effort: 'xhigh',
+    });
+    expect(m1.getDraft().modelChosenByVendor).toEqual({ cc: true });
+  });
+
+  it('patchVendorPrefsFromTaskModelSwitch:存着的来源已被搬走时按实际路由比较', async () => {
+    const m1 = await loadModule();
+    m1.patchVendorPrefs('cc', { model: 'auto/pool', providerId: 'org-pool' });
+    // 服务端把该 Auto 搬到了 xd:实际来源是 xd，不是存着的 org-pool。
+    const moved = () => 'xd';
+
+    expect(
+      m1.patchVendorPrefsFromTaskModelSwitch(
+        'cc',
+        { model: 'auto/pool', providerId: 'org-pool' },
+        'org-pool',
+        moved,
+      ),
+    ).toBe(false);
+    expect(m1.getDraft().lastByVendor.cc.providerId).toBe('org-pool');
+    // 解析不出来时回退用存着的来源比较。
+    expect(
+      m1.patchVendorPrefsFromTaskModelSwitch(
+        'cc',
+        { model: 'auto/pool', providerId: 'org-pool' },
+        'org-pool',
+        () => null,
+      ),
+    ).toBe(true);
+  });
+
+  it('patchVendorPrefsFromTaskModelSwitch:保留的草稿来源对新模型已失效时改写入任务实际来源', async () => {
+    const m1 = await loadModule();
+    m1.patchVendorPrefs('cc', { model: 'auto/pool', providerId: 'org-pool' });
+    // Auto 已搬到 xd：旧 org-pool 对任何模型都解析不到，实际落点是 xd。
+    const resolve = (prefs: { model: string; providerId?: string | null }) =>
+      prefs.model === 'auto/pool'
+        ? 'xd'
+        : prefs.providerId === 'org-pool'
+          ? null
+          : (prefs.providerId ?? null);
+
+    const written = m1.patchVendorPrefsFromTaskModelSwitch(
+      'cc',
+      { model: 'plain-model', providerId: null },
+      'xd',
+      resolve,
+    );
+
+    expect(written).toBe(true);
+    expect(m1.getDraft().lastByVendor.cc).toMatchObject({
+      model: 'plain-model',
+      providerId: 'xd',
+    });
+  });
+
+  it('patchVendorPrefsFromTaskModelSwitch:旧来源搬走后即使仍能提供新模型也不复活', async () => {
+    const m1 = await loadModule();
+    m1.patchVendorPrefs('cc', { model: 'auto/pool', providerId: 'org-pool' });
+    // Auto 已搬到 xd：存着的 org-pool 实际落点是 xd；org-pool 对普通模型仍然能提供。
+    const resolve = (prefs: { model: string; providerId?: string | null }) =>
+      prefs.model === 'auto/pool' ? 'xd' : (prefs.providerId ?? null);
+
+    expect(
+      m1.patchVendorPrefsFromTaskModelSwitch(
+        'cc',
+        { model: 'plain-model', providerId: null },
+        'xd',
+        resolve,
+      ),
+    ).toBe(true);
+    expect(m1.getDraft().lastByVendor.cc).toMatchObject({
+      model: 'plain-model',
+      providerId: 'xd',
+    });
+  });
+
+  it('patchVendorPrefsFromTaskModelSwitch:patch 里带着过期来源时仍写入已确认的任务来源', async () => {
+    const m1 = await loadModule();
+    m1.patchVendorPrefs('cc', { model: 'auto/pool', providerId: 'org-pool' });
+    const resolve = (prefs: { model: string; providerId?: string | null }) =>
+      prefs.model === 'auto/pool' ? 'xd' : (prefs.providerId ?? null);
+
+    expect(
+      m1.patchVendorPrefsFromTaskModelSwitch(
+        'cc',
+        { model: 'plain-model', providerId: 'org-pool' },
+        'xd',
+        resolve,
+      ),
+    ).toBe(true);
+    expect(m1.getDraft().lastByVendor.cc.providerId).toBe('xd');
+  });
+
+  it('patchVendorPrefsFromTaskModelSwitch:草稿本来跟随默认路由时保持跟随', async () => {
+    const m1 = await loadModule();
+    m1.patchVendorPrefs('cc', { model: 'claude-opus-5-5', providerId: null });
+
+    expect(
+      m1.patchVendorPrefsFromTaskModelSwitch(
+        'cc',
+        { model: 'claude-sonnet-5-5', providerId: 'anthropic' },
+        'anthropic',
+        () => 'anthropic',
+      ),
+    ).toBe(true);
+    expect(m1.getDraft().lastByVendor.cc).toMatchObject({
+      model: 'claude-sonnet-5-5',
+      providerId: null,
+    });
+  });
+
+  it('patchVendorPrefsFromTaskModelSwitch:任务跟随默认路由时保留草稿显式选过的同一来源', async () => {
+    const m1 = await loadModule();
+    m1.patchVendorPrefs('cc', { model: 'claude-opus-5-5', providerId: 'anthropic' });
+
+    const written = m1.patchVendorPrefsFromTaskModelSwitch(
+      'cc',
+      { model: 'claude-sonnet-5-5', providerId: null },
+      'anthropic',
+    );
+
+    expect(written).toBe(true);
+    expect(m1.getDraft().lastByVendor.cc).toMatchObject({
+      model: 'claude-sonnet-5-5',
+      providerId: 'anthropic',
+    });
+  });
+
+  it('patchVendorPrefsFromTaskModelSwitch:跟随默认路由的新建默认按解析出的来源比较', async () => {
+    const m1 = await loadModule();
+    m1.patchVendorPrefs('cc', { model: 'claude-opus-5-5', providerId: null });
+    const resolve = (prefs: { model: string }) =>
+      prefs.model === 'claude-opus-5-5' ? 'anthropic' : null;
+
+    expect(
+      m1.patchVendorPrefsFromTaskModelSwitch(
+        'cc',
+        { model: 'anthropic/claude-opus-5-5', providerId: 'xd' },
+        'xd',
+        resolve,
+      ),
+    ).toBe(false);
+    expect(m1.getDraft().lastByVendor.cc).toMatchObject({ model: 'claude-opus-5-5', providerId: null });
+
+    // 新建默认的来源解析不出来(目录未就绪等)时不能放行，否则会绕过保护把默认搬到任务的来源。
+    expect(
+      m1.patchVendorPrefsFromTaskModelSwitch(
+        'cc',
+        { model: 'anthropic/claude-opus-5-5', providerId: 'xd' },
+        'xd',
+        () => null,
+      ),
+    ).toBe(false);
+    expect(m1.patchVendorPrefsFromTaskModelSwitch('cc', { model: 'x', providerId: 'xd' }, 'xd')).toBe(
+      false,
+    );
+    expect(m1.getDraft().lastByVendor.cc).toMatchObject({ model: 'claude-opus-5-5', providerId: null });
+  });
+
+  it('patchVendorPrefsFromTaskModelSwitch:先吸收另一窗口刚保存的默认再比较来源', async () => {
+    const m1 = await loadModule();
+    m1.patchVendorPrefs('cc', { model: 'claude-opus-5-5', providerId: 'xd' });
+    // 另一窗口把新建默认改成 anthropic，本窗口的 storage 事件还没送达。
+    const stored = JSON.parse(memStorage.getItem([...(memStorage as any).store.keys()][0]) as string);
+    stored.lastByVendor.cc = { ...stored.lastByVendor.cc, model: 'claude-opus-5-5', providerId: 'anthropic' };
+    stored.modelChosenByVendor = { cc: true };
+    stored.defaultTupleCustomized = true;
+    stored.defaultTupleSelectionCustomized = true;
+    memStorage.setItem([...(memStorage as any).store.keys()][0], JSON.stringify(stored));
+
+    const written = m1.patchVendorPrefsFromTaskModelSwitch(
+      'cc',
+      { model: 'anthropic/claude-sonnet-5-5', providerId: 'xd' },
+      'xd',
+    );
+
+    expect(written).toBe(false);
+    expect(m1.getDraft().lastByVendor.cc.providerId).toBe('anthropic');
+  });
+
   it('patchVendorPrefsPreservingModelChoice:只改思考档不打显式选择标记', async () => {
     const m1 = await loadModule();
     m1.patchVendorPrefsPreservingModelChoice('cc', {
@@ -1913,4 +2126,25 @@ describe('newMakerDraft agent computer', () => {
     mod = await loadModule();
     expect(mod.getDraft()).toMatchObject({ workingDir: '/local/proj', agentDeviceId: null, agentDeviceName: null });
   });
+});
+
+// Standard: the new-task preference must survive owner reload without becoming a picker override.
+it('persists the default, preserves explicit permissions, isolates owners and restores auto', async () => {
+  const m = await loadModule();
+  m.setNewMakerDraftOwner('permission-owner');
+  m.patchVendorPrefs('cc', { permissionMode: 'acceptEdits' });
+  m.setNewChatDefaultPermissionMode('bypassPermissions');
+  expect(m.getDraft().lastByVendor.cc.permissionMode).toBe('acceptEdits');
+  expect(m.getDraft().lastByVendor.pi.permissionMode).toBe('bypassPermissions');
+  m.setNewMakerDraftOwner('another-owner');
+  expect(m.getDraft().lastByVendor.pi.permissionMode).toBe('auto');
+  m.setNewMakerDraftOwner('permission-owner');
+  expect(m.getDraft().newChatDefaultPermissionMode).toBe('bypassPermissions');
+  m.setNewChatDefaultPermissionMode(null);
+  expect(m.getDraft().lastByVendor.pi.permissionMode).toBe('auto');
+  expect(m.getDraft().lastByVendor.cc.permissionMode).toBe('acceptEdits');
+  m.setNewMakerDraftOwner('another-owner');
+  m.setNewMakerDraftOwner('permission-owner');
+  expect(m.getDraft().newChatDefaultPermissionMode).toBeNull();
+  expect(m.getDraft().lastByVendor.pi.permissionMode).toBe('auto');
 });

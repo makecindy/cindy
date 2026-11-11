@@ -3,7 +3,7 @@ import { activeOwnerScopeKey, isAppSessionBoundaryPending, ownerScopedUserDataPa
 import { getDbClient } from '../localDb/client/current.js';
 import { botSessionLinks, botProfiles, sessions } from '../localDb/schema.js';
 import { botEnvironmentSecretIo } from '../secrets/providerSecretStore.js';
-import { createCompanionEnvironmentStore } from './environment.js';
+import { companionEnvironmentKey, createCompanionEnvironmentStore } from './environment.js';
 import { projectEnvironmentDiscovery } from './environmentJson.js';
 import { fingerprint } from './files.js';
 import { CompanionImportError } from './types.js';
@@ -20,7 +20,12 @@ export const companionEnvironmentStore = createCompanionEnvironmentStore({
   read: (key, assertOwner) => botEnvironmentSecretIo.read(key, assertOwner),
   write: (key, value, assertOwner) => botEnvironmentSecretIo.write(key, value, assertOwner),
   remove: key => botEnvironmentSecretIo.remove(key),
-  removeResources: removeImportedMemoryMedia,
+  writeResource: (key, id, chunks, assertOwner) => botEnvironmentSecretIo.writeResource(key, id, chunks, assertOwner),
+  readResource: (key, id, digest, assertOwner) => botEnvironmentSecretIo.readResource(key, id, digest, assertOwner),
+  async removeResources(botId, assertOwner) {
+    await removeImportedMemoryMedia(botId, assertOwner);
+    await botEnvironmentSecretIo.removeResourceFiles(companionEnvironmentKey(botId), assertOwner);
+  },
 });
 
 /** Called only after profile deletion commits; failed deletions retain access. */

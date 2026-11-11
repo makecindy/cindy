@@ -124,9 +124,8 @@ export function CodexResetCredits({ snapshot, busy, canReset, canRetry = false, 
         <>
           <div className="flex items-center justify-between gap-3 pr-8">
             <h3 className="text-18 font-medium text-[var(--confirm-title)]">{t('codexResets.title')}</h3>
-            {count}
+            {snapshot?.autoUse && onChanged && <CodexResetAutoUseControl key={`${providerId}:${snapshot.autoUse.accountKey}`} state={snapshot.autoUse} providerId={providerId} onChanged={onChanged} />}
           </div>
-          {snapshot?.autoUse && onChanged && <div className="mt-3 flex justify-end"><CodexResetAutoUseControl key={`${providerId}:${snapshot.autoUse.accountKey}`} state={snapshot.autoUse} providerId={providerId} onChanged={onChanged} /></div>}
           {content}
         </>
       )}

@@ -24,7 +24,7 @@
  * (伙伴的 rail 入口由 CollapsedView 提供)。
  */
 
-import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   CirclePlus,
   Ellipsis,
@@ -37,6 +37,7 @@ import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { NavigationCountBadge } from '@/components/sidebar/NavigationCountBadge';
 import { useAuth } from '@/contexts/AuthContext';
+import { usePluginReviewUpdates } from '@/contexts/PluginReviewUpdatesContext';
 import { AttentionDot, type DotTone } from '@/components/sidebar/AttentionDot';
 import { useAnyGhostUnread } from '@/cindy-brain/ghostUnreadStore';
 import { useGhostMainViews, type GhostMainViewItem } from '@/cindy-brain/ghostMainViews';
@@ -126,6 +127,7 @@ function useSidebarNavigationActions(
   // 呼吸留给单条卡片;见 AttentionDot 头部的形态规范)。
   const hasRetirementUnread = useInstalledGhosts().some((ghost) => ghost.retirement?.unread);
   const hasGhostUnread = useAnyGhostUnread() || hasRetirementUnread;
+  const reviewUnread = usePluginReviewUpdates().updates.filter(item => item.unread);
   return {
     automations: {
       label: t('ccAgent.layout.automations'),
@@ -139,8 +141,8 @@ function useSidebarNavigationActions(
       icon: SIDEBAR_NAVIGATION_ITEM_ICONS.plugins,
       onSelect: () => navigateToView('plugins'),
       active: activeKey === 'plugins',
-      showDot: hasGhostUnread,
-      dotTone: hasRetirementUnread ? 'awaiting' : 'done',
+      showDot: hasGhostUnread || reviewUnread.length > 0,
+      dotTone: reviewUnread.some(item => item.status !== 'approved' && item.status !== 'enabled') ? 'error' : hasRetirementUnread ? 'awaiting' : 'done',
     },
     search: {
       label: t('sidebar.navigation.items.search'),
@@ -449,6 +451,44 @@ export function SidebarTopNav({
   const showPinned = section !== 'scrollable' && section !== 'rail';
   const showScrollable = section !== 'pinned' && section !== 'rail';
   const pinSearch = section === 'scrollable' && search.query.trim().length > 0;
+  const searchRowRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const row = searchRowRef.current;
+    const scroller = row?.parentElement;
+    if (!pinSearch || !row || !scroller) return;
+
+    // The sidebar and input are translucent. Clip scrolling content at the
+    // search row's bottom instead of painting an opaque rectangle over it.
+    const originalClips = new Map<HTMLElement, string>();
+    const resizeObserver = new ResizeObserver(() => updateClip());
+    const updateClip = () => {
+      const rowRect = row.getBoundingClientRect();
+      let beforeRow = true;
+      for (const sibling of scroller.children) {
+        if (sibling === row) { beforeRow = false; continue; }
+        if (!(sibling instanceof HTMLElement)) continue;
+        if (!originalClips.has(sibling)) {
+          originalClips.set(sibling, sibling.style.clipPath);
+          resizeObserver.observe(sibling);
+        }
+        const overlap = beforeRow && rowRect.top > scroller.getBoundingClientRect().top + 1
+          ? 0 : Math.max(0, rowRect.bottom - sibling.getBoundingClientRect().top);
+        sibling.style.clipPath = overlap > 0 ? `inset(${overlap}px 0 0)` : originalClips.get(sibling)!;
+      }
+    };
+    updateClip();
+    scroller.addEventListener('scroll', updateClip, { passive: true });
+    resizeObserver.observe(row);
+    resizeObserver.observe(scroller);
+    const mutationObserver = new MutationObserver(updateClip);
+    mutationObserver.observe(scroller, { childList: true });
+    return () => {
+      scroller.removeEventListener('scroll', updateClip);
+      resizeObserver.disconnect();
+      mutationObserver.disconnect();
+      for (const [element, clip] of originalClips) element.style.clipPath = clip;
+    };
+  }, [pinSearch, customizing]);
   // 其它 Feature 的 rail 过去只借这里补一个伙伴入口;伙伴并入侧栏后 rail 入口由
   // 任务侧栏的 CollapsedView 提供,这里不再渲染内容。
   if (section === 'rail') return <></>;
@@ -563,10 +603,11 @@ export function SidebarTopNav({
             )}
             <div
               className={cn(
-                'px-3',
+                'shrink-0 px-3',
                 searchIndex > 0 && '-mt-1.5',
-                pinSearch && 'sticky top-0 z-30 bg-[var(--cmd-palette-bg)] pb-2.5',
+                pinSearch && 'sticky top-0 z-30',
               )}
+              ref={searchRowRef}
             >
               {searchRow}
             </div>

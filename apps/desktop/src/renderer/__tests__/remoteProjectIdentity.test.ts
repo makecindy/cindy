@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  collectAmbiguousDeviceNames,
+  collectProjectDevices,
   projectDisplayLabelWithMachine,
   resolveRemoteProjectMachineIdentity,
 } from '@/features/cc-agent/lib/remoteProjectIdentity';
@@ -67,7 +67,7 @@ describe('resolveRemoteProjectMachineIdentity', () => {
   });
 
   // 2026-08-12 用户裁决:设备 ID 是机器指纹哈希,对用户没有可读意义,默认不显示;
-  // 只有两台设备撞名、光看名字分不出来时才附上消歧。
+  // 同名设备使用简短序号区分。
   it('shows only the device-link friendly name when the name is unambiguous', () => {
     const identity = resolveRemoteProjectMachineIdentity(
       {
@@ -86,7 +86,7 @@ describe('resolveRemoteProjectMachineIdentity', () => {
     });
   });
 
-  it('appends the device id only for names shared by more than one device', () => {
+  it('uses an ordinal for names shared by more than one device', () => {
     const identity = resolveRemoteProjectMachineIdentity(
       {
         scope: 'remote',
@@ -95,17 +95,17 @@ describe('resolveRemoteProjectMachineIdentity', () => {
         deviceLinkDeviceName: 'Office Mac',
       },
       [],
-      { ambiguousDeviceNames: new Set(['office mac']) },
+      { devices: [{ deviceId: 'device-123', name: 'Office Mac' }, { deviceId: 'device-456', name: 'Office Mac' }] },
     );
     expect(identity).toEqual({
       kind: 'device-link',
-      label: 'Office Mac',
-      detail: 'device-123',
-      displayLabel: 'Office Mac · device-123',
+      label: 'Office Mac (1)',
+      detail: null,
+      displayLabel: 'Office Mac (1)',
     });
   });
 
-  it('falls back to the device id as the label when no device name resolved', () => {
+  it('uses a readable fallback when no device name resolved', () => {
     const identity = resolveRemoteProjectMachineIdentity(
       {
         scope: 'remote',
@@ -115,12 +115,12 @@ describe('resolveRemoteProjectMachineIdentity', () => {
       },
       [],
     );
-    // 名字拿不到时 label 已经是 ID 本身,detail 不再重复一遍。
+    // 无名称也不暴露机器指纹。
     expect(identity).toEqual({
       kind: 'device-link',
-      label: 'device-123',
+      label: 'another computer',
       detail: null,
-      displayLabel: 'device-123',
+      displayLabel: 'another computer',
     });
   });
 
@@ -139,45 +139,14 @@ describe('resolveRemoteProjectMachineIdentity', () => {
   });
 });
 
-describe('collectAmbiguousDeviceNames', () => {
-  const project = (deviceLinkDeviceId: string | null, deviceLinkDeviceName: string | null) => ({
-    deviceLinkDeviceId,
-    deviceLinkDeviceName,
-  });
-
-  it('flags a name only when it maps to more than one device id', () => {
-    const ambiguous = collectAmbiguousDeviceNames([
-      project('device-a', 'Dash Macbook Pro'),
-      project('device-b', 'Dash Macbook Pro'),
-      project('device-c', 'Office Mac'),
-    ]);
-    expect(ambiguous.has('dash macbook pro')).toBe(true);
-    expect(ambiguous.has('office mac')).toBe(false);
-  });
-
-  it('does not flag several projects that live on the same device', () => {
-    const ambiguous = collectAmbiguousDeviceNames([
-      project('device-a', 'Dash Macbook Pro'),
-      project('device-a', 'Dash Macbook Pro'),
-    ]);
-    expect(ambiguous.size).toBe(0);
-  });
-
-  it('compares names case-insensitively and ignores surrounding whitespace', () => {
-    const ambiguous = collectAmbiguousDeviceNames([
-      project('device-a', ' Dash Macbook Pro'),
-      project('device-b', 'dash macbook pro '),
-    ]);
-    expect([...ambiguous]).toEqual(['dash macbook pro']);
-  });
-
-  it('skips entries without a device id or without a resolved name', () => {
-    const ambiguous = collectAmbiguousDeviceNames([
-      project(null, 'Dash Macbook Pro'),
-      project('device-b', null),
-      project('device-c', '   '),
-    ]);
-    expect(ambiguous.size).toBe(0);
+describe('collectProjectDevices', () => {
+  it('deduplicates project hosts without losing unnamed devices used for display fallback', () => {
+    expect(collectProjectDevices([
+      { deviceLinkDeviceId: 'b', deviceLinkDeviceName: 'Mac' },
+      { deviceLinkDeviceId: 'a', deviceLinkDeviceName: null },
+      { deviceLinkDeviceId: 'b', deviceLinkDeviceName: 'Mac' },
+      { deviceLinkDeviceId: null, deviceLinkDeviceName: null },
+    ])).toEqual([{ deviceId: 'a', name: null }, { deviceId: 'b', name: 'Mac' }]);
   });
 });
 

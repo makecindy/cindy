@@ -68,6 +68,7 @@ export async function readForRecovery(
           : tool === "get_window_state"
             ? Array.isArray(object.elements) ||
               typeof object.tree_markdown === "string" ||
+              typeof object.tree_diff === "string" ||
               typeof object.screenshot_frame_valid === "boolean"
             : true);
     return {

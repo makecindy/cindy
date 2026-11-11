@@ -19,10 +19,12 @@ import {
   createDuplicateToolUseIdRecoveryRule,
   createEmptyAssistantMessageRecoveryRule,
   createEmptyThinkingRecoveryRule,
+  createAnthropicContextManagementRecoveryRule,
   createEncryptedContentRecoveryRule,
   createImageGenerationIdRecoveryRule,
   createToolExchangeAdjacencyRecoveryRule,
   createToolUseProviderSpecificFieldsRecoveryRule,
+  createToolReferenceRecoveryRule,
   createVllmResponsesCompatibilityRule,
   dedupeDuplicateToolUseIds,
   repairToolExchangeAdjacency,
@@ -973,6 +975,104 @@ describe('anthropic-compat-proxy tool_use provider field compatibility', () => {
 
     expect(r.status).toBe(200);
     expect(upstream.bodies).toHaveLength(2);
+  });
+});
+
+describe('unsupported native tool references (#8593)', () => {
+  const request = {
+    model: 'opencode-go/glm-5.3-flash', max_tokens: 128,
+    tools: [{ name: 'lookup', input_schema: { type: 'object' } }],
+    messages: [
+      { role: 'user', content: 'Find the lookup tool' },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'search-1', name: 'ToolSearch', input: { query: 'lookup' } }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'search-1',
+        content: [{ type: 'tool_reference', tool_name: 'lookup' }, { type: 'text', text: 'found' }] }] },
+    ],
+  };
+  it.each(['encrypted', 'empty-thinking'] as const)('preserves native tool references when %s recovery retries', async kind => {
+    const error = kind === 'encrypted' ? ENC_ERROR_BODY
+      : JSON.stringify({ error: { message: 'each thinking block must contain thinking' } });
+    const upstream = await startFakeUpstream((index, _raw, res) => {
+      res.writeHead(index === 0 ? 400 : 200, { 'content-type': 'application/json' });
+      res.end(index === 0 ? error : JSON.stringify({ ok: true }));
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url, transformRequest: [],
+      recoveryRules: [createEncryptedContentRecoveryRule({ enabled: () => true }), createEmptyThinkingRecoveryRule(),
+        createToolReferenceRecoveryRule()] });
+    const input = kind === 'encrypted' ? { ...request, encrypted_content: 'ciphertext' }
+      : { ...request, messages: [{ role: 'assistant', content: [{ type: 'thinking', thinking: '' },
+        ...request.messages[1]!.content] }, request.messages[2]] };
+    const response = await post(proxy.url, input);
+    expect(response.status).toBe(200);
+    expect(upstream.bodies).toHaveLength(2);
+    const retried = JSON.parse(upstream.bodies[1]!);
+    expect(retried.encrypted_content).toBeUndefined();
+    expect(retried.messages).toEqual(kind === 'encrypted' ? request.messages
+      : [{ role: 'assistant', content: request.messages[1]!.content }, request.messages[2]]);
+    expect(retried.tools).toEqual(request.tools);
+  });
+  it.each(['unsupported', 'supported', 'unrelated-error'] as const)('%s upstream preserves the retry boundary', async mode => {
+    const upstream = await startFakeUpstream((_idx, raw, res) => {
+      const body = JSON.parse(raw);
+      const content = body.messages.at(-1).content[0].content;
+      const rejected = mode === 'unrelated-error' || mode === 'unsupported' && content[0].type === 'tool_reference';
+      res.writeHead(rejected ? 400 : 200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(rejected ? { error: { message: mode === 'unrelated-error'
+        ? 'invalid API key' : 'messages[6].content[0].content[0].type: content type tool_reference requires a native Anthropic Messages target' } }
+        : { ok: true }));
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url,
+      transformRequest: [repairToolExchangeAdjacency, dedupeDuplicateToolUseIds],
+      recoveryRules: [createToolReferenceRecoveryRule()] });
+    // Reuse the original persisted history on both turns; recovery must not require editing it.
+    for (let turn = 0; turn < 2; turn++) {
+      const response = await fetch(`${proxy.url}/v1/messages`, { method: 'POST',
+        headers: { 'content-type': 'application/json' }, body: JSON.stringify(request) });
+      expect(response.status).toBe(mode === 'unrelated-error' ? 400 : 200);
+      await response.text();
+    }
+    expect(upstream.bodies).toHaveLength(mode === 'unsupported' ? 4 : 2);
+    if (mode === 'unsupported') {
+      const retried = JSON.parse(upstream.bodies[1]!);
+      expect(retried.messages.at(-1).content[0]).toEqual({ type: 'tool_result', tool_use_id: 'search-1',
+        content: [{ type: 'text', text: 'Available tool: lookup' }, { type: 'text', text: 'found' }] });
+      expect(retried.tools).toEqual(request.tools);
+    } else expect(JSON.parse(upstream.bodies[0]!)).toEqual(request);
+  });
+});
+
+describe('Anthropic context management rejection (#7041)', () => {
+  const request = {
+    model: 'claude-opus-test', max_tokens: 128,
+    context_management: { edits: [{ type: 'clear_tool_uses_20250919' }] },
+    messages: [{ role: 'user', content: 'hello' }],
+  };
+  it.each([
+    [400, 'ValidationException: context_management: Extra inputs are not permitted', 200, 2],
+    [400, 'ValidationException: context_management: Extra inputs are not permitted', 400, 2],
+    [200, '{}', 200, 1],
+    [400, 'ValidationException: unrelated_field: Extra inputs are not permitted', 400, 1],
+  ] as const)('only retries an explicit context_management rejection (%s, %s)', async (status, error, expectedStatus, count) => {
+    const upstream = await startFakeUpstream((index, _body, res) => {
+      res.writeHead(index === 0 ? status : expectedStatus, { 'content-type': 'application/json' });
+      res.end(index === 0 ? JSON.stringify({ error: { message: error } }) : '{}');
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url, transformRequest: [],
+      recoveryRules: [createAnthropicContextManagementRecoveryRule()],
+    });
+    const response = await post(proxy.url, request);
+    expect(response.status).toBe(expectedStatus);
+    expect(upstream.bodies).toHaveLength(count);
+    expect(JSON.parse(upstream.bodies[0]!)).toEqual(request);
+    if (count === 2) {
+      expect(JSON.parse(upstream.bodies[1]!)).toEqual({
+        model: request.model, max_tokens: request.max_tokens, messages: request.messages,
+      });
+    }
   });
 });
 
@@ -4148,10 +4248,12 @@ describe('per-thread 已见 id 缓存(codex-connector P1:请求体缺席历史 i
 
   // per-thread 缓存需要**同一 proxy 实例**跨请求累积(每个请求独立建 proxy 会丢缓存),
   // 因此 postAs 复用同一个 upstream + proxy。
-  async function setupSingleProxy(): Promise<void> {
+  async function setupSingleProxy(compatibilityProfiles?: string[]): Promise<void> {
     const upstream = await mintingUpstream();
     upstreamClose = upstream.close;
-    proxy = await createAnthropicCompatProxy({ upstream: upstream.url, transformRequest: [] });
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url, transformRequest: [],
+      ...(compatibilityProfiles ? { routingTransform: () => ({ upstreamOverride: upstream.url, compatibilityProfiles }) } : {}),
+    });
   }
 
   async function postAs(sessionId: string, body: unknown): Promise<string> {
@@ -4184,19 +4286,18 @@ describe('per-thread 已见 id 缓存(codex-connector P1:请求体缺席历史 i
     expect(r2).toMatch(/Bash_210_dup\d+/);
   });
 
-  it('Kimi Code 的 k3 模型 id 同样判定为 kimi 会话(codex-connector P1)', async () => {
-    await setupSingleProxy();
-    // catalog 里 moonshot-kimi-code provider 的 claude-code runtime model id 是裸 `k3`
-    // (Kimi K3), 不带 kimi 前缀 —— 修复前 isKimiRequest 对 k3 返回 false → 不接管
+  it.each(['k3', 'k3-256k', 'k3.1-pro', 'k3.1-pro-highspeed', 'future-catalog-model'])('Kimi Code 的 %s 首次工具流在 rewind 后仍去重 (#7005)', async (model) => {
+    await setupSingleProxy(model === 'future-catalog-model' ? ['kimi-tool-ids-v1'] : undefined);
+    // Coding ID 不带 kimi 前缀；小数版本也必须记录首个 streamed id。
     const r1 = await postAs('sess-k3', {
-      model: 'k3',
+      model,
       messages: [{ role: 'user', content: '你好' }],
     });
     expect(r1).toContain('"id":"Bash_210"'); // fresh id 透传(无撞车)
 
     // 第二次请求(同 session, 模拟 rewind): 缓存里已有 Bash_210 → 拦截改名
     const r2 = await postAs('sess-k3', {
-      model: 'k3',
+      model,
       messages: [{ role: 'user', content: '继续' }],
     });
     expect(r2).not.toContain('"id":"Bash_210"');

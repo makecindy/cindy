@@ -21,12 +21,18 @@ vi.mock('react-i18next', () => ({
 }));
 
 const catalog = vi.hoisted(() => ({
-  refresh: vi.fn<(deviceId: string) => Promise<void>>(async () => undefined),
+  refresh: vi.fn<(deviceId: string, notification?: unknown) => Promise<void>>(async () => undefined),
   cached: new Set<string>(),
+  subscriptions: new Set<string>(),
+  stale: new Set<string>(),
 }));
 vi.mock('@/lib/remoteCatalogSnapshot', () => ({ refreshRemoteCatalogSnapshot: catalog.refresh }));
 vi.mock('@/hooks/useDeviceProviders', () => ({
-  getCachedDeviceProviders: (deviceId: string) => (catalog.cached.has(deviceId) ? { providers: [] } : null),
+  getCachedDeviceProviders: (deviceId: string) => (catalog.cached.has(deviceId) ? {
+    providers: catalog.subscriptions.has(deviceId) ? [{ subscriptionFastPolicy: { allowFast: false } }] : [],
+  } : null),
+  isSubscriptionShareCatalogStale: (deviceId: string) => catalog.stale.has(deviceId),
+  hasSubscriptionShareCatalog: (deviceId: string) => catalog.subscriptions.has(deviceId),
 }));
 
 function share(partial: Partial<ProviderShareReceived>): ProviderShareReceived {
@@ -46,6 +52,7 @@ function share(partial: Partial<ProviderShareReceived>): ProviderShareReceived {
 }
 
 let push: ((list: ProviderShareReceived[]) => void) | null = null;
+let catalogPush: ((event: { deviceId: string; channel: string; payload: unknown }) => void) | null = null;
 let initial: ProviderShareReceived[] = [];
 let linkStatus: ((payload: { status: 'online' | 'connecting' | 'stopped' }) => void) | null = null;
 let linkPresence: ((payload: { deviceId: string; online: boolean; remoteControlEnabled: boolean }) => void) | null = null;
@@ -67,6 +74,9 @@ beforeEach(() => {
   resetProviderShareStoreForTests();
   catalog.refresh.mockClear();
   catalog.cached.clear();
+  catalog.subscriptions.clear();
+  catalog.stale.clear();
+  catalogPush = null;
   push = null;
   initial = [];
   linkStatus = null;
@@ -79,6 +89,7 @@ beforeEach(() => {
     electronAPI: {
       deviceLink: {
         invoke,
+        onRemotePush: (callback: typeof catalogPush) => { catalogPush = callback; return () => { catalogPush = null; }; },
         onStatusChanged: (callback: typeof linkStatus) => {
           linkStatus = callback;
           return () => { linkStatus = null; };
@@ -110,6 +121,58 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe('useProviderShareAgentDevices', () => {
+  it('refreshes an authorized subscription share on catalog invalidation and ignores custom API shares and unrelated peers', async () => {
+    initial = [share({ shareId: 'subscription', providerId: 'openai' }), share({ shareId: 'api' })];
+    const { result } = renderHook(() => useProviderShareAgentDevices());
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    catalog.refresh.mockClear();
+    catalog.cached.add('share:subscription'); catalog.cached.add('share:api');
+    catalog.subscriptions.add('share:subscription');
+    act(() => {
+      catalogPush?.({ deviceId: 'share:subscription', channel: 'maker:provider:changed', payload: {} });
+      catalogPush?.({ deviceId: 'share:api', channel: 'maker:provider:changed', payload: {} });
+      catalogPush?.({ deviceId: 'share:unknown', channel: 'maker:provider:changed', payload: {} });
+      catalogPush?.({ deviceId: 'share:subscription', channel: 'maker:event', payload: {} });
+    });
+    expect(catalog.refresh.mock.calls).toEqual([['share:subscription', {}]]);
+    // A failed soft refresh leaves no authoritative cache, but another push
+    // must still retry the previously recognized subscription (never API peers).
+    catalog.cached.delete('share:subscription');
+    act(() => catalogPush?.({ deviceId: 'share:subscription', channel: 'maker:provider:changed', payload: {} }));
+    expect(catalog.refresh.mock.calls).toEqual([['share:subscription', {}], ['share:subscription', {}]]);
+  });
+
+  // Unit: the real received-share push listener must propagate a late denial for
+  // API catalogs as well as subscriptions; ordinary soft refresh stays selective.
+  it('forwards an expired-directory notification for every active share, excluding paused and unknown shares', async () => {
+    initial = [share({ shareId: 'subscription' }), share({ shareId: 'api' }), share({ shareId: 'paused', status: 'paused' })];
+    const { result } = renderHook(() => useProviderShareAgentDevices());
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    catalog.refresh.mockClear(); catalog.subscriptions.add('share:subscription');
+    const payload = { providerContinuity: { stale: true, remainingMs: 0 } };
+    act(() => {
+      for (const id of ['subscription', 'api', 'paused', 'unknown'])
+        catalogPush?.({ deviceId: `share:${id}`, channel: 'maker:provider:changed', payload });
+    });
+    // A denial/expiry notification retires the display; it must not reopen the
+    // denied target. Ordinary provider-change pushes keep the soft refresh.
+    expect(catalog.refresh.mock.calls).toEqual([
+      ['share:subscription', payload, { retireOnly: true }],
+      ['share:api', payload, { retireOnly: true }],
+    ]);
+  });
+
+  it('refreshes stale subscription catalogs even when a membership snapshot has no changes', async () => {
+    initial = [share({ shareId: 'subscription', providerId: 'openai' }), share({ shareId: 'api' })];
+    const { result } = renderHook(() => useProviderShareAgentDevices());
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    catalog.refresh.mockClear();
+    catalog.cached.add('share:subscription');
+    catalog.subscriptions.add('share:subscription');
+    catalog.stale.add('share:subscription');
+    await act(async () => { push?.(initial); await Promise.resolve(); await Promise.resolve(); });
+    expect(catalog.refresh.mock.calls).toEqual([['share:subscription']]);
+  });
   it('only offers new shares that the controlled host has loaded, even if the controller has more cross-region shares', async () => {
     initial = [share({ shareId: 'both' }), share({ shareId: 'controller-only' })];
     invoke.mockResolvedValue(hostShares({ shareId: 'both' }, { shareId: 'host-only' }));
@@ -522,7 +585,7 @@ describe('useProviderShareAgentDevices', () => {
     const { result } = renderHook(() => useProviderShareAgentDevices(['share:a']));
     await waitFor(() => expect(result.current.loaded).toBe(true));
     catalog.cached.add('share:a');
-    act(() => push?.([]));
+    await act(async () => { push?.([]); await Promise.resolve(); await Promise.resolve(); });
     expect(catalog.refresh).not.toHaveBeenCalled();
     expect(result.current.isKnown('share:a')).toBe(true);
   });
@@ -532,8 +595,25 @@ describe('useProviderShareAgentDevices', () => {
     const { result } = renderHook(() => useProviderShareAgentDevices());
     await waitFor(() => expect(result.current.loaded).toBe(true));
     catalog.cached.add('share:c');
-    act(() => push?.([share({ shareId: 'a' }), share({ shareId: 'b', hostOnline: false })]));
+    await act(async () => {
+      push?.([share({ shareId: 'a' }), share({ shareId: 'b', hostOnline: false })]);
+      await Promise.resolve(); await Promise.resolve();
+    });
     expect(catalog.refresh.mock.calls.map(([deviceId]) => deviceId).sort()).toEqual(['share:b', 'share:c']);
     expect(result.current.devices.map((device) => device.deviceId)).toEqual(['share:a', 'share:b']);
+  });
+
+  it('clears paused and removed share catalogs immediately', async () => {
+    initial = [share({ shareId: 'a' }), share({ shareId: 'b' }), share({ shareId: 'c' })];
+    const { result } = renderHook(() => useProviderShareAgentDevices());
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    await act(async () => {
+      push?.([share({ shareId: 'a' }), share({ shareId: 'b', status: 'paused' })]);
+      await Promise.resolve(); await Promise.resolve();
+    });
+    const revoked = { providerContinuity: { stale: true, remainingMs: 0 } };
+    expect(catalog.refresh).toHaveBeenCalledWith('share:b', revoked);
+    expect(catalog.refresh).toHaveBeenCalledWith('share:c', revoked, { retireOnly: true });
+    expect(catalog.refresh).not.toHaveBeenCalledWith('share:a', expect.anything());
   });
 });

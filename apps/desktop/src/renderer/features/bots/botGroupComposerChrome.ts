@@ -1,20 +1,16 @@
 /**
- * 群聊输入框的外观：主群（BotGroupComposer）与 Thread 回复（ChatThreadPanel）共用同一张
- * 卡片、同一个输入区和同一行操作，发送按钮都在卡片右下角（SendButton）。两处只引用这里，
- * 不各写一份，免得卡片描边、字号和按钮位置再次走样。
+ * 群聊输入框的布局与原生 textarea 行为；卡片与内边距由 ComposerCard 统一维护，
+ * 与私聊任务输入框共用。主群与 Thread 回复仍共用同一个 BotGroupComposer。
  *
  * 输入框贴在面板底部，不另画分隔线；卡片自己的描边就是边界。
  */
 import { useEffect, type MouseEvent, type RefObject } from 'react';
 
 /** Docked under the message list; no top rule — the card's border is the boundary. */
-export const BOT_GROUP_COMPOSER_DOCK = 'shrink-0 px-5 pb-4 pt-2';
+export const BOT_GROUP_COMPOSER_DOCK = 'shrink-0 px-[var(--cindy-input-pad,40px)] pb-4 pt-2';
 
 /** Centers the card in a wide main column; a narrow Thread panel simply fills it. */
-export const BOT_GROUP_COMPOSER_COLUMN = 'relative mx-auto w-full max-w-[760px]';
-
-export const BOT_GROUP_COMPOSER_CARD =
-  'relative flex flex-col gap-2 rounded-xl border border-[var(--chat-input-border)] bg-[var(--chat-input-bg)] px-3.5 pb-2.5 pt-3 transition-colors focus-within:border-[var(--chat-input-border-focus)]';
+export const BOT_GROUP_COMPOSER_COLUMN = 'relative mx-auto w-full max-w-[var(--cindy-input-width,934px)]';
 
 /** Starts at one line and grows with the text (see fitBotGroupComposerInput); max-h caps it and scrolls. */
 export const BOT_GROUP_COMPOSER_INPUT =

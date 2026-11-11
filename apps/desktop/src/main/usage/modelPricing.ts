@@ -28,6 +28,7 @@ import {
 } from './accountCurrencyStore.js';
 import { currentLedgerCurrency, isLedgerCurrencyKnown, setActiveLedgerCurrency } from './ledgerCurrency.js';
 import { createLogger } from '../logger.js';
+import { notifyUsagePricingChanged } from './pricingChanges.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { resolveOwnerScopedSecretStorageKey } from '../secrets/providerSecretStore.js';
 
@@ -348,6 +349,7 @@ async function hydrateFromDisk(scope: string): Promise<ModelPricingCatalog | nul
 }
 
 function broadcastPricing(pricing: ModelPricingCatalog | null): void {
+  notifyUsagePricingChanged();
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
       win.webContents.send(MODEL_PRICING_CHANGED_CHANNEL, pricing);

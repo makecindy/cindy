@@ -365,6 +365,42 @@ let nextId = 100;
 const okWithId = () => ({ ok: true, messageId: String(nextId++) });
 
 describe('官方 Telegram 终稿由客户端发布(turn-final)', () => {
+  // 回归 2026-10-27 终稿长期 pending：生产 publishFinal 遇小时级 429 时必须交回
+  // 服务端，而不是一直挡住 turn.end。现有测试只覆盖短退避与单次回执超时；unit 假时钟。
+  it.each(['turn-progress', 'turn-final'] as const)(
+    '%s 长退避不阻塞终稿交接；交接后不再重发旧 op',
+    async (limitedPurpose) => {
+      const h = autoHarness((p) =>
+        p.purpose === limitedPurpose
+          ? { ok: false, channelErrorCode: 429, retryAfterMs: 3_600_000 }
+          : okWithId(),
+      );
+      h.carrier.update('工作中');
+      await advance(THROTTLE_MS);
+      const completed = vi.fn();
+      const done = h.carrier.publishFinal({ status: 'ok', finalText: '完整答案' }).then(completed);
+      await advance(120_000);
+      expect(completed).toHaveBeenCalledWith(false);
+      await done;
+      const count = h.sent.length;
+      h.carrier.update('迟到进度');
+      await advance(3_600_000);
+      expect(h.sent).toHaveLength(count);
+    },
+  );
+
+  it('终稿交接期限先于回执到达：迟到的拒绝不能再触发 HTML 回落', async () => {
+    const h = harness({ resultTimeoutMs: 300_000 });
+    const completed = vi.fn();
+    const done = h.carrier.publishFinal({ status: 'ok', finalText: '完整答案' }).then(completed);
+    await advance(120_000);
+    expect(completed).toHaveBeenCalledWith(false);
+    await done;
+    h.reply({ ok: false, channelErrorCode: 400 });
+    await advance(300_000);
+    expect(h.sent).toHaveLength(1);
+  });
+
   it('有过程载体: Rich 新发终稿首段(私聊挂完成特效), 落地后删掉过程消息, 完整确认', async () => {
     const h = autoHarness(() => okWithId(), { directMessage: true });
     h.carrier.update('**工作中**');

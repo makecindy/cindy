@@ -1,7 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { InstalledGhost } from '../../../shared/ghost.js';
-import { classifyGhostVisibility, classifyInstalledGhostVisibility } from '../ghostVisibility.js';
+import { classifyGhostVisibility, classifyInstalledGhostVisibility } from '../ghostVisibility.desktop.js';
 
 function ghost(id: string, namespace?: string | null, enabled = true): InstalledGhost {
   return {
@@ -22,6 +22,22 @@ describe('classifyGhostVisibility namespace', () => {
     isDisabledForWorkdir: () => false,
   };
 
+  // BWG3 unit regression: repeated pre-dispatch checks use only the selected
+  // physical installation, but removal/replacement/disable still take effect.
+  it('rechecks an exact installation without scanning unrelated plugins', () => {
+    let current: InstalledGhost | undefined = enterprise;
+    const listGhosts = vi.fn(() => { throw new Error('full scan'); });
+    const exactDeps = { ...deps, listGhosts, findInstalledInstance: () => current };
+    expect(classifyInstalledGhostVisibility(enterprise, null, exactDeps)).toMatchObject({ ok: true });
+    current = { ...enterprise, enabled: false };
+    expect(classifyInstalledGhostVisibility(enterprise, null, exactDeps)).toMatchObject({ ok: false, errorCode: 'GHOST_ASLEEP' });
+    current = { ...enterprise, approval: { state: 'approved', revision: 'replacement' } };
+    expect(classifyInstalledGhostVisibility(enterprise, null, exactDeps)).toMatchObject({ ok: false, errorCode: 'GHOST_NOT_FOUND' });
+    current = undefined;
+    expect(classifyInstalledGhostVisibility(enterprise, null, exactDeps)).toMatchObject({ ok: false, errorCode: 'GHOST_NOT_FOUND' });
+    expect(listGhosts).not.toHaveBeenCalled();
+  });
+
   it('returns GHOST_AMBIGUOUS when the same ghostId has two instances and namespace is omitted', () => {
     const result = classifyGhostVisibility('helper', null, deps);
     expect(result.ok).toBe(false);
@@ -41,6 +57,100 @@ describe('classifyGhostVisibility namespace', () => {
     expect(classifyGhostVisibility('helper', null, deps, null)).toMatchObject({
       ok: true,
       ghost: { dir: '/tmp/helper' },
+    });
+  });
+
+  // Daily version selection must respect availability without merging identities.
+  // Unit entry: classifyGhostVisibility; minimal input is one public/local pair.
+  // Existing coverage only exercised root/organization ambiguity.
+  it.each(['disabled', 'workdir', 'unavailable', 'retired'] as const)(
+    'does not let a newer %s local copy hide the public copy', (reason) => {
+      const local = ghost('helper', 'local');
+      local.manifest.version = '2.0.0';
+      if (reason === 'disabled') local.enabled = false;
+      if (reason === 'retired') local.retirement = {} as NonNullable<InstalledGhost['retirement']>;
+      const pairDeps = { ...deps, listGhosts: () => [local, root],
+        isAvailableForActiveSession: (id: string) => reason !== 'unavailable' || id !== '_ns__local__helper',
+        isDisabledForWorkdir: (id: string) => reason === 'workdir' && id === '_ns__local__helper' };
+      expect(classifyGhostVisibility('helper', null, pairDeps)).toMatchObject({ ok: true, ghost: root });
+    },
+  );
+
+  // ghost_list shows only discoverable copies; a bare name must pick among the same set,
+  // or a newer panel-only local copy hides the listed public one from ghost_info.
+  it('does not let a newer undiscoverable local copy win a bare name', () => {
+    const local = ghost('helper', 'local');
+    local.manifest.version = '2.0.0';
+    const pairDeps = { ...deps, listGhosts: () => [local, root], isDiscoverable: (g: InstalledGhost) => g !== local };
+    expect(classifyGhostVisibility('helper', null, pairDeps)).toMatchObject({ ok: true, ghost: root });
+    expect(classifyGhostVisibility('_ns__local__helper', null, pairDeps)).toMatchObject({ ok: true, ghost: local });
+  });
+
+  it.each(['legacy', 'pending', 'unconfirmed', 'invalid-version', 'organization'] as const)(
+    'keeps %s identities explicit instead of guessing a version winner', (reason) => {
+      const local = ghost('helper', 'local');
+      const other = { ...root, manifest: { ...root.manifest } };
+      if (reason === 'legacy' || reason === 'pending') delete other.namespace;
+      if (reason === 'pending' || reason === 'unconfirmed') other.namespaceState = reason;
+      if (reason === 'invalid-version') other.manifest.version = 'development';
+      if (reason === 'organization') other.namespace = 'acme';
+      expect(classifyGhostVisibility('helper', null, { ...deps, listGhosts: () => [local, other] }))
+        .toMatchObject({ ok: false, errorCode: 'GHOST_AMBIGUOUS' });
+    },
+  );
+
+  it('keeps explicit local addresses and in-flight calls bound to the original installation', () => {
+    const local = ghost('helper', 'local');
+    local.manifest.version = '0.9.0';
+    const pairDeps = { ...deps, listGhosts: () => [root, local] };
+    expect(classifyGhostVisibility('helper', null, pairDeps)).toMatchObject({ ok: true, ghost: root });
+    expect(classifyGhostVisibility('helper', null, pairDeps, 'local')).toMatchObject({ ok: true, ghost: local });
+    expect(classifyInstalledGhostVisibility(local, null, pairDeps)).toMatchObject({ ok: true, ghost: local });
+  });
+
+  it.each([
+    { installed: root, requested: 'null', target: { ghost_id: 'helper', namespace: null } },
+    { installed: enterprise, requested: null, target: { ghost_id: 'helper', namespace: 'acme' } },
+  ])('reports an installed identity instead of absence for namespace $requested', ({ installed, requested, target }) => {
+    const result = classifyGhostVisibility('helper', null, { ...deps, listGhosts: () => [installed] }, requested);
+    expect(result).toMatchObject({ ok: false, errorCode: 'GHOST_NAMESPACE_MISMATCH' });
+    if (result.ok) return;
+    expect(result.message).toContain(JSON.stringify(target));
+    expect(result.message).toContain('JSON null');
+  });
+
+  // PR #6434: an explicit wrong address must not disclose an unavailable owner's
+  // identities. Existing namespace cases only exercised available installations.
+  it.each([null, 'null'])('hides unavailable identities for namespace %s', (namespace) => {
+    const unavailableDeps = {
+      ...deps,
+      listGhosts: () => [enterprise],
+      isAvailableForActiveSession: () => false,
+    };
+    const result = classifyGhostVisibility('helper', null, unavailableDeps, namespace);
+    expect(result).toEqual(classifyGhostVisibility('missing', null, unavailableDeps, namespace));
+    expect(result).toMatchObject({ ok: false, errorCode: 'GHOST_NOT_FOUND' });
+    expect(JSON.stringify(result)).not.toContain('acme');
+  });
+
+  it('only includes active-session identities in namespace mismatch guidance', () => {
+    const result = classifyGhostVisibility('helper', null, {
+      ...deps,
+      isAvailableForActiveSession: (id) => id === 'helper',
+    }, 'wrong');
+    expect(result).toMatchObject({ ok: false, errorCode: 'GHOST_NAMESPACE_MISMATCH' });
+    if (result.ok) return;
+    expect(result.message).toContain('{"ghost_id":"helper","namespace":null}');
+    expect(result.message).not.toContain('acme');
+  });
+
+  it('keeps the literal organization slug null distinct from JSON null', () => {
+    const namedNull = ghost('helper', 'null');
+    const stageDeps = { ...deps, listGhosts: () => [root, namedNull] };
+    expect(classifyGhostVisibility('helper', null, stageDeps, 'null')).toMatchObject({ ok: true, ghost: namedNull });
+    expect(classifyGhostVisibility('helper', null, stageDeps, null)).toMatchObject({ ok: true, ghost: root });
+    expect(classifyGhostVisibility('missing', null, stageDeps, 'null')).toMatchObject({
+      ok: false, errorCode: 'GHOST_NOT_FOUND',
     });
   });
 
@@ -85,8 +195,11 @@ describe('classifyGhostVisibility namespace', () => {
     const stageDeps = { ...deps, listGhosts: () => [pending] };
     expect(classifyGhostVisibility('xd-feishu', null, stageDeps)).toMatchObject({ ok: true, ghost: pending });
     expect(classifyGhostVisibility('xd-feishu', null, stageDeps, null)).toMatchObject({
-      ok: false, errorCode: 'GHOST_NOT_FOUND',
+      ok: false, errorCode: 'GHOST_NAMESPACE_MISMATCH',
     });
+    const result = classifyGhostVisibility('xd-feishu', null, stageDeps, null);
+    if (result.ok) return;
+    expect(result.message).toContain('{"ghost_id":"xd-feishu"}');
   });
 
 

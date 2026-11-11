@@ -5,7 +5,7 @@
  * public Plugin is installed by default is an installation policy, not a source.
  * An installed Ghost without a matching market record remains local.
  */
-import { isCindyAccountGhostId, type GhostInstallApproval } from '../../../../shared/ghost';
+import type { GhostInstallApproval } from '../../../../shared/ghost';
 import {
   createPluginLogicalIdentity,
   findInstalledGhostByIdentity,
@@ -15,6 +15,14 @@ import {
 import type { PluginMarketItem } from '../../../../shared/pluginMarket';
 
 export type PluginPresentationOrigin = 'public' | 'organization' | 'local' | 'custom';
+
+/** Public contributors stay anonymous even when an older payload includes an author. */
+export function pluginPresentationAuthor(
+  item: Pick<PluginMarketItem, 'scope' | 'sourceType' | 'publisherKind' | 'author'>,
+): string | null {
+  return item.sourceType === 'server' && item.scope === 'public' && item.publisherKind !== 'official'
+    ? null : item.author;
+}
 
 export type PluginCatalogPresentationItem<TInstalled> =
   { kind: 'installed'; item: TInstalled } | { kind: 'market'; item: PluginMarketItem };
@@ -172,11 +180,11 @@ export function orderPluginCatalogItems<TInstalled extends { id: string }>(
   return ordered;
 }
 
-/** 浏览可看公开目录；安装只在当前会话真能跑这个插件时露出。 */
+/** 目录不按名字推测账号依赖；包确认和运行时根据真实声明处理。 */
 export function canOfferMarketInstall(
   mode: 'signed-out' | 'local' | 'cloud',
-  ghostId: string,
+  _ghostId: string,
 ): boolean {
   if (mode === 'signed-out') return false;
-  return mode === 'cloud' || !isCindyAccountGhostId(ghostId);
+  return true;
 }

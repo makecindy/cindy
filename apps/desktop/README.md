@@ -6,7 +6,7 @@ Electron + React + TypeScript desktop client for Cindy.
 
 ```bash
 # From project root
-pnpm dev
+pnpm dev:desktop
 ```
 
 ## Build

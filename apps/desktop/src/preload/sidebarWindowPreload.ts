@@ -1,6 +1,7 @@
 import { createAccessibilitySupportBridge } from './accessibilitySupport';
 import { invokeOpenPath } from './openPath';
 import { COPY_PNG_TO_CLIPBOARD_CHANNEL, type CopyPngToClipboardParams } from '../shared/pngClipboard';
+import { SELECTION_CONTEXT_MENU_ADD_TO_CHAT_CHANNEL } from '../shared/selectionContextMenu';
 /**
  * 鍙充晶鏍忓瓙绐楀彛涓撶敤 preload锛氬彧鏆撮湶 RSB 绐楀彛鎵€闇€鐨勬渶灏忚兘鍔涖€?
  *
@@ -19,6 +20,10 @@ import { COPY_PNG_TO_CLIPBOARD_CHANNEL, type CopyPngToClipboardParams } from '..
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 
 import { createAppearanceSnapshotBridge } from './appearanceSnapshot';
+import { PROVIDER_SHARE_IPC, type ProviderShareCommand } from '../shared/providerShare';
+import { PROVIDER_GROUP_IPC } from '../shared/providerGroup';
+import { MODEL_ACCESS_STATUS_CHANNEL } from '../shared/modelAccess';
+import { isModelVisibilityLegacyOwnerClaim, type ModelVisibilityLegacyOwnerClaim } from '../shared/modelVisibility';
 import { DEVICE_LINK_INVOKE, DEVICE_LINK_PUSH } from '../shared/deviceLinkIpc';
 import type { LocalThemesResult } from '../shared/local-themes';
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES, type SupportedLocale } from '../shared/locale';
@@ -33,7 +38,7 @@ import {
   RSB_WINDOW_TAB_HANDOFF_CHANNEL,
   RSB_WINDOW_VISIBILITY_CHANGED_CHANNEL,
 } from '../shared/rightSidebarWindow';
-import type { RsbWindowTabHandoff } from '../shared/rightSidebarWindow';
+import type { RsbWindowContext, RsbWindowTabHandoff } from '../shared/rightSidebarWindow';
 import {
   SIDEBAR_TAB_WINDOW_ADOPT_TAB_CHANNEL,
   SIDEBAR_TAB_WINDOW_ASSIGNED_CHANNEL,
@@ -77,6 +82,14 @@ function onPayloadWithMetadata<T, M>(
   return () => ipcRenderer.removeListener(channel, listener);
 }
 
+function onProviderUsage(legacyChannel: string, defaultProvider: string, cb: (payload: unknown) => void, providerId = defaultProvider): () => void {
+  return providerId === defaultProvider ? onPayload(legacyChannel, cb)
+    : onPayload<{ providerId?: string; snapshot?: unknown }>(defaultProvider === 'openai'
+      ? 'usage:codex-provider-account-changed' : 'usage:subscription-provider-account-changed', payload => {
+        if (payload?.providerId === providerId) cb(payload.snapshot);
+      });
+}
+
 function readPreferredSystemLocale(): ApplicationMenuLocale {
   try {
     const value = ipcRenderer.sendSync('app-locale:get-preferred-system-locale-sync');
@@ -95,6 +108,8 @@ const fanOutFullscreenChange = (cb: (isFullscreen: boolean) => void): (() => voi
 
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
+  onSelectionContextMenuAddToChat: (callback: () => void): (() => void) =>
+    onPayload(SELECTION_CONTEXT_MENU_ADD_TO_CHAT_CHANNEL, () => callback()),
   accessibilitySupport: createAccessibilitySupportBridge(),
   onWindowHiddenChange: (cb: (hidden: boolean) => void): (() => void) => {
     const off = onPayload('window-hidden-change', cb);
@@ -121,6 +136,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         return { success: false, error: String(error), themes: [], diagnostics: [] };
       }
     },
+    onChanged: (cb: (payload: LocalThemesResult) => void): (() => void) =>
+      onPayload('local-themes:changed', cb),
   },
   appShortcuts: {
     getState: (): { overrides: Record<string, unknown>; platform: string } =>
@@ -169,6 +186,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       onPayload(DEVICE_LINK_PUSH.PRESENCE_CHANGED, cb),
     onStatusChanged: (cb: (payload: unknown) => void): (() => void) =>
       onPayload(DEVICE_LINK_PUSH.STATUS_CHANGED, cb),
+    onDeviceDirectoryInvalidated: (cb: () => void): (() => void) =>
+      onPayload(DEVICE_LINK_PUSH.DEVICE_DIRECTORY_INVALIDATED, cb),
     onRemotePush: (cb: (payload: unknown, localOwnerStamp?: unknown) => void): (() => void) =>
       onPayloadWithMetadata(DEVICE_LINK_PUSH.REMOTE_PUSH, cb),
     onAccessRevoked: (cb: (payload: unknown) => void): (() => void) =>
@@ -308,6 +327,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 意识面板注册与运行所需的最小 bridge。右侧栏独立窗口会复用
   // ghostPanels/GhostChipPanelBody，但不暴露安装、卸载、开发运行时或权限管理能力。
   ghosts: {
+    onModelPickerRequest: (cb: (request: import('../shared/pluginModelPicker').PluginModelPickerPresentation) => void) =>
+      onPayload('ghosts:model-picker:request', cb),
+    onModelPickerDismissed: (cb: (payload: { requestId: string }) => void) =>
+      onPayload('ghosts:model-picker:dismissed', cb),
+    resolveModelPicker: (requestId: string, route: import('../shared/pluginModelPicker').PluginModelPickerRoute | null) =>
+      ipcRenderer.invoke('ghosts:model-picker:resolve', { requestId, route }),
     listSync: (): { ghosts: unknown[] } => ipcRenderer.sendSync('ghosts:list'),
     reload: (id: string): Promise<{ state: string }> => ipcRenderer.invoke('ghosts:reload', id),
     openRetirement: (id: string): Promise<{ ok: true }> =>
@@ -361,14 +386,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       handoff?: RsbWindowTabHandoff,
     ): Promise<{ detached: boolean; lastOpen: boolean; open: boolean }> =>
       ipcRenderer.invoke('maker:rsb-window:set-detached', detached, handoff),
-    getContext: (): Promise<{
-      sessionId: string | null;
-      workdir: string | null;
-      remoteHostId: string | null;
-      deviceLinkDeviceId?: string | null;
-      subagentsAvailable?: boolean;
-      available: boolean;
-    } | null> => ipcRenderer.invoke('maker:rsb-window:get-context'),
+    getContext: (): Promise<RsbWindowContext | null> =>
+      ipcRenderer.invoke('maker:rsb-window:get-context'),
     /** 瀛橀噺灏辩华鎻℃墜 鈫?鏄犲皠鍒?renderer-ready(renderer shell 宸叉寕杞?銆?*/
     ready: (): Promise<void> => ipcRenderer.invoke('maker:rsb-window:ready'),
     /** 鍙岄樁娈靛氨缁?renderer shell 鎸傝浇銆?*/
@@ -380,16 +399,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onStateChanged: (
       cb: (state: { detached: boolean; open: boolean }) => void,
     ): (() => void) => onPayload(RSB_WINDOW_STATE_CHANGED_CHANNEL, cb),
-    onContextChanged: (
-      cb: (ctx: {
-        sessionId: string | null;
-        workdir: string | null;
-        remoteHostId: string | null;
-        deviceLinkDeviceId?: string | null;
-        subagentsAvailable?: boolean;
-        available: boolean;
-      }) => void,
-    ): (() => void) => onPayload(RSB_WINDOW_CONTEXT_CHANGED_CHANNEL, cb),
+    onContextChanged: (cb: (ctx: RsbWindowContext) => void): (() => void) =>
+      onPayload(RSB_WINDOW_CONTEXT_CHANGED_CHANNEL, cb),
     /** main → 子窗口的命令推送；channel 必须与 main 端 MAKER_PUSH.RSB_WINDOW_COMMAND 同源。 */
     onCommand: (
       cb: (cmd: unknown) => void,
@@ -558,6 +569,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       onChanged: (cb: (payload: unknown, ownerStamp?: unknown) => void): (() => void) => onPayloadWithMetadata('local-db:subagent-runs:changed', cb),
     },
     orcaWorkflows: {
+      projectLabel: (workerSessionId: string) => ipcRenderer.invoke('maker:worker:project-label', workerSessionId),
       getByLeadSession: (id: string): Promise<unknown> => ipcRenderer.invoke('local-db:orca-workflows:get-by-lead', id),
       getByWorkerSession: (id: string): Promise<unknown> => ipcRenderer.invoke('local-db:orca-workflows:get-by-worker-session', id),
       listWorkersByLead: (id: string): Promise<unknown> => ipcRenderer.invoke('local-db:orca-workflows:list-workers-by-lead', id),
@@ -585,6 +597,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       },
       archiveWorker: (leadSessionId: string, workerId: string): Promise<unknown> =>
         ipcRenderer.invoke('maker:worker:archive', { leadSessionId, workerId }),
+      updateWorker: (input: {
+        leadSessionId: string;
+        workerId: string;
+        role?: string;
+        label?: string;
+      }): Promise<unknown> => ipcRenderer.invoke('maker:worker:update', input),
       endTeam: (leadSessionId: string): Promise<unknown> =>
         ipcRenderer.invoke('maker:team:end', leadSessionId),
       getCollaborationSettings: (): Promise<unknown> =>
@@ -618,6 +636,48 @@ contextBridge.exposeInMainWorld('electronAPI', {
     push: (params: unknown): Promise<unknown> => ipcRenderer.invoke('git-review:push', params),
   },
   maker: {
+    mcpApps: (sessionId: string | null, input: unknown): Promise<unknown> => ipcRenderer.invoke('maker:mcp-apps:v1', sessionId, input),
+    onPluginUiAction: (cb: (input: unknown) => void) => onPayload('plugin-ui:action', cb),
+    onPluginUiState: (cb: (input: { epoch: string; updates: import('../shared/pluginUi').PluginUiStateChange[] }) => void) => onPayload('plugin-ui:state', cb),
+    // Read-only catalogs needed by the same model selector used in the main window.
+    listProviders: () => ipcRenderer.invoke('maker:provider:list'),
+    // The shared catalog reader needs the same owner lease even when legacy migration is deferred.
+    claimLegacyModelVisibilityOwner: (): ModelVisibilityLegacyOwnerClaim => {
+      const value: unknown = ipcRenderer.sendSync('maker:model-visibility:legacy-owner-claim-sync');
+      return isModelVisibilityLegacyOwnerClaim(value) ? value : {
+        dataOwnerId: null, ownerGeneration: 0, canWriteOwnerScoped: false,
+        claimed: false, claimedByOtherOwner: false, canInitialize: false,
+      };
+    },
+    syncModelVisibility: (dataOwnerId: string | null, ownerGeneration: number, map: Record<string, boolean>,
+      policy?: import('../shared/modelVisibility').ModelVisibilityPolicy): Promise<void> =>
+      ipcRenderer.invoke('maker:model-visibility:sync', dataOwnerId, ownerGeneration, map, policy),
+    listAvailableAgents: () => ipcRenderer.invoke('maker:list-available-agents'),
+    onAgentsChanged: (cb: (payload: unknown) => void) => onPayload('maker:agents:changed', cb),
+    onProvidersChanged: (cb: (payload: unknown, metadata?: unknown) => void) =>
+      onPayloadWithMetadata('maker:provider:changed', cb),
+    getCapabilities: (agentKind: string) => ipcRenderer.invoke('maker:get-capabilities', agentKind),
+    getModelContextLimit: (target: import('../shared/modelContextLimit').ModelContextLimitTarget) =>
+      ipcRenderer.invoke('maker:model-context-limit:get', target),
+    fetchProviderAccountUsage: (input: { providerId: string; forceRefresh?: boolean }) =>
+      ipcRenderer.invoke('maker:provider:account-usage', input),
+    requestProviderModelsAutoRefresh: (trigger: import('../shared/providerModelRefresh').ProviderModelAutoRefreshRendererTrigger) =>
+      ipcRenderer.invoke('maker:provider:models-auto-refresh', trigger),
+    usage: {
+      getModelPricing: () => ipcRenderer.invoke('maker:usage:model-pricing-v2'),
+      getReferenceModelPricing: () => ipcRenderer.invoke('maker:usage:reference-model-pricing'),
+      onModelPricingChanged: (cb: (payload: unknown) => void) => onPayload('usage:model-pricing-changed', cb),
+      onReferenceModelPricingChanged: (cb: (payload: unknown) => void) => onPayload('usage:reference-model-pricing-changed', cb),
+      getCodexRateLimits: (providerId?: string) => ipcRenderer.invoke('maker:usage:codex-rate-limits', providerId),
+      getClaudeSubscription: (providerId?: string) => ipcRenderer.invoke('maker:usage:claude-subscription', providerId),
+      getXaiSubscription: (providerId?: string) => ipcRenderer.invoke('maker:usage:xai-subscription', providerId),
+      onCodexAccountChanged: (cb: (payload: unknown) => void, providerId?: string) =>
+        onProviderUsage('usage:codex-account-changed', 'openai', cb, providerId),
+      onClaudeSubscriptionChanged: (cb: (payload: unknown) => void, providerId?: string) =>
+        onProviderUsage('usage:claude-subscription-changed', 'anthropic', cb, providerId),
+      onXaiSubscriptionChanged: (cb: (payload: unknown) => void, providerId?: string) =>
+        onProviderUsage('usage:xai-subscription-changed', 'xai', cb, providerId),
+    },
     // Live event subset consumed by makerChatStore in the detached renderer.
     onEvent: (cb: (payload: unknown) => void): (() => void) => onPayload('maker:event', cb),
     onStatusChanged: (cb: (payload: unknown) => void): (() => void) =>
@@ -646,6 +706,26 @@ contextBridge.exposeInMainWorld('electronAPI', {
     start: (params: unknown): Promise<unknown> => ipcRenderer.invoke('maker:search:start', params),
     cancel: (params: unknown): Promise<unknown> => ipcRenderer.invoke('maker:search:cancel', params),
     onEvent: (cb: (event: unknown) => void): (() => void) => onPayload('maker:search:event', cb),
+  },
+  // Only read operations required by the model selector; sharing/group management stays in the main UI.
+  providerShare: {
+    command: (command: ProviderShareCommand) => {
+      if (!['received', 'received-snapshot', 'quota-account'].includes(command.action) &&
+          !(command.action === 'insights' && command.includeUsage === false))
+        return Promise.reject(new Error('Unsupported model catalog operation'));
+      return ipcRenderer.invoke(PROVIDER_SHARE_IPC.COMMAND, command);
+    },
+    onReceivedChanged: (cb: (payload: unknown) => void) => onPayload(PROVIDER_SHARE_IPC.RECEIVED_CHANGED, cb),
+  },
+  providerGroup: {
+    command: (command: { action: 'list' }) => command?.action === 'list'
+      ? ipcRenderer.invoke(PROVIDER_GROUP_IPC.COMMAND, command)
+      : Promise.reject(new Error('Unsupported model catalog operation')),
+    onChanged: (cb: (payload: unknown) => void) => onPayload(PROVIDER_GROUP_IPC.CHANGED, cb),
+  },
+  modelAccess: {
+    getStatus: () => ipcRenderer.invoke('model-access:get-status'),
+    onStatusChange: (cb: (payload: unknown) => void) => onPayload(MODEL_ACCESS_STATUS_CHANNEL, cb),
   },
   /** 主窗推送 RSB 浏览器按键命令（⌘L / ⌘W 等）—— main 端常量见 webview-security RSB_BROWSER_COMMAND_CHANNEL。 */
   onRsbBrowserCommand: (

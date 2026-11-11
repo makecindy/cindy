@@ -7,7 +7,7 @@ import type { AgentIslandCompanionSnapshot } from '../../shared/agentIsland.js';
 import { parseBotGroupIdFromRouteKey } from '../../shared/botGroupChat.js';
 import { botAvatarInitial, normalizeBotAvatarHue } from '../../shared/botAvatarHue.js';
 import { BOT_AVATAR_MAX_BYTES, isManagedBotAvatarUrl, isSingleBotAvatarGrapheme } from '../../shared/botAvatarValue.js';
-import { resolveSafe } from '../cindy-media/blobStore.js';
+import { resolveSafe } from '../cindy-media/blobStore.desktop.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { botGroups, botProfiles, botSessionLinks } from '../localDb/schema.js';
 import { encodeNotificationAvatar } from '../notificationAvatar.js';
@@ -20,7 +20,7 @@ export interface AgentIslandCompanionIdentity {
 }
 
 /** Links that speak as the companion; delegated executions stay ordinary tasks. */
-const COMPANION_SPEAKING_ROLES = ['canonical', 'history', 'group', 'channel'] as const;
+const COMPANION_SPEAKING_ROLES = ['canonical', 'history', 'thread', 'group', 'channel'] as const;
 
 /**
  * Bundled preset artwork, relative to the packaged resources directory. The Cindy portrait is a

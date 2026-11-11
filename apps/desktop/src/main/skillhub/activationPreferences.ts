@@ -9,6 +9,7 @@ import {
   BUILT_IN_LEARN_SKILL_NAME,
   builtInSkillDescriptors,
   canonicalBuiltInSkillActivationPath,
+  type BuiltInSkillDescriptor,
 } from '../maker-host/built-in-skills';
 
 /** Device/profile-local user intent; independent of cloud installs and account changes. */
@@ -52,7 +53,8 @@ const store = createOverrideSettingsFile<SkillActivationPreferences>({
   preserveUnreadableFile: true,
 });
 
-export function readDisabledSkillPaths(): readonly string[] {
+/** An already verified snapshot may be reused within the same synchronous read. */
+export function readDisabledSkillPaths(descriptors?: readonly BuiltInSkillDescriptor[]): readonly string[] {
   store.invalidateIfChanged();
   const value = store.read();
   const paths = value.disabledPaths.flatMap((source) => [source,
@@ -64,7 +66,7 @@ export function readDisabledSkillPaths(): readonly string[] {
   // Cindy's bundled copy normally wins through ~/.agents/skills. Claude uses an
   // isolated config directory in Desktop dev, so mirror the same user preference
   // to that runtime projection. Codex's own /skill-creator remains independent.
-  for (const descriptor of builtInSkillDescriptors(
+  for (const descriptor of descriptors ?? builtInSkillDescriptors(
     app.getPath('userData'),
     app.getPath('appData'),
   )) {

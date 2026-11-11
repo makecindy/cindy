@@ -42,6 +42,19 @@ export class MailCardService {
     this.pending = task;
     return task;
   }
+  /** A link can reopen only this provider/account/draft's latest card in this task. */
+  async resolveLink(sender: string, sessionId: string, sourceCallId: string, accountId: unknown, draftId: unknown, current: () => boolean): Promise<string | undefined> {
+    if (typeof accountId !== 'string' || typeof draftId !== 'string' || !accountId || !draftId) return;
+    await this.pending.catch(() => {});
+    const rows = await this.deps.list(sessionId);
+    if (!current()) return;
+    const row = rows.find(row => {
+      const mail = readMailCard(row.html);
+      return row.ghostId === sender && row.sessionId === sessionId && mail && !mail.supersededBy &&
+        mail.accountId === accountId && mail.draftId === draftId && !['sent', 'deleted'].includes(mail.state);
+    });
+    if (row && this.deps.cards.reopenForTool(sender, row.callId, sourceCallId, row) && current()) return row.callId;
+  }
   /** Recovery reads the existing host-owned row, under the same call/owner scope
    * as updates. No mailbox bodies are copied into the plugin's small routing KV. */
   async restore(sender: string, payload: unknown, current: () => boolean): Promise<{ ok: boolean; draft?: MailCardData }> {

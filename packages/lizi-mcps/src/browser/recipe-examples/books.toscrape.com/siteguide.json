@@ -1,0 +1,22 @@
+{
+  "site": "books.toscrape.com",
+  "auth": "无需登录",
+  "entry": {
+    "home": "https://books.toscrape.com/"
+  },
+  "pages": [
+    {
+      "type": "listing",
+      "urlPattern": "https://books.toscrape.com/catalogue/page-:n.html",
+      "container": "article.product_pod"
+    }
+  ],
+  "recipes": [
+    "books-list"
+  ],
+  "notes": "静态站。书籍卡片 article.product_pod;标题在 h3 a[title],价格 .price_color,库存 .availability。分页 catalogue/page-N.html。\n完整目录更新时保留此 Cindy 独立配方：上游没有相同的接口或免登录/参数合同。本站其他能力可通过 opencli:<站点>/<命令> 查询。",
+  "upstream": {
+    "repository": "https://github.com/jackwener/opencli",
+    "revision": "fe5f1d96aff01c32fd84f86b52af922bfe6ca93f"
+  }
+}

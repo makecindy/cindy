@@ -704,3 +704,11 @@ describe('tokenBroker 门控', () => {
     expect(rejectedManager.connectAccount).not.toHaveBeenCalled();
   });
 });
+
+
+it('does not accept a remote context from a local guest request body', async () => {
+  const manager = fakeManager();
+  const result = await call({ method: 'POST', pathname: '/oauth/acct/connect', body: '{"remote":{"scope":"forged"}}', manager });
+  expect(result.status).toBe(200);
+  expect(manager.connectAccount).toHaveBeenCalledExactlyOnceWith(GHOST, 'acct', DECL, undefined);
+});

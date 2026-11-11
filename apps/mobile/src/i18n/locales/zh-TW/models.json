@@ -25,6 +25,12 @@
     "fastTag": "快速"
   },
   "options": {
+    "speed": {
+      "label": "速度",
+      "standard": "標準",
+      "fast": "快速",
+      "ultrafast": "超快"
+    },
     "fastMode": "快速模式",
     "fastModeAccessibility": "快速模式 {{model}}",
     "reasoningEffort": "推理強度",
@@ -63,10 +69,14 @@
     "titleHost": "改回「{{host}}」上執行 Agent？",
     "titleHostUnnamed": "改回任務所在的電腦執行 Agent？",
     "message": "原來那台電腦上的對話記錄帶不過來，會整理成交接摘要接上，思考內容等不能保證完美繼承。下一則訊息送出時生效。",
+    "messageNativeHistory": "完整對話記錄會複製過去接著用；如果恢復不了，會改用交接摘要接上，思考內容等不能保證完美繼承。下一則訊息送出時生效。",
     "confirm": "換電腦執行",
     "cancel": "保持不變"
   },
   "unified": {
+    "accountUnassigned": "帳號待分配",
+    "accountCount_other": "{{count}} 個帳號",
+    "accountFallback": "帳號 {{index}}",
       "favoriteConfiguration": "收藏此設定",
       "savedConfiguration": "已收藏 · 點擊取消",
       "currentConfiguration": "目前設定",
@@ -106,6 +116,12 @@
       "hour": "小時",
       "minute": "分鐘",
       "second": "秒"
-    }
+    },
+    "quotaAverage": "平均餘額 {{percent}}%",
+    "quotaUpdating": "餘額待更新",
+    "quotaResetSoon": "即將重設",
+    "quotaResetIn": "{{duration}}後重置",
+    "quotaAverageHint": "每週限額 · 各帳號等權平均",
+    "quotaResetHint": "依目前使用速度，重設時可能仍有餘量：24 小時內為黃色，6 小時內為紅色。"
   }
 }

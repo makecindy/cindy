@@ -68,6 +68,50 @@ describe('GhostInstallReceiptStore cleanup', () => {
     expect(store.listPendingMutationIdsSync().state).toBe('unreadable');
   });
 
+  // Receipt schema stays stable: an unknown/invalid optional capability is
+  // ignored, not a reason to revoke the old plugin. Existing cases only covered
+  // task/target grants. Minimal input is a malformed UI fact; tier: unit.
+  it.each([true, 'invalid', false, undefined])('tolerates optional UI approval fact %j', async fact => {
+    const receipt = createSetupReceipt();
+    await store.write(receipt);
+    const file = path.join(stateRoot, 'hello.json');
+    const raw = JSON.parse(await fs.promises.readFile(file, 'utf8'));
+    raw.uiCapabilityApproved = fact;
+    await fs.promises.writeFile(file, JSON.stringify(raw));
+    const result = store.readForRecovery('hello');
+    expect(result.state).toBe('approved');
+    if (result.state === 'approved') expect(result.receipt.uiCapabilityApproved).toBe(fact === true ? true : undefined);
+  });
+
+  // Unit: main removed Harness grants. Existing optional-UI tests never load a
+  // receipt written by that older Host. A legacy unknown Harness fact must not
+  // revoke the plugin or grant UI; read/write must retain identity and setup.
+  it.each([undefined, ['harness:read:tasks'], { obsolete: true }])(
+    'round-trips legacy receipts without reviving removed grants: %j', async legacyGrant => {
+      const original = createSetupReceipt();
+      original.manifest.schemaVersion = 3;
+      original.manifest.minCindyVersion = '0.1.61';
+      await store.write(original);
+      const file = path.join(stateRoot, 'hello.json');
+      const raw = JSON.parse(await fs.promises.readFile(file, 'utf8'));
+      raw.harnessCapabilityApproved = legacyGrant;
+      if (legacyGrant !== undefined) raw.manifest.harness = { read: ['tasks'] };
+      await fs.promises.writeFile(file, JSON.stringify(raw));
+      const loaded = store.readForRecovery('hello');
+      expect(loaded.state).toBe('approved');
+      if (loaded.state !== 'approved') throw new Error('legacy receipt rejected');
+      expect(loaded.receipt).toMatchObject({ revision: original.revision, enabled: true,
+        manifest: original.manifest, trust: original.trust });
+      expect(loaded.receipt.uiCapabilityApproved).toBeUndefined();
+      expect(loaded.receipt).not.toHaveProperty('harnessCapabilityApproved');
+      await store.write(loaded.receipt);
+      const reread = await store.readAsync('hello');
+      expect(reread).toMatchObject({ state: 'approved', receipt: loaded.receipt });
+      const persisted = JSON.parse(await fs.promises.readFile(file, 'utf8'));
+      expect(persisted).not.toHaveProperty('harnessCapabilityApproved');
+      expect(persisted).not.toHaveProperty('uiCapabilityApproved');
+    });
+
   function createSetupReceipt(): GhostInstallReceipt {
     const parsed = validateGhostManifest({
       schemaVersion: 2,
@@ -118,6 +162,18 @@ describe('GhostInstallReceiptStore cleanup', () => {
       skillContentSha256: {},
     });
   }
+
+  // Async discovery adds an await window: preserve the sync reader's no-follow
+  // parent gate. A linked namespace must never become an approved installation.
+  // Unit; one valid receipt behind a directory link (junction on Windows).
+  it('async reading rejects a linked namespace parent', async () => {
+    const outside = path.join(workDir, 'outside');
+    await fs.promises.mkdir(outside);
+    await fs.promises.writeFile(path.join(outside, 'hello.json'), JSON.stringify(createSetupReceipt()));
+    await fs.promises.mkdir(path.join(stateRoot, '_ns'));
+    await fs.promises.symlink(outside, path.join(stateRoot, '_ns', 'acme'), process.platform === 'win32' ? 'junction' : 'dir');
+    expect(await store.readAsync('_ns/acme/hello')).toMatchObject({ state: 'invalid' });
+  });
 
   // Unit regression: repeated store.read() must reuse only icon format validation.
   // Existing receipt tests do not cover unchanged revision/path with replaced icon
@@ -280,6 +336,93 @@ describe('GhostInstallReceiptStore cleanup', () => {
     await store.write(loaded.receipt);
     const saved = JSON.parse(await fs.promises.readFile(file, 'utf8'));
     expect(saved).toEqual(raw);
+  });
+
+  it('round trips independent target approval without inferring it from old tasks grants', async () => {
+    const receipt = createSetupReceipt();
+    receipt.manifest.agent = { tasks: true, targets: true };
+    receipt.taskCapabilityApproved = true;
+    await store.write(receipt);
+    const old = store.read('hello');
+    if (old.state !== 'approved') throw new Error('fixture not approved');
+    expect(old.receipt.targetCapabilityApproved).toBeUndefined();
+    await store.write({ ...old.receipt, targetCapabilityApproved: true });
+    const approved = store.read('hello');
+    expect(approved).toMatchObject({ state: 'approved', receipt: { taskCapabilityApproved: true, targetCapabilityApproved: true, revision: receipt.revision } });
+  });
+
+  // Rule: approved control points persist across reads, keep only names this manifest still declares,
+  // Contract: old receipts stay approved without auto grants; only still-declared grants persist.
+  it('round trips explicit auto tool grants without granting predeclared tools', async () => {
+    const receipt = createSetupReceipt();
+    receipt.manifest.tools = [{ name: 'read', description: 'Read', approval: 'auto' },
+      { name: 'write', description: 'Write', approval: 'each-call' }];
+    await store.write(receipt);
+    const old = store.read('hello');
+    if (old.state !== 'approved') throw new Error('fixture not approved');
+    expect(old.receipt.approvedAutoTools).toBeUndefined();
+    await store.write({ ...old.receipt, approvedAutoTools: ['read', 'read', 'write', 'unknown'] });
+    expect(store.read('hello')).toMatchObject({ state: 'approved', receipt: {
+      approvedAutoTools: ['read'], revision: receipt.revision,
+    } });
+  });
+
+  // Rule: approved control points persist across reads, keep only names this manifest still declares,
+  // and an older receipt without the field stays approved with no control point granted.
+  // Unit: real receipt write/read dropped a static capability because it is
+  // declared outside subscribe.hooks. Installation must preserve that consent.
+  it('round trips approved static prompt fragments through the installation receipt', async () => {
+    const base = createSetupReceipt();
+    const fragments = [{ id: 'style', text: 'Static task instructions', order: 10, scope: 'selected-task' as const }];
+    const receipt = createGhostInstallReceipt({ ...base,
+      manifest: { ...base.manifest, schemaVersion: 3, minCindyVersion: '0.0.0', systemPrompt: fragments },
+      approvedControlPoints: ['system-prompt'],
+    });
+    await store.write(receipt);
+    expect(await store.readAsync('hello')).toMatchObject({ state: 'approved', receipt: {
+      manifest: { systemPrompt: fragments }, approvedControlPoints: ['system-prompt'],
+    } });
+  });
+
+  it('round trips approved control points and keeps older receipts approved without them', async () => {
+    const receipt = createSetupReceipt();
+    receipt.manifest.subscribe = { hooks: ['will-routine-run', 'will-later-point'] as never };
+    await store.write(receipt);
+    const old = store.read('hello');
+    if (old.state !== 'approved') throw new Error('fixture not approved');
+    expect(old.receipt.approvedControlPoints).toBeUndefined();
+    await store.write({ ...old.receipt, approvedControlPoints: ['will-routine-run', 'will-later-point', 'undeclared'] });
+    const approved = store.read('hello');
+    expect(approved).toMatchObject({
+      state: 'approved',
+      receipt: { approvedControlPoints: ['will-later-point', 'will-routine-run'], revision: receipt.revision },
+    });
+  });
+
+  it('round trips independent observe approval without inferring it from tasks or targets grants', async () => {
+    const receipt = createSetupReceipt();
+    receipt.manifest.agent = { tasks: true, targets: true, observe: true };
+    receipt.taskCapabilityApproved = true;
+    receipt.targetCapabilityApproved = true;
+    await store.write(receipt);
+    const old = store.read('hello');
+    if (old.state !== 'approved') throw new Error('fixture not approved');
+    expect(old.receipt.observeCapabilityApproved).toBeUndefined();
+    await store.write({ ...old.receipt, observeCapabilityApproved: true });
+    expect(store.read('hello')).toMatchObject({ state: 'approved', receipt: { observeCapabilityApproved: true, revision: receipt.revision } });
+  });
+
+  it('round trips companions approval without inferring it from other grants', async () => {
+    const receipt = createSetupReceipt();
+    receipt.manifest.agent = { tasks: true, observe: true, companions: true };
+    receipt.taskCapabilityApproved = true;
+    receipt.observeCapabilityApproved = true;
+    await store.write(receipt);
+    const old = store.read('hello');
+    if (old.state !== 'approved') throw new Error('fixture not approved');
+    expect(old.receipt).not.toHaveProperty('companionsCapabilityApproved');
+    await store.write({ ...old.receipt, companionsCapabilityApproved: true });
+    expect(store.read('hello')).toMatchObject({ state: 'approved', receipt: { companionsCapabilityApproved: true, revision: receipt.revision } });
   });
 
   it('writes setup in the author format accepted by the v0.1.48 receipt reader', async () => {

@@ -39,7 +39,8 @@ export type ImChannelName =
   | 'wechat'
   | 'telegram'
   | 'dingtalk'
-  | 'wecom';
+  | 'wecom'
+  | 'imessage';
 
 /**
  * IM 编排层的产品默认配置(由 main/im/index.ts 产品接线层注入)。
@@ -88,8 +89,11 @@ export interface ImSessionNamespace {
    * workingDir 是 app 托管目录(im-working-dir),不该以它聚成假项目组。
    */
   workspaceKind?: 'project' | 'dialogue';
-  /** 该渠道 session 的工作目录(必须已创建好)。 */
-  ensureWorkingDir(botContextId: string): string;
+  /**
+   * 该渠道 session 的工作目录(必须已创建好)。`userId` 只给「一个路由键一个独立目录」的会话
+   * 用(Discord 服务器频道 / thread lane); 其余渠道忽略它, 私聊目录保持 botContextId 一个。
+   */
+  ensureWorkingDir(botContextId: string, userId?: string): string;
   /** 渠道专属列(feishu: feishuBotAppId/feishuOpenId;slack: imBotContextId/imUserId)。 */
   extraInsertColumns(botContextId: string, userId: string): Record<string, unknown>;
   /**
@@ -155,6 +159,11 @@ export interface ImChannelAdapter {
    * 实现; 缺省 = 这个渠道的连接不能交给伙伴, 保持原有路由。
    */
   companionLane?: (userId: string) => ImCompanionLane;
+  /**
+   * 公共对话(服务器频道 / thread)不接入本机桌面任务与项目: /ctr /exctr /session /project 及其卡片
+   * 按钮对这个 userId 一律不执行。接管会把主人私人桌面任务挂到公共场合, 与频道隔离的承诺冲突。
+   */
+  blocksLocalTaskAccess?: (userId: string) => boolean;
   /** Resolve an authenticated private notification topic before any default-session or command routing. */
   resolveNotificationReply?: (event: IMMessageEvent) => Promise<string | null>;
   notificationReplyText?: { unavailable: string; commands: string };
@@ -272,16 +281,16 @@ export interface ImChannelAdapter {
   /**
    * 按入站事件给该轮挂 per-turn 权限策略(telegram 群成员触发 → 破坏性调用
    * 强制确认卡, 卡片只认 owner 点击)。返回 undefined = 本轮不挂策略。
-   * 会话权限档不支持 turn 策略(acceptEdits/bypassPermissions)时 maker 拒跑
-   * 该轮(fail-closed), 不会静默放开。
+   * 保留的策略在完全访问下由 runner 临时切到 Auto 执行；不支持临时切档或
+   * 其他不兼容模式仍由 maker 拒跑(fail-closed)，不会静默放开。
    */
   turnPermissionPolicyFor?(event: IMMessageEvent): TurnPermissionPolicy | undefined;
   /**
    * 群轮次强确认策略对指定权限档「可选」的渠道判定 — 同时传入本轮 policy，
    * 让渠道能把会话档位授权限定到具体触发者。返回 true 时 dispatch 不挂
    * turnPermissionPolicy(maker 不再 fail-closed, 按用户显式选择直接执行)。
-   * 群上下文的防注入过滤/包裹独立于权限档, 照常生效。其它渠道不实现即保持
-   * fail-closed。
+   * 群上下文的防注入过滤/包裹独立于权限档, 照常生效。不实现本钩子则保留策略，
+   * 完全访问下先尝试临时 Auto，不能兑现策略时 fail-closed。
    */
   turnPolicyOptionalForMode?(
     permissionMode: PermissionMode,
@@ -347,6 +356,8 @@ export interface ImUiTextPack {
       effort: string;
       permission: string;
     }) => string;
+    /** blocksLocalTaskAccess 的会话里收到接管 / 项目类命令时的提示。缺省回 unknownCommand。 */
+    localTaskAccessUnavailable?: (cmd: string) => string;
     detachedBySlash: string;
     detachedByRevoke: string;
     notAttached: string;

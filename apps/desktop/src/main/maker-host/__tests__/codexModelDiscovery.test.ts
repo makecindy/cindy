@@ -1,3 +1,5 @@
+import path from 'node:path';
+import os from 'node:os';
 /**
  * codex-model-discovery mapper 单测 —— 用真实 codex models_cache.json 的字段形状,
  * 验证筛选(visibility/supported_in_api)+ 规范化映射 + capability 字段。
@@ -10,7 +12,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // codex-model-discovery 顶层 import electron(readCodexDiscoveredModels 用 app.getPath);
 // 本套件只测纯 mapper,但按 main 侧测试惯例显式 mock,避免依赖 Node 下 electron 包的
 // 「名导出恰好是 undefined 不炸」这种脆弱行为。
-vi.mock('electron', () => ({ app: { getPath: () => '/tmp/xdt-codex-model-discovery-test' } }));
+// Catalog parsing exercises OAuth/cache reads; account binding is covered by
+// codexAuthBindingClaim/Invalidation, so keep this fixture explicitly authorized.
+vi.mock('../nativeProviderAuthBinding.js', () => ({ isNativeProviderAuthBound: () => true }));
+vi.mock('electron', () => ({ app: { getPath: () => path.join(os.tmpdir(), 'cindy-codex-model-discovery-test') } }));
+vi.mock('../../userDataPath.js', () => ({ getUserDataDir: () => path.join(os.tmpdir(), 'cindy-codex-model-discovery-test'), userDataPath: (...parts: string[]) => path.join(os.tmpdir(), 'cindy-codex-model-discovery-test', ...parts) }));
 vi.mock('node:fs/promises', () => ({ default: { readFile: vi.fn() } }));
 
 import {
@@ -95,6 +101,16 @@ const SAMPLE = {
 const OAUTH_AUTH = JSON.stringify({ tokens: { access_token: 'oauth-token' } });
 
 describe('mapCodexModelsToCatalog', () => {
+  it.each([
+    { service_tiers: [{ id: 'priority' }, { id: 'ultrafast' }] },
+    { additional_speed_tiers: ['fast', 'ultrafast'] },
+  ])('reads both native cache speed declarations: %j', fields => {
+    const [model] = mapCodexModelsToCatalog({ models: [{ slug: 'gpt-6.1-sol',
+      visibility: 'list', supported_in_api: true, ...fields }] });
+    expect(model).toMatchObject({ supportsFastMode: true, supportsUltrafastMode: true });
+    expect(model.discoveredMetadata?.supportsFastMode).toBe(true);
+  });
+
   it('retains native maximum and explicit image capability separately from defaults', () => {
     const [model] = mapCodexModelsToCatalog({
       models: [
@@ -315,6 +331,22 @@ describe('mapCodexModelsToCatalog', () => {
 });
 
 describe('mapCodexAppServerModelsToCatalog', () => {
+  // Account access must survive discovery without inferring it from a GPT model ID.
+  it('only exposes Ultrafast when the account advertises that tier', () => {
+    const base = {
+      id: 'gpt-6-astra', model: 'gpt-6-astra', displayName: 'GPT-6 Astra',
+      description: '', hidden: false, supportedReasoningEfforts: [],
+      defaultReasoningEffort: 'high', additionalSpeedTiers: [], isDefault: false,
+    };
+    const available = mapCodexAppServerModelsToCatalog([{
+      ...base, serviceTiers: [{ id: 'ultrafast', name: 'Ultrafast', description: '' }],
+    } as CodexModelListItem]);
+    const unavailable = mapCodexAppServerModelsToCatalog([{
+      ...base, serviceTiers: [],
+    } as CodexModelListItem]);
+    expect(available[0]?.supportsUltrafastMode).toBe(true);
+    expect(unavailable[0]?.supportsUltrafastMode).toBe(false);
+  });
   it('live 即使把内部 ID 标成 hidden:false 也过滤 codex-auto-review', () => {
     const out = mapCodexAppServerModelsToCatalog([
       {

@@ -27,11 +27,13 @@ vi.mock("react-native", () => ({
       disabled={disabled}
       data-testid={testID}
       onClick={onPress ?? onLongPress}
+      onContextMenu={onLongPress}
     >
       {children}
     </button>
   ),
-  StyleSheet: { absoluteFill: {} },
+  StyleSheet: { absoluteFill: {}, create: (styles: unknown) => styles },
+  Platform: { OS: 'android', select: (values: any) => values.android ?? values.default },
 }));
 vi.mock("@expo/ui/jetpack-compose", () => {
   const Slot = ({ children }: any) => <>{children}</>;
@@ -52,7 +54,7 @@ vi.mock("@expo/ui/jetpack-compose", () => {
         {children}
       </button>
     ),
-    { Text: Slot, TrailingIcon: Slot },
+    { Text: Slot, TrailingIcon: Slot, LeadingIcon: Slot },
   );
   return {
     Box: () => null,
@@ -78,9 +80,12 @@ vi.mock("@/components/AppText", () => ({
 }));
 vi.mock("@/theme", () => ({
   fontWeight: {},
+  iconSize: {},
+  iconStroke: {},
   lineHeight: {},
   spacing: {},
   typeScale: {},
+  useThemedStyles: (make: any) => make({}),
   useTheme: () => ({
     mode: native.mode,
     colors: {
@@ -110,6 +115,7 @@ const click = (label: string) =>
     expect(button).toBeDefined();
     button!.click();
   });
+
 it("keeps groups, check states, disabled choices and repeated selections in the native popup", () => {
   const choose = vi.fn();
   act(() =>
@@ -126,7 +132,9 @@ it("keeps groups, check states, disabled choices and repeated selections in the 
             ],
           },
           { id: "locked", title: "Locked", disabled: true },
-          { id: "delete", title: "Delete", destructive: true },
+          // 2026-10-23 排队菜单要求动作配图标；由真实菜单入口验证原生图标槽。
+          { id: "delete", title: "Delete", destructive: true,
+            icon: React.forwardRef(() => <i data-icon="delete" />) },
         ]}
       >
         <span>Open</span>
@@ -135,6 +143,7 @@ it("keeps groups, check states, disabled choices and repeated selections in the 
   );
   click("Open");
   expect(container.textContent).toContain("Order");
+  expect(container.querySelector('[data-icon="delete"]')).not.toBeNull();
   click("Time✓");
   click("Time✓");
   click("Locked");
@@ -226,6 +235,26 @@ it("creates the host on demand and reuses it across dismiss/reopen without block
   expect(host?.parentElement?.getAttribute("data-pointer-events")).toBe("none");
   expect(container.textContent).toContain("One");
 });
+// 伙伴近况的待办行：长按开菜单（删除），短按要把待办交给对话。触发器接管整块触摸，短按必须经 onPress 转发。
+it("long-press mode opens on long press and forwards a tap to onPress", () => {
+  const tap = vi.fn();
+  act(() =>
+    root.render(
+      <AnchoredPullDownMenu longPress onPress={tap} actions={[{ id: "delete", title: "Delete", destructive: true }]} onAction={vi.fn()}>
+        <span>Todo</span>
+      </AnchoredPullDownMenu>,
+    ),
+  );
+  click("Todo");
+  expect(tap).toHaveBeenCalledOnce();
+  expect(container.textContent).not.toContain("Delete");
+  act(() => {
+    Array.from(container.querySelectorAll("button")).find((b) => b.textContent === "Todo")!
+      .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true }));
+  });
+  expect(container.textContent).toContain("Delete");
+  expect(tap).toHaveBeenCalledOnce();
+});
 it("navigates a submenu, returns through its back row, dismisses and resets the path on reopen", () => {
   act(() =>
     root.render(
@@ -270,3 +299,33 @@ it.each(["light", "dark"])(
     ).toBe(mode);
   },
 );
+// Companion bubbles: the caller opens the menu on its own long press, so the content
+// (quote, links, tables) must keep its taps instead of sitting under pointer-events none.
+it("keeps the content interactive when the caller controls opening", () => {
+  const choose = vi.fn();
+  const openChange = vi.fn();
+  const contentPress = vi.fn();
+  const render = (open: boolean) =>
+    act(() =>
+      root.render(
+        <AnchoredPullDownMenu
+          actions={[{ id: "reply", title: "Reply" }]}
+          onAction={choose}
+          onOpenChange={openChange}
+          open={open}
+        >
+          <button onClick={contentPress}>Quote</button>
+        </AnchoredPullDownMenu>,
+      ),
+    );
+  render(false);
+  const content = Array.from(container.querySelectorAll("button")).find((b) => b.textContent === "Quote");
+  expect(content?.closest('[data-pointer-events="none"]')).toBeNull();
+  click("Quote");
+  expect(contentPress).toHaveBeenCalledTimes(1);
+  expect(container.querySelector("section")).toBeNull();
+  render(true);
+  click("Reply");
+  expect(choose).toHaveBeenCalledWith("reply");
+  expect(openChange).toHaveBeenLastCalledWith(false);
+});

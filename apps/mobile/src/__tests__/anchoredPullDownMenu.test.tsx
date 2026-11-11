@@ -193,7 +193,9 @@ const actions: NativePullDownAction[] = [
     title: "More",
     subactions: [{ id: "more.rename", title: "Rename" }],
   },
-  { id: "delete", title: "Delete", destructive: true },
+  // 排队菜单的图标在缺少 iOS 原生菜单的兼容包中也要显示(unit,最小一个图标动作)。
+  { id: "delete", title: "Delete", destructive: true,
+    icon: forwardRef(() => <i data-icon="delete" />) },
   { id: "locked", title: "Locked", disabled: true },
 ];
 
@@ -271,6 +273,7 @@ describe("Android anchored pull-down menu", () => {
       (node) => node.textContent,
     );
     expect(headers).toEqual(["Sort", "Projects"]);
+    expect(q('[data-testid="pullDownMenu.item.delete"] [data-icon="delete"]')).not.toBeNull();
     expect(
       q('[data-testid="pullDownMenu.item.sort.time"] [data-icon="Check"]'),
     ).not.toBeNull();

@@ -19,6 +19,7 @@
 import { SESSION_CLOSED_MID_TURN_MESSAGE } from '@cindy/maker-core';
 
 import type { AutoResumeAgentSwitchCause } from '../../shared/agentInputQueue.js';
+import type { ProviderGroupUsageLimit } from '../../shared/providerGroup.js';
 import { isBillingDepletionError } from '../../shared/usageLimitRecovery.js';
 import { classifyTurnOverload, classifyTurnUsageLimit } from '../goal-host/usageLimit.js';
 import { isContextOverflowErrorData, isOversizedHistoryErrorData } from '../maker-ipc/contextOverflowRollover.js';
@@ -77,6 +78,23 @@ export const PROVIDER_GROUP_SUPERSEDED_ERROR = 'provider group: superseded by us
 export const PROVIDER_GROUP_UNAVAILABLE_ERROR =
   '[REMOTE_AGENT_GROUP_UNAVAILABLE] no computer in the provider group can run this task right now';
 
+/** Created before dispatch, from the group's verified quota result (not provider error text). */
+export class ProviderGroupUsageLimitError extends Error {
+  constructor(readonly limit: ProviderGroupUsageLimit) {
+    super('[REMOTE_AGENT_GROUP_USAGE_LIMIT] usage_limit_reached: the available accounts for this model have reached their usage limit'
+      + (limit.resetAtMs === null ? '' : `; resets_at: ${limit.resetAtMs}`));
+  }
+}
+
+/** 组里能接的电脑都达到并发上限(2026-11-11 起满了不再分，渲染端按 chat.remoteError 给文案)。 */
+export const PROVIDER_GROUP_FULL_ERROR =
+  '[REMOTE_AGENT_GROUP_FULL] every computer in the provider group that can run this task has reached its concurrency limit';
+
+export function providerGroupUnavailableError(pick: { usageLimit?: ProviderGroupUsageLimit; full?: true }): Error {
+  if (pick.full) return new Error(PROVIDER_GROUP_FULL_ERROR);
+  return pick.usageLimit ? new ProviderGroupUsageLimitError(pick.usageLimit) : new Error(PROVIDER_GROUP_UNAVAILABLE_ERROR);
+}
+
 /** 远程 Agent 任务结束时本机给的 reason(remote-agent/controller/proxyHandle)：lost = 连续拉不到那台，closed = 那台那边结束了。 */
 const REMOTE_AGENT_LOST_REASON = 'remote_agent_lost';
 const REMOTE_AGENT_CLOSED_REASON = 'remote_agent_closed';
@@ -105,6 +123,8 @@ const MEMBER_UNAVAILABLE_CODES = new Set([
   'REMOTE_AGENT_MODEL_UNAVAILABLE',
   'REMOTE_AGENT_SHARE_PAUSED',
   'REMOTE_AGENT_SHARE_REMOVED',
+  // 这台电脑开了「仅使用 Agent-Net」，旧版分享用不了：换组里别的电脑。
+  'REMOTE_AGENT_SHARE_LEGACY_DISABLED',
   'REMOTE_AGENT_ACCOUNT_CHANGED',
   'REMOTE_AGENT_PEER_TOO_OLD',
   'REMOTE_AGENT_UNSUPPORTED',
@@ -213,7 +233,7 @@ export function decideProviderGroupFailure(
   // 本机主动关掉了还在运行的会话(本机的操作，不是那台的问题)。
   if (message.startsWith(SESSION_CLOSED_MID_TURN_MESSAGE)) return { action: 'stay', why: 'local' };
   const code = errorCodeOf(message);
-  if (code === 'REMOTE_AGENT_GROUP_UNAVAILABLE') return { action: 'stay', why: 'group-unavailable' };
+  if (code === 'REMOTE_AGENT_GROUP_UNAVAILABLE' || code === 'REMOTE_AGENT_GROUP_USAGE_LIMIT') return { action: 'stay', why: 'group-unavailable' };
   if (phase !== 'run' && code && TASK_STATE_CODES.has(code)) return { action: 'stay', why: 'task-state' };
 
   // ── 换到哪台都一样 ──
@@ -255,6 +275,7 @@ export function decideProviderGroupFailure(
   if (code && CONNECTION_LOST_CODES.has(code)) return switchTo('unavailable', 'lost');
   if (code && MEMBER_UNAVAILABLE_CODES.has(code)) return switchTo('unavailable', null);
   // 连续拉不到那台(remote-agent/controller/proxyHandle)：只说明连接断了。
+  if (reason === 'remote_agent_restarted') return switchTo('unavailable', 'lost');
   if (reason === REMOTE_AGENT_LOST_REASON) return switchTo('unavailable', 'lost');
   if ((code && CONNECTION_CHECK_CODES.has(code)) || reason === REMOTE_AGENT_CLOSED_REASON) return switchTo('unavailable', 'check');
 

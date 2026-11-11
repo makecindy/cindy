@@ -1,3 +1,5 @@
+import { parseTaskCompanion, parseTaskTeammate } from './teammateTaskSource';
+import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
 import { normalizeTaskTags } from '@cindy/maker-shared';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { RemoteSession } from '@/session/types';
@@ -182,7 +184,7 @@ function normalizeSnapshotDevices(
     .slice(0, MAX_CACHED_HOME_DEVICES);
 }
 
-// 会话字段白名单瘦身:只保留列表渲染(标题 / 预览 / 时间 / 图标)、分组(workingDir / workspaceKind)
+// 会话字段白名单瘦身:只保留列表渲染(标题 / 预览 / 时间 / 图标)、分组(projectDir / workingDir / workspaceKind)
 // 与跳转(id)需要的字段。刻意丢弃:
 //  - live-only 状态(attached / deviceLinkAttached 等):冷启动时设备尚未连上,缓存它会画出假的在线态;
 //  - orcaRole === 'worker' 的会话:mobile 全局隐藏 worker 子会话,缓存它纯占体积;
@@ -210,13 +212,16 @@ function coerceCachedSession(item: unknown): RemoteSession | null {
     model: typeof item.model === 'string' ? truncateText(item.model) : '',
     effort: typeof item.effort === 'string' ? item.effort : '',
     permissionMode: typeof item.permissionMode === 'string' ? item.permissionMode : '',
-    fastMode: item.fastMode === true,
+    fastMode: (item.fastMode === 'ultrafast' ? 'ultrafast' : item.fastMode === true),
     status,
     agentKind: item.agentKind === 'codex' || item.agentKind === 'pi' ? item.agentKind : 'cc',
     userSendAt: typeof item.userSendAt === 'string' ? item.userSendAt : null,
+    lastActivityAt: typeof item.lastActivityAt === 'string' ? item.lastActivityAt : null,
     createdAt,
     updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : createdAt,
   };
+  // Project identity must round-trip exactly; truncating a path changes the project key.
+  if (typeof item.projectDir === 'string' || item.projectDir === null) session.projectDir = item.projectDir;
   if (typeof item.worktreePath === 'string') session.worktreePath = truncateText(item.worktreePath);
   if (typeof item.totalTokenUsage === 'number' && Number.isFinite(item.totalTokenUsage)) {
     session.totalTokenUsage = item.totalTokenUsage;
@@ -226,7 +231,12 @@ function coerceCachedSession(item: unknown): RemoteSession | null {
   }
   const totalMoney = normalizeRemoteMoney(item.totalMoney);
   if (totalMoney) session.totalMoney = totalMoney;
+  // Project aliases distinguish a host's local directory from its SSH workspaces.
+  // Keep that identity in the cold-start list too; otherwise an SSH row can borrow a local alias.
+  if (typeof item.remoteHostId === 'string') session.remoteHostId = item.remoteHostId;
   if (typeof item.source === 'string') session.source = item.source;
+  session.companion = parseTaskCompanion(item.companion);
+  session.taskTeammate = parseTaskTeammate(item.taskTeammate);
   if (orcaRole) session.orcaRole = orcaRole;
   if (typeof item.pinnedAt === 'string') session.pinnedAt = item.pinnedAt;
   if (typeof item.preview === 'string') session.preview = truncateText(item.preview);
@@ -240,7 +250,7 @@ function coerceCachedSession(item: unknown): RemoteSession | null {
 }
 
 function lastActivityTime(session: RemoteSession): string {
-  return session.userSendAt ?? session.updatedAt ?? session.createdAt;
+  return getSessionListActivityAt(session) ?? session.createdAt;
 }
 
 function truncateText(value: string): string {

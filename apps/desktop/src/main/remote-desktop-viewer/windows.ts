@@ -2,6 +2,7 @@ import {
   BrowserWindow,
   clipboard,
   ipcMain,
+  powerMonitor,
   screen,
   type IpcMainInvokeEvent,
   type WebContents,
@@ -15,7 +16,11 @@ import {
 import { createHash } from 'node:crypto';
 import { desktopDiagnosticCode } from '../../shared/remoteDesktopDiagnostics';
 import { REMOTE_VIEWER, type RemoteViewerTarget } from '../../shared/remoteDesktopViewer.js';
-import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
+import {
+  activeOwnerScopeKey,
+  getPersistedAppSessionMode,
+  isAppSessionBoundaryPending,
+} from '../appSessionState.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import {
   getSelfDeviceId,
@@ -34,7 +39,7 @@ import { createLogger } from '../logger.js';
 import { ResourceUsageWindowController } from '../resource-usage-window/controller.js';
 import { createResourceUsageWindow } from '../resource-usage-window/window.js';
 import type { SupportedLocale } from '../../shared/locale.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import { markRemoteDesktopViewer } from './registry.js';
 import { extractIpcError } from '../../shared/ipcError.js';
 import { RemoteViewerConnection } from './connection.js';
@@ -115,6 +120,10 @@ export class RemoteDesktopViewerWindows {
   private locale: SupportedLocale | null = null;
   constructor(private readonly isOpenSender: (sender: WebContents) => boolean) {}
   prewarm(): void {
+    // Remote desktop needs a Cindy account, so local and signed-out profiles
+    // never keep a spare shell. A persisted cloud intent still prewarms while
+    // auth is verifying at startup; a later sign-in opens the first viewer cold.
+    if (!getAppCapabilities().canUseDeviceLink && getPersistedAppSessionMode() !== 'cloud') return;
     if (![...this.entries].some((e) => e.connection.target === null))
       this.create().controller.prewarm();
   }
@@ -312,7 +321,23 @@ export class RemoteDesktopViewerWindows {
       throwIpcError('PERMISSION_DENIED', 'Invalid viewer');
     return entry;
   }
+  private readonly endForLocalLock = () => {
+    for (const entry of this.entries) {
+      if (!entry.connection.active) continue;
+      try {
+        entry.connection.close(entry.connection.generation, true);
+      } catch {
+        // An account change can retire the owner between the power event and
+        // its handler. Revoke locally without acting as the previous owner.
+        entry.connection.deactivate();
+      }
+      const win = entry.window;
+      if (win && !win.isDestroyed()) entry.controller.close(win.webContents);
+    }
+  };
   register(): void {
+    powerMonitor.on('lock-screen', this.endForLocalLock);
+    powerMonitor.on('suspend', this.endForLocalLock);
     ipcMain.handle(REMOTE_VIEWER.OPEN, (event, target) => {
       assertTrustedAppRendererEvent(event);
       this.open(event.sender, target);

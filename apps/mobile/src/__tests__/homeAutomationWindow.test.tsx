@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import * as jsxRuntime from 'react/jsx-runtime';
 import { act, Children, createContext, forwardRef, Fragment, isValidElement, useContext, useRef, useState, type ReactElement, type ReactNode } from 'react';
@@ -19,6 +20,59 @@ const declaration = source.statements.find((node): node is ts.FunctionDeclaratio
 const compiled = ts.transpileModule(declaration.getText(source), {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
 }).outputText;
+
+// Unit regression for #7083: the native drag callback must transfer only its
+// small payload, not the project's task/history tree. Existing window tests
+// count mounted rows but never exercise Babel's actual worklet closure.
+it('keeps task data out of the project drag worklet while preserving drag actions', () => {
+  const projectRow = source.statements.find((node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node)
+    && node.name?.text === 'ProjectRow')!;
+  let gesture!: ts.VariableDeclaration;
+  function visit(node: ts.Node) {
+    if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'dragGesture') gesture = node;
+    ts.forEachChild(node, visit);
+  }
+  visit(projectRow);
+  const require = createRequire(import.meta.url);
+  const { transformSync } = require('@babel/core');
+  const code = transformSync(`function build(project, onDragStart, onDragMove, onDragEnd) {
+    const kind = 'project', displayTitle = project.title;
+    return ${gesture.initializer!.getText(source)};
+  }`, {
+    filename: __filename, babelrc: false, configFile: false,
+    plugins: [require.resolve('react-native-worklets/plugin')],
+  }).code;
+  const callbacks: Record<string, ((event?: unknown) => void) & { __closure?: object }> = {};
+  const pan: Record<string, (...args: any[]) => unknown> = {};
+  for (const method of ['activateAfterLongPress', 'activeOffsetY', 'failOffsetX', 'onStart', 'onUpdate', 'onFinalize']) {
+    pan[method] = (value: any) => {
+      if (method.startsWith('on')) callbacks[method] = value;
+      return pan;
+    };
+  }
+  const build = new Function('Gesture', 'useMemo', 'runOnJS', `${code}; return build;`)(
+    { Pan: () => pan }, (factory: () => unknown) => factory(), (callback: unknown) => callback,
+  );
+  const start = vi.fn(), move = vi.fn(), finish = vi.fn();
+  const project = { key: 'project', title: 'Project', sessionCount: 1,
+    get sessions(): never { throw new Error('task data crossed into a gesture worklet'); } };
+  build(project, start, move, finish);
+  // Serializable conversion enumerates captured objects, including their
+  // nested fields. A single sentinel task collection catches the old transfer.
+  const visited = new Set<object>();
+  function inspect(value: unknown) {
+    if (!value || typeof value !== 'object' || visited.has(value)) return;
+    visited.add(value);
+    Object.values(value).forEach(inspect);
+  }
+  expect(() => Object.values(callbacks).forEach(callback => inspect(callback.__closure))).not.toThrow();
+  callbacks.onStart({ absoluteY: 140 });
+  callbacks.onUpdate({ absoluteY: 160 });
+  callbacks.onFinalize();
+  expect(start).toHaveBeenCalledWith({ absoluteY: 140, count: 1, key: 'project', title: 'Project' });
+  expect(move).toHaveBeenCalledWith(160);
+  expect(finish).toHaveBeenCalledOnce();
+});
 
 function renderChildren(count: number, anchor: number, old = false) {
   const now = Date.now();

@@ -106,9 +106,21 @@ const fsKnobs = vi.hoisted(() => ({
   /** Fails the next `remaining` unlinks with `code`, the shape of a file lock. */
   rmFailures: null as null | { remaining: number; code: string },
   rmAttempts: 0,
+  /** Receipt tests stub OS inventory; never mix it with the CI host's procfs. */
+  isolateProcfs: false,
 }));
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
+  const readFile = ((...args: Parameters<typeof actual.readFile>) => {
+    if (fsKnobs.isolateProcfs && String(args[0]).startsWith('/proc/')) {
+      return Promise.reject(Object.assign(new Error('fixture process is absent'), { code: 'ENOENT' }));
+    }
+    return actual.readFile(...args);
+  }) as typeof actual.readFile;
+  const readdir = ((...args: Parameters<typeof actual.readdir>) => {
+    if (fsKnobs.isolateProcfs && String(args[0]) === '/proc') return Promise.resolve([]);
+    return actual.readdir(...args);
+  }) as typeof actual.readdir;
   const writeFile: typeof actual.writeFile = async (...args) => {
     if (fsKnobs.failWriteFileOnce) {
       fsKnobs.failWriteFileOnce = false;
@@ -133,7 +145,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     }
     return actual.rm(...args);
   };
-  return { ...actual, default: { ...actual, writeFile, rm }, writeFile, rm };
+  return { ...actual, default: { ...actual, readFile, readdir, writeFile, rm }, readFile, readdir, writeFile, rm };
 });
 
 const roots: string[] = [];
@@ -189,6 +201,7 @@ afterEach(async () => {
   fsKnobs.onRmHeld = null;
   fsKnobs.rmFailures = null;
   fsKnobs.rmAttempts = 0;
+  fsKnobs.isolateProcfs = false;
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -1416,6 +1429,220 @@ describe('PI durable subagent run store', () => {
         stubProbes({ aliveProbes: 0 });
         const agentHome = await homeWithUnreadableRun(write);
 
+        await expect(stopAllPiSubagentRunsForExit(agentHome, 0, { killUnresponsiveRunners: true }))
+          .resolves.toBe(false);
+      });
+
+      // #6694 unit boundary regression: a real runner writes this separate
+      // terminal artifact before status. Existing unreadable-status cases have
+      // no receipt and must keep refusing the account handover.
+      async function terminalReceiptHome(write: (dir: string) => Promise<void>) {
+        // An independently successful OS inventory, with unrelated processes.
+        // Empty stdout is deliberately not evidence that the run has exited.
+        // Linux CI #41055150440 mixed mocked ps with real /proc. A transient
+        // unknown probe could emit a stop control before a later probe succeeded.
+        // Keep both sources in the same fixture; run artifacts still use real I/O.
+        fsKnobs.isolateProcfs = true;
+        childProcess.spawnSync.mockImplementation(() => ({ status: 0, stdout: inventory(['node unrelated.js']) }));
+        const agentHome = await homeWithUnreadableRun(write);
+        const root = piSubagentRunRoot(agentHome, 'session-1');
+        const dir = path.join(root, runId);
+        const task = { childId: 'child-1', sessionId: 'native-1', agent: 'scout' };
+        const config = {
+          version: 1, runId, runDir: dir, taskId: 'tool-1', parentSessionId: 'session-1',
+          cwd: dir, binary: 'pi', tasks: [task],
+        };
+        const result = {
+          version: 1, runId, taskId: 'tool-1', state: 'completed', completedAt: 100,
+          tasks: [{ ...task, status: 'completed', output: 'original result' }],
+        };
+        await writeFile(path.join(dir, 'config.json'), JSON.stringify(config));
+        await writeFile(path.join(dir, 'result.json'), JSON.stringify(result));
+        await writeFile(path.join(dir, 'transcript.jsonl'), 'original transcript\n');
+        return { agentHome, root, dir, config, result };
+      }
+
+      function inventory(commands: string[]): string {
+        return process.platform === 'win32'
+          ? JSON.stringify({ complete: true, count: commands.length, commands })
+          : commands.map((command, i) => `${100 + i} ${command}`).join('\n');
+      }
+
+      // #6733: global account/exit sweeps share one deadline across parents.
+      // Three complete receipts and a 4s OS probe must fit an 8s budget; the
+      // former per-root query exhausted it. Advance a clock, never really wait.
+      it.each([false, true])('shares the global recovery budget while last-root child alive is %s', async activeLast => {
+        usePlatform('win32');
+        const { agentHome, config, result } = await terminalReceiptHome(async () => {});
+        for (const parent of ['session-2', 'session-3']) {
+          const dir = path.join(piSubagentRunRoot(agentHome, parent), runId);
+          await mkdir(dir, { recursive: true });
+          const tasks = [{ ...config.tasks[0]!, sessionId: `native-${parent}` }];
+          await writeFile(path.join(dir, 'config.json'), JSON.stringify({ ...config, parentSessionId: parent, runDir: dir, tasks }));
+          await writeFile(path.join(dir, 'result.json'), JSON.stringify({ ...result, tasks: tasks.map(task => ({ ...task, status: 'completed' })) }));
+        }
+        let now = Date.now();
+        const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+        childProcess.spawnSync.mockClear();
+        childProcess.spawnSync.mockImplementation(() => {
+          now += 4_000;
+          return { status: 0, stdout: inventory([activeLast ? 'pi --session-id native-session-3' : 'node unrelated.js']) };
+        });
+        try {
+          await expect(stopAllPiSubagentRunsForExit(agentHome, 0, { killUnresponsiveRunners: true, killBudgetMs: 8_000 }))
+            .resolves.toBe(!activeLast);
+          // A fresh inventory is required for escalation, but never per root.
+          expect(childProcess.spawnSync).toHaveBeenCalledTimes(activeLast ? 2 : 1);
+        } finally { clock.mockRestore(); }
+      });
+
+      it.each(['runner', 'orphan child'])('keeps a terminal receipt in scope while its %s is alive', async kind => {
+        const { agentHome, dir, config } = await terminalReceiptHome(async () => {});
+        const command = kind === 'runner'
+          ? `node ${path.join(dir, 'runner.cjs')} ${path.join(dir, 'config.json')}`
+          : `pi --mode rpc --session-id ${config.tasks[0]!.sessionId}`;
+        childProcess.spawnSync.mockImplementation(() => ({ status: 0, stdout: inventory([command]) }));
+        await expect(stopAllPiSubagentRunsForExit(agentHome, 0, { killUnresponsiveRunners: true })).resolves.toBe(false);
+        // Process discovery never grants permission to signal an unverified PID.
+        expect(childProcess.spawnSync.mock.calls.some(call => call[0] === 'taskkill')).toBe(false);
+        childProcess.spawnSync.mockImplementation(() => ({ status: 0, stdout: inventory(['node unrelated.js']) }));
+        await expect(stopAllPiSubagentRunsForExit(agentHome, 0)).resolves.toBe(true);
+      });
+
+      it.each([
+        ['empty output', { status: 0, stdout: '' }],
+        ['malformed output', { status: 0, stdout: 'unreadable process list' }],
+        ['failed probe', { status: 1, stdout: '' }],
+        ['timeout or overflow', { error: new Error('process inventory unavailable') }],
+      ] as const)('does not treat %s as process exit', async (_label, probe) => {
+        const { agentHome } = await terminalReceiptHome(async () => {});
+        childProcess.spawnSync.mockImplementation(() => probe);
+        await expect(stopAllPiSubagentRunsForExit(agentHome, 0)).resolves.toBe(false);
+      });
+
+      it.each([false, true])('requires every Windows process command line even when complete is %s', async complete => {
+        usePlatform('win32');
+        const { agentHome } = await terminalReceiptHome(async () => {});
+        childProcess.spawnSync.mockImplementation(() => ({
+          status: 0, stdout: JSON.stringify({ complete, count: 2, commands: ['node unrelated.js'] }),
+        }));
+        await expect(stopAllPiSubagentRunsForExit(agentHome, 0)).resolves.toBe(false);
+        childProcess.spawnSync.mockImplementation(() => ({ status: 0, stdout: inventory(['node unrelated.js']) }));
+        await expect(stopAllPiSubagentRunsForExit(agentHome, 0)).resolves.toBe(true);
+      });
+
+      it('treats a finished Windows inventory with no command lines as absence', async () => {
+        usePlatform('win32');
+        const { root } = await terminalReceiptHome(async () => {});
+        // Empty stdout is still an unknown probe. A completed report with zero
+        // readable processes is the case where every user process has exited.
+        childProcess.spawnSync.mockImplementation(() => ({
+          status: 0,
+          stdout: JSON.stringify({ complete: true, count: 0, commands: [] }),
+        }));
+        await expect(stopPiSubagentRunsForAccountBoundary(root, { timeoutMs: 0 })).resolves.toBe(true);
+        childProcess.spawnSync.mockImplementation(() => ({
+          status: 0,
+          stdout: JSON.stringify({ complete: false, count: 0, commands: [] }),
+        }));
+        await expect(stopPiSubagentRunsForAccountBoundary(root, { timeoutMs: 0 })).resolves.toBe(false);
+      });
+
+      const terminalReceiptCases = [
+        ...cases,
+        ['contains zero bytes', async (dir: string) => writeFile(path.join(dir, 'status.json'), Buffer.alloc(72_506))],
+      ] satisfies typeof cases;
+      // Exercise Linux procfs and Windows inventory parsing on either host OS.
+      // Unit regression: both sweeps must preserve history and create no controls.
+      it.each(terminalReceiptCases.flatMap(([label, write]) =>
+        (['linux', 'win32'] as const).map(platform => [platform, label, write] as const),
+      ))('on %s accepts a matching terminal receipt when status %s, without changing history', async (platform, _label, write) => {
+        usePlatform(platform);
+        if (platform === 'linux' && process.geteuid === undefined) {
+          Object.defineProperty(process, 'geteuid', { configurable: true, value: () => 1000 });
+          restores.push(() => { Reflect.deleteProperty(process, 'geteuid'); });
+        }
+        const { agentHome, root, dir } = await terminalReceiptHome(write);
+        const files = ['config.json', 'status.json', 'result.json', 'transcript.jsonl'];
+        const before = await Promise.all(files.map(file => readFile(path.join(dir, file)).catch(() => null)));
+        await expect(stopAllPiSubagentRunsForExit(agentHome, 0, { hostPid: process.pid, killUnresponsiveRunners: true }))
+          .resolves.toBe(true);
+        await expect(stopPiSubagentRunsForAccountBoundary(root, { timeoutMs: 0 }))
+          .resolves.toBe(true);
+        // Native byte comparison keeps the 3 MiB oversize fixture cheap on CI;
+        // deep equality enumerates millions of Buffer indices and times out.
+        const after = await Promise.all(files.map(file => readFile(path.join(dir, file)).catch(() => null)));
+        for (let index = 0; index < files.length; index += 1) {
+          const original = before[index]!;
+          const current = after[index]!;
+          expect(current === null ? original === null : original !== null && current.equals(original), files[index])
+            .toBe(true);
+        }
+        expect(existsSync(path.join(dir, 'controls'))).toBe(false);
+      });
+
+      it.each(['failed', 'stopped'])('also recognizes a complete %s receipt', async state => {
+        const { agentHome, dir, result } = await terminalReceiptHome(async () => {});
+        result.state = state;
+        result.tasks[0]!.status = state;
+        await writeFile(path.join(dir, 'result.json'), JSON.stringify(result));
+        await expect(stopAllPiSubagentRunsForExit(agentHome, 0)).resolves.toBe(true);
+      });
+
+      it.each([
+        ['another generation', { runId: '123e4567-e89b-42d3-a456-426614174099' }],
+        ['another task', { taskId: 'other-tool' }],
+        ['unfinished run', { state: 'running' }],
+        ['missing child', { tasks: [] }],
+        ['unfinished child', { tasks: [{ childId: 'child-1', sessionId: 'native-1', agent: 'scout', status: 'running' }] }],
+        ['different child identity', { tasks: [{ childId: 'child-1', sessionId: 'other-native', agent: 'scout', status: 'completed' }] }],
+      ])('refuses a receipt for %s', async (_label, patch) => {
+        const { agentHome, dir, result } = await terminalReceiptHome(async () => {});
+        await writeFile(path.join(dir, 'result.json'), JSON.stringify({ ...result, ...patch }));
+        await expect(stopAllPiSubagentRunsForExit(agentHome, 0, { killUnresponsiveRunners: true }))
+          .resolves.toBe(false);
+      });
+
+      it('refuses a receipt detached from its original run directory', async () => {
+        const { agentHome, dir, config } = await terminalReceiptHome(async () => {});
+        await writeFile(path.join(dir, 'config.json'), JSON.stringify({ ...config, runDir: path.dirname(dir) }));
+        await expect(stopAllPiSubagentRunsForExit(agentHome, 0)).resolves.toBe(false);
+      });
+
+      it('does not follow a linked terminal result', async context => {
+        const { agentHome, dir } = await terminalReceiptHome(async () => {});
+        const resultFile = path.join(dir, 'result.json');
+        const outside = path.join(agentHome, 'outside-result.json');
+        await writeFile(outside, await readFile(resultFile));
+        await rm(resultFile);
+        try {
+          await symlink(outside, resultFile, 'file');
+        } catch (error) {
+          // Probe the actual capability: Windows hosts with symlink privileges
+          // must exercise the same terminal-receipt boundary as POSIX hosts.
+          if (['EPERM', 'EACCES', 'ENOTSUP', 'ENOSYS'].includes((error as NodeJS.ErrnoException).code ?? '')) {
+            context.skip();
+            return;
+          }
+          throw error;
+        }
+        await expect(stopAllPiSubagentRunsForExit(agentHome, 0)).resolves.toBe(false);
+      });
+
+      it('does not replace a readable live status with the result artifact', async () => {
+        const { agentHome, root } = await terminalReceiptHome(async () => {});
+        await writeStatus(root, status(runId, { updatedAt: Date.now() }));
+        await expect(stopAllPiSubagentRunsForExit(agentHome, 0)).resolves.toBe(false);
+      });
+
+      it.each(cases)('keeps refusing when the result artifact %s', async (_label, write) => {
+        const { agentHome, dir } = await terminalReceiptHome(async () => {});
+        await rm(path.join(dir, 'result.json'));
+        // The malformed artifacts share the same bounded reader. Move the
+        // fixture's malformed status bytes to the independent result file.
+        await write(dir);
+        const bytes = await readFile(path.join(dir, 'status.json')).catch(() => null);
+        if (bytes) await writeFile(path.join(dir, 'result.json'), bytes);
         await expect(stopAllPiSubagentRunsForExit(agentHome, 0, { killUnresponsiveRunners: true }))
           .resolves.toBe(false);
       });

@@ -106,7 +106,15 @@ export async function readDeviceFile<T extends DeviceFileResult>(options: {
   const direct = needsFallback ? null : await options.peer(prepared);
   if (direct && !active()) return discardCancelled(direct);
   else assertActive();
-  if (direct) return direct;
+  if (direct) {
+    // Older hosts' peer endpoint omits media MIME mappings. Use the authorized
+    // metadata only for exactly the same version/size; never infer from a URL.
+    // Preserve object identity: adapters attach staging leases through WeakMaps.
+    if (direct.mimeType === 'application/octet-stream' && validFileVersion(prepared.version) &&
+      direct.version === prepared.version && direct.size === prepared.size &&
+      /^(audio|video)\//i.test(prepared.mimeType)) direct.mimeType = prepared.mimeType;
+    return direct;
+  }
   const result = await options.fallback();
   if (!active()) return discardCancelled(result);
   if (!mediaStream && !result.version && validFileVersion(prepared.version) && options.revalidate) {

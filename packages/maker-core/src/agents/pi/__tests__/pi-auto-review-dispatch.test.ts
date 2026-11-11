@@ -53,6 +53,7 @@ const captured = vi.hoisted(() => ({
   failSetModel: false,
   rejectSetModel: false,
   failPrompt: false,
+  failSwitchSession: false,
   failSteer: false,
   failNextGetState: false,
   commandCatalog: null as null | Array<Record<string, unknown>>,
@@ -144,6 +145,7 @@ vi.mock('../rpc-client.js', () => ({
         return { success: true, data: { contextWindow: 200_000 } };
       }
       if (cmd.type === 'switch_session') {
+        if (captured.failSwitchSession) return { success: false, error: 'history unavailable' };
         captured.runtimeProvider = captured.launchProvider;
         captured.runtimeModel = captured.launchModel;
         return { success: true, data: {} };
@@ -670,9 +672,13 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       ]),
     );
     const noProxy = (captured.env.NO_PROXY ?? '').split(',');
-    for (const entry of ['corp.internal', '127.0.0.1', 'localhost', '::1', '[::1]']) {
+    for (const entry of ['corp.internal', '127.0.0.1', 'localhost', '::1']) {
       expect(noProxy).toContain(entry);
     }
+    // #7632 unit regression: PiAgent.startSession's spawned env must omit [::1], or default
+    // Python httpx.Client() fails. Existing coverage checked only presence; the smallest
+    // failing input is NO_PROXY=corp.internal, to which Pi previously appended [::1].
+    expect(noProxy).not.toContain('[::1]');
     expect(captured.env.no_proxy).toBeUndefined();
   });
 
@@ -974,7 +980,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       expect.objectContaining({ data: expect.objectContaining({ isTerminal: true }) }),
     ]);
     expect(seen.filter((event) => event.type === 'done')).toEqual(stopped ? [
-      expect.objectContaining({ data: { status: 'cancelled' } }),
+      expect.objectContaining({ data: expect.objectContaining({ status: 'cancelled',
+        usage: expect.objectContaining({ receipts: [], settlementId: expect.any(String) }),
+      }) }),
     ] : []);
     expect(captured.requests.filter((request) => request.type === 'prompt')).toHaveLength(1);
     await handle.close();
@@ -3715,6 +3723,25 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     await handle.close();
   });
 
+  // Unit regression at the real Pi startup entry. Missing/switch-failed native
+  // history previously cleared the persisted id and silently created an empty task.
+  it.each(['missing', 'switch-failed'])('strict history resume preserves the binding on %s', async (failure) => {
+    const agent = new PiAgent(buildDeps());
+    const resumeFile = path.join(agentHome, 'strict-history.jsonl');
+    if (failure === 'switch-failed') writeFileSync(resumeFile, '{}\n');
+    captured.failSwitchSession = failure === 'switch-failed';
+    const invalidResume = vi.fn(async () => true);
+    try {
+      await expect(agent.startSession({ sessionId: 'strict-history', workingDir: cwd,
+        model: 'm', providerId: 'openai', resumeSessionId: resumeFile,
+        onInvalidResumeSession: invalidResume,
+        vendorOptions: { _cindyRequireNativeResume: true },
+      })).rejects.toThrow('Native Pi history');
+      expect(invalidResume).not.toHaveBeenCalled();
+      expect(captured.closed).toBe(true);
+    } finally { captured.failSwitchSession = false; }
+  });
+
   it('resume 模型同时缺少公开与 retained 描述符时不会在来源初始化前访问 resolver', async () => {
     const deps = buildDeps();
     deps.resolvePiRuntimeModelDescriptor = vi.fn(() => null);
@@ -3839,6 +3866,45 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     rmSync(referenceDir, { recursive: true, force: true });
     rmSync(writableDir, { recursive: true, force: true });
     rmSync(replacementWritableDir, { recursive: true, force: true });
+  });
+
+  it('sends extra dir full paths in the startup append and per-turn prefix, refreshing after mid-session additions (#8812)', async () => {
+    const referenceDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-reference-'));
+    const writableDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-writable-'));
+    const addedDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-added-'));
+    try {
+      const handle = await start('bypassPermissions', undefined, false, undefined, {
+        extraDirs: [referenceDir],
+        writableDirs: [writableDir],
+      });
+      // 会话启动的 --append-system-prompt 段即带完整路径。
+      const appended = readAppendedSystemPrompt();
+      expect(appended).toContain(`- ${referenceDir}`);
+      expect(appended).toContain(`- ${writableDir}`);
+
+      const lastPromptMessage = () =>
+        String(captured.requests.findLast((r) => r.type === 'prompt')?.message ?? '');
+      await handle.send({ type: 'user', content: 'hello' });
+      expect(lastPromptMessage()).toContain(`- ${referenceDir}`);
+      expect(lastPromptMessage()).toContain(`- ${writableDir}`);
+
+      // 运行中追加目录:下一轮用户轮前缀即带新路径,无需重建会话。
+      await handle.setExtraDirs!([referenceDir, addedDir]);
+      await handle.send({ type: 'user', content: 'again' });
+      expect(lastPromptMessage()).toContain(`- ${addedDir}`);
+
+      // steer 前缀与 send 同一 compose 口径。
+      captured.onEvent?.({ type: 'agent_start' });
+      await handle.steer({ type: 'user', content: 'steer' });
+      expect(String(captured.requests.findLast((r) => r.type === 'steer')?.message ?? ''))
+        .toContain(`- ${addedDir}`);
+
+      await handle.close();
+    } finally {
+      rmSync(referenceDir, { recursive: true, force: true });
+      rmSync(writableDir, { recursive: true, force: true });
+      rmSync(addedDir, { recursive: true, force: true });
+    }
   });
 
   it('forces an explicit decision for agent-home writes even under Full Access', async () => {
@@ -4594,6 +4660,17 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     expect(JSON.stringify(review.mock.calls[0]?.[0])).not.toContain('PRIVATE_FILE_BODY');
     expect(JSON.parse((review.mock.calls[0]?.[0].action as { description: string }).description).executionEvidence)
       .toMatchObject({ kind: 'file-write', path: input.path, resolvedPath: input.path, resolvedWritableRoots: [cwd] });
+    // The same active policy must follow the owner's live choice, then resume
+    // normal confirmation when the owner tightens back to Ask.
+    await handle.setPermissionMode!('bypassPermissions');
+    firePermissionRequest('policy-full-access', 'write', input);
+    expect(await waitForResponse('policy-full-access')).toMatchObject({ confirmed: true });
+    expect(review).toHaveBeenCalledOnce();
+    expect(resolver).not.toHaveBeenCalled();
+    await handle.setPermissionMode!('ask');
+    firePermissionRequest('policy-ask-restored', 'write', input);
+    expect(await waitForResponse('policy-ask-restored')).toMatchObject({ confirmed: true });
+    expect(resolver).toHaveBeenCalledOnce();
   });
 
   it('reviews MCP operations when turn policy cannot classify them', async () => {
@@ -4631,6 +4708,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
   it('delivers Auto-Review ask to the channel on policy turns', async () => {
     const handle = await start('auto', async () => ({
       verdict: 'ask' as const,
+      reason: 'Writes outside the project.',
     }));
     await handle.send(
       { type: 'user', content: 'Touch an outside file.' },
@@ -4654,6 +4732,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       confirmed: true,
     });
     expect(resolver).toHaveBeenCalledOnce();
+    // The channel card explains why Auto asked.
+    expect((resolver.mock.calls as unknown as Array<[{ metadata?: Record<string, unknown> }]>)[0]?.[0].metadata)
+      .toMatchObject({ autoReviewReason: 'Writes outside the project.' });
   });
 
   it('keeps a policy across internal continuation tools and clears it at agent_settled', async () => {
@@ -5179,11 +5260,14 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
    * 已经失效的卡。此前 resolver 只挂在卡上、切档不会唤醒它,工具调用会一直卡住(codex P1)。
    * 与 Claude / Codex 的 dismissAllPending 同口径,并发 interaction_dismissed 让 UI 收卡。
    */
-  it('settles an in-flight permission card when the mode widens to Full access', async () => {
+  it.each([false, true])('settles an in-flight permission card when the mode widens to Full access (IM policy=%s)', async (imPolicy) => {
     const handle = await start('ask', undefined, false, {
       serverNames: ['cindy_browser'],
       // prompt(非 prompt-each-time)→ 放宽档位时接受替用户放行。
       policy: () => 'prompt',
+    });
+    if (imPolicy) await handle.send({ type: 'user', content: 'Open the page.' }, {
+      turnPermissionPolicy: { origin: { kind: 'im', channel: 'feishu' }, confirmationSurface: 'channel', forceConfirmToolCall: () => true },
     });
     const events: Array<Record<string, unknown>> = [];
     void (async () => {

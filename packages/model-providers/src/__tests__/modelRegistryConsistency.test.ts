@@ -171,7 +171,7 @@ describe("model registry data consistency", () => {
                 expect(
                   effectiveWindow(entry, agent),
                   `${entry.id}/${agent}`,
-                ).toBe(272_000);
+                ).toBe(entry.id === "openai/gpt-6.1-sol" ? 500_000 : 272_000);
               }
               continue;
             }

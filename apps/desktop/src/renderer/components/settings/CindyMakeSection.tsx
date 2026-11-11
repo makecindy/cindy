@@ -3,6 +3,7 @@ import { FolderOpen, RefreshCw, Trash2, Wrench } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { Switch } from '@/components/ui/switch';
+import { SettingsCard, SettingsPageHeader, SettingsRow } from '@/components/ui/settings-rows';
 import { Button } from '@/components/ui/button';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Spinner } from '@/components/ui/spinner';
@@ -298,265 +299,259 @@ export function CindyMakeSection() {
         : report;
 
   return (
-    <div className="flex flex-col gap-[18px]">
-      <div>
-        <h2 className="flex items-center gap-2 text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-          <Wrench size={17} aria-hidden="true" />
-          {t('settings.cindyMake.title')}
-        </h2>
-        <p className="mt-2 text-13 leading-[1.45] text-[var(--settings-section-desc)]">
-          {t(
-            activeTab === 'versions'
-              ? 'cindyMake.overview.description'
-              : 'settings.cindyMake.description',
-          )}
-        </p>
-      </div>
-      {createOpen && <CindyMakeCreateDialog onOpenChange={setCreateOpen} />}
-      <div
-        role="tablist"
-        aria-label={t('settings.cindyMake.title')}
-        className="flex flex-wrap gap-1"
-      >
-        {CINDY_MAKE_SETTINGS_TABS.map((tab, index) => (
-          <Button
-            key={tab}
-            ref={(button) => {
-              tabButtons.current[index] = button;
-            }}
-            id={tabId + '-' + tab + '-tab'}
-            role="tab"
-            aria-selected={activeTab === tab}
-            aria-controls={tabId + '-' + tab + '-panel'}
-            tabIndex={activeTab === tab ? 0 : -1}
-            className={
-              activeTab === tab
-                ? undefined
-                : 'border-transparent bg-transparent text-[var(--text-secondary)] enabled:hover:border-[var(--surface-hover)] enabled:hover:bg-[var(--surface-hover)] enabled:hover:text-[var(--text-primary)]'
-            }
-            onClick={() => setActiveTab(tab)}
-            onKeyDown={(event) => {
-              const rtl = getComputedStyle(event.currentTarget).direction === 'rtl';
-              let next: number;
-              switch (event.key) {
-                case 'ArrowRight':
-                  next = index + (rtl ? -1 : 1);
-                  break;
-                case 'ArrowLeft':
-                  next = index + (rtl ? 1 : -1);
-                  break;
-                case 'Home':
-                  next = 0;
-                  break;
-                case 'End':
-                  next = CINDY_MAKE_SETTINGS_TABS.length - 1;
-                  break;
-                default:
-                  return;
+    <div className="flex flex-col gap-6">
+      <SettingsPageHeader
+        title={<><Wrench size={17} aria-hidden="true" />{t('settings.cindyMake.title')}</>}
+        description={t(
+          activeTab === 'versions'
+            ? 'cindyMake.overview.description'
+            : 'settings.cindyMake.description',
+        )}
+      />
+      {/* 页面标题以下的内容保持原来 18px 的节奏。 */}
+      <div className="flex flex-col gap-[18px]">
+        {createOpen && <CindyMakeCreateDialog onOpenChange={setCreateOpen} />}
+        <div
+          role="tablist"
+          aria-label={t('settings.cindyMake.title')}
+          className="flex flex-wrap gap-1"
+        >
+          {CINDY_MAKE_SETTINGS_TABS.map((tab, index) => (
+            <Button
+              key={tab}
+              ref={(button) => {
+                tabButtons.current[index] = button;
+              }}
+              id={tabId + '-' + tab + '-tab'}
+              role="tab"
+              aria-selected={activeTab === tab}
+              aria-controls={tabId + '-' + tab + '-panel'}
+              tabIndex={activeTab === tab ? 0 : -1}
+              className={
+                activeTab === tab
+                  ? undefined
+                  : 'border-transparent bg-transparent text-[var(--text-secondary)] enabled:hover:border-[var(--surface-hover)] enabled:hover:bg-[var(--surface-hover)] enabled:hover:text-[var(--text-primary)]'
               }
-              event.preventDefault();
-              next = (next + CINDY_MAKE_SETTINGS_TABS.length) % CINDY_MAKE_SETTINGS_TABS.length;
-              tabButtons.current[next]?.focus();
-              setActiveTab(CINDY_MAKE_SETTINGS_TABS[next]);
-            }}
-          >
-            {t('settings.cindyMake.tabs.' + tab)}
-          </Button>
-        ))}
-      </div>
-
-      {/* Keep both panels mounted so tab navigation preserves checks and local UI state. */}
-      <div
-        role="tabpanel"
-        id={tabId + '-environment-panel'}
-        aria-labelledby={tabId + '-environment-tab'}
-        hidden={activeTab !== 'environment'}
-      >
-        <div className="flex flex-col gap-[18px]">
-          {import.meta.env.DEV && (
-            <div className="flex flex-col gap-3 rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)] p-5">
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <p className="text-13 font-medium text-[var(--settings-section-sublabel)]">
-                    {t('settings.cindyMake.forceManaged.title')}
-                  </p>
-                  <p className="mt-1 text-12 leading-[1.45] text-[var(--settings-section-desc)]">
-                    {t('settings.cindyMake.forceManaged.description')}
-                  </p>
-                </div>
-                <Switch
-                  checked={forceManagedTools}
-                  onCheckedChange={(checked) => {
-                    // Toggling the developer switch is a diagnostic recheck. Never
-                    // let it restart an in-progress preparation run implicitly.
-                    setRunMode('check');
-                    setTrackedPreparationId(undefined);
-                    setForceManagedTools(checked);
-                  }}
-                  aria-label={t('settings.cindyMake.forceManaged.ariaLabel')}
-                />
-              </div>
-              {forceManagedTools ? (
-                <div className="space-y-2">
-                  <p className="text-12 leading-[1.45] text-[var(--settings-section-desc)]">
-                    {t('settings.cindyMake.forceManaged.enabledHint')}
-                  </p>
-                </div>
-              ) : null}
-            </div>
-          )}
-
-          {displayReport ? (
-            <MakeDoctorReportCard
-              report={displayReport}
-              showSource={false}
-              showSteps={false}
-              alwaysAllowRecheck
-              onPrepare={() => {
-                setDismissedPreparationId(undefined);
-                setRunMode('prepare');
-                setRunVersion((version) => version + 1);
-              }}
-              onOpenToolsDir={() => {
-                void window.electronAPI
-                  .openCindyMakeToolsDir()
-                  .then((result) => {
-                    if (!result.success) toast.error(t('cindyMakeDoctor.failed'));
-                  })
-                  .catch(() => toast.error(t('cindyMakeDoctor.failed')));
-              }}
-              onStop={() => {
-                void cancelMakeDoctor(displayReport.runId, displayReport.mode).catch(() =>
-                  toast.error(t('cindyMakeDoctor.failed')),
-                );
-              }}
-              onRecheck={() => {
-                setDismissedPreparationId(preparation?.report.runId);
-                setTrackedPreparationId(undefined);
-                setRunMode('check');
-                setCheckVersion((version) => version + 1);
-              }}
-            />
-          ) : (
-            <div className="flex items-center gap-2 text-13 text-[var(--settings-section-desc)]">
-              <Spinner size={15} />
-              {t('settings.cindyMake.checking')}
-            </div>
-          )}
-        </div>
-      </div>
-      <div
-        role="tabpanel"
-        id={tabId + '-versions-panel'}
-        aria-labelledby={tabId + '-versions-tab'}
-        hidden={activeTab !== 'versions'}
-      >
-        <div className="flex flex-col gap-[18px]">
-          <Button className="self-start" onClick={() => setCreateOpen(true)}>
-            {t('settings.cindyMake.create.title')}
-          </Button>
-          {showStorageCard && remoteState && (
-            <CindyMakeStorageCard
-              state={remoteState}
-              pending={personalRemote.pending}
-              preparing={saveAfterPrepare}
-              onSave={() => {
-                setStorageOffered(false);
-                if (sourceStatus?.status === 'ready') {
-                  void personalRemote.act('save');
-                  return;
+              onClick={() => setActiveTab(tab)}
+              onKeyDown={(event) => {
+                const rtl = getComputedStyle(event.currentTarget).direction === 'rtl';
+                let next: number;
+                switch (event.key) {
+                  case 'ArrowRight':
+                    next = index + (rtl ? -1 : 1);
+                    break;
+                  case 'ArrowLeft':
+                    next = index + (rtl ? 1 : -1);
+                    break;
+                  case 'Home':
+                    next = 0;
+                    break;
+                  case 'End':
+                    next = CINDY_MAKE_SETTINGS_TABS.length - 1;
+                    break;
+                  default:
+                    return;
                 }
-                if (sourceBusy) return;
-                saveAfterPrepareStarted.current = false;
-                setSaveAfterPrepare(true);
-                setSourceRunPending(true);
-                setSourceRun({ makeAction: 'prepare-source', forceManagedTools });
+                event.preventDefault();
+                next = (next + CINDY_MAKE_SETTINGS_TABS.length) % CINDY_MAKE_SETTINGS_TABS.length;
+                tabButtons.current[next]?.focus();
+                setActiveTab(CINDY_MAKE_SETTINGS_TABS[next]);
               }}
-              onKeepLocal={() => {
-                setStorageOffered(false);
-                void personalRemote.act('keep-local');
-              }}
-            />
-          )}
-          <CindyMakeVersionsPanel
-            active={activeTab === 'versions'}
-            busy={historyState?.activeWork ?? historyState?.busy}
-            buildRunning={buildRunning}
-            onState={setVersionsState}
-            refreshKey={
-              historyState?.build?.status === 'ready'
-                ? String(
-                    historyState.build.generatedAt ??
-                      historyState.build.versionId ??
-                      historyState.build.commit,
-                  )
-                : undefined
-            }
-          >
-            <CindyMakeSourceStatusCard
-              status={sourceStatus}
-              changes={
-                historyState?.items.filter((item) =>
-                  ['integrated', 'changed'].includes(item.integration),
-                ).length
-              }
-              preparing={sourceBusy}
-              merge={merge}
-              mergeBlocked={mergeBlocked}
+            >
+              {t('settings.cindyMake.tabs.' + tab)}
+            </Button>
+          ))}
+        </div>
+
+        {/* Keep both panels mounted so tab navigation preserves checks and local UI state. */}
+        <div
+          role="tabpanel"
+          id={tabId + '-environment-panel'}
+          aria-labelledby={tabId + '-environment-tab'}
+          hidden={activeTab !== 'environment'}
+        >
+          <div className="flex flex-col gap-[18px]">
+            {import.meta.env.DEV && (
+              <SettingsCard>
+                <SettingsRow
+                  title={t('settings.cindyMake.forceManaged.title')}
+                  hint={
+                    <span className="flex flex-col gap-2">
+                      <span>{t('settings.cindyMake.forceManaged.description')}</span>
+                      {forceManagedTools ? (
+                        <span>{t('settings.cindyMake.forceManaged.enabledHint')}</span>
+                      ) : null}
+                    </span>
+                  }
+                  trailing={
+                    <Switch
+                      checked={forceManagedTools}
+                      onCheckedChange={(checked) => {
+                        // Toggling the developer switch is a diagnostic recheck. Never
+                        // let it restart an in-progress preparation run implicitly.
+                        setRunMode('check');
+                        setTrackedPreparationId(undefined);
+                        setForceManagedTools(checked);
+                      }}
+                      aria-label={t('settings.cindyMake.forceManaged.ariaLabel')}
+                    />
+                  }
+                />
+              </SettingsCard>
+            )}
+
+            {displayReport ? (
+              <MakeDoctorReportCard
+                report={displayReport}
+                showSource={false}
+                showSteps={false}
+                alwaysAllowRecheck
+                onPrepare={() => {
+                  setDismissedPreparationId(undefined);
+                  setRunMode('prepare');
+                  setRunVersion((version) => version + 1);
+                }}
+                onOpenToolsDir={() => {
+                  void window.electronAPI
+                    .openCindyMakeToolsDir()
+                    .then((result) => {
+                      if (!result.success) toast.error(t('cindyMakeDoctor.failed'));
+                    })
+                    .catch(() => toast.error(t('cindyMakeDoctor.failed')));
+                }}
+                onStop={() => {
+                  void cancelMakeDoctor(displayReport.runId, displayReport.mode).catch(() =>
+                    toast.error(t('cindyMakeDoctor.failed')),
+                  );
+                }}
+                onRecheck={() => {
+                  setDismissedPreparationId(preparation?.report.runId);
+                  setTrackedPreparationId(undefined);
+                  setRunMode('check');
+                  setCheckVersion((version) => version + 1);
+                }}
+              />
+            ) : (
+              <div className="flex items-center gap-2 text-13 text-[var(--settings-section-desc)]">
+                <Spinner size={15} />
+                {t('settings.cindyMake.checking')}
+              </div>
+            )}
+          </div>
+        </div>
+        <div
+          role="tabpanel"
+          id={tabId + '-versions-panel'}
+          aria-labelledby={tabId + '-versions-tab'}
+          hidden={activeTab !== 'versions'}
+        >
+          <div className="flex flex-col gap-[18px]">
+            <Button className="self-start" onClick={() => setCreateOpen(true)}>
+              {t('settings.cindyMake.create.title')}
+            </Button>
+            {showStorageCard && remoteState && (
+              <CindyMakeStorageCard
+                state={remoteState}
+                pending={personalRemote.pending}
+                preparing={saveAfterPrepare}
+                onSave={() => {
+                  setStorageOffered(false);
+                  if (sourceStatus?.status === 'ready') {
+                    void personalRemote.act('save');
+                    return;
+                  }
+                  if (sourceBusy) return;
+                  saveAfterPrepareStarted.current = false;
+                  setSaveAfterPrepare(true);
+                  setSourceRunPending(true);
+                  setSourceRun({ makeAction: 'prepare-source', forceManagedTools });
+                }}
+                onKeepLocal={() => {
+                  setStorageOffered(false);
+                  void personalRemote.act('keep-local');
+                }}
+              />
+            )}
+            <CindyMakeVersionsPanel
+              active={activeTab === 'versions'}
+              busy={historyState?.activeWork ?? historyState?.busy}
               buildRunning={buildRunning}
-              updating={mergeActive && !!merge}
-              sync={syncState}
-              syncing={syncPending || !!syncState?.running}
-              onSync={() => void startSync()}
-              onAbandon={() => void abandonSync()}
-              abandoning={abandoning}
-              onAccept={() => void acceptSync()}
-              accepting={accepting}
-              needsGenerate={needsGenerate}
-              onGenerate={() => void generatePersonal()}
-              generating={generating}
-              onKeep={(side) => void keepSide(side)}
-              keeping={keeping}
-              onResume={() => void startSync()}
-              onPrepare={() => {
-                if (!sourceStatus || sourceBusy || sourceStatus.status === 'ready') return;
-                setSourceRunPending(true);
-                setSourceRun({ makeAction: 'prepare-source', forceManagedTools });
-              }}
-              onStop={() => {
-                void Promise.resolve(window.electronAPI.cancelCindyMakeSource?.())
-                  .then((result) => {
-                    if (result && !result.success) setSourceRunPending(false);
-                  })
-                  .catch(() => toast.error(t('cindyMakeDoctor.failed')));
-              }}
-              onClear={async () => {
-                if (!sourceStatus || sourceBusy || mergeBlocked) return;
-                const confirmed = await confirm({
-                  title: t('settings.cindyMake.source.resetConfirm.title'),
-                  description: t('settings.cindyMake.source.resetConfirm.description'),
-                  confirmText: t('settings.cindyMake.source.resetConfirm.confirm'),
-                  cancelText: t('settings.cindyMake.source.resetConfirm.cancel'),
-                  confirmVariant: 'destructive',
-                });
-                if (!confirmed) return;
-                setSourceRunPending(true);
-                setSourceRun({ makeAction: 'clear-source', forceManagedTools });
-              }}
+              onState={setVersionsState}
+              refreshKey={
+                historyState?.build?.status === 'ready'
+                  ? String(
+                      historyState.build.generatedAt ??
+                        historyState.build.versionId ??
+                        historyState.build.commit,
+                    )
+                  : undefined
+              }
+            >
+              <CindyMakeSourceStatusCard
+                status={sourceStatus}
+                changes={
+                  historyState?.items.filter((item) =>
+                    ['integrated', 'changed'].includes(item.integration),
+                  ).length
+                }
+                preparing={sourceBusy}
+                merge={merge}
+                mergeBlocked={mergeBlocked}
+                buildRunning={buildRunning}
+                updating={mergeActive && !!merge}
+                sync={syncState}
+                syncing={syncPending || !!syncState?.running}
+                onSync={() => void startSync()}
+                onAbandon={() => void abandonSync()}
+                abandoning={abandoning}
+                onAccept={() => void acceptSync()}
+                accepting={accepting}
+                needsGenerate={needsGenerate}
+                onGenerate={() => void generatePersonal()}
+                generating={generating}
+                onKeep={(side) => void keepSide(side)}
+                keeping={keeping}
+                onResume={() => void startSync()}
+                onPrepare={() => {
+                  if (!sourceStatus || sourceBusy || sourceStatus.status === 'ready') return;
+                  setSourceRunPending(true);
+                  setSourceRun({ makeAction: 'prepare-source', forceManagedTools });
+                }}
+                onStop={() => {
+                  void Promise.resolve(window.electronAPI.cancelCindyMakeSource?.())
+                    .then((result) => {
+                      if (result && !result.success) setSourceRunPending(false);
+                    })
+                    .catch(() => toast.error(t('cindyMakeDoctor.failed')));
+                }}
+                onClear={async () => {
+                  if (!sourceStatus || sourceBusy || mergeBlocked) return;
+                  const confirmed = await confirm({
+                    title: t('settings.cindyMake.source.resetConfirm.title'),
+                    description: t('settings.cindyMake.source.resetConfirm.description'),
+                    confirmText: t('settings.cindyMake.source.resetConfirm.confirm'),
+                    cancelText: t('settings.cindyMake.source.resetConfirm.cancel'),
+                    confirmVariant: 'destructive',
+                  });
+                  if (!confirmed) return;
+                  setSourceRunPending(true);
+                  setSourceRun({ makeAction: 'clear-source', forceManagedTools });
+                }}
+              />
+              <CindyMakeStorageRow
+                state={remoteState}
+                pending={personalRemote.pending}
+                act={personalRemote.act}
+                onOffer={() => setStorageOffered(true)}
+              />
+            </CindyMakeVersionsPanel>
+            <CindyMakeHistoryPanel
+              active={activeTab === 'versions'}
+              hasPersonalVersion={!!personalVersion}
+              canGenerate={!!personalVersion || needsGenerate}
+              onState={setHistoryState}
             />
-            <CindyMakeStorageRow
-              state={remoteState}
-              pending={personalRemote.pending}
-              act={personalRemote.act}
-              onOffer={() => setStorageOffered(true)}
-            />
-          </CindyMakeVersionsPanel>
-          <CindyMakeHistoryPanel
-            active={activeTab === 'versions'}
-            hasPersonalVersion={!!personalVersion}
-            canGenerate={!!personalVersion || needsGenerate}
-            onState={setHistoryState}
-          />
+          </div>
         </div>
       </div>
     </div>

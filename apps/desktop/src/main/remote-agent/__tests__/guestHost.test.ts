@@ -12,6 +12,7 @@
  */
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -25,6 +26,7 @@ import {
 } from '@cindy/maker-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { managedSkillDigest } from '../managedSkillDigest';
 import { createRemoteAgentHost, hostSessionIdFor, type HostedStartInput } from '../host/runHost';
 import { TunnelLinkActivity } from '../host/linkActivity';
 import * as runTunnel from '../host/tunnel';
@@ -50,6 +52,8 @@ function makeHost(
   started: Started[],
   options: {
     nativeId?: string;
+    directGuestExecution?: Parameters<typeof createRemoteAgentHost>[0]['directGuestExecution'];
+    forkHosted?: Parameters<typeof createRemoteAgentHost>[0]['forkHosted'];
     purge?: (ids: readonly string[], nativeIds: readonly string[]) => Promise<void>;
     events?: AgentEvent[];
     recordGuestUsage?: Parameters<typeof createRemoteAgentHost>[0]['recordGuestUsage'];
@@ -57,16 +61,21 @@ function makeHost(
     /** 任务开始时的账号是否仍是当前账号(缺省一直是)。 */
     ownerCurrent?: () => boolean;
     providerAccess?: boolean;
+    providerAllowed?: () => boolean;
+    modelAllowed?: (model: string | undefined) => boolean;
     /** false = 不接受受邀者出站登记(旧接线)；缺省给一个记录调用的实现。 */
     bindGuestProviderRoute?: false | Parameters<typeof createRemoteAgentHost>[0]['bindGuestProviderRoute'];
     /** 会话是否正在运行一轮(缺省不提供，同旧 Agent)。 */
     isTurnRunning?: (input: HostedStartInput) => boolean;
+    managedSkills?: Parameters<typeof createRemoteAgentHost>[0]['managedSkills'];
   } = {},
 ) {
   const bindGuestProviderRoute = options.bindGuestProviderRoute === false
     ? undefined
     : options.bindGuestProviderRoute ?? (async () => ({ routeToken: 'route-token', modelIds: ['claude-opus'], release: () => {} }));
   return createRemoteAgentHost({
+    forkHosted: options.forkHosted,
+    directGuestExecution: options.directGuestExecution,
     isAgentAvailable: () => true,
     startHosted: async (input) => {
       const record: Started = { input, sends: [], calls: [] };
@@ -112,13 +121,15 @@ function makeHost(
     ...(options.providerAccess === false ? {} : {
       providerAccess: {
         resolve: async (_kind, _model, providerId) => providerId ?? 'shared-provider',
-        isAllowed: () => true,
+        isAllowed: (_providerId, _controller, model) => (options.providerAllowed?.() ?? true)
+          && (options.modelAllowed?.(model) ?? true),
       },
     }),
     ...(options.purge ? { purgeHostedTranscripts: options.purge } : {}),
     ...(options.recordGuestUsage ? { recordGuestUsage: options.recordGuestUsage } : {}),
     ...(options.recordOwnerUsage ? { recordOwnerUsage: options.recordOwnerUsage } : {}),
     ...(bindGuestProviderRoute ? { bindGuestProviderRoute } : {}),
+    ...(options.managedSkills ? { managedSkills: options.managedSkills } : {}),
     captureOwner: () => 'owner',
     isOwnerCurrent: () => options.ownerCurrent?.() ?? true,
     runsRoot,
@@ -153,6 +164,15 @@ function shadowDir(controller: string, sessionId: string): string {
   return path.join(sessionRoot(controller, sessionId), 'fs', 'workspace', ...Array.from({ length: 24 }, () => 'p'));
 }
 
+async function waitForStarted(host: ReturnType<typeof makeHost>, controller: string, runId: string) {
+  // open only acknowledges receipt. Observe the completed protocol handshake,
+  // using the existing startup budget rather than asserting Windows disk speed.
+  await vi.waitFor(async () => {
+    const poll = await host.handle(controller, { op: 'poll', runs: [{ runId, cursor: 0 }], waitMs: 0 }) as { runs: Array<{ data?: string }> };
+    expect(Buffer.from(poll.runs[0]?.data ?? '', 'base64').toString('utf8')).toContain('"t":"started"');
+  }, { timeout: 10_000 });
+}
+
 beforeEach(() => {
   root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-ra-guest-')));
   runsRoot = path.join(root, 'host');
@@ -163,6 +183,117 @@ afterEach(() => {
 });
 
 describe('guest shadow workspace', () => {
+  it('admits each standby turn and releases its receipt after completion or revoked close', async () => {
+    const started: Started[] = [];
+    let authorized = true;
+    let busy = false;
+    const receipts = [vi.fn(async () => {}), vi.fn(async () => {})];
+    const admit = (receipt: () => Promise<void>) => async (_controller: string, _session: string, _execution: string, capture: (complete: () => Promise<void>) => void) => { capture(receipt); };
+    const begin = vi.fn().mockImplementationOnce(admit(receipts[0])).mockRejectedValueOnce(new Error('executor busy')).mockImplementationOnce(admit(receipts[1]));
+    const host = makeHost(started, { isTurnRunning: () => busy, directGuestExecution: {
+      ownerScope: () => 'fake-owner', sessionAllowed: () => authorized, sessionDelegated: () => true,
+      beginDelegatedTurn: begin, allocate: async () => null, status: () => {}, release: async () => {},
+      switch: async () => ({}), usage: async () => {}, delegate: async () => true, forget: () => true,
+    } });
+    const send = (callId: string) => host.handle(GUEST, { op: 'call', runId: RUN_1, callId, method: 'send',
+      payload: { json: [{ content: 'fake turn', attachments: [] }] } });
+    try {
+      await host.handle(GUEST, { op: 'open', runId: RUN_1, agentKind: 'claude-code', payload: { json: openPayload('standby-task') } });
+      await waitForStarted(host, GUEST, RUN_1);
+      await send(CALL_1);
+      await vi.waitFor(() => expect(receipts[0]).toHaveBeenCalledTimes(1));
+      expect(begin).toHaveBeenLastCalledWith(GUEST, 'standby-task', `${RUN_1}:${CALL_1}`, expect.any(Function));
+      await send(RUN_2);
+      await vi.waitFor(() => expect(begin).toHaveBeenCalledTimes(2));
+      expect(started[0].sends).toHaveLength(1);
+      busy = true;
+      await send('44444444-4444-4444-8444-444444444444');
+      await vi.waitFor(() => expect(started[0].sends).toHaveLength(2));
+      expect(receipts[1]).not.toHaveBeenCalled();
+      authorized = false;
+      await host.abortControllers(controller => controller === GUEST);
+      await vi.waitFor(() => expect(receipts[1]).toHaveBeenCalledTimes(1));
+    } finally { host.dispose(); }
+  });
+
+  // Unit: 4505241080; existing coverage rejected before capturing a reservation.
+  // Accept commits but its response is lost; even a failed first completion must
+  // retain the receipt for the existing retry path without executing the model.
+  it('releases uncertain standby admission and retries a failed completion', async () => {
+    const started: Started[] = [];
+    let reserved = false;
+    const complete = vi.fn().mockRejectedValueOnce(new Error('reply lost')).mockImplementation(async () => { reserved = false; });
+    const host = makeHost(started, { directGuestExecution: {
+      ownerScope: () => 'fake-owner', sessionAllowed: () => true, sessionDelegated: () => true,
+      beginDelegatedTurn: async (_controller, _session, _execution, capture: (complete: () => Promise<void>) => void) => {
+        capture(complete);
+        reserved = true;
+        throw new Error('admission response lost');
+      },
+      allocate: async () => null, status: () => {}, release: async () => {},
+      switch: async () => ({}), usage: async () => {}, delegate: async () => true, forget: () => true,
+    } });
+    try {
+      await host.handle(GUEST, { op: 'open', runId: RUN_1, agentKind: 'claude-code', payload: { json: openPayload('standby-task') } });
+      await waitForStarted(host, GUEST, RUN_1);
+      await host.handle(GUEST, { op: 'call', runId: RUN_1, callId: CALL_1, method: 'send', payload: { json: [{ content: 'fake', attachments: [] }] } });
+      await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(2));
+      expect(reserved).toBe(false);
+      expect(started[0].sends).toHaveLength(0);
+    } finally { host.dispose(); }
+  });
+
+  it.each([
+    { purged: false, ownerChanged: false }, { purged: true, ownerChanged: false }, { purged: true, ownerChanged: true },
+  ])('retries completion after close within its owner (purged=$purged, ownerChanged=$ownerChanged)', async ({ purged, ownerChanged }) => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const started: Started[] = [];
+    const complete = vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValue(undefined);
+    let ownerCurrent = true;
+    const host = makeHost(started, { ownerCurrent: () => ownerCurrent, isTurnRunning: () => true, directGuestExecution: {
+      ownerScope: () => 'fake-owner', sessionAllowed: () => true, sessionDelegated: () => true,
+      beginDelegatedTurn: async (_controller, _session, _execution, capture) => { capture(complete); },
+      allocate: async () => null, status: () => {}, release: async () => {},
+      switch: async () => ({}), usage: async () => {}, delegate: async () => true, forget: () => true,
+    } });
+    try {
+      await host.handle(GUEST, { op: 'open', runId: RUN_1, agentKind: 'claude-code', payload: { json: openPayload('standby-task') } });
+      await waitForStarted(host, GUEST, RUN_1);
+      await host.handle(GUEST, { op: 'call', runId: RUN_1, callId: CALL_1, method: 'send', payload: { json: [{ content: 'fake', attachments: [] }] } });
+      await vi.waitFor(() => expect(started[0].sends).toHaveLength(1));
+      if (purged) await host.purgeControllers(controller => controller === GUEST);
+      else await host.abortControllers(controller => controller === GUEST);
+      expect(complete).toHaveBeenCalledTimes(1);
+      expect(host.runCount()).toBe(0);
+      ownerCurrent = !ownerChanged;
+      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(ownerChanged ? 1 : 2));
+      await vi.advanceTimersByTimeAsync(70_000);
+      expect(complete).toHaveBeenCalledTimes(ownerChanged ? 1 : 2);
+    } finally { await host.dispose(); vi.useRealTimers(); }
+  });
+
+  it('requires standby assignment acceptance before starting the fake engine', async () => {
+    const started: Started[] = [];
+    const accept = vi.fn(async (): Promise<void> => { throw new Error('revoked assignment'); });
+    const host = makeHost(started, { directGuestExecution: {
+      ownerScope: () => 'fake-owner', sessionAllowed: () => true, sessionDelegated: () => true,
+      acceptDelegated: accept, allocate: async () => null, status: () => {}, release: async () => {},
+      switch: async () => ({}), usage: async () => {}, delegate: async () => true, forget: () => true,
+    } });
+    const request = { op: 'open' as const, runId: RUN_1, agentKind: 'claude-code' as const, payload: { json: openPayload('standby-task') } };
+    try {
+      await expect(host.handle(GUEST, request)).rejects.toThrow('revoked assignment');
+      expect(started).toHaveLength(0);
+      accept.mockImplementation(async () => undefined);
+      await host.handle(GUEST, request);
+      await waitForStarted(host, GUEST, RUN_1);
+      expect(started).toHaveLength(1);
+      expect(accept).toHaveBeenCalledWith(GUEST, 'standby-task');
+      expect(started[0].input.guest).toBe(true);
+    } finally { host.dispose(); }
+  });
+
   it('writes only allowlisted, sanitized files for a guest', async () => {
     const started: Started[] = [];
     const host = makeHost(started);
@@ -236,7 +367,8 @@ describe('imported instruction files', () => {
       agentKind: 'claude-code',
       payload: { json: openPayload('task-1', { importFiles: imports }) },
     });
-    await vi.waitFor(() => expect(started).toHaveLength(1));
+    await waitForStarted(host, OWNER, RUN_1);
+    expect(started).toHaveLength(1);
     const shadow = shadowDir(OWNER, 'task-1');
     const session = sessionRoot(OWNER, 'task-1');
     expect(fs.readFileSync(path.join(shadow, 'docs', 'rules.md'), 'utf8')).toBe('rules, see @~/.ssh/config');
@@ -262,7 +394,8 @@ describe('imported instruction files', () => {
         }),
       },
     });
-    await vi.waitFor(() => expect(started).toHaveLength(1));
+    await waitForStarted(host, GUEST, RUN_1);
+    expect(started).toHaveLength(1);
     const shadow = shadowDir(GUEST, 'task-1');
     expect(fs.readFileSync(path.join(shadow, 'docs', 'rules.md'), 'utf8')).toBe('rules, see `@~/.ssh/config`');
     expect(fs.existsSync(path.join(shadow, 'docs', 'run.sh'))).toBe(false);
@@ -275,6 +408,91 @@ describe('imported instruction files', () => {
 });
 
 describe('guest agents', () => {
+  // 受邀者只看到 Cindy 内置 Skill 的指纹(不透露这台装了哪些插件)；报「与你那份一样」的复制这台自己的，
+  // 指纹对不上的不带。
+  // 不变量：同一份内容，复用提供者自己那份与受邀者传输过来，落到任务里的结果逐字节相同——复用不能成为绕过
+  // Markdown 检查与落地改写的入口(`!` 预执行、越界 `@` 导入、带 hooks 的文件)。
+  it.each([
+    ['a Skill with shell syntax, outside imports and a hooked reference', {
+      'SKILL.md': '---\nname: pr\n---\nRun !`whoami` and read @~/.ssh/config',
+      'references/hooked.md': '---\nname: h\nhooks: {}\n---\n',
+      'references/ok.md': 'Hello',
+      'run.mjs': 'console.log(1)',
+    }],
+    ['a Skill whose entry declares hooks', { 'SKILL.md': '---\nname: pr\nhooks: {}\n---\nBody', 'run.mjs': 'console.log(1)' }],
+  ])('lands %s the same whether the guest reuses it or sends it', async (_label, content) => {
+    const own = path.join(root, 'own', 'pr');
+    for (const [file, data] of Object.entries(content)) {
+      fs.mkdirSync(path.dirname(path.join(own, file)), { recursive: true });
+      fs.writeFileSync(path.join(own, file), data);
+    }
+    const digest = await managedSkillDigest(own);
+    const started: Started[] = [];
+    const host = makeHost(started, { managedSkills: async () => [{ command: 'cindy:pr', dir: own }] });
+    const dir = '.claude/skills/cindy-pr';
+    const open = async (runId: string, task: string, personal: Record<string, unknown>) => {
+      await host.handle(GUEST, { op: 'open', runId, agentKind: 'claude-code', payload: { json: openPayload(task, { personal }) } });
+      await waitForStarted(host, GUEST, runId);
+      const skill = path.join(shadowDir(GUEST, task), '.cindy', 'managed-skills', 'cindy', 'skills', 'pr');
+      return fs.existsSync(skill)
+        ? Object.fromEntries((fs.readdirSync(skill, { recursive: true }) as string[]).filter((f) => fs.statSync(path.join(skill, f)).isFile())
+            .map((f) => [f, fs.readFileSync(path.join(skill, f), 'utf8')]))
+        : null;
+    };
+    const reused = await open(RUN_1, 'task-1', { files: [], managedSkills: [{ command: 'cindy:pr', dir, digest, reuse: true }] });
+    const sent = await open(RUN_2, 'task-2', {
+      files: [],
+      managedSkills: [{ command: 'cindy:pr', dir, digest }],
+      managedFiles: Object.entries(content).map(([file, data]) => ({ path: `${dir}/${file}`, data: b64(data) })),
+    });
+    expect(reused).toEqual(sent);
+    // 检查确实生效了：没有留下带 hooks 的文件，也没有原样的 `!` 预执行与越界 `@`。
+    expect(JSON.stringify(reused)).not.toContain('hooks: {}');
+    if (reused) {
+      expect(reused['SKILL.md']).not.toMatch(/!`whoami`/);
+      // 越界的 `@` 导入改成代码样式，不再是导入。
+      expect(reused['SKILL.md']).toContain('`@~/.ssh/config`');
+    }
+    host.dispose();
+  });
+
+  it('reuses only matching built-in managed skills for a guest', async () => {
+    const write = (dir: string, text: string) => {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'SKILL.md'), text);
+      return dir;
+    };
+    const pr = write(path.join(root, 'own', 'pr'), 'own pr');
+    const learn = write(path.join(root, 'own', 'learn'), 'own learn');
+    const secret = write(path.join(root, 'own', 'secret'), 'plugin');
+    const started: Started[] = [];
+    const host = makeHost(started, { managedSkills: async () => [
+      { command: 'cindy:pr', dir: pr }, { command: 'cindy:learn', dir: learn }, { command: 'cindy-plugin-x:secret', dir: secret },
+    ] });
+    const digest = await managedSkillDigest(pr);
+    const guestCaps = await host.handle(GUEST, { op: 'caps' }) as { managedSkills: { digests: Record<string, string> } };
+    const ownerCaps = await host.handle(OWNER, { op: 'caps' }) as { managedSkills: { digests: Record<string, string> } };
+    expect(Object.keys(guestCaps.managedSkills.digests).sort()).toEqual(['cindy:learn', 'cindy:pr']);
+    expect(Object.keys(ownerCaps.managedSkills.digests)).toContain('cindy-plugin-x:secret');
+    await host.handle(GUEST, {
+      op: 'open', runId: RUN_1, agentKind: 'claude-code',
+      payload: { json: openPayload('task-1', { personal: { files: [], managedSkills: [
+        { command: 'cindy:pr', dir: '.claude/skills/cindy-pr', digest, reuse: true },
+        { command: 'cindy:learn', dir: '.claude/skills/cindy-learn', digest: '0'.repeat(64), reuse: true },
+        // 受邀者点名提供者装的插件 Skill(指纹它是知道不了的，但不能因此靠猜就复制进它的任务)。
+        { command: 'cindy-plugin-x:secret', dir: '.claude/skills/cindy-plugin-x-secret-00000000', digest: await managedSkillDigest(secret), reuse: true },
+      ] } }) },
+    });
+    await waitForStarted(host, GUEST, RUN_1);
+    const plugin = path.join(shadowDir(GUEST, 'task-1'), '.cindy', 'managed-skills', 'cindy');
+    expect(started[0].input.controllerManagedSkills).toEqual({ claudePluginRoots: [plugin] });
+    expect(fs.readFileSync(path.join(plugin, 'skills', 'pr', 'SKILL.md'), 'utf8')).toBe('own pr');
+    expect(fs.existsSync(path.join(plugin, 'skills', 'learn'))).toBe(false);
+    expect(fs.existsSync(path.join(shadowDir(GUEST, 'task-1'), '.cindy', 'managed-skills', 'cindy-plugin-x'))).toBe(false);
+    expect(JSON.stringify(fs.readdirSync(sessionRoot(GUEST, 'task-1'), { recursive: true }))).not.toContain('secret');
+    host.dispose();
+  });
+
   it('offers every isolated agent to a guest, the same as same-account', async () => {
     const host = makeHost([]);
     const guestCaps = await host.handle(GUEST, { op: 'caps' }) as { agents: Array<{ kind: string; available: boolean }> };
@@ -289,7 +507,8 @@ describe('guest agents', () => {
     const host = makeHost(started);
     await host.handle(GUEST, { op: 'open', runId: RUN_1, agentKind: kind, payload: { json: openPayload('task-1') } });
     await host.handle(OWNER, { op: 'open', runId: RUN_2, agentKind: kind, payload: { json: openPayload('task-1') } });
-    await vi.waitFor(() => expect(started).toHaveLength(2));
+    await Promise.all([waitForStarted(host, GUEST, RUN_1), waitForStarted(host, OWNER, RUN_2)]);
+    expect(started).toHaveLength(2);
     const guest = started.find((record) => record.input.guest)!;
     const owner = started.find((record) => !record.input.guest)!;
     expect(guest.input.guestHome).toBe(guestHome(GUEST));
@@ -316,18 +535,18 @@ describe('guest mid-task calls', () => {
   async function startAndCall(controller: string, method: string, args: unknown[], sessionId = 'task-1') {
     const started: Started[] = [];
     const host = makeHost(started);
-    await host.handle(controller, { op: 'open', runId: RUN_1, agentKind: 'codex', payload: { json: openPayload(sessionId) } });
-    await vi.waitFor(() => expect(started).toHaveLength(1));
-    await vi.waitFor(async () => {
-      const poll = await host.handle(controller, { op: 'poll', runs: [{ runId: RUN_1, cursor: 0 }], waitMs: 0 }) as { runs: Array<{ data?: string }> };
-      expect(Buffer.from(poll.runs[0]?.data ?? '', 'base64').toString('utf8')).toContain('"started"');
-    });
-    await host.handle(controller, { op: 'call', runId: RUN_1, callId: CALL_1, method, payload: { json: args } });
-    await vi.waitFor(() => expect(started[0].calls).toHaveLength(1));
-    host.dispose();
-    // 等这个实例收尾删掉影子目录，下一个用例的实例不与它交错。
-    await vi.waitFor(() => expect(fs.existsSync(sessionRoot(controller, sessionId))).toBe(false));
-    return started[0].calls[0].args;
+    try {
+      await host.handle(controller, { op: 'open', runId: RUN_1, agentKind: 'codex', payload: { json: openPayload(sessionId) } });
+      await waitForStarted(host, controller, RUN_1);
+      expect(started).toHaveLength(1);
+      await host.handle(controller, { op: 'call', runId: RUN_1, callId: CALL_1, method, payload: { json: args } });
+      await vi.waitFor(() => expect(started[0].calls).toHaveLength(1));
+      return started[0].calls[0].args;
+    } finally {
+      host.dispose();
+      // 断言失败时也收尾；目录删除完成前，不让下一个实例与旧实例交错。
+      await vi.waitFor(() => expect(fs.existsSync(sessionRoot(controller, sessionId))).toBe(false), { timeout: 10_000 });
+    }
   }
 
   const patch = {
@@ -380,12 +599,16 @@ describe('guest resume', () => {
     })).rejects.toThrow(/REMOTE_AGENT_INVALID/);
 
     await host.handle(GUEST, { op: 'open', runId: RUN_1, agentKind: 'claude-code', payload: { json: openPayload('task-1') } });
-    await vi.waitFor(() => expect(started).toHaveLength(1));
+    // startHosted records its call before ownership is persisted and the public
+    // startup handshake completes. Observe the handshake before disposing.
+    await waitForStarted(host, GUEST, RUN_1);
+    expect(started).toHaveLength(1);
     const nativeId = `sdk-${hostSessionIdFor(GUEST, 'task-1')}`;
-    await vi.waitFor(() => expect(fs.existsSync(path.join(runsRoot, 'guest-sessions.json'))).toBe(true));
+    expect(fs.existsSync(path.join(runsRoot, 'guest-sessions.json'))).toBe(true);
     host.dispose();
-    // 等旧实例退出时的收尾(删除影子目录)做完，避免与新实例重建目录交错。
-    await vi.waitFor(() => expect(fs.existsSync(sessionRoot(GUEST, 'task-1'))).toBe(false));
+    // Match startAndCall's async filesystem cleanup budget: Windows CI may need
+    // more than vi.waitFor's default second. Still require actual deletion.
+    await vi.waitFor(() => expect(fs.existsSync(sessionRoot(GUEST, 'task-1'))).toBe(false), { timeout: 10_000 });
 
     // 新实例(重启)从落盘登记里认出自己的会话。
     const restarted = makeHost(started);
@@ -395,9 +618,12 @@ describe('guest resume', () => {
       agentKind: 'claude-code',
       payload: { json: openPayload('task-1', { options: { model: 'claude-opus', resumeSessionId: nativeId } }) },
     });
-    await vi.waitFor(() => expect(started).toHaveLength(2));
+    await waitForStarted(restarted, GUEST, RUN_2);
+    expect(started).toHaveLength(2);
     expect(started[1].input.options.resumeSessionId).toBe(nativeId);
     restarted.dispose();
+    // Do not let afterEach remove files while asynchronous disposal still uses them.
+    await vi.waitFor(() => expect(fs.existsSync(sessionRoot(GUEST, 'task-1'))).toBe(false), { timeout: 10_000 });
   });
 
   it('does not restrict same-account resume', async () => {
@@ -414,16 +640,88 @@ describe('guest resume', () => {
   });
 });
 
+// Unit regression: shared-model forks previously had no host operation. Exercise the public
+// handler, persistent ownership, chained forks, and account revocation without model calls.
+describe('shared-model native fork', () => {
+  // Review 4335650318 / sharing §12, unit: earlier fork fixtures allowed missing
+  // model IDs. A real model gate denies undefined even for an unrestricted grant;
+  // authorized forks must succeed, while another model and mid-fork revocation fail.
+  it.each([['claude-code', GUEST], ['codex', GUEST], ['pi', GUEST], ['claude-code', OWNER]] as const)('keeps %s children for %s across restart and rejects foreign history', async (agentKind, controller) => {
+    const started: Started[] = [];
+    let children = 0;
+    const forkHosted = vi.fn(async () => ({ newSdkSessionId: `native-child-${++children}`, uuidMap: new Map([['a', 'b']]) }));
+    const modelAllowed = (model: string | undefined) => model === 'claude-opus';
+    const host = makeHost(started, { nativeId: 'native-source', forkHosted, modelAllowed });
+    const request = { op: 'fork', sourceSessionId: 'task-1', newSessionId: 'task-2',
+      agentKind, sourceSdkSessionId: 'native-source', model: 'claude-opus', upToMessageId: 'a' };
+    if (controller === GUEST) await expect(host.handle(controller, request)).rejects.toThrow('REMOTE_AGENT_INVALID');
+    expect(forkHosted).not.toHaveBeenCalled();
+    await host.handle(controller, { op: 'open', runId: RUN_1, agentKind, payload: { json: openPayload('task-1') } });
+    await waitForStarted(host, controller, RUN_1);
+    expect(started).toHaveLength(1);
+    if (controller === GUEST) {
+      const index = JSON.parse(fs.readFileSync(path.join(runsRoot, 'guest-sessions.json'), 'utf8'));
+      expect(JSON.stringify(index)).toContain('native-source');
+    }
+    await expect(host.handle(controller, { ...request, model: 'claude-sonnet' })).rejects.toThrow('REMOTE_AGENT_PROVIDER_NOT_ALLOWED');
+    expect(forkHosted).not.toHaveBeenCalled();
+    await expect(host.handle(controller, request)).resolves.toEqual({ newSdkSessionId: 'native-child-1', uuidMap: [['a', 'b']] });
+    expect(forkHosted).toHaveBeenCalledWith(agentKind, expect.objectContaining({
+      providerId: 'shared-provider', sourceSdkSessionId: 'native-source',
+      ...(controller === GUEST ? { hostedGuestHome: guestHome(GUEST) } : {}),
+    }));
+    await host.handle(controller, { op: 'close', runId: RUN_1, mode: 'close', reason: 'navigation' });
+    host.dispose();
+    // Windows CI ENOTEMPTY: dispose starts asynchronous removal; do not race afterEach's root cleanup.
+    await vi.waitFor(() => expect(fs.existsSync(sessionRoot(controller, 'task-1'))).toBe(false), { timeout: 10_000 });
+    const restarted = makeHost([], { forkHosted, modelAllowed });
+    try {
+      await expect(restarted.handle(controller, { ...request, sourceSessionId: 'task-2', sourceSdkSessionId: 'native-child-1', newSessionId: 'task-3' }))
+        .resolves.toMatchObject({ newSdkSessionId: 'native-child-2' });
+      await restarted.handle(controller, { op: 'open', runId: RUN_2, agentKind, payload: { json: openPayload('task-3', {
+        options: { model: 'claude-opus', resumeSessionId: 'native-child-2' },
+      }) } });
+      await waitForStarted(restarted, controller, RUN_2);
+      const poll = await restarted.handle(controller, { op: 'poll', runs: [{ runId: RUN_2, cursor: 0 }], waitMs: 0 }) as { runs: Array<{ data?: string }> };
+      expect(Buffer.from(poll.runs[0]?.data ?? '', 'base64').toString('utf8')).toContain('"previousMirrorRoots":' + JSON.stringify([
+        path.join(sessionRoot(controller, 'task-1'), 'fs'), path.join(sessionRoot(controller, 'task-2'), 'fs'),
+      ]));
+      await restarted.handle(controller, { op: 'close', runId: RUN_2, mode: 'close', reason: 'navigation' });
+      await expect(restarted.handle(controller, { ...request, relay: 'a'.repeat(32) })).rejects.toThrow('REMOTE_AGENT_INVALID');
+    } finally {
+      restarted.dispose();
+      await vi.waitFor(() => expect(fs.existsSync(sessionRoot(controller, 'task-3'))).toBe(false), { timeout: 10_000 });
+    }
+  });
+
+  it.each(['account', 'provider', 'model'])('does not disclose a completed fork after %s access changes', async (revoked) => {
+    let current = true;
+    const host = makeHost([], {
+      ownerCurrent: () => revoked !== 'account' || current,
+      providerAllowed: () => revoked !== 'provider' || current,
+      modelAllowed: (model) => model === 'claude-opus' && (revoked !== 'model' || current),
+      forkHosted: async () => {
+        current = false;
+        return { newSdkSessionId: 'private-child', uuidMap: new Map() };
+      },
+    });
+    try {
+      await expect(host.handle(OWNER, { op: 'fork', sourceSessionId: 'task-1', newSessionId: 'task-2',
+        agentKind: 'claude-code', sourceSdkSessionId: 'source', model: 'claude-opus' })).rejects.toThrow(revoked === 'account' ? 'REMOTE_AGENT_UNAVAILABLE' : 'REMOTE_AGENT_PROVIDER_NOT_ALLOWED');
+      expect(current).toBe(false); // The native fork completed before its result was denied.
+    } finally { host.dispose(); }
+  });
+});
+
 describe('guest send options', () => {
   async function sendWithProofs(controller: string) {
     const started: Started[] = [];
     const host = makeHost(started);
     await host.handle(controller, { op: 'open', runId: RUN_1, agentKind: 'claude-code', payload: { json: openPayload('task-1') } });
-    await vi.waitFor(() => expect(started).toHaveLength(1));
-    await vi.waitFor(async () => {
-      const poll = await host.handle(controller, { op: 'poll', runs: [{ runId: RUN_1, cursor: 0 }], waitMs: 0 }) as { runs: Array<{ data?: string }> };
-      expect(Buffer.from(poll.runs[0]?.data ?? '', 'base64').toString('utf8')).toContain('"started"');
-    });
+    // Open acknowledges receipt before filesystem preparation; wait for startup,
+    // not the default 1s poll budget (Windows CI run 39835502754).
+    await waitForStarted(host, controller, RUN_1);
+    expect(started).toHaveLength(1);
     await host.handle(controller, {
       op: 'call',
       runId: RUN_1,
@@ -505,9 +803,12 @@ describe('guest provider access and usage', () => {
     const started: Started[] = [];
     const host = makeHost(started, { bindGuestProviderRoute: bind });
     await host.handle(GUEST, { op: 'open', runId: RUN_1, agentKind: 'claude-code', payload: { json: openPayload('task-1') } });
-    await vi.waitFor(() => expect(currents).toHaveLength(1));
+    await vi.waitFor(() => expect(currents).toHaveLength(1), { timeout: 10_000 });
     await host.handle(GUEST, { op: 'open', runId: RUN_2, agentKind: 'claude-code', payload: { json: openPayload('task-1') } });
-    await vi.waitFor(() => expect(started).toHaveLength(1));
+    // Windows CI run 40667219234 exceeded the default 1s disk-preparation wait.
+    // Observe RUN_2's completed handshake before checking that RUN_1 stays stale.
+    await waitForStarted(host, GUEST, RUN_2);
+    expect(started).toHaveLength(1);
     expect(currents[0]!()).toBe(false);
     openGate();
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -548,9 +849,9 @@ describe('guest provider access and usage', () => {
       samples: [{ model: 'claude-opus', turns: 1, inputTokens: 12, outputTokens: 3, cacheReadTokens: 0, cacheCreateTokens: 0, sdkCostUsd: 0.02 }],
     };
     expect(recordGuestUsage).toHaveBeenCalledTimes(1);
-    expect(recordGuestUsage).toHaveBeenCalledWith(GUEST, usage);
+    expect(recordGuestUsage).toHaveBeenCalledWith(GUEST, usage, 'task-1');
     expect(recordOwnerUsage).toHaveBeenCalledTimes(1);
-    expect(recordOwnerUsage).toHaveBeenCalledWith(OWNER, usage);
+    expect(recordOwnerUsage).toHaveBeenCalledWith(OWNER, usage, 'task-2');
     expect(host.activeControllers().sort()).toEqual([GUEST, OWNER].sort());
     host.dispose();
   });
@@ -608,6 +909,40 @@ describe('guest provider access and usage', () => {
 });
 
 describe('purgeController', () => {
+  it.each(['directory', 'transcript', 'index'] as const)('retains retryable guest records when strict %s cleanup fails', async failure => {
+    const started: Started[] = [];
+    const purge = vi.fn(async () => {});
+    const host = makeHost(started, { purge });
+    try {
+      await host.handle(GUEST, { op: 'open', runId: RUN_1, agentKind: 'claude-code', payload: { json: openPayload('task-1') } });
+      await waitForStarted(host, GUEST, RUN_1);
+      const index = path.join(runsRoot, 'guest-sessions.json');
+      fs.mkdirSync(guestHome(GUEST), { recursive: true });
+      fs.writeFileSync(path.join(guestHome(GUEST), 'history'), 'fake private history');
+      const error = Object.assign(new Error('cleanup busy'), { code: 'EBUSY' });
+      const remove = fsp.rm.bind(fsp);
+      const rename = fsp.rename.bind(fsp);
+      const rmSpy = vi.spyOn(fsp, 'rm').mockImplementation(async (target, options) => {
+        if (failure === 'directory' && String(target) === guestHome(GUEST)) throw error;
+        await remove(target, options);
+      });
+      const renameSpy = vi.spyOn(fsp, 'rename').mockImplementation(async (source, target) => {
+        if (failure === 'index' && String(target) === index) throw error;
+        await rename(source, target);
+      });
+      if (failure === 'transcript') purge.mockRejectedValueOnce(error);
+      await expect(host.purgeControllers(controller => controller === GUEST, true)).rejects.toThrow('cleanup busy');
+      expect(Object.values(JSON.parse(fs.readFileSync(index, 'utf8')))).toEqual([
+        expect.objectContaining({ controller: GUEST, nativeIds: [expect.any(String)] }),
+      ]);
+      if (failure === 'directory') expect(fs.existsSync(path.join(guestHome(GUEST), 'history'))).toBe(true);
+      rmSpy.mockRestore(); renameSpy.mockRestore();
+      await host.purgeControllers(controller => controller === GUEST, true);
+      expect(fs.existsSync(guestHome(GUEST))).toBe(false);
+      expect(JSON.parse(fs.readFileSync(index, 'utf8'))).toEqual({});
+    } finally { vi.restoreAllMocks(); await host.dispose(); }
+  });
+
   it('removes the guest workspace, guest home, session index and transcripts', async () => {
     const started: Started[] = [];
     const purged: Array<{ ids: string[]; nativeIds: string[] }> = [];
@@ -673,9 +1008,11 @@ describe('#6479 bounded resume projection', () => {
       });
       try {
         await host.handle(controller, { op: 'open', runId: RUN_1, agentKind: 'pi', payload: { json: payload() } });
-        await vi.waitFor(() => expect(started).toHaveLength(1));
+        // CI: open acknowledges before shadow setup/registration completes. Wait for the public handshake.
+        await waitForStarted(host, controller, RUN_1);
+        expect(started).toHaveLength(1);
         if (controller === GUEST) {
-          await vi.waitFor(() => expect(fs.readFileSync(path.join(runsRoot, 'guest-sessions.json'), 'utf8')).toContain(JSON.stringify(nativeId)));
+          expect(fs.readFileSync(path.join(runsRoot, 'guest-sessions.json'), 'utf8')).toContain(JSON.stringify(nativeId));
         }
         await host.handle(controller, { op: 'close', runId: RUN_1, mode: 'close', reason: 'navigation' });
         if (controller === GUEST) {
@@ -685,7 +1022,8 @@ describe('#6479 bounded resume projection', () => {
           expect(started).toHaveLength(1);
         }
         await host.handle(controller, { op: 'open', runId: RUN_2, agentKind: 'pi', payload: { json: payload(nativeId) } });
-        await vi.waitFor(() => expect(started).toHaveLength(2));
+        await waitForStarted(host, controller, RUN_2);
+        expect(started).toHaveLength(2);
         const resumed = started[1].input;
         expect.soft(resumed.options.userPrompt).toBe(`Read ${path.join(resumed.shadowDir, 'note.md')}`);
         expect.soft(resumed.personalInstructions).toBe(`Read ${path.join(resumed.shadowDir, 'note.md')}`);
@@ -701,7 +1039,9 @@ describe('#6479 bounded resume projection', () => {
           await host.handle(controller, { op: 'close', runId: RUN_2, mode: 'close', reason: 'navigation' });
         } finally {
           host.dispose();
-          tunnelSpy.mockRestore();
+          try {
+            await vi.waitFor(() => expect(fs.existsSync(sessionRoot(controller, 'task-6479'))).toBe(false), { timeout: 10_000 });
+          } finally { tunnelSpy.mockRestore(); }
         }
       }
     });

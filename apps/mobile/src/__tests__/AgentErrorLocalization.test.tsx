@@ -2,7 +2,7 @@
 import { act, type ReactNode } from 'react';
 import { readFileSync } from 'node:fs';
 import { parseAgentErrorCode } from '@cindy/maker-shared/error-redaction';
-import { unclassifiedAgentErrorI18nKey, requiresAgentErrorConfigurationChange } from '@/session/agentErrorI18n';
+import { localizeUnclassifiedAgentError, remoteActionErrorI18nKey, unclassifiedAgentErrorI18nKey, requiresAgentErrorConfigurationChange } from '@/session/agentErrorI18n';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { i18n } from '@/i18n';
@@ -138,6 +138,18 @@ describe.each(SUPPORTED_LOCALES)('mobile errors in %s', locale => {
 
 
 describe.each(SUPPORTED_LOCALES)('known mobile remote errors in %s', locale => {
+  // New member-budget refusal can be wrapped by the proxy; old cases only cover top-level codes.
+  // Minimal input is a 403 wrapper. Verify the production history projection in every locale; unit.
+  it('keeps a wrapped member budget pause understandable in history and action errors', async () => {
+    await i18n.changeLanguage(locale);
+    const message = '403 proxy: [REMOTE_AGENT_MEMBER_BUDGET_PAUSED] technical fallback';
+    const key = 'session.remoteError.REMOTE_AGENT_MEMBER_BUDGET_PAUSED';
+    expect(requiresAgentErrorConfigurationChange(message)).toBe(true);
+    expect(remoteActionErrorI18nKey(message)).toBe(key);
+    const [normalized] = normalizeRemoteMessages([row(message)]);
+    expect(normalized.body).toBe(i18n.t(key));
+    expect(normalized.body).not.toContain('technical fallback');
+  });
   it.each(['DEVICE_LIMIT', 'TOTAL_LIMIT'])('recognizes wrapped %s errors from the remote computer', async reason => {
     await i18n.changeLanguage(locale);
     const message = `LAZY_CREATE_FAILED: [REMOTE_AGENT_BUSY] [${reason}] upstream diagnostic`;
@@ -159,6 +171,16 @@ describe.each(SUPPORTED_LOCALES)('known mobile remote errors in %s', locale => {
     expect(normalized.body).toBe(i18n.t(key));
   });
 
+  // The fork action showed the raw "[IPC_ERROR] [REMOTE_AGENT_FORK_FAILED] …" string; it must use
+  // the localized remote copy, while unknown codes keep the caller's own fallback.
+  it('localizes a remote fork failure in one-shot action errors', async () => {
+    await i18n.changeLanguage(locale);
+    expect(remoteActionErrorI18nKey('[IPC_ERROR] [REMOTE_AGENT_FORK_FAILED] the conversation could not be forked'))
+      .toBe('session.remoteError.REMOTE_AGENT_FORK_FAILED');
+    expect(remoteActionErrorI18nKey('[REMOTE_FUTURE] private diagnostic')).toBeNull();
+    expect(remoteActionErrorI18nKey('[NOT_FOUND] message missing')).toBeNull();
+  });
+
   it('has every desktop bracket-code translation without relying on fallback languages', async () => {
     await i18n.changeLanguage(locale);
     const desktop = JSON.parse(readFileSync(`../desktop/src/renderer/i18n/locales/${locale}/common.json`, 'utf8'));
@@ -175,7 +197,7 @@ describe.each(SUPPORTED_LOCALES)('known mobile remote errors in %s', locale => {
     expect(unclassifiedAgentErrorI18nKey('[CUSTOM_ERROR] private diagnostic')).toBe('session.tail.replyFailed');
   });
 
-  it.each(['REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT'])(
+  it.each(['REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_MEDIA_ACCESS_DENIED', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'SSH_HARNESS_SWITCH_UNSUPPORTED', 'MODEL_SELECTION_UNAVAILABLE', 'HARNESS_SWITCH_NOT_READY'])(
     'preserves %s guidance across history, live and tail, including language changes', async code => {
       await i18n.changeLanguage(locale);
       const message = `Error invoking remote method 'maker:send': Error: [${code}] upstream diagnostic; api_key=private-test-value`;
@@ -228,7 +250,7 @@ it.each(['REMOTE_LOCAL_ONLY_PROVIDER', 'REMOTE_COMPAT_MODE_UNSUPPORTED', 'REMOTE
     expect(requiresAgentErrorConfigurationChange(`[${code}] diagnostic`)).toBe(true);
   },
 );
-it.each(['REMOTE_DAEMON_CLOSED', 'REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'REMOTE_FUTURE'])(
+it.each(['REMOTE_DAEMON_CLOSED', 'REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_MEDIA_ACCESS_DENIED', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'REMOTE_FUTURE'])(
   'preserves retry for recoverable or unclassified %s', code => {
     expect(requiresAgentErrorConfigurationChange(`[${code}] diagnostic`)).toBe(false);
   },
@@ -273,4 +295,24 @@ describe.each(SUPPORTED_LOCALES)('WeChat auto-review guidance in %s', locale => 
     expect(host.textContent).toContain(i18n.t(wechatKey));
     expect(host.textContent).not.toContain(i18n.t(genericKey));
   });
+});
+
+// Unit regression: both live and historical mobile errors share this presenter.
+it('localizes bound-account exhaustion and old ambiguous startup errors', async () => {
+  await i18n.changeLanguage('zh-CN');
+  const error = 'LAZY_CREATE_FAILED: [SUBSCRIPTION_ACCOUNT_LIMITED] diagnostic\nresetAtMs=1900000000000';
+  const text = localizeUnclassifiedAgentError(error);
+  expect(text).toContain('用量已达上限');
+  expect(text).toContain('不会自动换号');
+  expect(text).not.toContain('需要重新登录');
+  expect(text).not.toContain('resetAtMs=');
+  const [normalized] = normalizeRemoteMessages([row(error)]);
+  expect(normalized.body).toBe(text);
+  await act(async () => root.render(<InlineQueueSection
+    projection={{ error, errorRetryText: 'original' } as InputProjection}
+    busy={false} onRetryError={vi.fn()} onClearError={vi.fn()} onResume={vi.fn()} />));
+  expect(host.textContent).toContain(text);
+  expect(host.textContent).not.toContain('LAZY_CREATE_FAILED');
+  expect(localizeUnclassifiedAgentError('LAZY_CREATE_FAILED: The task subscription account requires login or quota reset'))
+    .toBe(i18n.t('chat.subscriptionAccountError.legacy'));
 });

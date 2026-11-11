@@ -3,6 +3,7 @@ import { Fragment, Slice, type Node as ProseMirrorNode } from '@tiptap/pm/model'
 import { EditorState } from '@tiptap/pm/state';
 import {
   buildBotReferenceHref,
+  parseTodoReferenceHref,
   parseBrowserTabReferenceHref,
   parseDesktopWindowReferenceHref,
   parsePluginResourceReferenceHref,
@@ -115,6 +116,7 @@ function serializeComposerDocument(
       attrs.kind === 'browser-tab' ||
       attrs.kind === 'desktop-window' ||
       attrs.kind === 'bot' ||
+      attrs.kind === 'todo' ||
       attrs.kind === 'plugin-resource' ||
       attrs.kind === 'plugin-capability'
     )
@@ -367,6 +369,25 @@ function serializeComposerDocument(
             botId: attrs.path,
             name: attrs.label || attrs.path,
           });
+          return;
+        }
+        if (attrs.kind === 'todo') {
+          const target = parseTodoReferenceHref(attrs.path);
+          const title = attrs.label.replace(/\s+/g, ' ').trim();
+          const wire = `[${title.replace(/([[\]\\])/g, '\\$1') || 'Todo'}](${attrs.path})`;
+          const start = buffer.length;
+          buffer += wire;
+          if (target && title) {
+            bufferAgentReferences.push({
+              kind: 'todo',
+              start,
+              end: buffer.length,
+              href: attrs.path,
+              botId: target.botId,
+              todoId: target.todoId,
+              title,
+            });
+          }
           return;
         }
         if (attrs.kind === 'dir') {

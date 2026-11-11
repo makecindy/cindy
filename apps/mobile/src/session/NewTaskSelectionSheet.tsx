@@ -1,9 +1,12 @@
 export interface NewTaskSelectionSheetProps {
   page: 'device' | 'workspace' | 'directory' | null;
+  workspaceTitle?: string;
+  /** Host capability loading for workspace choices; directory reads use loading. */
+  workspaceLoading?: boolean;
   busy: boolean;
   devices: readonly { deviceId: string; name?: string }[];
   selectedDeviceId: string;
-  workspaces: readonly { title: string; workingDir: string }[];
+  workspaces: readonly { title: string; workingDir: string; disabled?: boolean }[];
   workspaceKind: string;
   workingDir: string;
   path: string;
@@ -13,6 +16,8 @@ export interface NewTaskSelectionSheetProps {
   entries: readonly { name: string; path: string }[];
   loading: boolean;
   error: string | null;
+  /** A failed action leaves an already loaded directory selectable. */
+  actionError?: string | null;
   showHidden: boolean;
   onClose(): void;
   onClosed?(): void;

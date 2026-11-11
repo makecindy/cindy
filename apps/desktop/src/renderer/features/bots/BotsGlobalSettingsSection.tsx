@@ -1,13 +1,18 @@
+import { additionalSettings } from '@/components/settings/AdditionalSettings.settings-search';
+import { useSettingDefinition } from '@/components/settings/useSettingDefinition';
 /** Shared default model chain; individual teammates may override it. */
 import { useEffect, useRef, useState } from 'react';
 import { useBotTranslation } from './botPronounContext';
 
 import { cn } from '@/lib/utils';
 import {
-  SETTINGS_CARD_CLASS,
-  SETTINGS_ROW_HINT_CLASS,
-  SETTINGS_SECTION_TITLE_CLASS,
-} from '@/components/settings/settingsRowClasses';
+  SETTINGS_HINT,
+  SettingsCard,
+  SettingsRow,
+  SettingsSection,
+} from '@/components/ui/settings-rows';
+import { Switch } from '@/components/ui/switch';
+import { useBotReplyTargetPreference } from './useBotReplyTargetPreference';
 import { useProviders } from '@/hooks/useProviders';
 import { useAvailableAgents } from '@/hooks/useAvailableAgents';
 import {
@@ -21,6 +26,8 @@ import { BotModelChainEditor } from './BotModelChainEditor';
 
 export function BotsGlobalSettingsSection() {
   const { t } = useBotTranslation();
+  const modelSetting = useSettingDefinition(additionalSettings.botModel, t);
+  const replySetting = useSettingDefinition(additionalSettings.botReplyTarget, t);
   // Re-render derived defaults when the shared picker inputs change, including
   // when the empty-chain editor has no ModelSelector mounted yet.
   useProviders();
@@ -31,6 +38,7 @@ export function BotsGlobalSettingsSection() {
   useEffect(() => subscribeBotGlobalModel(() => bumpModelSettings((value) => value + 1)), []);
   const modelChain = getEffectiveBotModelChain();
   const customized = isBotGlobalModelChainCustomized();
+  const replyTarget = useBotReplyTargetPreference();
   const pendingRef = useRef(false);
   const [pending, setPending] = useState(false);
 
@@ -50,16 +58,14 @@ export function BotsGlobalSettingsSection() {
   };
 
   return (
-    <div className="flex flex-col gap-[14px]">
-      <h2 className={SETTINGS_SECTION_TITLE_CLASS}>{t('bots.globalSettings.title')}</h2>
-
-      <div className={SETTINGS_CARD_CLASS}>
-        <fieldset disabled={pending} aria-busy={pending} className="min-w-0">
-          <BotModelChainEditor
+    <SettingsSection title={t('bots.globalSettings.title')}>
+      <SettingsCard>
+        <fieldset {...modelSetting.anchorProps} disabled={pending} aria-busy={pending} className="min-w-0">
+          <BotModelChainEditor {...modelSetting.controlProps}
             layout="settings"
             settingsRows={{
-              primaryLabel: t('bots.globalSettings.defaultModel'),
-              primaryHint: t('bots.globalSettings.defaultModelHint'),
+              primaryLabel: modelSetting.title,
+              primaryHint: modelSetting.description,
             }}
             disabled={pending}
             value={modelChain}
@@ -70,11 +76,27 @@ export function BotsGlobalSettingsSection() {
           />
         </fieldset>
         {notice ? (
-          <p className={cn(SETTINGS_ROW_HINT_CLASS, 'px-4 pb-4')} role="status">
+          <p className={cn(SETTINGS_HINT, 'px-4 pb-4')} role="status">
             {notice}
           </p>
         ) : null}
-      </div>
-    </div>
+      </SettingsCard>
+
+      <SettingsCard>
+        <SettingsRow
+          {...replySetting.anchorProps}
+          title={replySetting.title}
+          hint={replySetting.description}
+          trailing={
+            <Switch {...replySetting.controlProps}
+              aria-label={replySetting.title}
+              className="shrink-0"
+              checked={replyTarget.enabled}
+              onCheckedChange={(value) => replyTarget.setEnabled(value === true)}
+            />
+          }
+        />
+      </SettingsCard>
+    </SettingsSection>
   );
 }

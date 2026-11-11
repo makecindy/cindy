@@ -2,7 +2,12 @@ import { createHash, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { app, BrowserWindow } from 'electron';
+import {
+  app,
+  BrowserWindow,
+  powerMonitor,
+  screen,
+} from 'electron';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -10,17 +15,27 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createComputerMcpServer } from '@cindy/mcps/computer';
 import { cleanupComputerDriverSession, getComputerMcpDeps } from '../mcp-integrations/computer.js';
 import { createLogger } from '../logger.js';
+import { windowStateElements } from './windowStateElements.js';
+import { runFolderPickerWheelSmoke } from './folderPickerWheelSmoke.js';
 
 const logger = createLogger('computer-use-smoke');
 let started = false;
 const cursorGoalDemo = process.env.CINDY_CUA_SMOKE === 'cursor-goal';
+const desktopPointerSmoke = process.env.CINDY_CUA_SMOKE === 'desktop-pointer';
 const requested =
   !app.isPackaged &&
   process.env.XDT_ISOLATED === '1' &&
-  (process.env.CINDY_CUA_SMOKE === '1' || cursorGoalDemo);
+  (process.env.CINDY_CUA_SMOKE === '1' || cursorGoalDemo || desktopPointerSmoke);
 
 /** Explicit, isolated, real-driver smoke. It operates only on its own disposable window. */
-export async function runComputerUseSmokeIfRequested(): Promise<void> {
+export async function runComputerUseSmokeIfRequested(mainWindow?: BrowserWindow): Promise<void> {
+  if (!started && !app.isPackaged && process.env.XDT_ISOLATED === '1'
+    && process.env.XDT_UI_MOCK === '1' && process.env.CINDY_CUA_SMOKE === 'folder-picker'
+    && mainWindow) {
+    started = true;
+    await runFolderPickerWheelSmoke(mainWindow);
+    return;
+  }
   if (started || !requested) return;
   started = true;
   const sessionId = `cua-smoke-${randomUUID()}`;
@@ -72,7 +87,7 @@ export async function runComputerUseSmokeIfRequested(): Promise<void> {
     const script = `document.getElementById('increment').addEventListener('click',()=>{const n=document.getElementById('count');n.textContent=String(Number(n.textContent)+1);const b=document.getElementById('increment');b.textContent='Smoke clicked once';b.disabled=true})`;
     const hash = createHash('sha256').update(script).digest('base64');
     await window.loadURL(
-      `data:text/html;charset=utf-8,${encodeURIComponent(`<!doctype html><html><head><title>Cindy Computer Use Smoke</title><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-${hash}'"></head><body><h1>Computer Use regression fixture</h1><label for="message">Smoke message</label><textarea id="message" aria-label="Smoke message"></textarea><button id="increment">Increment smoke count</button><output id="count">0</output><script>${script}</script></body></html>`)}`,
+      `data:text/html;charset=utf-8,${encodeURIComponent(`<!doctype html><html><head><title>Cindy Computer Use Smoke</title><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-${hash}'"></head><body><h1>Computer Use regression fixture</h1><label for="message">Smoke message</label><textarea id="message" aria-label="Smoke message"></textarea><button id="increment">Increment smoke count</button><output id="count">0</output>${desktopPointerSmoke ? '<p><input id="desktop-drag" aria-label="Desktop drag" type="range" min="0" max="100" value="0"></p>' : ''}<script>${script}</script></body></html>`)}`,
     );
     window.showInactive();
     server = createComputerMcpServer(getComputerMcpDeps({ isComputerUseEnabled: () => true }), {
@@ -103,6 +118,78 @@ export async function runComputerUseSmokeIfRequested(): Promise<void> {
       if (name === 'verify_state') report.verification = payload.data;
       return payload;
     };
+    if (desktopPointerSmoke) {
+      // Explicit foreground smoke through the production Cindy MCP/host/driver.
+      // The only click destination is this disposable fixture; no user's apps.
+      window.show();
+      window.focus();
+      const rect = await window.webContents.executeJavaScript(`(() => {
+        const r = document.getElementById('increment').getBoundingClientRect();
+        return {x:r.x+r.width/2,y:r.y+r.height/2};
+      })()`);
+      const content = window.getContentBounds();
+      const display = screen.getPrimaryDisplay().bounds;
+      check(content.x >= display.x && content.y >= display.y
+        && content.x + content.width <= display.x + display.width
+        && content.y + content.height <= display.y + display.height, 'fixture is inside primary display');
+      const captureArgs = { max_image_dimension: 1600 };
+      const capture = await call('get_desktop_state', { ...captureArgs, session_goal: 'Test desktop pointer' });
+      check(capture.ok && capture.data?.capture_id, 'desktop capture returns a credential');
+      check((await fs.stat(capture.data.screenshot_file_path)).size > 0, 'generated desktop screenshot is readable');
+      const pointer = {
+        target: { kind: 'desktop', display_id: 'primary' },
+        capture_id: capture.data.capture_id,
+        delivery_mode: 'foreground',
+        x: (content.x + rect.x - display.x) * capture.data.screenshot_width / display.width,
+        y: (content.y + rect.y - display.y) * capture.data.screenshot_height / display.height,
+      };
+      const fresh = await call('get_desktop_state', captureArgs);
+      check(fresh.ok && fresh.data?.capture_id !== capture.data.capture_id, 'new desktop capture replaces the credential');
+      check(!await fs.stat(capture.data.screenshot_file_path).then(() => true, () => false),
+        'superseded desktop screenshot is removed');
+      const stale = await call('click', pointer);
+      check(!stale.ok, 'old desktop capture is refused');
+      check(await window.webContents.executeJavaScript("document.getElementById('count').textContent") === '0', 'refused capture sent no click');
+      const clicked = await call('click', { ...pointer, capture_id: fresh.data.capture_id });
+      check(clicked.ok, 'fresh desktop click is delivered');
+      check(await window.webContents.executeJavaScript("document.getElementById('count').textContent") === '1', 'desktop click reached own fixture exactly once');
+      // This explicit native smoke shares the real HID clock. Capture only after
+      // the click's events have settled; a new picture is not a timing exemption.
+      currentStep = 'wait for native input to settle';
+      const idleDeadline = Date.now() + 10_000;
+      while (powerMonitor.getSystemIdleTime() < 3) {
+        if (Date.now() >= idleDeadline) throw new Error('Native input did not settle before the next capture');
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+      const after = await call('get_desktop_state', captureArgs);
+      check(after.ok, 'desktop can be observed after input');
+      const slider = await window.webContents.executeJavaScript(`(() => {
+        const r = document.getElementById('desktop-drag').getBoundingClientRect();
+        return {x:r.x+8,y:r.y+r.height/2,right:r.right-8};
+      })()`);
+      const dragged = await call('drag', {
+        target: pointer.target, capture_id: after.data.capture_id, delivery_mode: 'foreground',
+        from_x: (content.x + slider.x - display.x) * after.data.screenshot_width / display.width,
+        from_y: (content.y + slider.y - display.y) * after.data.screenshot_height / display.height,
+        to_x: (content.x + slider.right - display.x) * after.data.screenshot_width / display.width,
+        to_y: (content.y + slider.y - display.y) * after.data.screenshot_height / display.height,
+        duration_ms: 500,
+      });
+      check(dragged.ok, 'desktop drag is delivered');
+      check(Number(await window.webContents.executeJavaScript("document.getElementById('desktop-drag').value")) >= 80,
+        'desktop drag moved own slider to the far end');
+      await cleanupComputerDriverSession(sessionId);
+      check(!await fs.stat(after.data.screenshot_file_path).then(() => true, () => false),
+        'session cleanup removes the last generated desktop screenshot');
+      const exportPath = path.join(root, 'exported-desktop.png');
+      const exported = await call('get_desktop_state', { ...captureArgs, screenshot_out_file: exportPath });
+      check(exported.ok, 'explicit desktop screenshot export succeeds');
+      await cleanupComputerDriverSession(sessionId);
+      check((await fs.stat(exportPath)).size > 0, 'session cleanup preserves explicit desktop exports');
+      report.ok = true;
+      report.mode = 'desktop-pointer';
+      return;
+    }
     if (cursorGoalDemo) {
       // Exercise the real MCP -> host -> native driver path, without clicks or typing.
       // Closing the disposable fixture ends the demo; otherwise it lasts two minutes.
@@ -152,9 +239,8 @@ export async function runComputerUseSmokeIfRequested(): Promise<void> {
     for (
       let attempt = 0;
       attempt < 10 &&
-      !state.data?.elements?.some(
-        (item: { role?: string; label?: string }) =>
-          item.role === 'AXTextArea' && item.label === 'Smoke message',
+      !windowStateElements(state.data).some(
+        (item) => item.role === 'AXTextArea' && item.label === 'Smoke message',
       );
       attempt += 1
     ) {
@@ -168,25 +254,21 @@ export async function runComputerUseSmokeIfRequested(): Promise<void> {
         !state.data?.screenshot_out_file,
       'text observation excludes screenshot',
     );
-    const elements = state.data?.elements as Array<{
-      element_token?: string;
-      role?: string;
-      label?: string;
-    }>;
+    const elements = windowStateElements(state.data);
     report.observationSummary = {
       keys: Object.keys(state.data ?? {}),
       element_count: state.data?.element_count,
       degraded_reason: state.data?.degraded_reason,
-      roles: elements?.slice(0, 12).map((item) => item.role),
+      roles: elements.slice(0, 12).map((item) => item.role),
       window_id: target.window_id,
     };
-    report.fixtureElements = elements?.filter(
+    report.fixtureElements = elements.filter(
       (item) => item.label === 'Smoke message' || item.label === 'Increment smoke count',
     );
-    const input = elements?.find(
+    const input = elements.find(
       (item) => item.role === 'AXTextArea' && item.label === 'Smoke message',
     );
-    let button = elements?.find(
+    let button = elements.find(
       (item) => item.role === 'AXButton' && item.label === 'Increment smoke count',
     );
     check(input?.element_token && button?.element_token, 'opaque element tokens available');
@@ -212,9 +294,8 @@ export async function runComputerUseSmokeIfRequested(): Promise<void> {
     // An unknown input now triggers a bounded observation and invalidates the
     // previous credentials. Obtain an explicit fresh snapshot before clicking.
     state = await call('get_window_state', { ...targetArgs, include_screenshot: false });
-    button = state.data?.elements?.find(
-      (item: { role?: string; label?: string }) =>
-        item.role === 'AXButton' && item.label === 'Increment smoke count',
+    button = windowStateElements(state.data).find(
+      (item) => item.role === 'AXButton' && item.label === 'Increment smoke count',
     );
     check(state.ok && button?.element_token, 'fresh button token obtained after input');
     const click = await call('click', {
@@ -290,15 +371,14 @@ export async function runComputerUseSmokeIfRequested(): Promise<void> {
     );
     await window.webContents.executeJavaScript('document.getElementById("message").value = ""');
     state = await call('get_window_state', { ...targetArgs, include_screenshot: false });
-    const freshInput = state.data?.elements?.find(
-      (item: { role?: string; label?: string }) =>
-        item.role === 'AXTextArea' && item.label === 'Smoke message',
+    const freshInput = windowStateElements(state.data).find(
+      (item) => item.role === 'AXTextArea' && item.label === 'Smoke message',
     );
     check(freshInput?.element_token, 'fresh input token available for native typing');
     const typedValue = '原生输入测试🙂\n第二行内容';
     const typed = await call('type_text', {
       ...targetArgs,
-      element_token: freshInput.element_token,
+      element_token: freshInput!.element_token,
       text: typedValue,
       delivery_mode: 'foreground',
       postcondition: [

@@ -141,6 +141,20 @@ describe('messageWindow', () => {
     });
   });
 
+  it('does not flag new messages when a replacement empties the list away from bottom', () => {
+    // 不在底部时替换成另一批消息仍提示;替换成空列表没有可跳转的新消息。
+    expect(evaluateMessageWindowUpdate({
+      previousKeys: ['old-1'],
+      nextKeys: ['new-1'],
+      wasNearBottom: false,
+    }).showNewMessageIndicator).toBe(true);
+    expect(evaluateMessageWindowUpdate({
+      previousKeys: ['m1'],
+      nextKeys: [],
+      wasNearBottom: false,
+    })).toMatchObject({ kind: 'replaced', shouldAutoFollow: false, showNewMessageIndicator: false });
+  });
+
   it('builds the load-earlier action state from window availability', () => {
     expect(buildMessageLoadEarlierAction({
       hasOlderMessages: true,

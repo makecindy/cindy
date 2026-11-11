@@ -1,5 +1,4 @@
 import { Button } from '@/components/ui/button';
-import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/input';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 import { ConnectProviderCard } from '@/components/onboarding/ConnectProviderCard';
@@ -29,8 +28,6 @@ import { useRegisterContentHeader } from '../feature-context';
 import {
   canonicalBotSessionId,
   hasLoadedBotProfiles,
-  chooseBotAvatar,
-  retryBotInvitation,
   setCanonicalBotSession,
   updateBotProfile,
   useBotProfiles,
@@ -39,6 +36,7 @@ import {
   type BotCapabilities,
   type BotProfile,
 } from './botStore';
+import { useBotSettingsTarget } from './useBotSettingsTarget';
 import { BotRosterView } from './BotRosterView';
 import { BotAvatar } from './BotAvatar';
 import { BotBasicProfileFields } from './BotBasicProfileFields';
@@ -50,18 +48,15 @@ import {
   withBotCanonicalSessionReadTimeout,
 } from './botNavigation';
 import { useCompanionCloud } from './companionCloudStore';
-import { withoutShadowedBots } from './companionCloudPresentation';
+import { cloudCompanionAt, withoutShadowedBots } from './companionCloudPresentation';
 import { BotHomeComputerSetting } from './BotHomeComputerSetting';
 import { CindyMergeSetting } from './CindyMergeSetting';
 import { BotLifecycleSettings } from './BotLifecycleSettings';
 import { BotInvitationWelcome } from './BotInvitationWelcome';
 import { BotModelChainEditor } from './BotModelChainEditor';
-import { BotTaskModelEditor } from './BotTaskModelEditor';
 import { BotCapabilitySettings } from './BotCapabilitySettings';
-import { BotRoutines } from './BotRoutines';
-import { BotAutonomySettings } from './BotAutonomySettings';
-import { BotTodoList } from './BotTodoList';
 import { BotMemorySettings } from './BotMemorySettings';
+import { CompanionVoiceSettings } from './voice/CompanionVoiceSettings';
 import { BotChannelsPage } from './BotChannelsPage';
 import {
   botSettingsChanges,
@@ -70,6 +65,8 @@ import {
   type BotSettingsPayload,
 } from './botSettingsAutosave';
 import { useBotSettingsAutosave } from './useBotSettingsAutosave';
+import { BotProjectsSettings } from './BotProjectsSettings';
+import { BotAutomationsSettings } from './BotAutomationsSettings';
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 
@@ -102,7 +99,7 @@ export function BotSettings({
   beforeCloseRef,
   initialPage = 'home',
 }: {
-  initialPage?: 'home' | 'memory' | 'capabilities' | 'model' | 'channels';
+  initialPage?: 'home' | 'memory' | 'capabilities' | 'model' | 'voice' | 'channels';
   bot: BotProfile;
   beforeCloseRef?: { current: (() => Promise<boolean>) | null };
   onBack: () => void;
@@ -110,9 +107,13 @@ export function BotSettings({
 }) {
   const { t } = useBotTranslation();
   const navigate = useNavigate();
+  // The computer these pages read from and write to: this one, or the teammate's own computer.
+  const target = useBotSettingsTarget();
+  const isRemote = target.kind === 'remote';
+  const cloud = useCompanionCloud();
   const [name, setName] = useState(bot.name);
   const [description, setDescription] = useState(bot.description);
-  const profiles = useBotProfiles();
+  const profiles = target.useRoster();
   // Same identity rule as creation and the host: NFKC, trimmed, case-insensitive.
   const nameTaken = !!name.trim() && profiles.some((other) => other.id !== bot.id && other.status !== 'archived'
     && normalizeBotName(other.name) === normalizeBotName(name));
@@ -124,52 +125,50 @@ export function BotSettings({
   const [selectedSkills, setSelectedSkills] = useState<string[]>(bot.skills);
   const [capabilities, setCapabilities] = useState<BotCapabilities>(bot.capabilities);
   // Live defaults are display state, not form edits: refreshing them must not
-  // dirty autosave or overwrite a local model override / pending text edits.
-  useProviders();
-  const { availableVendors, loaded: availableAgentsLoaded } = useAvailableAgents();
-  const hiddenVendors = useMemo<MakerVendor[]>(() => {
-    if (!availableAgentsLoaded) return [];
-    return (['cc', 'codex', 'pi'] as const).filter((item) => !availableVendors.has(item));
-  }, [availableAgentsLoaded, availableVendors]);
-  useSyncExternalStore(subscribeBotGlobalModel, () => JSON.stringify(getEffectiveBotModelChain()));
+  // dirty autosave or overwrite a model override / pending text edits.
+  const hiddenVendors = target.useHiddenVendors();
+  const defaultModelChain = target.useDefaultModelChain();
   const displayedModelChain =
     capabilities.modelChainOverride === null
-      ? getEffectiveBotModelChain()
+      ? defaultModelChain
       : capabilities.modelChain;
   const [page, setPage] = useState<
     | 'home'
     | 'profile'
     | 'personality'
     | 'model'
+    | 'voice'
     | 'capabilities'
     | 'channels'
     | 'history'
     | 'advanced'
-    | 'routines'
     | 'memory'
+    | 'projects'
+    | 'automations'
   >(initialPage);
-  const routineLeaveRef = useRef<(() => Promise<boolean>) | null>(null);
-  const routineBackRef = useRef<(() => Promise<boolean>) | null>(null);
+  const voiceLeaveRef = useRef<(() => Promise<boolean>) | null>(null);
   const memoryLeaveRef = useRef<(() => Promise<boolean>) | null>(null);
   const memoryBackRef = useRef<(() => Promise<boolean>) | null>(null);
+  const capabilityBackRef = useRef<(() => Promise<boolean>) | null>(null);
+  const capabilityLeaveRef = useRef<(() => Promise<boolean>) | null>(null);
   const pageTitle =
-    page === 'channels'
-      ? t('bots.channels.title')
-      : page === 'memory'
-      ? t('bots.memory.title')
-      : page === 'model'
-        ? t('bots.settingsTabs.model')
-        : page === 'routines'
-          ? t('routines.title')
-          : page === 'history'
-            ? t('bots.historySearch.title')
-            : page === 'advanced'
-              ? t('bots.homeFolder.title')
-              : page === 'capabilities'
-                ? t('bots.capabilities.title')
-                : page === 'personality'
-                  ? t('bots.profile.personality')
-                  : t('bots.profile.title');
+    page === 'projects' ? t('bots.projects.title') : page === 'automations' ? t('bots.automations.title') : page === 'voice'
+      ? t('bots.voiceMode.settingsTitle')
+      : page === 'channels'
+        ? t('bots.channels.title')
+        : page === 'memory'
+          ? t('bots.memory.title')
+          : page === 'model'
+            ? t('bots.settingsTabs.model')
+            : page === 'history'
+              ? t('bots.historySearch.title')
+              : page === 'advanced'
+                ? t('bots.homeFolder.title')
+                : page === 'capabilities'
+                  ? t('bots.capabilities.title')
+                  : page === 'personality'
+                    ? t('bots.profile.personality')
+                    : t('bots.profile.title');
   const [folderError, setFolderError] = useState<string | null>(null);
   const avatarInFlight = useRef(false);
   const [avatarBusy, setAvatarBusy] = useState(false);
@@ -198,16 +197,19 @@ export function BotSettings({
     ),
   );
   const commitProfile = useCallback(
-    async (payload: BotSettingsPayload) => {
+    async (payload: BotSettingsPayload, modelSelection = false) => {
       savingProfileRef.current = true;
       try {
-        await updateBotProfile(bot.id, botSettingsChanges(savedSettingsRef.current, payload, true));
+        await target.profile.update(bot.id, {
+          ...botSettingsChanges(savedSettingsRef.current, payload, true, modelSelection),
+          ...(modelSelection ? { acceptModelSelection: true } : {}),
+        });
         savedSettingsRef.current = payload;
       } finally {
         savingProfileRef.current = false;
       }
     },
-    [bot.id],
+    [bot.id, target],
   );
 
   const autosave = useBotSettingsAutosave({
@@ -233,8 +235,9 @@ export function BotSettings({
     if (avatarInFlight.current) return false;
     await autosave.flush();
     if (autosave.isDirty()) return false;
+    if (!((await voiceLeaveRef.current?.()) ?? true)) return false;
     if (!((await memoryLeaveRef.current?.()) ?? true)) return false;
-    return (await routineLeaveRef.current?.()) ?? true;
+    return (await capabilityLeaveRef.current?.()) ?? true;
   }, [autosave.flush, autosave.isDirty]);
   useEffect(() => {
     if (!beforeCloseRef) return;
@@ -262,7 +265,7 @@ export function BotSettings({
       settingsRowRefs.current.get(returnFocusRowRef.current)?.focus();
   }, [page]);
   const go = (next: typeof page) => {
-    if (!autosave.isDirty() && !routineLeaveRef.current && !memoryLeaveRef.current) {
+    if (!autosave.isDirty() && !memoryLeaveRef.current && !voiceLeaveRef.current && !capabilityLeaveRef.current) {
       showPage(next);
       return;
     }
@@ -297,6 +300,7 @@ export function BotSettings({
               skills: selectedSkills,
             },
             incoming,
+            autosave.hasPendingModelSelection(),
           )
         : incoming;
     botIdentityRef.current = bot.id;
@@ -317,7 +321,7 @@ export function BotSettings({
       ...current,
       [key]: value,
       ...(key === 'fastMode' && current.modelOverride
-        ? { modelOverride: { ...current.modelOverride, fastMode: value === true } }
+        ? { modelOverride: { ...current.modelOverride, fastMode: value === 'ultrafast' ? 'ultrafast' : value === true } }
         : {}),
     }));
     autosave.onEdit('instant');
@@ -362,7 +366,7 @@ export function BotSettings({
     );
   }
 
-  const handleChooseAvatar = async (portrait?: string) => {
+  const handleChooseAvatar = async (portrait: string) => {
     if (avatarInFlight.current) return;
     avatarInFlight.current = true;
     setAvatarBusy(true);
@@ -370,9 +374,8 @@ export function BotSettings({
     try {
       await autosave.flush();
       if (autosave.isDirty()) return;
-      const next = portrait
-        ? await chooseBotAvatar(bot.id, portrait.split(',')[1])
-        : await chooseBotAvatar(bot.id);
+      // The picker chooses and crops on this computer; the teammate's own computer saves the image.
+      const next = await target.profile.chooseAvatar(bot.id, portrait.split(',')[1]);
       if (!next) return;
       setAvatar(next.avatar);
       setAvatarColor(next.avatarColor);
@@ -388,7 +391,6 @@ export function BotSettings({
     <BotPortraitPicker
       disabled={avatarBusy}
       onChange={portrait => void handleChooseAvatar(portrait)}
-      onUpload={() => void handleChooseAvatar()}
       trigger={
         <button
           type="button"
@@ -396,7 +398,7 @@ export function BotSettings({
           aria-label={t('bots.profile.changeAvatar')}
           className="relative rounded-full outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:opacity-50"
         >
-          <BotAvatar bot={{ name: displayName, avatar, avatarColor }} size="xl" />
+          <BotAvatar bot={{ name: displayName, avatar, avatarColor, deviceId: target.deviceId }} size="xl" />
           <span className="absolute bottom-0 right-0 flex h-6 w-6 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)]">
             <Camera size={12} aria-hidden="true" />
           </span>
@@ -408,17 +410,21 @@ export function BotSettings({
   const invitationPending = bot.invitation && bot.invitation.stage !== 'ready'
     && !(bot.invitation.stage === 'avatar' && bot.canonicalSessionId);
 
-  const settingsRows = [
+  const settingsRows = ([
     ['profile', botSettingsIcons.profile, t('bots.profile.title')],
     ['personality', botSettingsIcons.personality, t('bots.profile.personality')],
     ['memory', botSettingsIcons.memory, t('bots.memory.title')],
+    ['projects', botSettingsIcons.projects, t('bots.projects.title')],
+    // A V2 teammate's automations are its project's own (2026-11-10).
+    ['automations', botSettingsIcons.routines, t('bots.automations.title')],
     ['model', botSettingsIcons.model, t('bots.settingsTabs.model')],
+    ['voice', botSettingsIcons.voice, t('bots.voiceMode.settingsTitle')],
     ['capabilities', botSettingsIcons.capabilities, t('bots.capabilities.title')],
     ['channels', botSettingsIcons.channels, t('bots.channels.title')],
-    ['routines', botSettingsIcons.routines, t('routines.title')],
     ['history', botSettingsIcons.history, t('bots.historySearch.title')],
+    // The Home folder is a path on the teammate's own computer.
     ['advanced', botSettingsIcons.advanced, t('bots.homeFolder.title')],
-  ] as const;
+  ] as const).filter(([id]) => target.pages.has(id) && (id !== 'automations' || capabilities.projectMode === true));
   return (
     <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pb-8">
       <div className="mx-auto w-full max-w-xl">
@@ -428,7 +434,7 @@ export function BotSettings({
             onRetry={async () => {
               // A retry must use the confirmed selection, never race an autosave.
               if (!await canLeave()) throw new Error('Bot settings have not been saved');
-              await retryBotInvitation(bot.id);
+              await target.profile.retryInvitation(bot.id);
             }} />
         ) : null}
         <div className="flex min-h-12 flex-wrap items-center justify-between gap-3">
@@ -440,7 +446,7 @@ export function BotSettings({
                 onClick={() =>
                   void (async () => {
                     if (page === 'memory' && (await memoryBackRef.current?.())) return;
-                    if (page === 'routines' && (await routineBackRef.current?.())) return;
+                    if (page === 'capabilities' && (await capabilityBackRef.current?.())) return;
                     go('home');
                   })()
                 }
@@ -475,7 +481,7 @@ export function BotSettings({
             </span>
           ) : autosave.status === 'error' ? (
             <p className="flex items-center gap-2 text-11 text-[var(--text-danger)]" role="alert">
-              {t('bots.profileSaveFailed')}
+              {t(autosave.errorKey ?? 'bots.profileSaveFailed')}
               <button
                 type="button"
                 onClick={() => void autosave.retry()}
@@ -517,8 +523,20 @@ export function BotSettings({
                 </button>
               ))}
             </div>
-            <BotHomeComputerSetting bot={bot} />
-            <CindyMergeSetting bot={bot} />
+            {!isRemote ? (
+              <>
+                <BotHomeComputerSetting bot={bot} />
+                <CindyMergeSetting bot={bot} />
+              </>
+            ) : cloudCompanionAt(cloud, target.deviceId!, bot.id) ? (
+              // The main computer can be changed from any computer (it is asked to hand the companion over).
+              <>
+                <BotHomeComputerSetting bot={{ id: bot.id, name: bot.name }} />
+                <CindyMergeSetting bot={{ id: bot.id, name: bot.name }} />
+              </>
+            ) : (
+              <p className="mt-4 truncate text-12 text-[var(--text-tertiary)]">{target.deviceName}</p>
+            )}
             <div className="mt-6">
               <BotLifecycleSettings
                 bot={bot}
@@ -554,7 +572,7 @@ export function BotSettings({
                 type="button"
                 onClick={() => {
                   setPortraitRetryFailed(false);
-                  void retryBotInvitation(bot.id).catch(() => setPortraitRetryFailed(true));
+                  void target.profile.retryInvitation(bot.id).catch(() => setPortraitRetryFailed(true));
                 }}
                 disabled={bot.invitation.stage === 'avatar'}
                 className="ml-2 text-[var(--text-primary)] underline underline-offset-2 disabled:opacity-50"
@@ -597,17 +615,20 @@ export function BotSettings({
               <BotModelChainEditor
                 label={t('bots.model.primary')}
                 hiddenVendors={hiddenVendors}
+                deviceId={target.deviceId}
                 onRestoreDefault={() => {
-                  const modelChain = getEffectiveBotModelChain();
+                  const modelChain = defaultModelChain;
                   const primary = modelChain[0];
                   setCapabilities((current) => ({
                     ...current,
                     ...(primary ?? { model: '', providerId: null, effort: '', fastMode: false }),
+                    ...((current.agentDeviceId != null || primary?.agentDeviceId != null)
+                      ? { agentDeviceId: primary?.agentDeviceId ?? null } : {}),
                     modelOverride: null,
                     modelChain,
                     modelChainOverride: null,
                   }));
-                  autosave.onEdit('instant');
+                  autosave.onEdit('model');
                 }}
                 value={displayedModelChain}
                 onChange={(modelChain) => {
@@ -616,6 +637,8 @@ export function BotSettings({
                   setCapabilities((current) => ({
                     ...current,
                     ...primary,
+                    ...((current.agentDeviceId != null || primary.agentDeviceId != null)
+                      ? { agentDeviceId: primary.agentDeviceId ?? null } : {}),
                     modelChain,
                     modelChainOverride: modelChain,
                     modelOverride: {
@@ -625,35 +648,33 @@ export function BotSettings({
                       fastMode: primary.fastMode,
                     },
                   }));
-                  autosave.onEdit('instant');
+                  autosave.onEdit('model');
                 }}
               />
             </div>
-            <BotTaskModelEditor value={capabilities.taskModelOverride ?? null}
-              inheritedRoute={displayedModelChain[0]} hiddenVendors={hiddenVendors}
-              onChange={taskModelOverride => {
-                setCapabilities(current => ({ ...current, taskModelOverride }));
-                autosave.onEdit('instant');
-              }} />
           </div>
         </section>
+        {page === 'projects' && <BotProjectsSettings key={bot.id} botId={bot.id} />}
+        {page === 'automations' && <BotAutomationsSettings key={bot.id} bot={bot} beforeLeave={canLeave} />}
         {page === 'capabilities' && (
           <div>
             <BotCapabilitySettings
-              onConfigure={(kind, id) => {
+              // These open the settings of the computer this window runs on, not the teammate's.
+              onConfigure={isRemote ? undefined : (kind, id) => {
                 void canLeave().then(ok => {
                   if (!ok) return;
                   const toolSettings: Record<string, string> = {
                     browser: 'computer-use', computer: 'computer-use', android: 'computer-use',
-                    contacts: 'personalization&section=personalization.contacts',
                     ssh: 'remote-control&section=remoteControl.ssh',
                     slack: 'im-bot&section=imBot.cindy.slack', feishu_bot: 'im-bot', wechat: 'im-bot',
-                    'ios-simulator': 'ghosts',
                   };
                   navigate(kind === 'skill' ? '/skillhub/local' : `/settings?tab=${toolSettings[id ?? ''] ?? 'builtin-tools'}`);
                 });
               }}
               expanded={page === 'capabilities'}
+              backRef={capabilityBackRef}
+              leaveRef={capabilityLeaveRef}
+              onInputHandoffChange={(allowed) => updateCapability('inputHandoff', allowed)}
               bot={bot}
               capabilities={capabilities}
               skills={selectedSkills}
@@ -670,18 +691,6 @@ export function BotSettings({
                 autosave.onEdit('instant');
               }}
             />
-            <div className="mt-5 flex items-start gap-3 border-t border-[var(--border-default)] pt-4">
-              <div className="min-w-0 flex-1">
-                <p className="text-13 font-medium text-[var(--text-primary)]">{t('bots.capabilities.inputHandoff.title')}</p>
-                <p className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">{t('bots.capabilities.inputHandoff.description')}</p>
-              </div>
-              <Switch
-                aria-label={t('bots.capabilities.inputHandoff.title')}
-                className="mt-0.5 shrink-0"
-                checked={capabilities.inputHandoff !== false}
-                onCheckedChange={(value) => updateCapability('inputHandoff', value === true)}
-              />
-            </div>
           </div>
         )}
         {page === 'channels' ? <BotChannelsPage bot={bot} /> : null}
@@ -727,37 +736,34 @@ export function BotSettings({
             </div>
           </div>
         ) : null}
+        {page === 'voice' ? (
+          <CompanionVoiceSettings botId={bot.id} sessionId={canonicalBotSessionId(bot) ?? undefined}
+            beforeLeaveRef={voiceLeaveRef}
+            // Providers are connected in the settings of the computer the teammate runs on.
+            onOpenProviders={isRemote ? undefined : () => {
+              void canLeave().then((allowed) => {
+                if (allowed) navigate('/settings?tab=providers');
+              });
+            }} />
+        ) : null}
         {page === 'memory' ? (
           <BotMemorySettings
             botId={bot.id}
             botName={name}
             memoryEnabled={capabilities.memory}
             onMemoryEnabledChange={(enabled) => updateCapability('memory', enabled)}
+            aboutMe={{
+              value: userContextSource,
+              readOnly: !!invitationPending,
+              onChange: (next) => {
+                setUserContextSource(next);
+                autosave.onEdit('text');
+              },
+              onBlur: () => void autosave.flush(),
+              composition: autosave.composition,
+            }}
             backRef={memoryBackRef}
             leaveRef={memoryLeaveRef}
-          />
-        ) : null}
-        {page === 'routines' ? (
-          <BotRoutines
-            embedded
-            botId={bot.id}
-            beforeLeaveRef={routineLeaveRef}
-            backRef={routineBackRef}
-            header={
-              <BotAutonomySettings
-                botId={bot.id}
-                botName={displayName}
-                allowSchedulerFollow={capabilities.allowSchedulerFollow === true}
-                onAllowSchedulerFollowChange={(value) => updateCapability('allowSchedulerFollow', value)}
-              />
-            }
-            footer={
-              // 伙伴被叫醒后维护的待办：工作台里不再平铺，主人在这里查看与处理。
-              // 待办面板自带 20px 水平内边距，这里收回 8px，与例行任务行的文字起点对齐。
-              <div className="-mx-2 border-t border-[var(--border-default)] pt-2">
-                <BotTodoList botId={bot.id} />
-              </div>
-            }
           />
         ) : null}
       </div>

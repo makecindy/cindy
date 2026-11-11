@@ -235,6 +235,70 @@ async function connect(): Promise<void> {
 }
 
 describe('TelegramIM', () => {
+  it('reads a persisted image locator without needing the recent in-memory media pool', async () => {
+    await im.init();
+    await connect();
+    const original = api.call.bind(api);
+    api.call = async (method, params, signal) =>
+      method === 'getFile'
+        ? ({ file_path: 'photos/saved.jpg', file_size: 3 } as never)
+        : original(method, params, signal);
+    const fetcher = vi.fn(async () => new Response(new Uint8Array([1, 2, 3])));
+    vi.stubGlobal('fetch', fetcher);
+    try {
+      expect(await im.readGroupHistoryImage('saved-file')).toEqual(Buffer.from([1, 2, 3]));
+      expect(fetcher).toHaveBeenCalledWith(
+        'https://files.local/photos/saved.jpg',
+        expect.anything(),
+      );
+      fetcher.mockImplementationOnce(async () => {
+        await im.dispose();
+        return new Response(new Uint8Array([1]));
+      });
+      expect(await im.readGroupHistoryImage('saved-file')).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it.each(['startup', 'poll'])('honors the full rate-limit wait during %s', async (phase) => {
+    vi.useFakeTimers();
+    ctx.host.secrets.write('telegram-bot-token', '999:saved-token');
+    const method = phase === 'startup' ? 'getMe' : 'getUpdates';
+    const rateLimit = new TelegramApiError(method, 429, 'Too Many Requests', 90);
+    if (phase === 'startup') api.failNextCall(method, rateLimit);
+    try {
+      await im.init();
+      if (phase === 'poll') api.failNextGetUpdates(rateLimit);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(89_999);
+      expect(api.calls.filter((call) => call.method === method)).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(api.calls.filter((call) => call.method === method)).toHaveLength(2);
+    } finally {
+      await im.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['recover', 'offline', 'dispose', 'invalid-token'])('handles startup failure: %s', async (outcome) => {
+    vi.useFakeTimers();
+    ctx.host.secrets.write('telegram-bot-token', '999:saved-token');
+    api.failNextCall('getMe', outcome === 'invalid-token'
+      ? new TelegramApiError('getMe', 401, 'invalid token') : new Error('network down'));
+    try {
+      await im.init();
+      if (outcome === 'offline') await im.goOffline();
+      if (outcome === 'dispose') await im.dispose();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(api.calls.filter((call) => call.method === 'getMe')).toHaveLength(outcome === 'recover' ? 2 : 1);
+      if (outcome === 'recover') expect(im.getStatus().kind).toBe('connected');
+    } finally {
+      await im.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it('无 token 时 init 保持 idle, 不发任何请求', async () => {
     await im.init();
     expect(im.getStatus()).toEqual({ kind: 'idle' });
@@ -322,6 +386,41 @@ describe('TelegramIM', () => {
       text: 'hi',
       messageId: '111|2',
     });
+  });
+
+  // 测试价值：真实 TelegramIM 入站入口；复现伙伴 guestDm=true 导致陌生私信进 Agent。
+  // 原有测试只有个人 bot 默认配置，未覆盖旧伙伴选项。最小输入为陌生人普通私信；
+  // unit tier，假 Bot API，不联网；同时保留主人私聊和群成员 @ 的可观察行为。
+  it('伙伴连接的旧 guestDm 选项不能放行陌生私信，主人和群成员仍可发言', async () => {
+    await im.dispose();
+    const legacyCompanionOptions = {
+      apiFactory: () => api,
+      secretKeyPrefix: 'bot-im:test:',
+      ipc: false,
+      guestDm: true,
+    };
+    im = new TelegramIM(ctx.host, legacyCompanionOptions);
+    const events: IMMessageEvent[] = [];
+    im.onMessage((event) => events.push(event));
+    await im.setConfig({ token: '999:secret-token-abcdefghijk', ownerUserId: OWNER_ID });
+
+    api.pushUpdates([
+      privateMessage('最近更新的有哪些项目', 222, 1),
+      privateMessage('还有吗', 222, 2),
+      privateMessage('/help', 222, 3),
+      privateMessage('主人私聊', 111, 4),
+      groupMessage({ text: '群成员提问', fromId: 222, messageId: 5, mentionBot: true }),
+    ]);
+    // 等正向消息被处理，避免以“暂时没收到事件”误判拒绝成功；不同 lane 不约定顺序。
+    await vi.waitFor(() => {
+      expect(events.some((event) => event.senderId === OWNER_ID)).toBe(true);
+      expect(events.some((event) => event.senderId === 'g/-100200')).toBe(true);
+    });
+    expect(events.map((event) => event.senderId).sort()).toEqual([OWNER_ID, 'g/-100200'].sort());
+    expect(events.find((event) => event.senderId === 'g/-100200')?.speaker?.isOwner).toBe(false);
+    const strangerReplies = api.calls.filter((call) => call.method === 'sendMessage' && call.params.chat_id === '222');
+    expect(strangerReplies).toHaveLength(1);
+    expect(strangerReplies[0].params.text).toContain('只响应主人本人的指令');
   });
 
   it('群里 owner 裸斜杠命令视为召唤(不带 @ 也进 slash); 成员裸命令仍静默', async () => {
@@ -1281,6 +1380,8 @@ describe('TelegramIM', () => {
     ]);
     await vi.waitFor(() => expect(events).toHaveLength(1));
     expect(events[0].replyContext).toEqual({
+      messageId: '40',
+      sentAt: expect.any(Number),
       author: 'Cindy',
       text: '方案 A: 先改 transport',
       isBot: true,
@@ -1634,7 +1735,7 @@ describe('TelegramIM', () => {
     try {
       for (const [index, emoji] of PROCESSING_REACTION_POOL.entries()) {
         random.mockReturnValue((index + 0.5) / PROCESSING_REACTION_POOL.length);
-        expect(await im.reactToMessage('111|5', '👨‍💻')).toBe(emoji);
+        expect(await im.reactToMessage('111|5', '🤔')).toBe(emoji);
         const sent = api.calls.filter((call) => call.method === 'setMessageReaction').at(-1)!;
         expect(sent.params.reaction).toEqual([{ type: 'emoji', emoji }]);
         expect(sent.params.is_big).toBeUndefined();
@@ -1657,12 +1758,12 @@ describe('TelegramIM', () => {
         'setMessageReaction',
         new TelegramApiError('setMessageReaction', 400, 'REACTION_INVALID'),
       );
-      expect(await im.reactToMessage('111|5', '👨‍💻')).toBe('👨‍💻');
+      expect(await im.reactToMessage('111|5', '🤔')).toBe('🤔');
       expect(
         api.calls
           .filter((call) => call.method === 'setMessageReaction')
           .map((call) => call.params.reaction),
-      ).toEqual([[{ type: 'emoji', emoji: '✍' }], [{ type: 'emoji', emoji: '👨‍💻' }]]);
+      ).toEqual([[{ type: 'emoji', emoji: '✍' }], [{ type: 'emoji', emoji: '🤔' }]]);
     } finally {
       random.mockRestore();
     }
@@ -1680,7 +1781,7 @@ describe('TelegramIM', () => {
     await connect();
     // emoji off: reactToMessage 直接返回 null, 不发 setMessageReaction
     expect(await im.reactToMessage('111|5', '👍')).toBeNull();
-    expect(await im.reactToMessage('111|5', '👨‍💻')).toBeNull();
+    expect(await im.reactToMessage('111|5', '🤔')).toBeNull();
     expect(await im.reactToMessage('111|5', '👀')).toBeNull();
     expect(api.calls.some((c) => c.method === 'setMessageReaction')).toBe(false);
     // DM replyQuote=first: 首条回复挂回触发消息, 第二条不挂
@@ -2998,11 +3099,16 @@ describe('TelegramIM 音视频与群历史媒体', () => {
       kind: 'file',
       originalName: 'IMG_80.MP4',
       mimeType: 'video/mp4',
-      author: 'Tom',
+      author: 'Tom · 消息 80',
     });
     // 不在上下文 id 里的消息不下载; 其它群同 id 不串。
     expect((await im.collectGroupHistoryMedia('-100200', ['81'])).attachments).toEqual([]);
     expect((await im.collectGroupHistoryMedia('-100300', ['80'])).attachments).toEqual([]);
+    const missing = await im.collectGroupHistoryMedia('-100200', ['999'], undefined, { attachmentMessageIds: ['999'] });
+    expect(missing).toEqual({ attachments: [], unavailable: ['历史消息 999：附件原件不在可用缓存中，仅提供历史记录'] });
+    const full = await im.collectGroupHistoryMedia('-100200', ['80'], undefined, { provided: Array.from({ length: 4 }, () => ({kind: 'file' as const, absPath: '/current.pdf', originalName: 'current.pdf', mimeType: 'application/pdf'})) });
+    expect(full.attachments).toEqual([]);
+    expect(full.unavailable.join(' ')).toContain('上限');
   });
 
   it('本轮已随附件送达的被引消息/相册成员不重复补; 媒体不随轮次出池; 受保护群不入池', async () => {

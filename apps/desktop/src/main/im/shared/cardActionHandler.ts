@@ -443,7 +443,9 @@ export function createCardActionHandler(
           try {
             // The Pi host transaction reads the old DB route to protect native
             // history and register a correct rollback snapshot while busy.
-            await updateModelEffort(sessionId, modelId, effort ?? 'high',
+            await updateModelEffort(sessionId,
+              'effectiveModelId' in runtimeChange ? runtimeChange.effectiveModelId ?? modelId : modelId,
+              effort ?? 'high',
               'effectiveProviderId' in runtimeChange ? runtimeChange.effectiveProviderId : providerId);
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
@@ -1023,7 +1025,7 @@ export function createCardActionHandler(
       {
         fallbackModel: newTaskDefault?.model,
         desiredEffort: desktopPrefs.effort,
-        desiredFastMode: desktopPrefs.fastMode === true,
+        desiredFastMode: desktopPrefs.fastMode ?? false,
       },
     );
     // 换了模型时 effort 用 reconcile 结果(保存档可能超出兜底模型的支持集,原样透传
@@ -1559,6 +1561,15 @@ export function createCardActionHandler(
           log.info(
             `card action sender=...${event.senderId.slice(-8)} button=${event.buttonId} payload=${JSON.stringify(event.payload).slice(0, 200)}`,
           );
+
+          // 公共对话(服务器频道)不接入本机桌面任务 / 项目: 即使旧卡仍在，接管 / 项目按钮也不执行。
+          if (
+            (event.buttonId.startsWith('control:') || event.buttonId.startsWith('project:')) &&
+            adapter.blocksLocalTaskAccess?.(event.senderId)
+          ) {
+            log.warn(`ignored local-task card action in public conversation button=${event.buttonId}`);
+            return;
+          }
 
           // model:pick is NOT an InteractionRequest reply — it's a direct command
           // triggered by the /model slash command's picker card. Handle it

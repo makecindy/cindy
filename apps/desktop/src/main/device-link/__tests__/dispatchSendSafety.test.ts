@@ -41,11 +41,11 @@ const deviceLinkSettings = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('../settings-store', () => ({
+vi.mock('../settings-store.desktop', () => ({
   readDeviceLinkSettings: () => deviceLinkSettings.value,
 }));
 
-import { __testing, runInvoke, wireInboundDispatch, setRemoteTurnChangeAction } from '../dispatch';
+import { __testing, runInvoke, wireInboundDispatch, setRemoteTurnChangeAction } from '../dispatch.desktop';
 import { __testing as registry } from '../invoke-registry';
 import { setRemoteBotSessionLookup } from '../remoteBotSessionBoundary';
 import { currentDbRpcAdmissionClass } from '../../localDb/client/rpcAdmission';
@@ -85,6 +85,25 @@ beforeEach(() => {
     revokedControllers: [],
   };
   __testing.reset();
+});
+
+// Test value: public push dispatch must deliver the new metadata invalidation to both controllers.
+// Existing forwarding cases did not cover alias topics or the bot-authorization queue's empty payload.
+// Minimal input: one {} invalidation and two sessions subscribers; unit tier, no network.
+it('forwards project alias invalidations through the production bot authorization queue to every subscriber', async () => {
+  const client = mkClient();
+  __testing.setActiveClient(client as never);
+  subscriptions.subscribe('mobile', ['sessions'], 'mobile', []);
+  subscriptions.subscribe('desktop', ['sessions'], 'desktop', []);
+  setRemoteBotSessionLookup(async () => 'ordinary');
+  try {
+    __testing.forwardPush('local-db:project-aliases:changed', {});
+    await vi.waitFor(() => expect(client.sendPush).toHaveBeenCalledTimes(2));
+    expect(client.sendPush).toHaveBeenCalledWith('mobile', 'local-db:project-aliases:changed', {});
+    expect(client.sendPush).toHaveBeenCalledWith('desktop', 'local-db:project-aliases:changed', {});
+  } finally {
+    setRemoteBotSessionLookup(null);
+  }
 });
 
 it('strips Desktop credential links from authorization history and live metadata pushes', () => {

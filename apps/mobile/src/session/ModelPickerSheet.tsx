@@ -1,3 +1,4 @@
+import type { ScrollViewInstance, TextInputInstance } from 'react-native';
 import { modelNeedsReselection } from './modelReselection';
 /**
  * Shared model and permission selection for new and existing tasks.
@@ -9,17 +10,8 @@ import { UnifiedModelPickerSheet, type UnifiedMobilePickerOptions } from './Unif
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronRight, Search, X } from 'lucide-react-native';
-import {
-  Animated,
-  Easing,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  View,
-  useWindowDimensions,
-} from 'react-native';
-import type { TextInput as RNTextInput } from 'react-native';
+import { Animated, Easing, Platform, Pressable, StyleSheet, View, useWindowDimensions } from 'react-native';
+
 import { Text, TextInput } from '@/components/AppText';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -69,7 +61,9 @@ const SECONDARY_SLIDE_OUT_EASING = Easing.bezier(...motionEasing.in);
 const EMPTY_FLAT_OPTIONS: readonly MobileModelOption[] = [];
 
 export interface ModelPickerSheetProps {
-  unified?: UnifiedMobilePickerOptions;
+  /** Host-owned context, such as the plugin requesting this selection. */
+  title?: string;
+  unified: UnifiedMobilePickerOptions;
   visible: boolean;
   onClose(): void;
   onClosed?(): void;
@@ -94,10 +88,12 @@ export interface ModelPickerSheetProps {
   activeModelId: string;
   /** 已建会话的选择器传 true:当前来源按实际路由口径解析(见 buildMobileModelSections)。 */
   existingSessionRoute?: boolean;
+  /** Existing task binding on the directory host; omitted for configuration/new tasks. */
+  subscriptionTaskId?: string;
   /** 显式选中的来源 id(null = 跟随被控端默认路由;内部据此算高亮来源)。 */
   selectedProviderId: string | null;
   selectedEffort: string;
-  selectedFastMode: boolean;
+  selectedFastMode: boolean | 'ultrafast';
   loading?: boolean;
   disabled?: boolean;
   emptyHint?: string;
@@ -106,7 +102,7 @@ export interface ModelPickerSheetProps {
   onSelectProviderRow(row: ProviderModelRow): void;
   onSelectFlatModel(option: MobileModelOption): void;
   onChangeSelectedEffort?(effort: string): void;
-  onChangeSelectedFastMode?(enabled: boolean): void | Promise<void>;
+  onChangeSelectedFastMode?(enabled: boolean | 'ultrafast'): void | Promise<void>;
   modelMemory?: MobileModelMemoryAccessors;
   pricing?: MobileModelPricingMap | null;
   apiKeyStatus?: DeviceApiKeyStatus;
@@ -132,6 +128,7 @@ export function ModelPickerSheet(props: ModelPickerSheetProps) {
 }
 function LegacyModelPickerSheet({
   visible,
+  title,
   onClose,
   onClosed,
   providers,
@@ -176,8 +173,8 @@ function LegacyModelPickerSheet({
   const [primarySnap, setPrimarySnap] = useState<ContextSheetSnap>('half');
   const [secondarySnap, setSecondarySnap] = useState<ContextSheetSnap>('half');
   const [query, setQuery] = useState('');
-  const scrollRef = useRef<ScrollView | null>(null);
-  const searchInputRef = useRef<RNTextInput>(null);
+  const scrollRef = useRef<ScrollViewInstance | null>(null);
+  const searchInputRef = useRef<TextInputInstance>(null);
   const didAutoScrollRef = useRef(false);
   // 二级 Surface 滑入/滑出动画(0 = 就位;windowHeight = 屏下)。动画期间锁交互防连点。
   const secondaryTranslate = useRef(new Animated.Value(windowHeight)).current;
@@ -514,7 +511,7 @@ function LegacyModelPickerSheet({
   if (Platform.OS === 'ios') {
     return (
       <ComposerSheet nativeContent visible={visible} onClose={onClose} onClosed={onClosed} backLabel={t('models.picker.backToModels')}
-        title={view.kind === 'models' ? t('models.picker.title') : secondaryTitle}
+        title={view.kind === 'models' ? title ?? t('models.picker.title') : secondaryTitle}
         onBack={view.kind === 'models' ? undefined : backToModels} testID={testID}>
         {view.kind === 'models' ? <>
           <ModelPickerNativeHeader query={query} onChangeQuery={setQuery}
@@ -547,7 +544,7 @@ function LegacyModelPickerSheet({
         scrollRef={scrollRef}
         snap={primarySnap}
         testID={testID}
-        title={t('models.picker.title')}
+        title={title ?? t('models.picker.title')}
       >
         {permissionRow}
         {noResults ? (

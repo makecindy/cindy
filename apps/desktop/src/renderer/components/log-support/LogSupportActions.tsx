@@ -25,18 +25,20 @@ export function OpenLogsRow({ presentation = 'settings' }: LogSupportRowProps) {
   };
 
   return (
-    // Preserve AboutSection's existing 18px row gutter; dialogs supply their own panel padding.
+    // Settings rows use the shared px-4 py-4 gutter (DESIGN.md §4); dialogs supply their own panel padding.
     <div
       className={cn(
         'flex justify-between gap-3',
-        inDialog ? 'items-start' : 'items-center px-[18px] py-4',
+        inDialog ? 'items-start' : 'items-center px-4 py-4',
       )}
     >
       <div className="flex min-w-0 flex-col gap-1">
         <span
           className={cn(
             'text-13',
-            inDialog ? 'text-[var(--confirm-title)]' : 'text-[var(--settings-section-sublabel)]',
+            inDialog
+              ? 'text-[var(--confirm-title)]'
+              : 'font-medium text-[var(--settings-section-sublabel)]',
           )}
         >
           {t('settings.about.logsDirLabel')}
@@ -90,11 +92,11 @@ export function UploadLogsActionRow({
       : null;
   const descriptionClassName = inDialog
     ? 'text-12 leading-normal text-[var(--confirm-desc)]'
-    : 'text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70';
+    : 'text-12 leading-[1.4] text-[var(--text-secondary)]';
 
   return (
     // Same inherited Settings row gutter as OpenLogsRow; not an additional dialog inset.
-    <div className={cn('flex flex-col gap-1.5', !inDialog && 'px-[18px] py-4')}>
+    <div className={cn('flex flex-col gap-1.5', !inDialog && 'px-4 py-4')}>
       {/* items-start:本行的说明有三段(用途 / 上传内容边界 / 不可用原因),按钮若垂直居中会浮在
           文字块中间;与标签对齐才和同页其它「标签 + 按钮」行(日志目录 / 服务条款)读起来一致。 */}
       <div className="flex items-start justify-between gap-3">
@@ -102,7 +104,9 @@ export function UploadLogsActionRow({
           <span
             className={cn(
               'text-13',
-              inDialog ? 'text-[var(--confirm-title)]' : 'text-[var(--settings-section-sublabel)]',
+              inDialog
+                ? 'text-[var(--confirm-title)]'
+                : 'font-medium text-[var(--settings-section-sublabel)]',
             )}
           >
             {t('settings.about.logUpload.uploadLabel')}
@@ -116,7 +120,7 @@ export function UploadLogsActionRow({
           </p>
           {inDialog ? (
             <details className={descriptionClassName}>
-              <summary className="w-fit cursor-pointer underline underline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]">
+              <summary className="w-fit cursor-pointer underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]">
                 {t('logSupport.uploadDetails')}
               </summary>
               <p className="mt-2">{t('settings.about.logUpload.scopeDescription')}</p>

@@ -69,13 +69,14 @@ import {
   recordXaiSubscriptionUsageSnapshot,
 } from '../usageBroadcaster.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
-import { isOpenAiSubscriptionProviderId } from '../maker-host/codex-account-auth.js';
+import { isOpenAiSubscriptionProviderId } from '../maker-host/codex-account-auth.desktop.js';
 import { desktopCodexAuthAdapter } from '../maker-host/auth-adapters.js';
 import { hasClaudeNativeLogin } from '../maker-host/claude-native-auth.js';
 import { peekClaudeCliLoginStatus } from '../maker-host/claude-native-cli-status.js';
-import { readClaudeCliPlanUsage } from '../maker-host/claude-native-cli.js';
-import { getGrokAccessToken, hasGrokOAuthLogin } from '../maker-host/grok-oauth-login.js';
-import { outboundFetch } from '../maker-host/outbound-fetch.js';
+import { readClaudeCliPlanUsage } from '../maker-host/claude-native-cli.desktop.js';
+import { observeSubscriptionAccountUsage } from '../subscription-accounts/runtime.js';
+import { getGrokAccessToken, hasGrokOAuthLogin } from '../maker-host/grok-oauth-login.desktop.js';
+import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 import { CodexResetAutoUse, parseCodexResetAutoUse } from '../usage/codexResetAutoUse.js';
 import { codexResetAutoUseStore, codexResetAccountKey } from '../usage/codexResetAutoUseStore.js';
 import { observeUsageChanges } from '../usageBroadcaster.js';
@@ -196,8 +197,8 @@ export async function readXaiSubscriptionUsageSnapshotForDeviceLink(providerId?:
   return await readSubscriptionAccountUsage(providerId) as XaiSubscriptionUsageSnapshot | null;
 }
 
-export async function readClaudeSubscriptionUsageSnapshotForDeviceLink(providerId?: string): Promise<import('../../shared/claudeSubscriptionUsage.js').ClaudeSubscriptionUsageSnapshot | null> {
-  if (!providerId || providerId === 'anthropic') return claudeSubscriptionUsageReader.read();
+export async function readClaudeSubscriptionUsageSnapshotForDeviceLink(providerId?: string, options?: { fresh?: boolean }): Promise<import('../../shared/claudeSubscriptionUsage.js').ClaudeSubscriptionUsageSnapshot | null> {
+  if (!providerId || providerId === 'anthropic') return claudeSubscriptionUsageReader.read(options);
   if (subscriptionAccountKind(providerId) !== 'claude') return null;
   return await readSubscriptionAccountUsage(providerId) as import('../../shared/claudeSubscriptionUsage.js').ClaudeSubscriptionUsageSnapshot | null;
 }
@@ -430,7 +431,8 @@ export function registerMakerUsageIpc(maker: Maker): void {
 
   // 订阅会话的 CLI 在会话里上报 SDK rate_limit_event → 落库 + 广播(maker-core 只对本机
   // Claude 订阅会话转发)。事件晚于登出 / 断开到达时丢弃,不复活刚清掉的快照。
-  setClaudeRateLimitInfoListener((info) => {
+  setClaudeRateLimitInfoListener((info, account) => {
+    if (account) { observeSubscriptionAccountUsage(account, info); return; }
     if (!hasClaudeNativeLogin()) return;
     const snapshot = parseClaudeSdkRateLimitInfo(info, Date.now());
     if (!snapshot) return;

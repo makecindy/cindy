@@ -19,7 +19,8 @@ describe('mobile cross-device quote wiring', () => {
     expect(bubbleSource).toContain("segment.kind === 'quote' ? [segment.quote] : []");
     expect(bubbleSource).toContain('joinChatQuoteTextSegments(quoteSegments)');
     expect(bubbleSource).toContain('actions.onPreviewRewind?.(clientId, {');
-    expect(bubbleSource).toContain('{ orderedBody: item.message.body }');
+    expect(bubbleSource).toContain('const draftBody = item.message.draftBody ?? item.message.body;');
+    expect(bubbleSource).toContain('{ orderedBody: draftBody }');
   });
 
   it('propagates quote metadata through direct and attachment-outbox sends', () => {

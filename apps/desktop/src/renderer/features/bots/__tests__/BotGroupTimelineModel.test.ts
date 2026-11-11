@@ -41,6 +41,16 @@ const page = (from: number, to: number) => Array.from({ length: to - from + 1 },
   msg({ id: `m${from + index}`, sequence: from + index, content: `第 ${from + index} 条` }));
 
 describe('push refresh merge', () => {
+  // Unit: edits/deletions of already opened history must arrive without reloading every page.
+  it('applies historical message projections and discards all pages across a history reset', () => {
+    const first: BotGroupLoadedTimeline = { group: { ...detail(page(10, 12), true), historyRevision: 'a' }, older: page(1, 3), olderPlans: [], olderHasMore: true };
+    const edited = { ...first.older[0]!, content: 'edited remotely' };
+    const deleted = { ...first.older[1]!, deleted: true, content: '' };
+    const next = { ...first.group, messageUpdates: [edited, deleted] };
+    const merged = mergeBotGroupLatestPage(first, next);
+    expect(merged.older).toEqual([edited, deleted, first.older[2]]);
+    expect(mergeBotGroupLatestPage(merged, { ...next, historyRevision: 'b', messageUpdates: [] }).older).toEqual([]);
+  });
   it('keeps rows pushed out of the latest page instead of leaving a gap', () => {
     const first: BotGroupLoadedTimeline = { group: detail(page(1, 3), true), older: [], olderPlans: [], olderHasMore: false };
     // Two new messages arrive; a three-message page no longer covers 1 and 2.
@@ -69,6 +79,18 @@ describe('push refresh merge', () => {
     const merged = mergeBotGroupLatestPage(first, detail(page(11, 13), false));
     expect(merged.older.map((message) => message.id)).toEqual(['m1', 'm2', 'm3']);
     expect(merged.older).toBe(first.older);
+  });
+
+  // bot-group-chat.md §10「话题未读与提示」: older pages are not re-read, yet a Thread read meanwhile must lose its badge.
+  it('gives Thread roots on pages opened with 「查看更早」 the unread state of the latest Thread list', () => {
+    const root = msg({ id: 'm2', sequence: 2, replyCount: 2, threadUnread: { count: 2, mentioned: true, latest: 21 } });
+    const first: BotGroupLoadedTimeline = { group: detail(page(10, 12), true), older: [msg({ id: 'm1', sequence: 1 }), root], olderPlans: [], olderHasMore: true };
+    const thread = { rootId: 'm2', rootAuthorName: '咪咪', rootAuthorBotId: 'mimi', rootText: '', replyCount: 2, lastReply: null };
+    const read = mergeBotGroupLatestPage(first, { ...detail(page(10, 12), true), threads: [{ ...thread, unread: { count: 0, mentioned: false } }] });
+    expect(read.older[1]!.threadUnread).toEqual({ count: 0, mentioned: false });
+    expect(read.older[0]).toBe(first.older[0]);
+    // The same list again changes nothing.
+    expect(mergeBotGroupLatestPage(read, { ...detail(page(10, 12), true), threads: [{ ...thread, unread: { count: 0, mentioned: false } }] })).toBe(read);
   });
 
   it('retains loaded history when exactly one full latest page arrives with no missing sequence', () => {

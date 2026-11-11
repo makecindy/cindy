@@ -73,7 +73,10 @@ function deferred<T>() {
 }
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({
+    t: (key: string) => key,
+    i18n: { language: 'en', exists: (key: string) => key === 'chat.remoteError.REMOTE_AGENT_GROUP_USAGE_LIMIT' },
+  }),
 }));
 
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
@@ -304,6 +307,18 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     rerender(banner);
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(dismiss).toHaveBeenCalledOnce();
+  });
+
+  // Unit regression: startup account errors need actionable copy, not replyFailed.
+  it.each([
+    ['[SUBSCRIPTION_ACCOUNT_LIMITED] diagnostic', 'limited'],
+    ['[SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED] diagnostic', 'loginRequired'],
+    ['The task subscription account requires login or quota reset', 'legacy'],
+  ])('localizes subscription startup failure %s', (message, key) => {
+    const error = `LAZY_CREATE_FAILED: ${message}`;
+    render(<ErrorBanner error={error} retryText="original" onRetry={vi.fn()} agentKind="cc" />);
+    expect(screen.getByText(`chat.subscriptionAccountError.${key}`)).toBeTruthy();
+    expect(screen.queryByText(error)).toBeNull();
   });
 
   it('localizes the Codex resume preflight marker without exposing the host envelope', () => {
@@ -1175,6 +1190,20 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     },
   );
 
+  // Unit regression: a pending switch still has the previous local route in its projection.
+  // Group quota exhaustion must not offer spending a reset card on that unrelated account.
+  it('keeps group quota waits without reading the previous local account reset credits', async () => {
+    render(<ErrorBanner error="[REMOTE_AGENT_GROUP_USAGE_LIMIT] usage_limit_reached"
+      retryText="retry this turn" onRetry={vi.fn()} agentKind="codex" providerId="openai"
+      usageLimitRecovery={{ resetAtMs: null, isAccountUsageLimit: true }}
+      usageLimitWait={{ resumeAt: Date.now() + 60 * 60 * 1000 }} onCancelUsageLimitWait={vi.fn()} />);
+    await act(async () => {});
+    expect(screen.getByText('chat.remoteError.REMOTE_AGENT_GROUP_USAGE_LIMIT')).toBeTruthy();
+    expect(screen.getByText('chat.errorBanner.usageLimitAutoContinueAt')).toBeTruthy();
+    expect(mocks.getCodexRateLimits).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'codexResets.limitAction' })).toBeNull();
+  });
+
   it('explains an organization Codex limit and keeps the raw 429 response available', () => {
     const rawError =
       'API Error: Request rejected (429) · {"error":{"type":"usage_limit_reached","plan_type":"business","resets_at":1788220709}}';
@@ -1396,5 +1425,14 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     />);
     expect(screen.getByText('chat.errorBanner.modelAccessDenied')).toBeTruthy();
     expect(screen.queryByText(/Failed to authenticate/)).toBeNull();
+  });
+});
+
+
+describe('output-limit guidance', () => {
+  it.each([131064, 1000])('renders reasoning-aware usage and guidance (%s)', (reasoningTokens) => {
+    render(<ErrorBanner error="limit" errorReason="output-limit" outputLimit={{ outputTokens: 131072, reasoningTokens }} onRetry={vi.fn()} />);
+    const expected = reasoningTokens === 131064 ? 'logic.errors.outputLimitReasoning' : 'logic.errors.outputLimit';
+    expect(screen.getByText(`logic.errors.outputLimitUsage ${expected}`)).toBeTruthy();
   });
 });

@@ -29,7 +29,7 @@ describe("Gemini 4 Argon catalog entry", () => {
     });
   });
 
-  it("stays a public model without a guessed gateway route", () => {
+  it("keeps the native Gemini protocol without inventing model availability", () => {
     expect(
       registry?.models.some((m) => m.modelRef === "google/gemini-4-argon"),
     ).toBe(false);
@@ -37,6 +37,10 @@ describe("Gemini 4 Argon catalog entry", () => {
       expect(resolveModelNativeApi(registry, "xd", id), id).toBe(
         "google-generative-ai",
       );
+    // Argon follows the verified Gemini family protocol, just like Flash.
+    expect(resolveModelNativeApi(registry, "xd", "google/gemini-3.8-flash")).toBe(
+      "google-generative-ai",
+    );
   });
 
   it("switches from the launch price to the published 2026-12-01 price", () => {

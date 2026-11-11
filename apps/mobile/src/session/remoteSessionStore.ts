@@ -1,3 +1,5 @@
+import { isTeammateTask } from './teammateTaskSource';
+import { applyMobileSessionRebalancePreferencePatch } from './sessionRebalanceCache';
 import { readTokenSpeedSnapshot, type TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
 import { historyTurnEnded, nextHistoryCacheReceipt } from '@cindy/maker-shared/message-window';
 import { normalizeTaskTags, reconcileTaskTags } from '@cindy/maker-shared';
@@ -44,7 +46,7 @@ import { isDefaultDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
 import { EMPTY_INPUT_PROJECTION, normalizeInputProjection } from '@/session/inputProjection';
 import { sortPendingInteractions } from '@/session/interactionModel';
-import { clearAskUserDraft } from '@/session/interactionDraftStore';
+import { clearAskUserDraft, clearIssueConfirmDraft, clearAllInteractionDrafts } from '@/session/interactionDraftStore';
 import { applySessionModelPrefPush } from '@/session/sessionModelMirror';
 import {
   createLatestWriteGuard,
@@ -114,6 +116,9 @@ export type RemoteNewMakerWorktreeBranchPreference = {
  * 字段,防止同字段旧写的 push 回流把本机更新的乐观意图滚回(review P2)。
  */
 export const sessionPendingWrites = createPendingWriteTracker();
+// List-only previews reuse the existing counted tracker. Raw rows remain available
+// to details and metadata reconciliation until archive is actually confirmed.
+let sessionListRemovalPreviews = createPendingWriteTracker();
 
 /**
  * 会话元数据写序守卫与出网队列(app 级单例):首页滑动操作与会话详情页菜单是同一组
@@ -147,6 +152,8 @@ export interface RemoteSessionRunStatus {
   isRunning: boolean;
   /** Terminal failure remains sticky until the next run, even after read acknowledgement. */
   hasTerminalError?: boolean;
+  /** Existing maker:event identity, retained locally for live/history error deduplication. */
+  terminalError?: { clientId: string; message: string } | null;
   reconnectAttempt: RemoteSessionReconnectAttempt | null;
   sideTaskRunning: boolean;
   startedAt: number | null;
@@ -255,8 +262,9 @@ const listMessageKeys = new Map<string, Set<string>>();
 const livePlanSnapshots = new Map<string, Map<string, LivePlanSnapshot>>();
 const pendingInteractions = new Map<string, PendingInteraction[]>();
 // Editing is local to the controller. It must not keep a provider turn alive.
-const protectedQuestions = new Map<string, PendingInteraction>();
-const visibleInteractionCache = new Map<string, { raw: PendingInteraction[]; protected?: PendingInteraction; result: PendingInteraction[] }>();
+// Every edited async question keeps its own snapshot; lists are replaced, never mutated, so the cache can compare identity.
+const protectedQuestions = new Map<string, PendingInteraction[]>();
+const visibleInteractionCache = new Map<string, { raw: PendingInteraction[]; protected?: PendingInteraction[]; result: PendingInteraction[] }>();
 /**
  * 这个会话的 pending 列表当前是不是**权威**的(来自被控端的一次全量快照)。
  *
@@ -625,6 +633,16 @@ const sessionTaskUpdates = new Map<string, ReadonlyMap<string, AgentTaskUpdate>>
 // Keep one temporary assistant row per session and reconcile it with the persisted row by
 // clientId/persistId when the database push arrives.
 const streamingAssistantClientIds = new Map<string, string>();
+// Identities known to be separate from the current anonymous stream: rows present
+// at its start, plus persisted rows kept separate from it. Retain until it resolves.
+const generatedStreamPriorIdentities = new Map<string, Set<string>>();
+// Existing provider item identity can link a legacy delta without persistId to
+// its final. null means the anonymous batch did not establish one identity.
+const generatedStreamAgentIdentities = new Map<string, {
+  agentMessageId: string;
+  source: string | null;
+  deviceId: string | undefined;
+} | null>();
 // The same persisted streaming identity can be replayed by a stale transport after
 // re-link. Track the transport currently assembling that identity so a device switch
 // replaces the stale live text instead of concatenating two transports into one row.
@@ -668,6 +686,8 @@ const pendingTextDeltaBatches = new Map<string, {
   persistId?: string;
   deviceId?: string;
   agentMeta: Record<string, unknown> | null;
+  agentMessageId: string | null;
+  source: string | null;
 }>();
 let textDeltaFlushTimer: ReturnType<typeof setTimeout> | null = null;
 let textDeltaFlushDeadlineAt: number | null = null;
@@ -697,6 +717,8 @@ function forgetStreamingAssistantDeviceId(sessionId: string, clientId: string): 
 }
 
 function clearStreamingAssistantPointer(sessionId: string): boolean {
+  generatedStreamPriorIdentities.delete(sessionId);
+  generatedStreamAgentIdentities.delete(sessionId);
   return streamingAssistantClientIds.delete(sessionId);
 }
 
@@ -1263,7 +1285,7 @@ function discardTransportOwnedPendingSessionState(
   }
   const streamingClientId = streamingAssistantClientIds.get(sessionId);
   if (streamingClientId && pendingAnchorIds.has(streamingClientId)) {
-    streamingAssistantClientIds.delete(sessionId);
+    clearStreamingAssistantPointer(sessionId);
   }
   for (const id of pendingAnchorIds) forgetStreamingAssistantDeviceId(sessionId, id);
   if (pendingAnchors) {
@@ -1419,6 +1441,9 @@ const mergedSessionById = new Map<string, RemoteSession>();
 // live usage. Usage pushes must not rebuild Home's grouping/localization tree.
 let homeSessions: RemoteSession[] = [];
 const SESSION_USAGE_FIELDS = new Set(['totalMoney', 'totalCostUsd', 'totalTokenUsage']);
+// These fields cannot change shard ownership, visibility or retention. Timestamps
+// still update this task's live-row anchor; titles still reconcile local previews.
+const SESSION_METADATA_FIELDS = new Set([...SESSION_USAGE_FIELDS, 'title', 'updatedAt', 'userSendAt']);
 const homeSessionProjectionCache = new Map<string, {
   source: RemoteSession;
   projected: RemoteSession;
@@ -1762,8 +1787,15 @@ function sameElementRefs<T>(a: readonly T[], b: readonly T[]): boolean {
   return true;
 }
 
+// Ordinary task-list snapshots do not describe these detail-only conversations.
+// Share the omission rule with reconciliation: absence from Home is not deletion.
+function isDetailOnlySession(session: RemoteSession): boolean {
+  return session.source === 'side-chat' || (session.source === 'bot' && !isTeammateTask(session));
+}
+
 function reconcileVisibleSessions(): void {
-  const next = mergedSessions.filter((session) => session.source !== 'side-chat'
+  const next = mergedSessions.filter((session) => !isDetailOnlySession(session)
+    && sessionListRemovalPreviews.pendingFields(session.id).length === 0
     && (CINDY_MAKE_ENABLED || !isCindyMakeSource(session.source)));
   if (!sameElementRefs(visibleSessions, next)) visibleSessions = next;
 }
@@ -1806,6 +1838,8 @@ function preserveSessionRuntimeFields(
   if (!local) return fresh;
   let next = fresh;
   for (const key of [
+    'companion',
+    'taskTeammate',
     'agentSwitchIntent',
     'runtimeGeneration',
     'runtimeBaseline',
@@ -2435,7 +2469,7 @@ function reanchorPendingLiveAssistantRows(
 
 function retireGeneratedStreamingFallback(sessionId: string): void {
   const current = streamingAssistantClientIds.get(sessionId);
-  if (isGeneratedStreamingClientId(current)) streamingAssistantClientIds.delete(sessionId);
+  if (isGeneratedStreamingClientId(current)) clearStreamingAssistantPointer(sessionId);
   forgetGeneratedPendingLiveAssistantClientIds(sessionId);
 }
 
@@ -2495,6 +2529,8 @@ interface StreamingClientIdResolution {
 }
 
 function migrateGeneratedStreamingClientId(sessionId: string, generatedClientId: string, persistId: string): boolean {
+  generatedStreamPriorIdentities.delete(sessionId);
+  generatedStreamAgentIdentities.delete(sessionId);
   streamingAssistantClientIds.set(sessionId, persistId);
 
   const hadPendingLiveId = pendingLiveAssistantClientIds.get(sessionId)?.has(generatedClientId) === true;
@@ -2543,6 +2579,12 @@ function migrateGeneratedStreamingClientId(sessionId: string, generatedClientId:
   return true;
 }
 
+function excludeFromGeneratedStream(sessionId: string, ...ids: (string | undefined)[]): void {
+  const identities = generatedStreamPriorIdentities.get(sessionId);
+  if (!identities) return;
+  for (const id of ids) if (id) identities.add(id);
+}
+
 function streamingClientIdFor(sessionId: string, persistId: string | undefined): StreamingClientIdResolution {
   const normalizedPersistId = persistId?.trim();
   if (normalizedPersistId) {
@@ -2553,12 +2595,17 @@ function streamingClientIdFor(sessionId: string, persistId: string | undefined):
         changed: migrateGeneratedStreamingClientId(sessionId, existing, normalizedPersistId),
       };
     }
+    generatedStreamPriorIdentities.delete(sessionId);
+    generatedStreamAgentIdentities.delete(sessionId);
     streamingAssistantClientIds.set(sessionId, normalizedPersistId);
     return { clientId: normalizedPersistId, changed: false };
   }
   const existing = streamingAssistantClientIds.get(sessionId);
   if (existing) return { clientId: existing, changed: false };
   const generated = `mobile-stream-${++streamingFallbackSequence}`;
+  generatedStreamPriorIdentities.set(sessionId, new Set(
+    (messages.get(sessionId) ?? []).flatMap((row) => [row.id, row.clientId].filter((id): id is string => Boolean(id))),
+  ));
   streamingAssistantClientIds.set(sessionId, generated);
   return { clientId: generated, changed: false };
 }
@@ -2570,6 +2617,8 @@ function upsertMessage(
     /** Caller already resolved this exact identity in the current message array. */
     knownIndex?: number;
     retirePendingAssistantIdentityOnEqual?: boolean;
+    /** An older final with no proven link must not retire an anonymous new stream. */
+    preserveGeneratedStreamingFallback?: boolean;
     /** A streaming text replacement changes row content but not list structure or identities. */
     preserveStructureOnReplace?: boolean;
     /** Streaming replacement preserves the already sorted message order. */
@@ -2577,6 +2626,10 @@ function upsertMessage(
   } = {},
 ): boolean {
   const existing = messages.get(sessionId) ?? [];
+  const priorIdentities = generatedStreamPriorIdentities.get(sessionId);
+  let preservesGeneratedStream = options.preserveGeneratedStreamingFallback === true
+    || priorIdentities?.has(message.id) === true
+    || (message.clientId ? priorIdentities?.has(message.clientId) === true : false);
   const candidateIndex = options.knownIndex ?? -1;
   const index = candidateIndex >= 0
     && candidateIndex < existing.length
@@ -2588,6 +2641,7 @@ function upsertMessage(
     fallbackIndex = findPendingGeneratedStreamingFallbackIndex(sessionId, existing);
     if (
       fallbackIndex >= 0
+      && !preservesGeneratedStream
       && generatedFallbackMatchesPersistedMessage(existing[fallbackIndex], message)
     ) {
       // A producer without persistId creates a temporary mobile-stream-* row. The
@@ -2601,10 +2655,16 @@ function upsertMessage(
       return true;
     }
   }
+  if (isPersistedAssistantMessage(message)
+    && isGeneratedStreamingClientId(streamingAssistantClientIds.get(sessionId))) {
+    // This row did not merge with the live fallback. Keep that separation on replay.
+    excludeFromGeneratedStream(sessionId, message.id, message.clientId);
+    preservesGeneratedStream = true;
+  }
   if (index < 0) {
     messages.set(sessionId, normalizeMessages([...existing, message]));
     applyMessageWriteRetention(sessionId);
-    if (isPersistedAssistantMessage(message) && fallbackIndex < 0) {
+    if (isPersistedAssistantMessage(message) && fallbackIndex < 0 && !preservesGeneratedStream) {
       retireGeneratedStreamingFallback(sessionId);
     }
     bumpMessageVersion(sessionId);
@@ -2631,7 +2691,7 @@ function upsertMessage(
       message.id,
       message.clientId,
     );
-    if (isPersistedAssistantMessage(message)) retireGeneratedStreamingFallback(sessionId);
+    if (isPersistedAssistantMessage(message) && !preservesGeneratedStream) retireGeneratedStreamingFallback(sessionId);
     return hadPendingIdentity;
   }
   const next = existing.slice();
@@ -2655,7 +2715,7 @@ function upsertMessage(
       message.id,
       message.clientId,
     );
-    if (isPersistedAssistantMessage(message)) retireGeneratedStreamingFallback(sessionId);
+    if (isPersistedAssistantMessage(message) && !preservesGeneratedStream) retireGeneratedStreamingFallback(sessionId);
   }
   bumpMessageVersion(sessionId);
   return true;
@@ -2735,14 +2795,41 @@ function mergeRemoteTextEvent(
 
   const previousStreamingClientId = streamingAssistantClientIds.get(sessionId);
   const normalizedPersistId = persistId?.trim();
-  const itemBoundaryClientId = normalizedPersistId
+  // A completed older item may deliver its full text after a newer stream has
+  // started. Its exact row owns this correction, not the current stream pointer.
+  const priorIdentities = generatedStreamPriorIdentities.get(sessionId);
+  const finalReusesExistingItem = isFinal && data?.isFullText === true && normalizedPersistId
+    && (priorIdentities?.has(normalizedPersistId) === true
+      || currentMessages.some((row) => row.role === 'assistant'
+        && (row.clientId === normalizedPersistId || row.id === normalizedPersistId)));
+  const itemBoundaryClientId = !finalReusesExistingItem && normalizedPersistId
     && previousStreamingClientId
     && !isGeneratedStreamingClientId(previousStreamingClientId)
     && previousStreamingClientId !== normalizedPersistId
     ? previousStreamingClientId
     : undefined;
-  const clientIdResolution = streamingClientIdFor(sessionId, persistId);
+  // A DB/history arrival alone cannot identify an anonymous stream. A final
+  // carrying the same provider item from the same transport can, even when the
+  // text is short or the authoritative final corrects it to a different prefix.
+  const hasGeneratedStream = isGeneratedStreamingClientId(previousStreamingClientId);
+  const agentMessageId = data ? readString(data, 'agentMessageId') : null;
+  const source = readString(event, 'source');
+  const generatedIdentity = generatedStreamAgentIdentities.get(sessionId);
+  const finalIdentifiesGeneratedStream = hasGeneratedStream && isFinal && data?.isFullText === true
+    && agentMessageId && generatedIdentity?.agentMessageId === agentMessageId
+    && generatedIdentity.source === source && generatedIdentity.deviceId === deviceId;
+  const clientIdResolution = finalReusesExistingItem && normalizedPersistId && !finalIdentifiesGeneratedStream
+    ? { clientId: normalizedPersistId, changed: false }
+    : streamingClientIdFor(sessionId, persistId);
   const { clientId } = clientIdResolution;
+  if (!isFinal && isGeneratedStreamingClientId(clientId)) {
+    if (!generatedStreamAgentIdentities.has(sessionId)) {
+      generatedStreamAgentIdentities.set(sessionId, agentMessageId ? { agentMessageId, source, deviceId } : null);
+    } else if (generatedIdentity && (generatedIdentity.agentMessageId !== agentMessageId
+      || generatedIdentity.source !== source || generatedIdentity.deviceId !== deviceId)) {
+      generatedStreamAgentIdentities.set(sessionId, null);
+    }
+  }
   const previousStreamingDeviceId = streamingAssistantDeviceId(sessionId, clientId);
   const currentAfterClientIdResolution = messages.get(sessionId) ?? [];
   const matchedExistingIndex = findMessageIndexByIdentity(currentAfterClientIdResolution, clientId);
@@ -2854,7 +2941,9 @@ function mergeRemoteTextEvent(
   const nextText = isFinal
     ? (finalTextWasTruncated && existing
       ? currentText
-      : existing && currentText
+      : data?.isFullText === true
+        ? text
+        : existing && currentText
         ? (text.startsWith(currentText)
           ? text
           : currentText.startsWith(text)
@@ -2899,6 +2988,7 @@ function mergeRemoteTextEvent(
     ),
   }, {
     knownIndex: matchedExistingIndex,
+    preserveGeneratedStreamingFallback: Boolean(finalReusesExistingItem && hasGeneratedStream && !finalIdentifiesGeneratedStream),
     preserveOrderOnReplace: !changesCreatedAt,
     preserveStructureOnReplace: !isFinal && existing !== undefined && !changesCreatedAt,
   });
@@ -2972,8 +3062,11 @@ function enqueueRemoteTextDelta(
   }
   const current = pendingTextDeltaBatches.get(sessionId);
   const incomingMeta = isRecord(event.agentMeta) ? event.agentMeta : null;
+  const agentMessageId = data ? readString(data, 'agentMessageId') : null;
+  const source = readString(event, 'source');
   if (current) {
     current.chunks.push(text);
+    if (current.agentMessageId !== agentMessageId || current.source !== source) current.agentMessageId = null;
     if (incomingMeta) current.agentMeta = { ...(current.agentMeta ?? {}), ...incomingMeta };
     if (!current.persistId) current.persistId = persistId;
     if (current.deviceId === undefined) current.deviceId = deviceId;
@@ -2983,6 +3076,8 @@ function enqueueRemoteTextDelta(
       persistId,
       deviceId,
       agentMeta: incomingMeta,
+      agentMessageId,
+      source,
     });
   }
   scheduleTextDeltaFlush(sessionId);
@@ -2998,7 +3093,8 @@ function flushPendingTextDelta(sessionId: string): boolean {
     sessionId,
     {
       type: 'text',
-      data: { text: batch.chunks.join(''), isFinal: false },
+      data: { text: batch.chunks.join(''), isFinal: false, agentMessageId: batch.agentMessageId },
+      ...(batch.source ? { source: batch.source } : {}),
       ...(batch.agentMeta ? { agentMeta: batch.agentMeta } : {}),
     },
     batch.persistId,
@@ -3227,7 +3323,13 @@ function sweepDevicesOffline(deviceIds: readonly string[]): boolean {
     // invalidation, or actual device removal will retire them.
     changed = freezeUnboundPendingHostAnchorsForOffline(sessionId, indexedDeviceId) || changed;
     changed = writeMakerTurnRunning(sessionId, false) || changed;
-    changed = writeSessionRunStatus(sessionId, EMPTY_SESSION_RUN_STATUS) || changed;
+    // Soft offline keeps history. Keep its known terminal identity too: reconnect
+    // restores the error projection without replaying the terminal maker event.
+    // The next running transition or session/device removal still retires it.
+    const terminalError = readSessionRunStatus(sessionId).terminalError;
+    changed = writeSessionRunStatus(sessionId, terminalError
+      ? { ...EMPTY_SESSION_RUN_STATUS, hasTerminalError: true, terminalError }
+      : EMPTY_SESSION_RUN_STATUS) || changed;
   }
   for (const [sessionId, pendingAnchors] of pendingHostAnchorLiveAssistantClientIds) {
     for (const identity of pendingAnchors.values()) {
@@ -3238,6 +3340,21 @@ function sweepDevicesOffline(deviceIds: readonly string[]): boolean {
     }
   }
   return changed;
+}
+
+function cleanupRemovedSession(deviceId: string, sessionId: string, deleted: boolean): void {
+  protectedQuestions.delete(sessionId);
+  visibleInteractionCache.delete(sessionId);
+  void clearHistoryDisk(deviceId, sessionId);
+  clearRemoteHistoryViews(deviceId, sessionId);
+  deleteSessionLiveActivity(sessionId);
+  dropPendingTitlePreview(sessionId);
+  let messageStateChanged = invalidateSessionMessageWindowState(sessionId, false);
+  messageStateChanged = releaseSessionDetailProjections(sessionId) || messageStateChanged;
+  sessionMessageLifecycle.forget(sessionId);
+  sessionsOpenedInDetail.delete(sessionId);
+  if (deleted) clearSessionMessageCache(sessionId, deviceId);
+  if (messageStateChanged) bumpMessageVersion(sessionId);
 }
 
 export const remoteSessionStore = {
@@ -3484,7 +3601,7 @@ export const remoteSessionStore = {
       const pendingStatusRows = (existing?.sessions ?? []).filter((row) =>
         !snapshotIds.has(row.id) && (sessionPendingWrites.pendingFields(row.id).includes('status')
           // These details are deliberately omitted from the host's ordinary task list.
-          || (row.source === 'side-chat' && (row.status === 'active' || row.status === 'archived'))));
+          || (isDetailOnlySession(row) && (row.status === 'active' || row.status === 'archived'))));
       if (pendingStatusRows.length > 0) nextSessions = [...pendingStatusRows, ...nextSessions];
     }
     if (
@@ -3578,6 +3695,18 @@ export const remoteSessionStore = {
     recomputeSessions();
   },
 
+  /** Hide only the list projection; release never restores an old metadata snapshot. */
+  beginSessionListRemovalPreview(sessionId: string): () => void {
+    const release = sessionListRemovalPreviews.track(sessionId, ['status']);
+    const refresh = () => {
+      reconcileVisibleSessions();
+      reconcileHomeSessions();
+      emit();
+    };
+    refresh();
+    return () => { release(); refresh(); };
+  },
+
   applySessionPatch(deviceId: string, sessionId: string, patch: Partial<RemoteSession>): void {
     // Local optimistic removals must fence a late startup cache just like remote pushes,
     // even when the removed row has not reached this shard yet.
@@ -3598,19 +3727,8 @@ export const remoteSessionStore = {
     let shouldReseedAfterPatch = false;
     const turnEnded = historyTurnEnded(shard.sessions[idx], patch);
     if (patch.status === 'deleted' || patch.status === 'archived') {
-      protectedQuestions.delete(sessionId);
-      visibleInteractionCache.delete(sessionId);
-      void clearHistoryDisk(deviceId, sessionId);
-      clearRemoteHistoryViews(deviceId, sessionId);
       shard.sessions = shard.sessions.filter((s) => s.id !== sessionId);
-      deleteSessionLiveActivity(sessionId);
-      dropPendingTitlePreview(sessionId);
-      let messageStateChanged = invalidateSessionMessageWindowState(sessionId, false);
-      messageStateChanged = releaseSessionDetailProjections(sessionId) || messageStateChanged;
-      sessionMessageLifecycle.forget(sessionId);
-      sessionsOpenedInDetail.delete(sessionId);
-      if (patch.status === 'deleted') clearSessionMessageCache(sessionId, deviceId);
-      if (messageStateChanged) bumpMessageVersion(sessionId);
+      cleanupRemovedSession(deviceId, sessionId, patch.status === 'deleted');
     } else {
       const wasPinned = shard.sessions[idx].pinnedAt != null;
       const unpinned = Object.prototype.hasOwnProperty.call(patch, 'pinnedAt') && patch.pinnedAt == null;
@@ -3631,6 +3749,26 @@ export const remoteSessionStore = {
             return updated;
           });
           reconcileVisibleSessions();
+        }
+        emit();
+        return;
+      }
+      if (Object.keys(patch).every((key) => SESSION_METADATA_FIELDS.has(key))) {
+        const previous = mergedSessionById.get(sessionId);
+        if (previous && sessionDeviceIndex.get(sessionId) === deviceId) {
+          const updated = applyPendingTitlePreview({ ...patched, canonicalDeviceId: previous.canonicalDeviceId });
+          if (!remoteSessionEqual(previous, updated)) {
+            mergedSessions = mergedSessions.map((session) => session.id === sessionId ? updated : session);
+            mergedSessionById.set(sessionId, updated);
+            pendingMessagePreviewSessionIds.add(sessionId);
+            reconcileVisibleSessions();
+            reconcileHomeSessions();
+          }
+          bindPendingHostAnchorSendAt(sessionId, updated.userSendAt);
+          if (reanchorPendingLiveAssistantRows(sessionId,
+            updated.userSendAt ?? updated.updatedAt ?? updated.createdAt, { consumePending: false })) {
+            bumpMessageVersion();
+          }
         }
         emit();
         return;
@@ -3861,7 +3999,11 @@ export const remoteSessionStore = {
       if (isPersistedAssistantMessage(item)) {
         const fallbackIndex = findPendingGeneratedStreamingFallbackIndex(sessionId, existing);
         const fallback = fallbackIndex >= 0 ? existing[fallbackIndex] : undefined;
-        if (fallback && generatedFallbackMatchesPersistedMessage(fallback, item)) {
+        const priorIdentities = generatedStreamPriorIdentities.get(sessionId);
+        const knownSeparateIdentity = priorIdentities?.has(item.id) === true
+          || (item.clientId ? priorIdentities?.has(item.clientId) === true : false)
+          || messageIdentityIndexHas(existingIdentityIndex, item);
+        if (fallback && !knownSeparateIdentity && generatedFallbackMatchesPersistedMessage(fallback, item)) {
           // History sync may be the first place the authoritative DB identity
           // arrives. Remove the generated key before inserting the persisted row;
           // otherwise the newer temporary row is kept as a tail and the DB row
@@ -3881,6 +4023,7 @@ export const remoteSessionStore = {
           continue;
         }
       }
+      if (isPersistedAssistantMessage(item)) excludeFromGeneratedStream(sessionId, item.id, item.clientId);
       const directKey = messageKey(item);
       const identityKey = findMessageMergeKey(byKey, item);
       const key = identityKey ?? directKey;
@@ -4652,6 +4795,7 @@ export const remoteSessionStore = {
       const sessionId = readString(payload, 'sessionId');
       const patch = isRecord(payload.patch) ? payload.patch : null;
       if (sessionId && patch) {
+        applyMobileSessionRebalancePreferencePatch(deviceId, sessionId, patch);
         bumpDeviceSessionListMutationEpoch(deviceId);
         // 遮蔽本机在途写的字段:旧写的无差别 push 回流不得滚回更新的乐观意图,
         // 被遮字段的终态由对应写的对账 / 后续 push 收敛;全部被遮时跳过应用。
@@ -4858,9 +5002,21 @@ export const remoteSessionStore = {
       const sessionId = readString(payload, 'sessionId');
       const requestId = readString(payload, 'requestId');
       if (sessionId && requestId && acceptSessionStateSource(sessionId, deviceId, sessionInteractionSources)) {
-        if (payload.reason === 'resolved' && !(isRecord(payload.decision) && payload.decision.dismissed === true)) {
-          this.confirmProtectedQuestion(sessionId, requestId);
+        if (payload.reason === 'question_withdrawn' && typeof payload.withdrawalReason === 'string') {
+          this.settleOptimisticInteractionDismiss(sessionId, requestId, { kind: 'confirmed' });
+          const retained = protectedQuestions.get(sessionId);
+          if (retained?.some((item) => item.request.requestId === requestId)) {
+            protectedQuestions.set(sessionId, retained.map((item) => item.request.requestId === requestId
+              ? { ...item, request: { ...item.request, withdrawalReason: payload.withdrawalReason as string } } : item));
+            visibleInteractionCache.delete(sessionId);
+            emit();
+          }
         }
+        if (payload.reason === 'resolved' || payload.reason === 'superseded' || payload.reason === 'session_closed') {
+          this.confirmProtectedQuestion(sessionId, requestId);
+          clearAskUserDraft(requestId);
+        }
+        clearIssueConfirmDraft(requestId);
         // 注意:这里**不**提前回收延长抑制条目——push 到达只说明被控端已确认,
         // 不排除仍有「决定提交前发出、此刻还在途」的旧 getPendingInteractions
         // 快照晚于本 push 返回(弱网高发);提前回收会让那份旧快照把已解决的卡
@@ -5058,6 +5214,9 @@ export const remoteSessionStore = {
         && writeSessionRunStatus(sessionId, {
           ...readSessionRunStatus(sessionId),
           hasTerminalError: true,
+          terminalError: persistId && readString(event.data, 'message')
+            ? { clientId: persistId, message: readString(event.data, 'message')! }
+            : null,
         });
       this.setSessionRunning(
         sessionId,
@@ -5260,6 +5419,7 @@ export const remoteSessionStore = {
       const next: RemoteSessionRunStatus = {
         isRunning,
         ...(current.hasTerminalError !== undefined ? { hasTerminalError: current.hasTerminalError } : {}),
+        ...(current.terminalError !== undefined ? { terminalError: current.terminalError } : {}),
         reconnectAttempt: null,
         sideTaskRunning: isRunning ? data?.skipTurnReset === true : false,
         startedAt: isRunning ? (current.startedAt ?? Date.now()) : null,
@@ -5384,6 +5544,7 @@ export const remoteSessionStore = {
   },
 
   clear(): void {
+    clearAllInteractionDrafts();
     clearRemoteHistoryViews();
     deviceSessionListMutationEpochFloor = ++nextDeviceSessionListMutationEpoch;
     deviceSessionListMutationEpochs.clear();
@@ -5427,6 +5588,8 @@ export const remoteSessionStore = {
     sessionLiveStreamAcked.clear();
     sessionTaskUpdates.clear();
     streamingAssistantClientIds.clear();
+    generatedStreamPriorIdentities.clear();
+    generatedStreamAgentIdentities.clear();
     streamingAssistantDeviceIds.clear();
     pendingLiveAssistantClientIds.clear();
     pendingHostAnchorLiveAssistantClientIds.clear();
@@ -5445,6 +5608,7 @@ export const remoteSessionStore = {
     sessionListRefreshArmed.clear();
     sessionListRefreshSeen.clear();
     pendingTitlePreview.clear();
+    sessionListRemovalPreviews = createPendingWriteTracker();
     mergedSessions = [];
     visibleSessions = [];
     mergedSessionById.clear();
@@ -5663,21 +5827,25 @@ export const remoteSessionStore = {
 
   protectAsyncQuestion(sessionId: string, item: PendingInteraction): void {
     if (item.request.kind !== 'ask_user_question' || item.request.delivery !== 'async') return;
-    if (protectedQuestions.get(sessionId)?.request.requestId === item.request.requestId) return;
-    protectedQuestions.set(sessionId, { ...item, retainedDraft: true });
+    const retained = protectedQuestions.get(sessionId) ?? [];
+    if (retained.some((q) => q.request.requestId === item.request.requestId)) return;
+    protectedQuestions.set(sessionId, [...retained, { ...item, retainedDraft: true }]);
     emit();
   },
 
   releaseProtectedQuestion(sessionId: string, requestId: string): void {
-    if (protectedQuestions.get(sessionId)?.request.requestId !== requestId) return;
-    protectedQuestions.delete(sessionId);
+    const retained = protectedQuestions.get(sessionId);
+    if (!retained?.some((q) => q.request.requestId === requestId)) return;
+    const rest = retained.filter((q) => q.request.requestId !== requestId);
+    if (rest.length > 0) protectedQuestions.set(sessionId, rest);
+    else protectedQuestions.delete(sessionId);
     visibleInteractionCache.delete(sessionId);
     emit();
   },
 
   /** Both the resolve receipt and a resolved push complete the same draft. */
   confirmProtectedQuestion(sessionId: string, requestId: string): void {
-    if (protectedQuestions.get(sessionId)?.request.requestId !== requestId) return;
+    if (!protectedQuestions.get(sessionId)?.some((q) => q.request.requestId === requestId)) return;
     // Register the existing stale-snapshot suppression before publishing removal.
     this.settleOptimisticInteractionDismiss(sessionId, requestId, { kind: 'confirmed' });
     clearAskUserDraft(requestId);
@@ -5691,7 +5859,8 @@ export const remoteSessionStore = {
     if (!retained) return raw;
     const cached = visibleInteractionCache.get(sessionId);
     if (cached?.raw === raw && cached.protected === retained) return cached.result;
-    const result = [retained, ...raw.filter((item) => item.request.requestId !== retained.request.requestId)];
+    const kept = new Set(retained.map((item) => item.request.requestId));
+    const result = [...retained, ...raw.filter((item) => !kept.has(item.request.requestId))];
     visibleInteractionCache.set(sessionId, { raw, protected: retained, result });
     return result;
   },
@@ -5933,7 +6102,7 @@ function writeMakerTurnRunning(sessionId: string, running: boolean): boolean {
 function writeSessionRunStatus(sessionId: string, next: RemoteSessionRunStatus): boolean {
   const current = readSessionRunStatus(sessionId);
   if (next.isRunning && !current.isRunning && current.hasTerminalError) {
-    next = { ...next, hasTerminalError: false };
+    next = { ...next, hasTerminalError: false, terminalError: null };
   }
   if (shallowRecordEqual(current as unknown as Record<string, unknown>, next as unknown as Record<string, unknown>)) {
     return false;
@@ -6183,6 +6352,26 @@ export function useRemoteSessions(): RemoteSession[] {
   return usePausableRemoteSessionStoreSnapshot('sessions', remoteSessionStore.getVisibleSessions);
 }
 
+/** Link chips observe only their visible targets, not every task's activity. */
+export function useRemoteSessionTitles(ids: readonly string[]): Record<string, string> | undefined {
+  const read = useCallback(() => {
+    if (ids.length === 0) return undefined;
+    const sessions = remoteSessionStore.getVisibleSessions();
+    const titles: Record<string, string> = {};
+    for (const id of ids) {
+      const title = sessions.find((session) => session.id === id)?.title?.trim();
+      if (title) titles[id] = title;
+    }
+    return Object.keys(titles).length > 0 ? JSON.stringify(titles) : undefined;
+  }, [ids]);
+  // A primitive snapshot stays equal on unrelated pushes. Reuse the route's
+  // subscription gate so covered conversations remain frozen until resumed.
+  const json = usePausableRemoteSessionStoreSnapshot(
+    read, read, ids.length > 0 ? remoteSessionStore.subscribe : NOOP_SUBSCRIBE,
+  );
+  return useMemo(() => json === undefined ? undefined : JSON.parse(json) as Record<string, string>, [json]);
+}
+
 /** A hidden child can be opened without making it an ordinary Home list row. */
 export function useRemoteSessionDetail(deviceId: string, sessionId: string): RemoteSession | null {
   const read = useCallback(() => remoteSessionStore.getSessions().find(session =>
@@ -6281,6 +6470,9 @@ function useSessionMessageCacheSync(
 ): void {
   const hydratedKeyRef = useRef<string | null>(null);
   const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Set when the debounce was skipped because a reply was still streaming: there is no timer,
+  // but the latest snapshot is still unsaved, so unmount must flush it like a pending timer.
+  const persistDeferredWhileStreamingRef = useRef(false);
   const retention = useSyncExternalStore(
     remoteSessionStore.subscribe,
     () => remoteSessionStore.getSessionRetention(sessionId),
@@ -6339,11 +6531,20 @@ function useSessionMessageCacheSync(
   useEffect(() => {
     if (persistTimerRef.current) clearTimeout(persistTimerRef.current);
     persistTimerRef.current = null;
+    persistDeferredWhileStreamingRef.current = false;
     if (!deviceId || !sessionId || retention !== 'regular') return;
     const key = `${deviceId}::${sessionId}`;
     // 空内存可能只是 regular LRU 淘汰，绝不能据此删除磁盘缓存。真正的远端
     // 删除由 removeMessages / 权威空窗显式处理。
     if (messages.length === 0) return;
+    // A streaming reply rewrites this snapshot every flush, and each write re-reads, normalizes
+    // and stringifies the whole window on the JS thread. Wait for the final flush (the row loses
+    // isStreaming), which changes `messages` again and schedules the write; unmount flushes the
+    // deferred snapshot via the ref below.
+    if (messages.some((message) => message.agentMeta?.isStreaming === true)) {
+      persistDeferredWhileStreamingRef.current = true;
+      return;
+    }
     const cacheAuthority = captureSessionMessageCacheWriteAuthority(deviceId, sessionId);
     persistTimerRef.current = setTimeout(() => {
       persistTimerRef.current = null;
@@ -6357,9 +6558,10 @@ function useSessionMessageCacheSync(
 
   // 卸载时把尚未落盘的最新快照立即 flush(防止快速返回导致最后一次更新丢失)。
   useEffect(() => () => {
-    if (!persistTimerRef.current) return;
-    clearTimeout(persistTimerRef.current);
+    if (!persistTimerRef.current && !persistDeferredWhileStreamingRef.current) return;
+    if (persistTimerRef.current) clearTimeout(persistTimerRef.current);
     persistTimerRef.current = null;
+    persistDeferredWhileStreamingRef.current = false;
     const ctx = ctxRef.current;
     if (!ctx.deviceId || !ctx.sessionId) return;
     if (remoteSessionStore.getSessionRetention(ctx.sessionId) !== 'regular') return;

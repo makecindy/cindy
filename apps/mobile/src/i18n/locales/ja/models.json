@@ -25,6 +25,12 @@
     "fastTag": "高速"
   },
   "options": {
+    "speed": {
+      "label": "速度",
+      "standard": "標準",
+      "fast": "高速",
+      "ultrafast": "超高速"
+    },
     "fastMode": "高速モード",
     "fastModeAccessibility": "高速モード {{model}}",
     "reasoningEffort": "推論強度",
@@ -63,10 +69,14 @@
     "titleHost": "Agent を「{{host}}」で実行し直しますか？",
     "titleHostUnnamed": "Agent をセッションのあるパソコンで実行し直しますか？",
     "message": "元のパソコンにある会話の記録は移せないため、引き継ぎの要約から続けます。思考内容などは完全には引き継がれない場合があります。次のメッセージを送信したときに反映されます。",
+    "messageNativeHistory": "会話の記録をすべてコピーして、続きから再開します。復元できない場合は引き継ぎの要約から続けるため、思考内容などは完全には引き継がれない場合があります。次のメッセージを送信したときに反映されます。",
     "confirm": "パソコンを切り替える",
     "cancel": "このままにする"
   },
   "unified": {
+    "accountUnassigned": "アカウント未割り当て",
+    "accountCount_other": "{{count}} 個のアカウント",
+    "accountFallback": "アカウント {{index}}",
       "favoriteConfiguration": "この設定をお気に入りに追加",
       "savedConfiguration": "登録済み · タップして解除",
       "currentConfiguration": "現在の設定",
@@ -106,6 +116,12 @@
       "hour": "時間",
       "minute": "分",
       "second": "秒"
-    }
+    },
+    "quotaAverage": "クォータ残り {{percent}}%（平均）",
+    "quotaUpdating": "クォータ更新待ち",
+    "quotaResetSoon": "まもなくリセット",
+    "quotaResetIn": "{{duration}}後にリセット",
+    "quotaAverageHint": "週の上限 · アカウントごとの単純平均",
+    "quotaResetHint": "現在の利用ペースではリセット時にクォータが残る見込みです。24時間以内は黄色、6時間以内は赤色で表示します。"
   }
 }

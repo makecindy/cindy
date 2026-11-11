@@ -75,6 +75,64 @@ async function makeHarness(
 }
 
 describe('createComputerMcpServer', () => {
+  // #9887 acceptance: status items are outside AXWindow. Unit coverage through
+  // the real MCP entry; existing tests only cover window-scoped pointer input.
+  it('dispatches explicit desktop capture/click/drag without inventing a window target', async () => {
+    const capture = { capture_id: 'desktop-capture', screenshot_frame_valid: true };
+    const deps: ComputerMcpDeps = { getStatus: vi.fn(), callTool: vi.fn(async () => capture) };
+    const h = await makeHarness(deps, { sessionId: 'desktop-test' });
+    try {
+      for (const [name, args] of [
+        ['get_desktop_state', { max_image_dimension: 1600 }],
+        ['click', { target: { kind: 'desktop', display_id: 'primary' }, capture_id: capture.capture_id, delivery_mode: 'foreground', x: 12, y: 8 }],
+        ['drag', { target: { kind: 'desktop', display_id: 'primary' }, capture_id: capture.capture_id, delivery_mode: 'foreground', from_x: 12, from_y: 8, to_x: 40, to_y: 8, modifier: ['cmd'] }],
+      ] as const) {
+        expect(textPayload(await h.client.callTool({ name: 'call_tool', arguments: { name, args } }))).toMatchObject({ ok: true });
+        expect(deps.callTool).toHaveBeenLastCalledWith(name, { ...args, session: 'desktop-test' }, expect.objectContaining({ sessionId: 'desktop-test' }));
+      }
+    } finally { await h.cleanup(); }
+  });
+
+  it.each([
+    { pid: 42 }, { window_id: 7 }, { element_token: 's00000001:3' },
+    { snapshot_id: 'ws-old' }, { from_zoom: true }, { action: 'press' },
+    { capture_id: undefined }, { delivery_mode: 'background' }, { delivery_mode: undefined },
+    { observe: {} }, { x: undefined },
+  ])('rejects ambiguous or ungrounded desktop click before input: %j', async (extra) => {
+    const deps: ComputerMcpDeps = { getStatus: vi.fn(), callTool: vi.fn() };
+    const h = await makeHarness(deps);
+    try {
+      const result = await h.client.callTool({ name: 'call_tool', arguments: { name: 'click', args: {
+        target: { kind: 'desktop', display_id: 'primary' }, capture_id: 'desktop-capture',
+        delivery_mode: 'foreground', x: 12, y: 8, ...extra,
+      } } });
+      expect(textPayload(result)).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+      expect(deps.callTool).not.toHaveBeenCalled();
+    } finally { await h.cleanup(); }
+  });
+
+  it.each([{ screenshot_frame_valid: false, capture_id: 'failed' }, {}])('does not report an unusable desktop capture as success: %j', async (data) => {
+    const h = await makeHarness({ getStatus: vi.fn(), callTool: vi.fn(async () => data) });
+    try {
+      expect(textPayload(await h.client.callTool({ name: 'call_tool', arguments: { name: 'get_desktop_state', args: {} } })))
+        .toMatchObject({ ok: false, errorCode: 'CUA_UNAVAILABLE' });
+    } finally { await h.cleanup(); }
+  });
+
+  // Audit regression: discovery returned every schema even when only one was
+  // needed. Exercise the real MCP list entry with no driver/process side effects.
+  it('returns only requested schemas for focused discovery', async () => {
+    const deps: ComputerMcpDeps = { getStatus: vi.fn(), callTool: vi.fn() };
+    const h = await makeHarness(deps);
+    try {
+      const payload = textPayload(await h.client.callTool({ name: 'list_tools', arguments: { names: ['click'] } })) as {
+        tools: Array<{ name: string; inputSchema: { properties: Record<string, unknown> } }>;
+      };
+      expect(payload.tools.map((tool) => tool.name)).toEqual(['click']);
+      expect(payload.tools[0]?.inputSchema.properties).toHaveProperty('observe');
+      expect(deps.callTool).not.toHaveBeenCalled();
+    } finally { await h.cleanup(); }
+  });
   it('advertises a first-call goal and keeps host session routing independent of it', async () => {
     const deps: ComputerMcpDeps = { getStatus: vi.fn(), callTool: vi.fn(async () => ({ windows: [] })) };
     const h = await makeHarness(deps, { sessionId: 'stable-task' });
@@ -486,6 +544,74 @@ describe('createComputerMcpServer', () => {
     await h.cleanup();
   });
 
+  // CU-018: driver errors suggested unsupported x/y or a foreground retry.
+  // Unit: real MCP entry, both returned refusals and thrown adapter errors;
+  // verify guidance and partial-delivery evidence without dispatching another input.
+  it.each(['throw', 'return'] as const)('normalizes input failure advice (%s)', async mode => {
+    for (const code of ['background_unavailable', 'type_text_incomplete']) {
+      const progress = { completed_chars: 2, remaining_chars: 3 };
+      const rawMessage = 'Use pixel-targeted type_text (x,y) or delivery_mode:"foreground"; retry only the remaining suffix';
+      const deps: ComputerMcpDeps = { getStatus: vi.fn(), callTool: vi.fn(async name => {
+        if (name !== 'type_text') return { windows: [] };
+        if (mode === 'throw') throw Object.assign(new Error(rawMessage), {
+          code, outcomeUnknown: true, inputProgress: progress,
+        });
+        const refusal = { ok: false, code, message: rawMessage, hint: rawMessage,
+          next_call: { tool: 'type_text', arguments: { x: 1, y: 2 } },
+          outcome_unknown: true, input_progress: progress };
+        // Chunked long text nests the raw refused chunk under lastResult.
+        return { ...refusal, lastResult: refusal };
+      }) };
+      const h = await makeHarness(deps);
+      try {
+        const result = await h.client.callTool({ name: 'call_tool', arguments: {
+          name: 'type_text', args: { pid: 123, text: 'hello' },
+        } });
+        const payload = textPayload(result) as { data: { message: string } };
+        expect(payload).toMatchObject({ ok: false, errorCode: code,
+          data: { outcome_unknown: true, input_progress: progress } });
+        expect(payload.data.message).toContain('get_window_state');
+        expect(payload.data.message).toContain(code === 'background_unavailable' ? 'set_value' : 'Do not resend');
+        expect(JSON.stringify(payload)).not.toContain(rawMessage);
+        expect(payload.data).not.toHaveProperty('next_call');
+        if (mode === 'return') expect(payload.data).toMatchObject({ lastResult: { code, outcome_unknown: true, input_progress: progress } });
+        const calls = vi.mocked(deps.callTool).mock.calls;
+        expect(calls.filter(([name]) => name === 'type_text')).toHaveLength(1);
+        expect(calls.map(([name]) => name)).toEqual(mode === 'throw' ? ['type_text', 'list_windows'] : ['type_text']);
+      } finally { await h.cleanup(); }
+    }
+  });
+
+  // CU-019 (2026-11-06, Xcode on macOS 27): a background click result told the
+  // Agent to retry in the foreground, which USER_INPUT_ACTIVE refused while the
+  // person worked; an AXSelected-only row write was reported as confirmed although
+  // Xcode never opened the row. Unit: real MCP entry, one dispatch per case.
+  it.each([
+    ['foreground retry advice', { effect: 'unverifiable', route: 'synthetic_events',
+      summary: '✅ Posted click to pid 1 (not driver-verified — confirm via screenshot and retry with delivery_mode:"foreground" if nothing changed).' },
+    'unknown', 'first try another background route'],
+    ['selection-only row write', { effect: 'confirmed', route: 'accessibility',
+      summary: '✅ Selected nearest AXRow for [3] AXTextField ""; confirmed AXSelected=true.' },
+    'unknown', 'click the row\'s window-local coordinates'],
+    ['selection by a delivered coordinate click', { effect: 'confirmed', route: 'accessibility',
+      summary: '✅ Selected nearest AXRow for [3] AXTextField ""; AX selection write was unavailable, so a coordinate click was delivered and confirmed by stable AXSelected read-back.' },
+    'confirmed', undefined],
+  ] as const)('steers background click results away from foreground retries: %s', async (_case, driverResult, status, hint) => {
+    const deps: ComputerMcpDeps = { getStatus: vi.fn(), callTool: vi.fn(async name =>
+      name === 'click' ? driverResult : { tree_markdown: '- [0] AXWindow' }) };
+    const h = await makeHarness(deps);
+    try {
+      const payload = textPayload(await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'click', args: { pid: 1, window_id: 2, x: 10, y: 20 },
+      } })) as { ok: boolean; outcome: { status: string }; data: { summary: string; hint?: string } };
+      expect(payload).toMatchObject({ ok: true, outcome: { status } });
+      expect(payload.data.summary).not.toContain('"foreground"');
+      if (hint) expect(payload.data.hint).toContain(hint);
+      else expect(payload.data).toEqual(driverResult);
+      expect(vi.mocked(deps.callTool).mock.calls.filter(([name]) => name === 'click')).toHaveLength(1);
+    } finally { await h.cleanup(); }
+  });
+
   it('dispatches zoom with cua-driver 0.5 region bounds', async () => {
     const deps: ComputerMcpDeps = {
       getStatus: vi.fn(),
@@ -740,6 +866,57 @@ describe('createComputerMcpServer', () => {
       by: 'page',
     }, { signal: expect.any(AbortSignal) });
     await h.cleanup();
+  });
+
+  // #9695 acceptance: Windows falls back to the window center when an indexed
+  // button has no UIA ScrollPattern. Exercise the real MCP entry so a screenshot
+  // point reaches the driver unchanged; the direction-only case above missed
+  // this strict-schema rejection. Unit tier, no native input or real waiting.
+  it('discovers and dispatches window-local scroll coordinates in the owning session', async () => {
+    const deps: ComputerMcpDeps = {
+      getStatus: vi.fn(),
+      callTool: vi.fn(async () => ({ effect: 'unverifiable', summary: 'Wheel delivered' })),
+    };
+    const h = await makeHarness(deps, { sessionId: 'scroll-owner' });
+    try {
+      const catalogue = textPayload(await h.client.callTool({
+        name: 'list_tools', arguments: { names: ['scroll'] },
+      })) as { tools: Array<{ inputSchema: { properties: Record<string, unknown> } }> };
+      const args = { pid: 123, window_id: 7, x: 1055.5, y: 609, direction: 'down', amount: 1, by: 'line', delivery_mode: 'foreground' };
+      const payload = textPayload(await h.client.callTool({
+        name: 'call_tool', arguments: { name: 'scroll', args },
+      })) as { ok: boolean; outcome: { status: string } };
+      expect(payload.ok).toBe(true);
+      expect(payload.outcome.status).toBe('unknown');
+      expect(deps.callTool).toHaveBeenCalledWith('scroll', { ...args, session: 'scroll-owner' }, {
+        signal: expect.any(AbortSignal), sessionId: 'scroll-owner',
+      });
+      expect(catalogue.tools[0].inputSchema.properties).toMatchObject({
+        x: { type: 'number' }, y: { type: 'number' },
+      });
+    } finally {
+      await h.cleanup();
+    }
+  });
+
+  it.each([
+    { window_id: 7, x: 10 },
+    { window_id: 7, y: 20 },
+    { x: 10, y: 20 },
+    { window_id: 7, x: 10, y: 20, element_index: 2 },
+    { window_id: 7, x: 10, y: 20, element_token: 's1:2' },
+  ])('refuses incomplete or ambiguous scroll coordinates before dispatch: %j', async (target) => {
+    const deps: ComputerMcpDeps = { getStatus: vi.fn(), callTool: vi.fn() };
+    const h = await makeHarness(deps);
+    try {
+      const payload = textPayload(await h.client.callTool({
+        name: 'call_tool', arguments: { name: 'scroll', args: { pid: 123, direction: 'down', ...target } },
+      })) as { ok: boolean; errorCode: string };
+      expect(payload).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+      expect(deps.callTool).not.toHaveBeenCalled();
+    } finally {
+      await h.cleanup();
+    }
   });
 
   it('injects the current session id into session-aware action tools', async () => {
@@ -1901,5 +2078,150 @@ describe('createComputerMcpServer', () => {
     expect((result as { isError?: boolean }).isError).toBe(true);
     expect(deps.callTool).not.toHaveBeenCalled();
     await h.cleanup();
+  });
+});
+
+/**
+ * 2026-10-31 audit (CU-014/017/018): session-level shortcuts, unexplained
+ * observation failures and discovery-flooded errors. Each case drives the
+ * public call_tool entry; gap: none of these outcomes existed before.
+ */
+describe('createComputerMcpServer desktop guards', () => {
+  it('refuses lock / log-out / sleep chords before the driver sees them', async () => {
+    const deps: ComputerMcpDeps = { getStatus: vi.fn(), callTool: vi.fn(async () => ({ ok: true })) };
+    const h = await makeHarness(deps, { sessionId: 'hotkey-guard' });
+    try {
+      for (const keys of [['ctrl', 'cmd', 'q'], ['Command', 'Shift', 'Q'], ['win', 'l'],
+        // review: restart / shut down chords reached the driver
+        ['ctrl', 'cmd', 'power'], ['ctrl', 'alt', 'cmd', 'power'], ['control', 'option', 'command', 'eject'], ['ctrl', 'power'],
+        // review: one canonical form (repeats, "a+b" entries, stray spaces, case)
+        ['ctrl', 'ctrl', 'cmd', 'q'], ['ctrl+cmd', 'q'], [' Ctrl ', 'CMD', 'Q'], ['cmd', 'q', 'ctrl', 'q']]) {
+        const blocked = textPayload(await h.client.callTool({ name: 'call_tool', arguments: {
+          name: 'hotkey', args: { pid: 1, window_id: 2, keys },
+        } })) as { ok: boolean; errorCode?: string };
+        expect(blocked).toMatchObject({ ok: false, errorCode: 'HOTKEY_BLOCKED' });
+      }
+      const pressed = textPayload(await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'press_key', args: { pid: 1, window_id: 2, key: 'q', modifiers: ['control', 'command'] },
+      } })) as { ok: boolean; errorCode?: string };
+      expect(pressed).toMatchObject({ ok: false, errorCode: 'HOTKEY_BLOCKED' });
+      expect(deps.callTool).not.toHaveBeenCalledWith('hotkey', expect.anything(), expect.anything());
+      expect(deps.callTool).not.toHaveBeenCalledWith('press_key', expect.anything(), expect.anything());
+
+      // an ordinary chord that shares keys with a blocked one stays allowed
+      await h.client.callTool({ name: 'call_tool', arguments: { name: 'hotkey', args: { pid: 1, window_id: 2, keys: ['ctrl', 'q'] } } });
+      expect(deps.callTool).toHaveBeenCalledWith('hotkey', expect.objectContaining({ keys: ['ctrl', 'q'] }), expect.anything());
+      await h.client.callTool({ name: 'call_tool', arguments: { name: 'hotkey', args: { pid: 1, window_id: 2, keys: ['cmd', 'c'] } } });
+      expect(deps.callTool).toHaveBeenCalledWith('hotkey', expect.objectContaining({ keys: ['cmd', 'c'] }), expect.anything());
+    } finally { await h.cleanup(); }
+  });
+
+  it('names a locked screen as the reason an observation produced nothing', async () => {
+    const deps: ComputerMcpDeps = {
+      getStatus: vi.fn(),
+      callTool: vi.fn(async () => ({ ok: false, error: 'capture failed' })),
+      describeDesktop: vi.fn(async () => ({ screen_locked: true })),
+    };
+    const h = await makeHarness(deps, { sessionId: 'locked' });
+    try {
+      const observed = textPayload(await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'get_window_state', args: { pid: 100, window_id: 1 },
+      } })) as { errorCode?: string; reason?: string; hint?: string };
+      expect(observed).toMatchObject({ errorCode: 'CUA_UNAVAILABLE', reason: 'screen_locked' });
+      expect(observed.hint).toContain('unlock');
+    } finally { await h.cleanup(); }
+  });
+
+  it('distinguishes a vanished window from one that is only off screen, with compact discovery', async () => {
+    const windows = [
+      { pid: 65985, window_id: 5304, app_name: 'Electron', title: 'Cindy', is_on_screen: false,
+        process: { pid: 65985, command: '/very/long/command/line --with --flags' },
+        identity: { kind: 'electron-dev', confidence: 0.75, labels: ['electron'], hints: ['use set_value'] } },
+    ];
+    const failure = { degraded: true, degraded_reason: 'ax_window_unresolved', elements: [], tree_markdown: '',
+      screenshot_frame_valid: false, screenshot_error: { code: 'px_capture_unavailable' } };
+    const callTool = vi.fn(async (name: string) => name === 'list_windows' ? { windows } : failure);
+    const h = await makeHarness({ getStatus: vi.fn(), callTool, describeDesktop: async () => ({ screen_locked: false }) }, { sessionId: 'gone' });
+    try {
+      const offScreen = textPayload(await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'get_window_state', args: { pid: 65985, window_id: 5304 },
+      } })) as { reason?: string; recovery?: { discovery?: { data?: { windows?: unknown[] } } } };
+      expect(offScreen.reason).toBe('window_not_on_screen');
+      expect(offScreen.recovery?.discovery?.data?.windows).toEqual([
+        { pid: 65985, window_id: 5304, app_name: 'Electron', title: 'Cindy', is_on_screen: false,
+          identity: { kind: 'electron-dev', hints: ['use set_value'] } },
+      ]);
+
+      const gone = textPayload(await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'get_window_state', args: { pid: 65985, window_id: 5300 },
+      } })) as { reason?: string };
+      expect(gone.reason).toBe('window_gone');
+    } finally { await h.cleanup(); }
+  });
+
+  it('tells the model the single-entry rule and the Electron / simulator routes', async () => {
+    const h = await makeHarness({ getStatus: vi.fn(), callTool: vi.fn() });
+    try {
+      const payload = textPayload(await h.client.callTool({ name: 'list_tools', arguments: {} })) as {
+        workflow: string; tools: Array<{ name: string; description: string }>;
+      };
+      expect(payload.workflow).not.toContain('If using the native CLI instead');
+      expect(payload.workflow).toContain('not alternatives');
+      expect(payload.workflow).toContain('set_value');
+      expect(payload.workflow).toContain('xcrun simctl');
+      expect(payload.tools.find((tool) => tool.name === 'type_text')?.description).toContain('set_value');
+    } finally { await h.cleanup(); }
+  });
+});
+
+describe('unavailable observations get window state without an identity error', () => {
+  // Review (#8227 round 14): a minimized or other-Space window still has an AX tree, so the
+  // failed capture carries no window_id_not_found; window_not_on_screen must still be reachable.
+  const captureFailed = { degraded: true, elements: [], tree_markdown: '', screenshot_frame_valid: false,
+    screenshot_error: { code: 'px_capture_unavailable' } };
+
+  it('names window_not_on_screen for a capture failure of a window that exists off screen', async () => {
+    const callTool = vi.fn(async (name: string) => name === 'list_windows'
+      ? { windows: [{ pid: 7, window_id: 9, app_name: 'Electron', is_on_screen: false, process: { command: 'x --secret' } }] }
+      : captureFailed);
+    const h = await makeHarness({ getStatus: vi.fn(), callTool, describeDesktop: async () => ({ screen_locked: false }) }, { sessionId: 'offscreen' });
+    try {
+      const result = textPayload(await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'get_window_state', args: { pid: 7, window_id: 9, include_screenshot: true },
+      } })) as { reason?: string };
+      expect(result.reason).toBe('window_not_on_screen');
+      expect(JSON.stringify(result)).not.toContain('--secret');
+    } finally { await h.cleanup(); }
+  });
+
+  it('skips the extra window discovery when the screen is locked', async () => {
+    const callTool = vi.fn(async (_name: string) => captureFailed);
+    const h = await makeHarness({ getStatus: vi.fn(), callTool, describeDesktop: async () => ({ screen_locked: true }) }, { sessionId: 'locked-skip' });
+    try {
+      const result = textPayload(await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'get_window_state', args: { pid: 7, window_id: 9, include_screenshot: true },
+      } })) as { reason?: string };
+      expect(result.reason).toBe('screen_locked');
+      expect(callTool.mock.calls.map(([name]) => name)).toEqual(['get_window_state']);
+    } finally { await h.cleanup(); }
+  });
+});
+
+describe('thrown window identity failures carry the same reason', () => {
+  // 2026-10-31 dev-build run: a dead window_id made the driver throw
+  // window_id_not_found, which skipped the CUA_UNAVAILABLE classification.
+  it('names window_gone for a thrown window_id_not_found with discovery', async () => {
+    const callTool = vi.fn(async (name: string) => {
+      if (name === 'list_windows') return { windows: [{ pid: 7, window_id: 99, is_on_screen: true }] };
+      throw Object.assign(new Error('window_id 1 is not a live window'), { code: 'window_id_not_found' });
+    });
+    const h = await makeHarness({ getStatus: vi.fn(), callTool, describeDesktop: async () => ({ screen_locked: false }) }, { sessionId: 'thrown' });
+    try {
+      const result = textPayload(await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'get_window_state', args: { pid: 7, window_id: 1, include_screenshot: false },
+      } })) as { errorCode?: string; reason?: string; data?: { hint?: string } };
+      expect(result).toMatchObject({ errorCode: 'window_id_not_found', reason: 'window_gone' });
+      expect(result.data?.hint).toContain('no longer exists');
+    } finally { await h.cleanup(); }
   });
 });

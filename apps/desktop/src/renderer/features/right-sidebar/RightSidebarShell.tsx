@@ -76,6 +76,7 @@ import {
   isGlobalTabId,
   removeGlobalTab,
   setActiveGlobalTabId,
+  subscribeRevealSessionTab,
   useActiveGlobalTabId,
   useGlobalTabs,
 } from './globalTabs';
@@ -99,6 +100,15 @@ const log = createLogger('rightSidebar.shell');
 /** 组内激活记忆的订阅(与组归属同一个通知源)。 */
 const subscribeGroupActive = (cb: () => void) => subscribeTabGroups(cb);
 const EMPTY_TAB_ID_SET = new Set<string>();
+
+// helpers
+/** 已挂载页签里属于全局页签的那部分:全局页签跨任务存活,任务页签跟任务走。 */
+function selectPinnedTabIds(
+  tabIds: ReadonlySet<string>,
+  pinnedTabIds: ReadonlySet<string>,
+): Set<string> {
+  return new Set([...tabIds].filter((tabId) => pinnedTabIds.has(tabId)));
+}
 /**
  * Mac 合并顶栏右端 spacer 宽度，对应 MainLayout 固定唤起按钮：28px 按钮 + 8px 右距。
  * detach / maximize / 收起均属于面板自身，直接渲染在本顶栏中。
@@ -392,23 +402,29 @@ export function RightSidebarShell({
     sessionId: string | null;
     tabIds: Set<string>;
   }>(() => ({ sessionId: null, tabIds: new Set() }));
-  const deferredMountedTabIds =
-    deferredMountState.sessionId === sessionId ? deferredMountState.tabIds : EMPTY_TAB_ID_SET;
+  const pinnedTabIds = useMemo(() => new Set(pinnedTabs.map((tab) => tab.id)), [pinnedTabs]);
+  // 全局页签(webview 持有插件的页面状态)一旦挂载就不因任务变化卸载,所以换任务的这一帧
+  // 也要保住它们——effect 来不及:它在 commit 之后才把状态换成新任务,而这一帧的 render
+  // 已经决定了谁被卸载。任务页签仍按新任务重新计。
+  const deferredMountedTabIds = useMemo(() => {
+    if (deferredMountState.sessionId === sessionId) return deferredMountState.tabIds;
+    const kept = selectPinnedTabIds(deferredMountState.tabIds, pinnedTabIds);
+    return kept.size > 0 ? kept : EMPTY_TAB_ID_SET;
+  }, [deferredMountState, pinnedTabIds, sessionId]);
 
   useEffect(() => {
     setDeferredMountState((previous) => {
       if (previous.sessionId !== sessionId) {
-        return {
-          sessionId,
-          tabIds: activeTabId ? new Set([activeTabId]) : new Set(),
-        };
+        const tabIds = selectPinnedTabIds(previous.tabIds, pinnedTabIds);
+        if (activeTabId) tabIds.add(activeTabId);
+        return { sessionId, tabIds };
       }
       if (!activeTabId || previous.tabIds.has(activeTabId)) return previous;
       const next = new Set(previous.tabIds);
       next.add(activeTabId);
       return { sessionId, tabIds: next };
     });
-  }, [activeTabId, sessionId]);
+  }, [activeTabId, pinnedTabIds, sessionId]);
 
   useEffect(() => {
     if (!bucket.hydrated || !sessionId) return;
@@ -511,7 +527,8 @@ export function RightSidebarShell({
   ]);
 
   // 面板收束后不再注册的历史页签在 hydration 后静默关闭，避免显示死页签。
-  // `ghost:*`、`bot-delegations` 和 `bot-artifacts` 只作为数据库历史值保留。
+  // `ghost:*`、`bot-delegations`、`bot-artifacts`、`bot-workbench`(伙伴工作台已并入聊天头部
+  // 的近况浮层)和 `routines`(V1 伙伴例行工作已改为项目自动化)只作为数据库历史值保留。
   // 这些 kind 已无渲染方,
   // 留着只会落到 PlaceholderBody 变成"敬请期待"的死页签。
   useEffect(() => {
@@ -519,7 +536,9 @@ export function RightSidebarShell({
     const legacyGhostTabs = bucket.tabs.filter((tab) =>
       tab.kind.startsWith('ghost:') ||
       tab.kind === ('bot-delegations' as TabKindId) ||
-      tab.kind === ('bot-artifacts' as TabKindId),
+      tab.kind === ('bot-artifacts' as TabKindId) ||
+      tab.kind === ('bot-workbench' as TabKindId) ||
+      tab.kind === ('routines' as TabKindId),
     );
     if (legacyGhostTabs.length === 0) return;
     void (async () => {
@@ -677,6 +696,28 @@ export function RightSidebarShell({
     [activeGlobalTabId, groupId, pinnedTabs, sessionId, soloMode],
   );
 
+  // 程序打开的任务页签(插件任务页)要露出来:与用户点选同口径离开本组的全局页签。
+  const revealContextRef = useRef({ activeGlobalTabId, inGroup, pinnedTabs, hostedTabIds });
+  revealContextRef.current = { activeGlobalTabId, inGroup, pinnedTabs, hostedTabIds };
+  useEffect(() => {
+    if (!sessionId) return undefined;
+    return subscribeRevealSessionTab((targetSessionId, tabId) => {
+      if (targetSessionId !== sessionId) return;
+      const context = revealContextRef.current;
+      if (soloMode) {
+        if (context.hostedTabIds?.has(tabId)) setHostedActiveTabId(tabId);
+        return;
+      }
+      // 与页签投影共用弹出归属镜像;不要依赖尚未重渲染的新页签列表。
+      if (!context.inGroup(tabId) || isTabPoppedOut(tabId)) return;
+      setGroupActiveTabId(groupId, sessionId, tabId);
+      const activeGlobal = context.activeGlobalTabId;
+      if (activeGlobal && context.pinnedTabs.some((tab) => tab.id === activeGlobal)) {
+        setActiveGlobalTabId(null);
+      }
+    });
+  }, [groupId, sessionId, soloMode]);
+
   // 主窗:已弹出的页签窗口(同任务或只有全局页签的),右键菜单「移到窗口 …」的目标。
   // 标签用窗口里第一个页签的标题(插件的 TabPillTitle 组件,不是字符串)。
   const popoutWindows = useMemo<PopoutWindowOption[] | undefined>(() => {
@@ -817,13 +858,19 @@ export function RightSidebarShell({
     [activeTabId, onDetachTab],
   );
 
-  const bodyHosts = useRetainedBrowserTabHosts(
-    contentReady
-      ? tabs
-          .filter((tab) => tab.id === activeTabId || deferredMountedTabIds.has(tab.id))
-          .map((tab) => ({ tab, sessionId, workdir, remoteHostId, deviceLinkDeviceId }))
-      : [],
+  // 桶还没水合(contentReady=false)时只挡任务页签:全局页签不依赖任务桶,卸载它等于丢掉插件页面状态。
+  const retainedHosts = useRetainedBrowserTabHosts(
+    tabs
+      .filter((tab) => contentReady || pinnedTabIds.has(tab.id))
+      .filter((tab) => tab.id === activeTabId || deferredMountedTabIds.has(tab.id))
+      .map((tab) => ({ tab, sessionId, workdir, remoteHostId, deviceLinkDeviceId })),
   );
+  // 全局页签的 wrapper 在 keyed 列表里排最前、彼此顺序稳定:useRetainedBrowserTabHosts 会把
+  // 浏览器页签排到前面,不重排的话 React 为了让位会移动全局页签的 wrapper,断开里面的 webview guest。
+  const bodyHosts = [
+    ...retainedHosts.filter((host) => pinnedTabIds.has(host.tab.id)),
+    ...retainedHosts.filter((host) => !pinnedTabIds.has(host.tab.id)),
+  ];
 
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
@@ -901,26 +948,24 @@ export function RightSidebarShell({
             pillVariant="chip"
             addButtonWrapperClassName="h-[30px]"
           />
-          {/* 面板自属控件始终跟随面板：detach → maximize → 收起。固定唤起入口只在
-              面板收起或分离时存在；展开态不渲染无效的 show 按钮，也不预留空位。 */}
+          {/* 面板自属控件：分离 → 最大化 → 关闭；显示入口留在聊天区。 */}
           <div
             data-testid="right-sidebar-topbar-actions"
             className="flex h-full shrink-0 items-center gap-0.5"
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           >
             {handleDetachActiveTab && (
-              <RightSidebarDetach size="toolbar" onDetach={handleDetachActiveTab} />
+              <RightSidebarDetach onDetach={handleDetachActiveTab} />
             )}
             {onMaximize && (
               <RightSidebarMaximize
-                size="toolbar"
                 onMaximize={onMaximize}
                 isMaximized={isMaximized}
               />
             )}
             {onCloseSidebar && (
               <RightSidebarToggle
-                size="toolbar"
+                action="close"
                 collapsed={false}
                 onToggle={onCloseSidebar}
                 side={panelSide}

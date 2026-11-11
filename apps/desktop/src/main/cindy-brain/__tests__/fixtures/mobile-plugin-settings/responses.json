@@ -1,0 +1,19 @@
+{
+  "preferences": {
+    "displayLabel": "QA target B",
+    "notifications": true,
+    "language": "en",
+    "lastField": "QA long form initial value",
+    "unrelatedPreference": "must survive partial form saves"
+  },
+  "secrets": [{ "key": "key", "saved": false }],
+  "oauth": [{
+    "key": "login",
+    "clientConfigured": true,
+    "clientCustom": false,
+    "accounts": [
+      { "id": "qa-account-one", "label": "QA account one", "isDefault": true },
+      { "id": "qa-account-two", "label": "QA account two", "isDefault": false }
+    ]
+  }]
+}

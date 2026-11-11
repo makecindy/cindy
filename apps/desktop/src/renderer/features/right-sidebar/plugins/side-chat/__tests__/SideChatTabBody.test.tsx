@@ -17,7 +17,7 @@ vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: m.t }) }));
 vi.mock('@/components/ui/button', () => ({ Button: ({ children, onClick }: any) => <button onClick={onClick}>{children}</button> }));
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({ useConfirmDialog: () => ({ confirm: m.confirm }) }));
 vi.mock('@/features/cc-agent/CCAgentSessionView', () => ({ CCAgentSessionView: () => <textarea aria-label="Side chat composer" /> }));
-vi.mock('@/features/device-link/remoteProjectsStore', () => ({ remoteProjectsStore: { pinSessionOrigin: vi.fn() } }));
+vi.mock('@/features/device-link/remoteProjectsStore', () => ({ remoteProjectsStore: { pinSessionOrigin: vi.fn(), mergeDeviceSessions: vi.fn(), getDeviceName: () => 'Host' } }));
 vi.mock('@/hooks/useWindowVisible', () => ({ useWindowVisible: () => true, useDocumentVisible: () => true }));
 vi.mock('@/lib/sidebarWindow', () => ({ isSidebarWindow: () => false }));
 vi.mock('@/lib/makerChatStore', () => ({ makerChatStore: { closeSessionQuery: vi.fn(), purgeSession: vi.fn() } }));
@@ -54,25 +54,25 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); m.local.clear(); m.remote.clear(); });
 
-// Unit regression: deleting on another controller must remove the dead full-page entry.
+// Unit regression: deleting on another controller must immediately remove the side-chat composer.
 // Existing opener tests exercise tab creation only, not the mounted editor.
 // Minimal inputs: a deleted host snapshot or a deletion push while GET is in flight.
 it.each([null, 'host'])('removes a deleted branch without another confirmation (%s)', async deviceId => {
   mount(deviceId);
   await act(async () => {});
-  expect(screen.queryByRole('button', { name: 'chat.sideChat.openPage' })).not.toBeNull();
+  expect(screen.queryByRole('textbox', { name: 'Side chat composer' })).not.toBeNull();
   await act(async () => deleted(deviceId));
-  expect(screen.queryByRole('button', { name: 'chat.sideChat.openPage' })).toBeNull();
+  expect(screen.queryByRole('textbox', { name: 'Side chat composer' })).toBeNull();
   expect(m.close).toHaveBeenCalledWith('parent', 'tab', { skipBeforeClose: true });
   expect(m.confirm).not.toHaveBeenCalled();
   expect(m.setStatus).not.toHaveBeenCalled();
 });
 
-it.each([null, { ...child, status: 'deleted' }])('does not offer a full-page entry for an unavailable remote snapshot', async value => {
+it.each([null, { ...child, status: 'deleted' }])('does not mount a composer for an unavailable remote snapshot', async value => {
   m.get.mockResolvedValue(value);
   mount('host');
   await act(async () => {});
-  expect(screen.queryByRole('button', { name: 'chat.sideChat.openPage' })).toBeNull();
+  expect(screen.queryByRole('textbox', { name: 'Side chat composer' })).toBeNull();
   expect(m.close).toHaveBeenCalledWith('parent', 'tab', { skipBeforeClose: true });
 });
 
@@ -82,7 +82,7 @@ it('does not revive a deleted branch when an older active snapshot completes', a
   mount('host');
   await act(async () => deleted('host'));
   await act(async () => finish(child));
-  expect(screen.queryByRole('button', { name: 'chat.sideChat.openPage' })).toBeNull();
+  expect(screen.queryByRole('textbox', { name: 'Side chat composer' })).toBeNull();
   expect(m.close).toHaveBeenCalledTimes(1);
 });
 

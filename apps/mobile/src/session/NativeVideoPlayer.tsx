@@ -34,6 +34,9 @@ export function NativeVideoPlayer({
   testID,
   url,
   visible,
+  autoPlay = false,
+  nativeControls = true,
+  onVideoSize,
 }: {
   onError(detail: string): void;
   style?: StyleProp<ViewStyle>;
@@ -41,10 +44,16 @@ export function NativeVideoPlayer({
   url: string;
   /** 所在页是否为当前可见页:可见 → 失活沿暂停一次。 */
   visible: boolean;
+  /** Only true after an explicit play action in the message stream. */
+  autoPlay?: boolean;
+  /** A message cover uses the paused first frame beneath its own gallery link. */
+  nativeControls?: boolean;
+  /** Intrinsic display size, available once the native track renders. */
+  onVideoSize?: (size: { width: number; height: number }) => void;
 }) {
   const { t } = useTranslation();
   const liquidGlass = useLiquidGlassAvailable();
-  const player = useVideoPlayer(url);
+  const player = useVideoPlayer(url, instance => { if (autoPlay && visible) instance.play(); });
   const { status, error } = useEvent(player, "statusChange", {
     status: player.status,
   });
@@ -110,8 +119,13 @@ export function NativeVideoPlayer({
       <VideoView
         allowsPictureInPicture={false}
         contentFit="contain"
-        fullscreenOptions={{ enable: true, orientation: "default" }}
-        nativeControls
+        fullscreenOptions={{ enable: nativeControls, orientation: "default" }}
+        nativeControls={nativeControls}
+        onFirstFrameRender={() => {
+          const size = player.videoTrack?.size;
+          if (size && Number.isFinite(size.width) && Number.isFinite(size.height)
+            && size.width > 0 && size.height > 0) onVideoSize?.(size);
+        }}
         player={player}
         style={StyleSheet.absoluteFill}
       />

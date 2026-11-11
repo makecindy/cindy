@@ -20,19 +20,6 @@ export function normalizeBotHarness(value: unknown): BotHarness {
 
 export const normalizeBotModelRoute = normalizeModelRoute;
 
-/** Optional task-specific route. Absence inherits the live primary route, never a stored copy. */
-export function readBotTaskModelOverride(value: unknown): BotModelRoute | null {
-  if (value === null || value === undefined) return null;
-  const record = value as Partial<BotModelRoute>;
-  const route = normalizeBotModelRoute(value);
-  if (!route || !['claude', 'codex', 'pi'].includes(String(record.harness))
-    || (record.providerId !== null && typeof record.providerId !== 'string')
-    || typeof record.effort !== 'string' || typeof record.fastMode !== 'boolean') {
-    throw new Error('Invalid task model route');
-  }
-  return route;
-}
-
 /**
  * Read the ordered route chain while preserving every legacy single-model Bot.
  * Duplicate routes are dropped because retrying the same endpoint cannot recover it.
@@ -113,4 +100,54 @@ export function nextBotModelRoute(
     return route;
   }
   return null;
+}
+
+/** A saved model selection supersedes an earlier runtime-only fallback. */
+export function botProfileModelSelectionChanged(previous: Record<string, unknown>, next: Record<string, unknown>): boolean {
+  // Legacy profiles may contain only modelChain. Compare the same canonical
+  // shape the settings save uses, so adding mirror fields is not a model edit.
+  previous = normalizeBotProfileModelChain(previous);
+  next = normalizeBotProfileModelChain(next);
+  return ['modelChainOverride', 'modelOverride', 'modelChain', 'harness', 'model', 'providerId', 'agentDeviceId', 'effort', 'fastMode']
+    .some((key) => JSON.stringify(previous[key] ?? null) !== JSON.stringify(next[key] ?? null));
+}
+
+/** Main-owned persistence boundary for the ordered Bot runtime routes. */
+export function normalizeBotProfileModelChain(
+  value: Record<string, unknown>,
+): Record<string, unknown> {
+  // `taskModelOverride` (the retired teammate task model) is not read here: a stored value stays as
+  // it is, opaque, so a profile carrying it loads and saves, and the cloud still carries it for an
+  // older computer (companion-cloud/capabilities.ts).
+  const next = { ...value };
+  if (Object.prototype.hasOwnProperty.call(next, 'modelChain')) {
+    const chain = normalizeBotModelChain(next.modelChain);
+    if (chain.length === 0 && next.modelChainOverride !== null && next.modelOverride !== null) {
+      throw new Error('modelChain must contain at least one valid route');
+    }
+    const primary = chain[0];
+    next.modelChain = chain;
+    if (primary) {
+      next.harness = primary.harness;
+      next.model = primary.model;
+      next.providerId = primary.providerId;
+      // The scalar fields mirror the first route, including returning to this
+      // computer. Do not introduce a new field into untouched legacy local profiles.
+      if (primary.agentDeviceId || Object.prototype.hasOwnProperty.call(next, 'agentDeviceId')) {
+        next.agentDeviceId = primary.agentDeviceId ?? null;
+      }
+      next.effort = primary.effort;
+      next.fastMode = primary.fastMode;
+    }
+  }
+  if (Array.isArray(next.modelChainOverride)) {
+    const override = normalizeBotModelChain(next.modelChainOverride);
+    if (override.length === 0) {
+      throw new Error('modelChainOverride must contain at least one valid route');
+    }
+    next.modelChainOverride = override;
+  } else if (next.modelChainOverride !== null && next.modelChainOverride !== undefined) {
+    throw new Error('modelChainOverride must be an ordered route list or null');
+  }
+  return next;
 }

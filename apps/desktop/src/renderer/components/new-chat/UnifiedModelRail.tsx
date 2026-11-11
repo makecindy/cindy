@@ -1,15 +1,22 @@
 import type { ReactNode } from 'react';
-import { LayoutGrid, Star } from 'lucide-react';
+import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
+import { useProviderShareWeeklyQuota } from '@/features/provider-share/useProviderShareWeeklyQuota';
+import { History, LayoutGrid, Star } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { ModelPickerAccountBoundary, useModelPickerAccount } from './ModelPickerAccount';
+import { ModelPoolQuotaDetails, useModelPoolQuota, type ModelPoolQuota } from './ModelPoolQuota';
 
 import type { ProviderView } from '@cindy/model-providers';
 
 import { cn } from '@/lib/utils';
 import { providerAccountLabel } from '@/lib/providerDisplayName';
+import { stopWheelPropagation } from '@/lib/stopWheelPropagation';
 import { Tip } from '@/components/ui/tooltip';
 
 import {
   useProviderWeeklyQuota,
+  useProviderUsageSnapshots,
+  useWeeklyQuotaFromSnapshots,
   type ProviderGroupUsageOf,
   type ProviderUsageScope,
 } from './useProviderWeeklyQuota';
@@ -23,12 +30,13 @@ import {
   type UnifiedRailFilter,
   type UnifiedRailItem,
 } from './unifiedModelSelection';
+import { QUOTA_FILL_COLOR_CLASSES, quotaSeverity } from '../status/QuotaBar';
 
 /**
  * UnifiedModelRail —— 统一面板左侧的视图筛选栏(model-selector-unified §1.2 / §1.6)。
  *
  * 格位由数据派生(见 `buildUnifiedRail`),这里只负责画:
- *   ★收藏 → 同引擎(仅会话内,图标 = 当前会话引擎的品牌 mark)→ ──分隔── → 全部 → 各来源
+ *   最近 → ★收藏 → 同引擎(仅会话内,图标 = 当前会话引擎的品牌 mark)→ ──分隔── → 全部 → 各来源
  *   → (新任务草稿)──分隔── → 其他电脑上的供应商(带信号波纹的 Logo,每台电脑一段)。
  * rail 常驻(2026-08-13 裁决),分隔线与设计稿 .rail-sep 同构:「个人钉的」与
  * 「目录本身的视图」两段之间画一条 22px 细线。
@@ -74,7 +82,12 @@ export function UnifiedModelRail({
   return (
     // 设计稿 .rail:宽 48(含 6px 侧距 + 1px 右分隔线)、纵向 8px、格间 2px。
     // 与侧栏窄图标栏一致：滚动条不占宽度，避免挤压按钮并触发横向溢出。
-    <div className="flex min-h-0 w-12 shrink-0 flex-col items-center gap-0.5 overflow-x-hidden overflow-y-auto scrollbar-hide border-r border-[var(--model-dropdown-border)] px-1.5 py-2">
+    // onWheel:模态对话框里 react-remove-scroll 会拦下浮层的滚轮,rail 又藏着
+    // 滚动条,不放行的话供应商一多就完全滚不到(stopWheelPropagation 注释有全景)。
+    <div
+      className="flex min-h-0 w-12 shrink-0 flex-col items-center gap-0.5 overflow-x-hidden overflow-y-auto scrollbar-hide border-r border-[var(--model-dropdown-border)] px-1.5 py-2"
+      onWheel={stopWheelPropagation}
+    >
       {items.map((item, index) => {
         const key = railItemKey(item);
         const isActive = activeKey === key;
@@ -129,17 +142,19 @@ export function UnifiedModelRail({
                 })
           : undefined;
         const label =
-          item.kind === 'favorites'
-            ? t('newChat.modelSelector.unified.railFavorites')
-            : item.kind === 'engine'
-              ? t('newChat.modelSelector.unified.railSameEngine', {
-                  agent: engineOption?.label ?? '',
-                })
-              : item.kind === 'all'
-                ? t('newChat.modelSelector.unified.railAll')
-                : item.kind === 'remote-provider'
-                  ? (remoteSources?.labelOf(item.deviceId, item.providerId) ?? item.providerId)
-                  : (remoteSources?.localProviderLabel ?? providerLabel)(item.providerId);
+          item.kind === 'recent'
+            ? t('newChat.modelSelector.unified.railRecent')
+            : item.kind === 'favorites'
+              ? t('newChat.modelSelector.unified.railFavorites')
+              : item.kind === 'engine'
+                ? t('newChat.modelSelector.unified.railSameEngine', {
+                    agent: engineOption?.label ?? '',
+                  })
+                : item.kind === 'all'
+                  ? t('newChat.modelSelector.unified.railAll')
+                  : item.kind === 'remote-provider'
+                    ? (remoteSources?.labelOf(item.deviceId, item.providerId) ?? item.providerId)
+                    : (remoteSources?.localProviderLabel ?? providerLabel)(item.providerId);
         return (
           <div key={key} className="contents">
             {separatorBefore && (
@@ -149,6 +164,12 @@ export function UnifiedModelRail({
               />
             )}
             <RailButton
+              shareDeviceId={
+                (item.kind === 'provider' || item.kind === 'remote-provider') &&
+                isProviderShareAgentDeviceId(usageDeviceId)
+                  ? usageDeviceId
+                  : null
+              }
               label={label}
               accountIdentity={accountIdentity}
               {...(groupNote ? { groupNote } : {})}
@@ -163,7 +184,11 @@ export function UnifiedModelRail({
                   : usageDeviceId
               }
             >
-              {item.kind === 'favorites' ? (
+              {item.kind === 'recent' ? (
+                // 最近格用 History(时钟 + 回拨箭头)表达「用过的时间序」,与 ★ 的「钉住」
+                // 语义区分;与其它非激活格同灰,hover 提亮,不抢视线。
+                <History size={16} />
+              ) : item.kind === 'favorites' ? (
                 // ☆ 未激活与其它格同灰(hover 提亮)—— 常亮金色会在没进收藏视图时也
                 // 抢视线(2026-08-14 实机自查);激活时整格反色 + 实心星跟随 currentColor。
                 <Star size={16} fill={isActive ? 'currentColor' : 'none'} />
@@ -199,22 +224,57 @@ interface RailButtonProps {
   disabled: boolean;
   provider?: ProviderView;
   usageDeviceId: string | null;
+  shareDeviceId?: string | null;
   children: ReactNode;
 }
 
 function RailButton(props: RailButtonProps) {
   // Quota follows the directory's owner: remote directories read that device's mirrors
   // and must never borrow this desktop's account quota.
+  if (props.shareDeviceId) {
+    return <SharedProviderQuotaButton {...props} shareDeviceId={props.shareDeviceId} />;
+  }
+  // Groups already resolve an executing member. Keep that member's runtime
+  // mirror, rather than previewing a new allocation on the same computer.
+  if (props.provider && props.groupNote)
+    return <ProviderQuotaButton {...props} provider={props.provider} />;
   return props.provider ? (
-    <ProviderQuotaButton {...props} provider={props.provider} />
+    <ModelPickerAccountBoundary
+      providerId={props.provider.auth?.method === 'oauth' ? props.provider.id : ''}
+      deviceId={props.usageDeviceId}
+    >
+      <ProviderQuotaButton {...props} provider={props.provider} />
+    </ModelPickerAccountBoundary>
   ) : (
     <RailButtonView {...props} />
   );
 }
 
-function ProviderQuotaButton(props: RailButtonProps & { provider: ProviderView }) {
-  const quota = useProviderWeeklyQuota(props.provider, { deviceId: props.usageDeviceId });
+function SharedProviderQuotaButton(props: RailButtonProps & { shareDeviceId: string }) {
+  const quota = useProviderShareWeeklyQuota(props.shareDeviceId);
   return <RailButtonView {...props} quota={quota} />;
+}
+
+function ProviderQuotaButton(props: RailButtonProps & { provider: ProviderView }) {
+  const { t } = useTranslation();
+  const pickerAccount = useModelPickerAccount(props.provider.id, props.usageDeviceId);
+  const usage = useProviderUsageSnapshots(props.provider, { deviceId: props.usageDeviceId ?? null });
+  const quota = useWeeklyQuotaFromSnapshots(usage);
+  const pool = useModelPoolQuota(props.provider.id, props.usageDeviceId, usage);
+  const identity = pool?.isPool
+    ? t('providerGroup.member.accountCount', { count: pool.members.length })
+    : pool && pickerAccount ? pool.members[0].identity
+    : pickerAccount
+      ? (pickerAccount.identity ?? t('subscriptionAccounts.unassigned'))
+      : props.accountIdentity;
+  const displayedQuota = pool
+    ? pool.average === null
+      ? null
+      : { usedPercent: 100 - pool.average, resetsAt: null }
+    : quota;
+  return (
+    <RailButtonView {...props} accountIdentity={identity} quota={displayedQuota} pool={pool} />
+  );
 }
 
 function RailButtonView({
@@ -227,31 +287,52 @@ function RailButtonView({
   disabled,
   children,
   quota,
+  pool,
 }: RailButtonProps & {
   quota?: ReturnType<typeof useProviderWeeklyQuota>;
+  pool?: ModelPoolQuota | null;
 }) {
   const { t } = useTranslation();
   const remaining = quota ? Math.round(100 - quota.usedPercent) : null;
-  const quotaLabel =
-    remaining === null
+  const quotaLabel = pool?.hasAccountDetails
+    ? pool.label
+    : remaining === null
       ? null
       : `${t('quotaCard.weeklyLabel')} · ${t('quotaCard.remainingPercent', { percent: remaining })}`;
   const reset = formatQuotaResetCountdown(quota?.resetsAt, Date.now(), t);
   // 供应商组：组名不带某一台的账号，账号跟在「当前在 {电脑} 上运行」后面。
   const displayLabel = groupNote ? label : providerAccountLabel(label, accountIdentity);
   const note = groupNote ? providerAccountLabel(groupNote, accountIdentity) : null;
-  const description = [note, quotaLabel].filter(Boolean).join(' · ');
-  const tooltip =
-    quotaLabel || note ? (
-      <>
-        <div>{displayLabel}</div>
-        {note && <div>{note}</div>}
-        {quotaLabel && <div>{quotaLabel}</div>}
-        {reset && <div>{reset}</div>}
-      </>
-    ) : (
-      displayLabel
-    );
+  const accountLines = pool?.hasAccountDetails ? pool.members.map((member) =>
+    [
+      member.identity,
+      member.remaining === null
+        ? '—'
+        : `${t('quotaCard.weeklyLabel')} · ${t('quotaCard.remainingPercent', { percent: member.remaining })}`,
+      member.fiveHourLabel,
+      member.recovery,
+      member.reset,
+      member.resetSoon ? t('subscriptionAccounts.quotaResetSoon') : null,
+    ]
+      .filter(Boolean)
+      .join(' · '),
+  ) : undefined;
+  const description = [note, quotaLabel, ...(!pool?.hasAccountDetails ? [pool?.warningLabel] : []), ...(accountLines ?? [])].filter(Boolean).join(' · ');
+  const tooltip = pool && (pool.hasAccountDetails || pool.warning) ? (
+    <>
+      <div>{displayLabel}</div>
+      <ModelPoolQuotaDetails pool={pool} />
+    </>
+  ) : quotaLabel || note ? (
+    <>
+      <div>{displayLabel}</div>
+      {note && <div>{note}</div>}
+      {quotaLabel && <div>{quotaLabel}</div>}
+      {reset && <div>{reset}</div>}
+    </>
+  ) : (
+    displayLabel
+  );
   return (
     <Tip
       text={tooltip}
@@ -270,12 +351,21 @@ function RailButtonView({
         className={cn(
           'relative flex h-[38px] w-[34px] shrink-0 flex-col items-center justify-center rounded-[9px] transition-colors',
           isActive
-            ? 'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)] shadow-[var(--shadow-menu)]'
+            ? 'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]'
             : 'text-[var(--text-tertiary)] hover:bg-[var(--model-item-hover)] hover:text-[var(--text-secondary)]',
           disabled && 'cursor-not-allowed opacity-50',
         )}
       >
         <span className="flex h-[24px] items-center justify-center">{children}</span>
+        {(pool?.warning || !!pool?.resetSoonCount) && (
+          <span
+            aria-hidden
+            data-pool-reset-soon={pool?.resetSoonCount ? '' : undefined}
+            data-quota-warning={pool?.warning?.kind}
+            className={cn('pointer-events-none absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full',
+              pool?.warning?.kind === 'limited' ? 'bg-[var(--quota-bar-crit)]' : 'bg-[var(--warning-fg)]')}
+          />
+        )}
         {quota && (
           <span
             aria-hidden="true"
@@ -291,11 +381,9 @@ function RailButtonView({
             <span
               className={cn(
                 'block h-full rounded-full',
-                quota.usedPercent >= 90
-                  ? 'bg-[var(--quota-bar-crit)]'
-                  : quota.usedPercent > 70
-                    ? 'bg-[var(--quota-bar-warn)]'
-                    : 'bg-current',
+                quotaSeverity(quota.usedPercent) === 'normal'
+                  ? 'bg-current'
+                  : QUOTA_FILL_COLOR_CLASSES[quotaSeverity(quota.usedPercent)],
               )}
               style={{ width: `${100 - quota.usedPercent}%` }}
             />

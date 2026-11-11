@@ -52,6 +52,32 @@ afterEach(async () => {
 });
 
 describe('bot model chain settings store', () => {
+  // unit regression: a new-task draft change used to switch existing teammates,
+  // including unattended routine sends. Exercise the actual default resolver
+  // and reset with a different harness/source/model/tuning in the draft.
+  it('keeps teammate defaults independent of new-task selections, including after reset', async () => {
+    const rootPath = await testRoot();
+    const providers = [{
+      id: 'openai', source: 'builtin', connected: true, agents: ['codex'],
+      auth: { method: 'oauth' },
+      access: { kind: 'subscription', product: 'ChatGPT' },
+      routing: { codex: { upstream: 'https://example.invalid', authStrategy: 'oauth-passthrough' } },
+      models: { codex: [{ id: 'gpt-5.6-sol', mode: 'chat', status: 'active', efforts: ['medium'], defaultEffort: 'medium' }] },
+    }] as ProviderView[];
+    const before = await readEffectiveBotModelChain({ modelChainOverride: null }, { rootPath, providers });
+    expect(before).toHaveLength(1);
+    providers.push({
+      id: 'anthropic', source: 'builtin', connected: true, agents: ['claude-code'],
+      auth: { method: 'oauth' }, access: { kind: 'subscription', product: 'Claude' },
+      routing: { 'claude-code': { upstream: 'https://example.invalid', authStrategy: 'oauth-passthrough' } },
+      models: { 'claude-code': [{ id: 'other-model', mode: 'chat', status: 'active', efforts: ['high'], defaultEffort: 'high' }] },
+    } as ProviderView);
+    setNewMakerDraftCache({ selectedRoute: { harness: 'claude', providerId: 'anthropic', model: 'other-model', effort: 'high', fastMode: true }, lastByVendor: {}, effortByModel: {}, fastModeByModel: {} }, owner.key);
+    expect(await readEffectiveBotModelChain({ modelChainOverride: null }, { rootPath, providers })).toEqual(before);
+    await writeBotModelChainSettings([{ harness: 'pi', model: 'custom-model' }], { rootPath });
+    expect((await resetBotModelChainSettings({ rootPath, providers })).value.modelChain).toEqual(before);
+  });
+
   it('keeps unconfigured defaults empty without writing a Gateway placeholder', async () => {
     const rootPath = await testRoot();
     expect(await readBotModelChainSettingsState({ rootPath, providers: [] })).toMatchObject({
@@ -63,14 +89,13 @@ describe('bot model chain settings store', () => {
     const rootPath = await testRoot();
     const providers = [{
       id: 'openai', source: 'builtin', connected: true, agents: ['codex'],
+      auth: { method: 'oauth' },
       access: { kind: 'subscription', product: 'ChatGPT' },
       routing: { codex: { upstream: 'https://example.invalid', authStrategy: 'oauth-passthrough' } },
       models: { codex: [{ id: 'gpt-5.6-sol', mode: 'chat', status: 'active', efforts: ['medium'], defaultEffort: 'medium' }] },
     }] as ProviderView[];
-    // Connected catalog alone cannot select a model while the default mirror is absent.
+    // Teammates can resolve defaults before any new-task draft has synchronized.
     setNewMakerDraftCache({ lastByVendor: {}, effortByModel: {}, fastModeByModel: {} }, owner.key);
-    expect((await readBotModelChainSettingsState({ rootPath, providers })).value.modelChain).toEqual([]);
-    setNewMakerDraftCache({ selectedRoute: { harness: 'codex', providerId: 'openai', model: 'gpt-5.6-sol', effort: 'medium', fastMode: false }, lastByVendor: {}, effortByModel: {}, fastModeByModel: {} }, owner.key);
     const state = await readBotModelChainSettingsState({ rootPath, providers });
     expect(state.isCustomized).toBe(false);
     expect(state.value.modelChain[0]).toMatchObject({
@@ -84,10 +109,11 @@ describe('bot model chain settings store', () => {
       .toEqual(state.value);
   });
 
-  it('uses only enabled Luna with Cindy tuning for new and existing default-following partners', async () => {
+  it('uses only enabled Luna with catalog tuning for new and existing default-following partners', async () => {
     const rootPath = await testRoot();
     const providers = [{
       id: 'openai', source: 'builtin', connected: true, agents: ['codex'],
+      auth: { method: 'oauth' },
       access: { kind: 'subscription', product: 'ChatGPT' },
       routing: { codex: { upstream: 'https://example.invalid', authStrategy: 'oauth-passthrough' } },
       models: { codex: ['gpt-5.6-sol', 'gpt-5.6-luna'].map(id => ({
@@ -95,16 +121,15 @@ describe('bot model chain settings store', () => {
       })) },
     }] as ProviderView[];
     const selectedRoute = { harness: 'codex' as const, providerId: 'openai', model: 'gpt-5.6-luna', effort: 'medium', fastMode: false };
+    const expected = [{ ...selectedRoute, effort: 'low' }];
     setModelVisibilityMirror({ 'codex:openai:gpt-5.6-luna': true }, { fallback: false, followCatalogKeys: [] });
     setNewMakerDraftCache({ selectedRoute, lastByVendor: {}, effortByModel: {}, fastModeByModel: {} }, owner.key);
-    expect((await readBotModelChainSettingsState({ rootPath, providers })).value.modelChain).toEqual([selectedRoute]);
-    expect(await readEffectiveBotModelChain({ modelChainOverride: null, model: 'gpt-5.6-sol', effort: 'low' }, { rootPath, providers })).toEqual([selectedRoute]);
+    expect((await readBotModelChainSettingsState({ rootPath, providers })).value.modelChain).toEqual(expected);
+    expect(await readEffectiveBotModelChain({ modelChainOverride: null, model: 'gpt-5.6-sol', effort: 'low' }, { rootPath, providers })).toEqual(expected);
     setNewMakerDraftCache({ selectedRoute: { ...selectedRoute, providerId: null }, lastByVendor: {}, effortByModel: {}, fastModeByModel: {} }, owner.key);
-    expect(await readEffectiveBotModelChain({ modelChainOverride: null }, { rootPath, providers })).toEqual([selectedRoute]);
+    expect(await readEffectiveBotModelChain({ modelChainOverride: null }, { rootPath, providers })).toEqual(expected);
     expect(await fs.readdir(rootPath)).toEqual([]);
-    setModelVisibilityMirror({}, { fallback: true });
-    expect((await readBotModelChainSettingsState({ rootPath, providers })).value.modelChain).toEqual([selectedRoute]);
-    setModelVisibilityMirror({ 'codex:openai:gpt-5.6-luna': false }, { fallback: true });
+    setModelVisibilityMirror({}, { fallback: false, followCatalogKeys: [] });
     expect(await readEffectiveBotModelChain({ modelChainOverride: null }, { rootPath, providers })).toEqual([]);
   });
 
@@ -165,6 +190,7 @@ describe('bot model chain settings store', () => {
     const otherRoot = await testRoot();
     const providers = [{
       id: 'openai', source: 'builtin', connected: true, agents: ['codex'],
+      auth: { method: 'oauth' },
       access: { kind: 'subscription', product: 'ChatGPT' },
       routing: { codex: { upstream: 'https://example.invalid', authStrategy: 'oauth-passthrough' } },
       models: { codex: [{ id: 'gpt-5.6-sol', mode: 'chat', status: 'active', efforts: ['medium'], defaultEffort: 'medium' }] },

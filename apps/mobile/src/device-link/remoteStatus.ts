@@ -5,7 +5,9 @@ import {
 } from '@cindy/maker-shared/device-link-contract';
 import type { DeviceLinkConnectionIssue, DeviceLinkConnectionIssueKind, DeviceLinkStatus } from '@cindy/device-link';
 import type { LocalNetworkStatus } from '@/device-link/localNetworkStatus';
+import { getActiveSelfHostedRelay } from '@/device-link/selfHostedRelayRouting';
 import { i18n } from '@/i18n';
+import { parseAgentErrorCode } from '@cindy/maker-shared/error-redaction';
 
 export {
   formatRemoteError,
@@ -32,12 +34,22 @@ const CONNECTION_ISSUE_COPY_KEYS: Record<
   unstable: { title: 'deviceLink.unstableTitle', hint: 'deviceLink.unstableHint' },
 };
 
+/**
+ * 自建中转下,鉴权失败与 4410 只说明中转凭证失效(被主人移出或中转已停用),与 Cindy 登录无关:
+ * 不能沿用「请重新登录」,改为指向设置里的「切回官方中转」。
+ */
+function isSelfHostedRelayRemoval(kind: DeviceLinkConnectionIssueKind): boolean {
+  return (kind === 'auth-failed' || kind === 'device-removed') && getActiveSelfHostedRelay() !== null;
+}
+
 /** Mobile 连接问题标题/提示统一走 i18n,避免同一 banner 混用本地化与中文硬编码。 */
 export function connectionIssueTitle(kind: DeviceLinkConnectionIssueKind): string {
+  if (isSelfHostedRelayRemoval(kind)) return i18n.t('relay.issue.removedTitle');
   return i18n.t(CONNECTION_ISSUE_COPY_KEYS[kind].title);
 }
 
 export function connectionIssueHint(kind: DeviceLinkConnectionIssueKind): string {
+  if (isSelfHostedRelayRemoval(kind)) return i18n.t('relay.issue.removedHint');
   return i18n.t(CONNECTION_ISSUE_COPY_KEYS[kind].hint);
 }
 
@@ -104,9 +116,12 @@ export function describeAgentAuthError(error: string | null | undefined): string
   });
 }
 
-/** 自动恢复类连接错误保留结构化 marker 做状态分类，展示文案则复用 Mobile i18n。 */
-function localizedConnectionRecoveryCopy(error: unknown): string | null {
+/** 结构化运行错误保留 marker 做状态分类，展示文案复用 Mobile i18n。 */
+function localizedRuntimeErrorCopy(error: unknown): string | null {
   const formatted = typeof error === 'string' ? error : formatRemoteErrorShared(error);
+  if (formatted.includes('[REMOTE_AGENT_MEMBER_BUDGET_PAUSED]')) return i18n.t('session.remoteError.REMOTE_AGENT_MEMBER_BUDGET_PAUSED');
+  const agentCode = parseAgentErrorCode(formatted)?.code;
+  if (agentCode && i18n.exists(`session.remoteError.${agentCode}`)) return i18n.t(`session.remoteError.${agentCode}`);
   if (formatted.includes('DEVICE_OFFLINE')) return i18n.t('session.menu.aiRenameOffline');
   if (formatted.includes('NOT_CONNECTED')) return i18n.t('session.screen.networkReconnecting');
   return null;
@@ -121,7 +136,7 @@ export function humanizeRemoteError(error: unknown): string {
   if (isDeviceUnresponsiveRemoteError(error)) {
     return i18n.t('deviceLink.deviceUnresponsiveHint');
   }
-  const recoveryCopy = localizedConnectionRecoveryCopy(error);
+  const recoveryCopy = localizedRuntimeErrorCopy(error);
   if (recoveryCopy) return recoveryCopy;
   const formatted = typeof error === 'string' ? error : formatRemoteErrorShared(error);
   const localized = localizedStableRemoteError(formatted);
@@ -169,7 +184,7 @@ export function describeRemoteError(error: string | null): string | null {
   if (error.includes('DEVICE_UNRESPONSIVE')) {
     return i18n.t('deviceLink.deviceUnresponsiveHint');
   }
-  const recoveryCopy = localizedConnectionRecoveryCopy(error);
+  const recoveryCopy = localizedRuntimeErrorCopy(error);
   if (recoveryCopy) return recoveryCopy;
   const agentAuth = describeAgentAuthError(error);
   if (agentAuth) return agentAuth;

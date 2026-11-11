@@ -45,7 +45,17 @@ export interface SessionMessageCacheWriteAuthority {
   readonly keyEpoch: number;
 }
 
+interface PendingListWrite {
+  authority: SessionMessageCacheWriteAuthority;
+  messages: RemoteMessage[];
+  completion: Promise<void>;
+}
+const pendingListWrites = new Map<string, PendingListWrite>();
+
 function enqueueCacheOperation(key: string, operation: () => Promise<void>): Promise<void> {
+  // A read, replacement or other write is an ordering barrier. Later pushes
+  // must never join a batch ahead of that operation.
+  pendingListWrites.delete(key);
   const previous = pendingOperations.get(key) ?? Promise.resolve();
   const next = previous.catch(() => undefined).then(operation).catch(() => undefined);
   pendingOperations.set(key, next);
@@ -174,17 +184,31 @@ export async function cacheSessionMessages(
 export async function cacheSessionListMessage(deviceId: string, sessionId: string, message: RemoteMessage): Promise<void> {
   const authority = captureSessionMessageCacheWriteAuthority(deviceId, sessionId);
   if (!authority) return;
-  await enqueueCacheOperation(authority.key, async () => {
+  const pending = pendingListWrites.get(authority.key);
+  if (pending && isSessionMessageCacheWriteAuthorityCurrent(pending.authority)) {
+    pending.messages.push(message);
+    return pending.completion;
+  }
+  const batch: PendingListWrite = { authority, messages: [message], completion: Promise.resolve() };
+  batch.completion = enqueueCacheOperation(authority.key, async () => {
+    // Seal before the first await: arrivals during disk I/O form the next batch,
+    // so a busy session cannot indefinitely delay a completed durable snapshot.
+    if (pendingListWrites.get(authority.key) === batch) pendingListWrites.delete(authority.key);
     if (!isSessionMessageCacheWriteAuthorityCurrent(authority)) return;
     const raw = await messageCacheStorage.getItem(authority.key);
     const parsed: unknown = raw ? JSON.parse(raw) : null;
-    const previous = normalizeCachedMessages(isRecord(parsed) && Array.isArray(parsed.messages)
+    let messages = normalizeCachedMessages(isRecord(parsed) && Array.isArray(parsed.messages)
       ? parsed.messages : Array.isArray(parsed) ? parsed : []);
-    const messages = normalizeCachedMessages([...previous.filter(row =>
-      row.id !== message.id && (!message.clientId || row.clientId !== message.clientId)), message]);
+    for (const incoming of batch.messages) {
+      // Keep per-arrival alias replacement and window trimming semantics.
+      messages = normalizeCachedMessages([...messages.filter(row =>
+        row.id !== incoming.id && (!incoming.clientId || row.clientId !== incoming.clientId)), incoming]);
+    }
     if (!isSessionMessageCacheWriteAuthorityCurrent(authority)) return;
     await messageCacheStorage.setItem(authority.key, JSON.stringify({ version: 1, updatedAt: Date.now(), messages }));
   });
+  pendingListWrites.set(authority.key, batch);
+  return batch.completion;
 }
 
 // 登出清空:遍历所有本前缀的 key 一次性删除(AsyncStorage 支持枚举,无需手动维护 host 索引)。

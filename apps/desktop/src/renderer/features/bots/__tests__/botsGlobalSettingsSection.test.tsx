@@ -10,7 +10,7 @@
  *
  * 于是三行连同无用状态文案整体删除。导入/导出(portability)整段能力随本轮砍削
  * 一并移除;这组用例只钉住剩下的两件事:
- *   1. 这一屏不许再出现任何没接运行时的通知设置;
+ *   1. 这一屏不许再出现任何没接运行时的设置(唯一的开关「显示回复对应的消息」由私聊气泡读取);
  *   2. 真正能用的模型链入口必须真的调到链路上。
  */
 
@@ -76,7 +76,13 @@ describe('设置 › 伙伴', () => {
   it('不再摆没人消费的通知开关', () => {
     const { container } = render(<BotsGlobalSettingsSection />);
 
-    expect(screen.queryByRole('switch')).toBeNull();
+    // 唯一的开关是「显示回复对应的消息」:私聊气泡读它(BotChatReplyTarget),切换真的落到偏好里。
+    const switches = screen.queryAllByRole('switch');
+    expect(switches.map((item) => item.getAttribute('aria-label'))).toEqual(['bots.globalSettings.showReplyTarget']);
+    fireEvent.click(switches[0]!);
+    expect(localStorage.getItem('bots.chat.showReplyTarget')).toBe('true');
+    fireEvent.click(switches[0]!);
+    expect(localStorage.getItem('bots.chat.showReplyTarget')).toBeNull();
     expect(screen.queryByRole('checkbox')).toBeNull();
     expect(container.querySelector('input[type="checkbox"]')).toBeNull();
     // 「勿扰时段」那一行连值都是假的（存了个默认串、既不可编辑也没人读），一并删掉。

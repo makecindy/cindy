@@ -4,6 +4,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createInstance } from 'i18next';
 import { I18nextProvider } from 'react-i18next';
 import { SUPPORTED_LOCALES } from '../../../../shared/locale';
+import es from '@/i18n/locales/es/common.json';
+import fr from '@/i18n/locales/fr/common.json';
+import de from '@/i18n/locales/de/common.json';
+import ptPT from '@/i18n/locales/pt-PT/common.json';
+import ptBR from '@/i18n/locales/pt-BR/common.json';
+import lzh from '@/i18n/locales/zh-Hant-x-lzh/common.json';
+import lzhHans from '@/i18n/locales/zh-Hans-x-lzh/common.json';
 import en from '@/i18n/locales/en/common.json';
 import zhCN from '@/i18n/locales/zh-CN/common.json';
 import zhTW from '@/i18n/locales/zh-TW/common.json';
@@ -24,12 +31,83 @@ import { clearDraft, getDraft, plainTextToTiptapDoc, saveDraft } from '@/lib/com
 import { NEW_MAKER_DRAFT_KEY } from '@/features/cc-agent/newMakerDraftKeys';
 import { getDraft as getNewMakerDraft, patchDraft } from '@/state/newMakerDraft';
 
-const locales = { en, 'zh-CN': zhCN, 'zh-TW': zhTW, ja, ko };
+const locales = { en, 'zh-CN': zhCN, 'zh-TW': zhTW, ja, ko, es, fr, de, 'pt-PT': ptPT, 'pt-BR': ptBR, 'zh-Hant-x-lzh': lzh, 'zh-Hans-x-lzh': lzhHans };
 const raw = JSON.stringify({ error: {
   message: 'X-OpenAI-Internal-Codex-Responses-Lite requires `parallel_tool_calls` to be false.',
   type: 'invalid_request_error', code: 'unsupported_value', param: 'parallel_tool_calls',
 } });
 afterEach(cleanup);
+
+it('keeps the shared Codex account reset guidance instead of replacing it with generic budget text', async () => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'en', resources: { en: { translation: en } } });
+  render(<I18nextProvider i18n={i18n}><ErrorBanner error='429 usage_limit: usage limit reached'
+    agentKind="codex" agentDeviceId="share:one" onRetry={vi.fn()} onChooseComputer={vi.fn()}
+    usageLimitRecovery={{ isAccountUsageLimit: true, resetAtMs: Date.now() + 60_000 }} /></I18nextProvider>);
+  expect(screen.queryByText(en.sharedTaskRecovery.reason.budget)).toBeNull();
+  expect(screen.queryByRole('button', { name: en.sharedTaskRecovery.choose })).toBeNull();
+});
+
+it.each([['DEVICE_OFFLINE', 'offline'], ['TIMEOUT', 'timeout']] as const)(
+  'distinguishes terminal runtime %s from an unknown allocation failure', async (code, reason) => {
+    const i18n = createInstance();
+    await i18n.init({ lng: 'en', resources: { en: { translation: en } } });
+    render(<I18nextProvider i18n={i18n}><ErrorBanner error={`[${code}] runtime probe failed`}
+      agentDeviceId="share:one" onRetry={vi.fn()} onChooseComputer={vi.fn()} /></I18nextProvider>);
+    expect(screen.getByText(en.sharedTaskRecovery.reason[reason])).toBeTruthy();
+  },
+);
+
+it('offers a route choice for confirmed shared-provider quota exhaustion without misclassifying local billing', async () => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'en', resources: { en: { translation: en } } });
+  const choose = vi.fn();
+  const error = 'insufficient_quota: You exceeded your current quota, please check your plan and billing details';
+  const h = render(<I18nextProvider i18n={i18n}><ErrorBanner error={error} onRetry={vi.fn()}
+    agentDeviceId="share:one" onChooseComputer={choose} /></I18nextProvider>);
+  expect(screen.getByText(en.sharedTaskRecovery.reason.budget)).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: en.sharedTaskRecovery.choose }));
+  expect(choose).toHaveBeenCalledOnce();
+  h.rerender(<I18nextProvider i18n={i18n}><ErrorBanner error={error} onRetry={vi.fn()}
+    onChooseComputer={choose} /></I18nextProvider>);
+  expect(screen.queryByRole('button', { name: en.sharedTaskRecovery.choose })).toBeNull();
+});
+
+// Unit: both live and persisted terminal errors expose the same reason and
+// route-choice action. An allocation failure must not become "computer offline".
+it.each(['live', 'tail', 'history'] as const)('offers a computer choice for a specific %s shared-task failure', async surface => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } } });
+  const choose = vi.fn();
+  const message = '[REMOTE_AGENT_UNAVAILABLE] [SHARED_TASK_RECOVERY_timeout] [SHARED_TASK_STAGE_executor] Shared task recovery failed';
+  render(<I18nextProvider i18n={i18n}>{surface === 'live'
+    ? <ErrorBanner error={message} errorReason="turn-failed" onRetry={vi.fn()} onChooseComputer={choose} />
+    : surface === 'tail' ? <ErrorTailErrorBanner errorText={message} errorReason="turn-failed" onContinue={vi.fn()} onDismiss={vi.fn()} onChooseComputer={choose} />
+    : <ErrorMessageCard message={message} reason="turn-failed" />}</I18nextProvider>);
+  expect(screen.getByText(zhCN.sharedTaskRecovery.reason.timeout)).toBeTruthy();
+  if (surface !== 'history') {
+    fireEvent.click(screen.getByRole('button', { name: zhCN.sharedTaskRecovery.choose }));
+    expect(choose).toHaveBeenCalledOnce();
+  }
+});
+
+it.each(['thread not found', 'app-server force-retired: auth changed'])(
+  'retains the specific execution failure in details: %s',
+  async (error) => {
+    const i18n = createInstance();
+    await i18n.init({ lng: 'en', resources: { en: { translation: en } } });
+    const onDiagnose = vi.fn();
+    const onRetry = vi.fn();
+    render(<I18nextProvider i18n={i18n}>
+      <ErrorBanner agentKind="codex" error={error} onRetry={onRetry} onDiagnose={onDiagnose} />
+    </I18nextProvider>);
+    fireEvent.click(screen.getByText(en.chat.errorBanner.networkShowRaw));
+    expect(screen.getByText(error)).toBeTruthy();
+    fireEvent.click(screen.getByText(en.chat.errorBanner.diagnose));
+    expect(onDiagnose).toHaveBeenCalledWith(expect.objectContaining({ details: error }));
+    expect(onRetry).not.toHaveBeenCalled();
+  },
+);
 
 // 诊断入口只在展开详情后出现；预填给新任务的提示带出错任务链接，且与详情同样脱敏。
 it('offers diagnosis after expanding details with a redacted prompt for the failed session', async () => {
@@ -75,6 +153,16 @@ it('appends the diagnosis prompt to an unsent new-task draft instead of replacin
 });
 
 describe.each(SUPPORTED_LOCALES)('error presentation in %s', locale => {
+  it('builds a localized diagnosis without a task link for early execution failures', async () => {
+    const i18n = createInstance();
+    await i18n.init({ lng: locale, resources: { [locale]: { translation: locales[locale] } }, interpolation: { escapeValue: false } });
+    const prompt = buildErrorDiagnosisPrompt(i18n.t, null, {
+      message: 'Execution failed', details: 'runId: early-run; api_key=private-value',
+    });
+    expect(prompt).toContain('runId: early-run');
+    expect(prompt).not.toMatch(/private-value|cindy:\/\/|\{\{|diagnosePromptWithoutSession/);
+  });
+
   it('keeps the localized blocked-input fallback visible instead of a reply-failure summary', async () => {
     const i18n = createInstance();
     await i18n.init({ lng: locale, fallbackLng: 'en', resources: Object.fromEntries(Object.entries(locales).map(([lng, common]) => [lng, { translation: common }])) });
@@ -84,14 +172,15 @@ describe.each(SUPPORTED_LOCALES)('error presentation in %s', locale => {
     expect(screen.queryByText(locales[locale].chat.errorBanner.networkShowRaw)).toBeNull();
   });
 
-  it.each(['REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_BUSY', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT'])('preserves curated %s guidance and follows language changes', async code => {
+  it.each(['REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_MEDIA_ACCESS_DENIED', 'DEVICE_LINK_BUSY', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'SSH_HARNESS_SWITCH_UNSUPPORTED', 'MODEL_SELECTION_UNAVAILABLE', 'HARNESS_SWITCH_NOT_READY'])('preserves curated %s guidance and follows language changes', async code => {
     const i18n = createInstance();
     await i18n.init({ lng: locale, fallbackLng: 'en', resources: Object.fromEntries(Object.entries(locales).map(([lng, common]) => [lng, { translation: common }])) });
     const message = `Error invoking remote method device-link:invoke: Error: [${code}] upstream fallback api_key=private-test-value`;
     render(<I18nextProvider i18n={i18n}><ErrorMessageCard message={message} /></I18nextProvider>);
     const expected = locales[locale].chat.remoteError[code as keyof typeof en.chat.remoteError];
     expect(typeof expected).toBe('string');
-    expect(screen.getByText(expected)).toBeTruthy();
+    expect(screen.getByText(code === 'DEVICE_LINK_MEDIA_ACCESS_DENIED'
+      ? i18n.t('chat.errorBanner.attachmentAccessDeniedRecovery') : expected)).toBeTruthy();
     expect(screen.queryByText(i18n.t('chat.errorBanner.replyFailed'))).toBeNull();
     expect(screen.queryByText(/upstream fallback/)).toBeNull();
     fireEvent.click(screen.getByText(i18n.t('chat.errorBanner.networkShowRaw')));
@@ -99,8 +188,26 @@ describe.each(SUPPORTED_LOCALES)('error presentation in %s', locale => {
     expect(screen.queryByText(/private-test-value/)).toBeNull();
     const next = locale === 'en' ? 'ja' : 'en';
     await act(async () => { await i18n.changeLanguage(next); });
-    expect(screen.getByText(i18n.t(`chat.remoteError.${code}`))).toBeTruthy();
+    expect(screen.getByText(i18n.t(code === 'DEVICE_LINK_MEDIA_ACCESS_DENIED'
+      ? 'chat.errorBanner.attachmentAccessDeniedRecovery' : `chat.remoteError.${code}`))).toBeTruthy();
     expect(screen.queryByText(locales[locale].chat.remoteError[code as keyof typeof en.chat.remoteError])).toBeNull();
+  });
+
+  // #6530 real-device gap: recovery must be visible before expanding details on every desktop surface.
+  it.each(['live', 'tail', 'history'] as const)('shows attachment recovery outside details on %s', async surface => {
+    const i18n = createInstance();
+    await i18n.init({ lng: locale, fallbackLng: 'en', resources: Object.fromEntries(Object.entries(locales).map(([lng, common]) => [lng, { translation: common }])) });
+    const error = '[DEVICE_LINK_MEDIA_ACCESS_DENIED] Cannot read the source attachment.';
+    render(<I18nextProvider i18n={i18n}>{surface === 'live'
+      ? <ErrorBanner error={error} onRetry={vi.fn()} />
+      : surface === 'tail'
+        ? <ErrorTailErrorBanner errorText={error} onContinue={vi.fn()} onDismiss={vi.fn()} />
+        : <ErrorMessageCard message={error} />}</I18nextProvider>);
+    expect(screen.getByText(i18n.t('chat.errorBanner.attachmentAccessDeniedTitle'))).toBeTruthy();
+    expect(screen.getByText(i18n.t('chat.errorBanner.attachmentAccessDeniedRecovery'))).toBeTruthy();
+    expect(screen.getByText(i18n.t('chat.errorBanner.networkShowRaw')).getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByText(i18n.t('chat.errorBanner.replyFailed'))).toBeNull();
+    expect(screen.queryByText(error)).toBeNull();
   });
 
   it.each(['live', 'tail'] as const)('keeps known remote recovery guidance in the %s banner across language changes', async surface => {

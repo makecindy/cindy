@@ -44,12 +44,39 @@ function setup(options: { account?: string | null; cached?: ClaudeSubscriptionUs
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
 describe('createClaudeSubscriptionUsageReader', () => {
+  it('awaits a fresh exact reset snapshot for recovery while sharing the existing refresh', async () => {
+    const { deps, reader, state } = setup();
+    let finish!: (value: ClaudeSubscriptionUsageSnapshot) => void;
+    deps.fetchSnapshot.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const waiting = reader.read({ fresh: true });
+    await flush();
+    expect(state.cached).toBeNull();
+    finish({ ...SNAPSHOT, sevenDay: { utilization: 100, resetsAt: 9_000_000 } });
+    expect(await waiting).toMatchObject({ sevenDay: { utilization: 100, resetsAt: 9_000_000 } });
+    await reader.read({ fresh: true });
+    expect(deps.fetchSnapshot).toHaveBeenCalledOnce();
+  });
+
   it('cached-first:读立即返回缓存,后台拉取并附上账号指纹', async () => {
     const { deps, reader, state } = setup({ cached: { ...SNAPSHOT, source: 'unified-headers' } });
     await expect(reader.read()).resolves.toMatchObject({ source: 'unified-headers' });
     await flush();
     expect(deps.fetchSnapshot).toHaveBeenCalledTimes(1);
     expect(state.cached).toMatchObject({ source: 'oauth-endpoint', accountFingerprint: 'acct-a' });
+  });
+
+  // Standard regression: fresh recovery reads must await the new account even if an old refresh is in flight.
+  it.each([false, true])('waits for the current account after discarding its old cache; inFlight=%s', async (inFlight) => {
+    const { deps, reader, state } = setup({ cached: { ...SNAPSHOT, accountFingerprint: 'acct-a' } });
+    let release!: (value: ClaudeSubscriptionUsageSnapshot) => void;
+    if (inFlight) {
+      deps.fetchSnapshot.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+      reader.triggerRefresh();
+    }
+    state.account = 'acct-b';
+    const result = reader.read({ fresh: true });
+    if (inFlight) { await flush(); release(SNAPSHOT); }
+    expect(await result).toMatchObject({ accountFingerprint: 'acct-b', sevenDay: SNAPSHOT.sevenDay });
   });
 
   it('节流窗口内不重复拉起 CLI,过了窗口再拉', async () => {

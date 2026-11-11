@@ -214,26 +214,29 @@ describe('isolated Make test runner', () => {
     expect(h.cleanTemp).toHaveBeenCalledOnce();
   });
 
-  it('records a wrapper failure code across chunks without raw output or free-form messages', async () => {
-    const h = await processHarness();
-    h.emit(
-      'compiler output with private data\r\nDESKTOP_DEV_STEP=launching\r\nDESKTOP_DEV_VERDICT=failed\r\n',
-    );
-    expect(h.kill).not.toHaveBeenCalled();
-    h.emit('co');
-    h.emit('de=DEV_PROCESS_EXITED\r\nmessage=private credentials and paths\r\n');
-    await expect(h.process.ready).rejects.toMatchObject({ code: 'launchFailed' });
-    expect(h.diagnostics).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: 'failed',
-        reason: 'wrapperFailed',
-        step: 'launching',
-        wrapperCode: 'DEV_PROCESS_EXITED',
-      }),
-    );
-    expect(JSON.stringify(h.diagnostics.mock.calls)).not.toMatch(/private|credentials|compiler/);
-    expect(h.kill).toHaveBeenCalledOnce();
-  });
+  it.each(['DEV_PROCESS_EXITED', 'WHOAMI_UNAVAILABLE', 'PROCESS_SCAN_FAILED'])(
+    'records %s across chunks without raw output or free-form messages',
+    async (code) => {
+      const h = await processHarness();
+      h.emit(
+        'compiler output with private data\r\nDESKTOP_DEV_STEP=launching\r\nDESKTOP_DEV_VERDICT=failed\r\n',
+      );
+      expect(h.kill).not.toHaveBeenCalled();
+      h.emit('co');
+      h.emit(`de=${code}\r\nmessage=private credentials and paths\r\n`);
+      await expect(h.process.ready).rejects.toMatchObject({ code: 'launchFailed' });
+      expect(h.diagnostics).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'failed',
+          reason: 'wrapperFailed',
+          step: 'launching',
+          wrapperCode: code,
+        }),
+      );
+      expect(JSON.stringify(h.diagnostics.mock.calls)).not.toMatch(/private|credentials|compiler/);
+      expect(h.kill).toHaveBeenCalledOnce();
+    },
+  );
   it('bounds incomplete failure verdicts and rejects unknown diagnostic codes', async () => {
     vi.useFakeTimers();
     const h = await processHarness();

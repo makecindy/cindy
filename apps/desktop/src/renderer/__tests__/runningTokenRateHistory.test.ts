@@ -96,7 +96,7 @@ describe('running speed history', () => {
     expect(next.samples.at(-1)?.rate).toBe(50);
   });
 
-  it('bounds samples and excludes evicted samples from the observed peak', () => {
+  it('bounds chart samples without losing the turn peak', () => {
     let history = recordRunningTokenRate(begin(), {
       ...input,
       outputTokens: 1000,
@@ -110,7 +110,7 @@ describe('running speed history', () => {
       });
     }
     expect(history.samples).toHaveLength(60);
-    expect(history.peak).toBe(1);
+    expect(history.peak).toBe(1000);
     expect(history.samples[0].durationMs).toBe(141000);
   });
 });
@@ -343,7 +343,7 @@ describe('host token speed (Pi extension algorithm)', () => {
     expect(history.samples.map((sample) => sample.durationMs)).toEqual([1200]);
     history = recordTokenSpeed(history, { startedAt: 1, speed: speed(70, 2300), now: 40 });
     expect(history.samples.map((sample) => sample.rate)).toEqual([90, 70]);
-    expect(history.peak).toBe(90);
+    expect(history.peak).toBe(95);
     expect(history.latestRate).toBe(70);
   });
 
@@ -362,6 +362,21 @@ describe('host token speed (Pi extension algorithm)', () => {
     const measured = recordTokenSpeed(first, { startedAt: 1, speed: speed(50, 900) });
     expect(measured.latestRate).toBe(50);
     expect(recordTokenSpeed(measured, { startedAt: 2, speed: speed(0, 100) }).latestRate).toBeNull();
+  });
+
+  it('restores the host peak after reconnect and resets it with a new product turn', () => {
+    const snapshot = readTokenSpeedSnapshot({ ...speed(37.7, 10_000), peak: 100 })!;
+    let history = recordTokenSpeed(emptyRateHistory(null), { startedAt: 1, speed: snapshot });
+    expect(history.peak).toBe(100);
+    for (let i = 2; i <= 70; i++) {
+      history = recordTokenSpeed(history, { startedAt: 1, speed: speed(37.7, i * 10_000) });
+    }
+    expect(history.samples).toHaveLength(60);
+    expect(history.peak).toBe(100);
+    saveCachedRateHistory('continuation-peak', history);
+    history = recordTokenSpeed(loadCachedRateHistory('continuation-peak')!, { startedAt: 2, speed: speed(20, 1_000) });
+    expect(history.peak).toBe(20);
+    clearRateHistoryCache();
   });
 
   it('accepts only well-formed host snapshots', () => {

@@ -180,7 +180,8 @@ describe('remote schedule binding badges', () => {
           { sessionBindings: true },
         ]),
       );
-      remoteProjectsStore[action]('A');
+      if (action === 'clear') remoteProjectsStore.clear();
+      else remoteProjectsStore[action]('A');
       resolve([binding()]);
       expect(await refresh).toBe('superseded');
       expect(remoteProjectsStore.getSessionScheduleBindings('A', 'task')).toEqual([]);
@@ -197,6 +198,13 @@ describe('remote schedule binding badges', () => {
       expect(() => parseScheduleBindings([{ ...binding(), intervalMs: invalid }])).toThrow();
     }
     expect(() => parseScheduleBindings([{ ...binding(), recurring: 'false' }])).toThrow();
+  });
+
+  it('keeps the persistent-session flag only when true, so archive confirmation can skip it', () => {
+    expect(parseScheduleBindings([{ ...binding(), persistentSession: true }])).toEqual([
+      { ...binding(), persistentSession: true },
+    ]);
+    expect(parseScheduleBindings([{ ...binding(), persistentSession: false }])).toEqual([binding()]);
   });
 
   it.each([

@@ -10,6 +10,8 @@ import { coordinationModelPrefix, type BotTaskCoordination } from './botTaskCoor
  * sides from quietly inventing different meanings for the same queued row.
  */
 
+import type { OutputLimitDetails } from '@cindy/maker-shared';
+
 import { stripChatQuoteMarkerLines } from '@cindy/maker-shared/chat-quotes';
 import type { SharedTaskAuthor } from '@cindy/maker-shared';
 import type { MessageSourceDevice, MessageSourcePlugin } from '@cindy/maker-shared/message-source';
@@ -167,7 +169,7 @@ export interface AgentInputCreateOpts {
   providerId?: string | null;
   orcaRole?: 'lead' | 'worker' | null;
   effort?: string;
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   permissionMode?: string;
   /** 计划模式一级开关(与 permissionMode 正交), lazy-create / rehydrate 时透传给 maker。 */
   planMode?: boolean;
@@ -347,6 +349,8 @@ export interface AgentInputQueuedMessage {
         displayText?: string;
         /** 发出本条的 Lead / Worker 会话；接收方据此渲染可点击的来源标签。老快照没有。 */
         senderSessionId?: string;
+        autoBridge?: true;
+        autoBridgeBatchCount?: number;
       }
     | {
         /**
@@ -394,6 +398,8 @@ export interface AgentInputQueuedMessage {
   fromMobileClient?: boolean;
   /** Main-stamped interface language for this turn. Wire text is not trusted as prompt text. */
   uiLanguage?: string;
+  /** Main-stamped classical output style for this turn (only a catalog id; see classical-reply). */
+  classicalStyle?: string;
   /** Main-owned provenance: this queue item entered through device-link input IPC. */
   fromDeviceLinkClient?: boolean;
   /**
@@ -442,6 +448,7 @@ export interface AgentInputQueuedMessage {
   /**
    * 本次自动续跑的展示信息（中断原因 + 本轮第几次 + 会话累计）。随 `autoResume`
    * 一起透传到落库 agentMeta，供「已重新连接」活动行的展开详情用。
+   * 首次派发前的组限额恢复只带 info、不设 autoResume：保留原用户气泡与用户轮记账，另显示恢复活动。
    */
   autoResumeInfo?: AutoResumeInfo;
   /** Bounded, durable handoff state shared by manual and automatic recovery. */
@@ -497,6 +504,8 @@ export function normalizeAgentInputClearBoundaryMs(value: unknown): number | nul
 
 export interface AgentInputProjection {
   sessionId: string;
+  /** Host still owns a turn/dispatch/interaction boundary. Older hosts may omit it. */
+  turnInProgress?: boolean;
   pendingQueue: AgentInputQueuedMessage[];
   /**
    * 被控端最近一次 `/clear` 的权威毫秒 token。只在会话至少 clear 过一次时出现；
@@ -523,10 +532,14 @@ export interface AgentInputProjection {
   queueEditLocks: string[];
   queueAbortPending: boolean;
   error: string | null;
+  /** Exact persisted error row owned by this banner; older hosts may omit it. */
+  errorPersistId?: string | null;
   /** Stable error reason for live clients; older controlled hosts may omit it. */
   errorReason?: string | null;
   /** Bounded details for tool-loop errors; never carries the raw provider message. */
   toolLoop?: AgentInputToolLoopDetails | null;
+  /** Final-request output usage; optional for older controlled hosts. */
+  outputLimit?: OutputLimitDetails | null;
   recovery: AgentInputRecovery;
   /**
    * Compatibility display value for the existing ErrorBanner. It is no longer
@@ -534,6 +547,9 @@ export interface AgentInputProjection {
    * resending this string through the normal composer path.
    */
   errorRetryText: string | null;
+  /** Host confirms this error belongs to a persisted scheduled input whose recovery ended.
+   * Missing on older hosts means unavailable; never infer it from conversation history. */
+  errorCanContinue?: boolean;
   /**
    * 凭证切换等待态:发送需要重启共享 codex 进程,但被列出的会话(其它本地 Codex
    * 任务)挡住。等待中的那条消息保留在队首,挡路任务结束后 main 自动重发;renderer
@@ -574,14 +590,16 @@ export function queuedMessageRetryToken(queued: AgentInputQueuedMessage): string
 }
 
 /**
- * 队列崩溃恢复快照不能持久化跨设备引用正文或瞬时 Bot 状态。两者只在当前
- * 进程内存中存活；恢复后正文保留 fail-closed 标记，Bot 状态必须重新查询，
- * 不能把崩溃前的 working/idle 当成当前事实。
+ * 队列崩溃恢复快照不能持久化跨设备引用正文、瞬时 Bot 状态或尚未落库的
+ * 原用户消息自动继续标记。它们只在当前进程内存中存活；恢复后正文保留
+ * fail-closed 标记，Bot 状态必须重新查询，手动恢复不能冒充自动继续。
  */
 export function sanitizeQueuedMessageForPersistence(
   item: AgentInputQueuedMessage,
 ): AgentInputQueuedMessage {
-  let changed = false;
+  const transientUsageResume = !item.autoResume
+    && item.autoResumeInfo?.reason === USAGE_LIMIT_RESET_AUTO_RESUME_REASON;
+  let changed = transientUsageResume;
   let persistedContent = item.persistedContent;
   let agentReferences = item.agentReferences;
   let chatMessage = item.chatMessage;
@@ -659,6 +677,7 @@ export function sanitizeQueuedMessageForPersistence(
       : {}),
   };
   delete sanitized[HOST_ONLY_AGENT_PREFIX];
+  if (transientUsageResume) delete sanitized.autoResumeInfo;
   if (!item.agentReferences) delete sanitized.agentReferences;
   if (item.trustedSessionReferenceContexts) delete sanitized.trustedSessionReferenceContexts;
   return sanitized;
@@ -1224,4 +1243,26 @@ export function buildMakerUserMessage(
   return blocks.length === 1 && first?.type === 'text'
     ? { type: 'user', content: first.text as string }
     : { type: 'user', content: blocks };
+}
+
+/**
+ * 把宿主说明追加到发给模型的正文末尾（附件与引用 block 的顺序不变）。
+ * 说明只存在于这一次派发的 wire 消息里：不写回队列项，因此不进排队正文、落库正文，
+ * 派发失败重新入队后也不会带着过期的说明。
+ */
+export function appendNoteToMakerUserMessage(
+  message: AgentInputMakerMessage,
+  note: string | null | undefined,
+): AgentInputMakerMessage {
+  if (!note) return message;
+  const suffix = `\n\n---\n${note}`;
+  if (typeof message === 'string') return `${message}${suffix}`;
+  if (typeof message.content === 'string') {
+    return { ...message, content: `${message.content}${suffix}` };
+  }
+  const [first, ...rest] = message.content;
+  if (first?.type === 'text' && typeof first.text === 'string') {
+    return { ...message, content: [{ ...first, text: `${first.text}${suffix}` }, ...rest] };
+  }
+  return { ...message, content: [{ type: 'text', text: note }, ...message.content] };
 }

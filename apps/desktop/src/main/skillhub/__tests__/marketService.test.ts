@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { SkillhubMarketService, normalizeSkillhubSlugs, skillhubIpcError, type SkillhubMarketFetcher } from '../marketService';
-import { ServerApiError } from '../../serverApiClient';
-import type { ApiFetchOptions } from '../../serverApiClient';
+import { ServerApiError } from '../../serverApiClient.desktop';
+import type { ApiFetchOptions } from '../../serverApiClient.desktop';
 import type { HubSkillInfoForDesktop } from '../infoMapping';
 
-vi.mock('../../serverApiClient', async () => {
+vi.mock('../../serverApiClient.desktop', async () => {
   class MockServerApiError extends Error {
     constructor(
       public readonly code: string,

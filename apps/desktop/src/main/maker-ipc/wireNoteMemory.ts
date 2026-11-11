@@ -18,7 +18,7 @@
  * `[消息来源]` 不在此列:它陈述的是"本条"由谁发,逐条都要带。
  */
 
-export type RepeatableWireNoteKind = 'ui-language' | 'client-environment' | 'cindy-make' | 'side-chat';
+export type RepeatableWireNoteKind = 'ui-language' | 'client-environment' | 'cindy-make' | 'side-chat' | 'bot-thread';
 
 export type RepeatableWireNotes = Partial<Record<RepeatableWireNoteKind, string | null>>;
 
@@ -35,7 +35,7 @@ export interface WireNoteMemory {
   reset(sessionId: string): void;
 }
 
-const KINDS: readonly RepeatableWireNoteKind[] = ['ui-language', 'client-environment', 'cindy-make', 'side-chat'];
+const KINDS: readonly RepeatableWireNoteKind[] = ['ui-language', 'client-environment', 'cindy-make', 'side-chat', 'bot-thread'];
 
 export function createWireNoteMemory(): WireNoteMemory {
   const lastSent = new Map<string, Map<RepeatableWireNoteKind, string | null>>();

@@ -18,6 +18,7 @@ import {
   AVATAR_SOURCE_MAX_BYTES,
   AVATAR_UPLOAD_MAX_EDGE_PX,
   chooseAvatarFile,
+  chooseAvatarSource,
   cleanupLegacyProfileOverride,
   getProfileEditState,
   readAvatarDimensions,
@@ -265,6 +266,26 @@ describe('HDR 头像在取景前转 SDR', () => {
     expect(readPngHdrChunks(hdrPng).cicp?.transfer).toBe(16);
     expect(readPngHdrChunks(preview).cicp).toBeNull();
     expect(preview.equals((await toSdrAvatarImage({ buffer: hdrPng, mimeType: 'image/png' })).buffer)).toBe(true);
+  });
+
+  // Unit regression #6889: local-mode Bot picking must share real HDR
+  // preparation without bypassing the account editor's existing login guard.
+  // Account-only tests previously rejected every unlogged-in chooser.
+  it('local Bot source preparation tone-maps HDR without reading or writing account data', async () => {
+    const hdrPng = fs.readFileSync(path.join(__dirname, 'fixtures/hdr-avatar/pq-bt2100.png'));
+    const { deps } = makeDeps({
+      getCurrentUserId: () => null,
+      showAvatarOpenDialog: vi.fn(async () => '/fixture/avatar.png'),
+      readFile: vi.fn(async () => hdrPng),
+      toSdrAvatar: toSdrAvatarImage,
+      getServerProfile: () => { throw new Error('No account in local mode'); },
+    });
+    await expect(chooseAvatarFile(deps)).rejects.toSatisfy((error) => ipcCode(error) === 'PRECONDITION_FAILED');
+    const result = await chooseAvatarSource(deps);
+    const expected = await toSdrAvatarImage({ buffer: hdrPng, mimeType: 'image/png' });
+    expect(result).toEqual({ canceled: false, previewDataUrl: `data:${expected.mimeType};base64,${expected.buffer.toString('base64')}` });
+    expect(deps.uploadAvatar).not.toHaveBeenCalled();
+    expect(deps.patchProfile).not.toHaveBeenCalled();
   });
 
   it('chooseAvatarFile:转换结果超出源图上限 → 选图阶段就 INVALID_PARAMS', async () => {

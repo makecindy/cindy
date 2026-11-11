@@ -11,9 +11,12 @@ import { GhostFsSlot } from '../../cindy-brain/fsSlot.js';
 import { GhostPipeDispatcher } from '../../cindy-brain/pipeDispatcher.js';
 import type { GhostPipeToolCall, InstalledGhost } from '../../../shared/ghost.js';
 import { installedGhostStoragePart, resolveInstalledGhost } from '../../../shared/pluginIdentity.js';
-import { SchedulerScriptCapabilityBroker } from '../script-capability-broker';
+import { SchedulerScriptCapabilityBroker } from '../script-capability-broker.desktop';
 
 const sendToSessionMock = vi.hoisted(() => vi.fn());
+const restoreArchivedSessionForSend = vi.hoisted(() => vi.fn());
+const getSessionRowSnapshotStrict = vi.hoisted(() => vi.fn());
+vi.mock('../../localDb/ipc/sessions', () => ({ restoreArchivedSessionForSend, getSessionRowSnapshotStrict }));
 // ghost pipe 统一入口:缺省回显请求(jira/feishu 用例断言请求形状),
 // 单个用例可 mockResolvedValueOnce 覆盖返回(断言 data 解包 / 错误映射)。
 const callGhostToolMock = vi.hoisted(() =>
@@ -79,6 +82,8 @@ function schedule(overrides: Partial<Schedule> = {}): Schedule {
 describe('SchedulerScriptCapabilityBroker', () => {
   beforeEach(() => {
     sendToSessionMock.mockReset();
+    restoreArchivedSessionForSend.mockReset();
+    getSessionRowSnapshotStrict.mockReset().mockResolvedValue({ status: 'active', source: 'user' });
     callGhostToolMock.mockReset();
     callGhostToolMock.mockImplementation(async (request: unknown) => ({ ok: true, result: request }));
     registerCallMock.mockReset();
@@ -469,7 +474,8 @@ describe('SchedulerScriptCapabilityBroker', () => {
     expect(byMethod.get('feishu.recent_messages')).toBe(false);
     expect(byMethod.get('sessions.dispatch')).toBe(false);
     expect(byMethod.get('jira.search_jql')).toBe(true);
-    expect(result.methods).toHaveLength(7);
+    expect(result.methods).toHaveLength(10);
+    expect(byMethod.get('github.get_pr_status')).toBe(false);
   });
 
   it('rejects missing task grants and unknown methods', async () => {
@@ -502,6 +508,55 @@ describe('SchedulerScriptCapabilityBroker', () => {
       { schedule: schedule() },
     );
     expect(sendToSessionMock.mock.calls[0]?.[0][AUTO_REVIEW_DELEGATED_CONTINUATION]).toBe(true);
+  });
+
+  // User decision 2026-10-23: unbound scripts select a target only at dispatch;
+  // they must restore it before the normal sender rejects ARCHIVED. Unit, no I/O.
+  it('restores an explicitly selected archived target before delivering the message', async () => {
+    let status = 'archived';
+    restoreArchivedSessionForSend.mockImplementation(async () => { status = 'active'; });
+    sendToSessionMock.mockImplementation(async () => {
+      expect(status).toBe('active');
+      return { ok: true, targetSessionId: 'owner', agentKind: 'codex', wakeKind: 'queued' };
+    });
+    const result = await new SchedulerScriptCapabilityBroker().call(
+      { method: 'sessions.dispatch', params: { target_session_id: 'owner', message: 'update' } },
+      new Set(['sessions.dispatch']), { schedule: schedule() },
+    );
+    expect(result).toMatchObject({ target_session_id: 'owner', wake_kind: 'queued' });
+    expect(status).toBe('active');
+  });
+
+  // PR #6864: rejected Review input must not reactivate an archived audit task.
+  // Exercise the real broker/policy boundary; previous happy-path mocks missed it.
+  it.each(['active', 'archived'])('rejects a %s Review target without changing its lifecycle', async (status) => {
+    const target = { status, source: 'review' };
+    getSessionRowSnapshotStrict.mockResolvedValue(target);
+    restoreArchivedSessionForSend.mockImplementation(async () => { target.status = 'active'; });
+    sendToSessionMock.mockResolvedValue({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Review input rejected' });
+    await expect(new SchedulerScriptCapabilityBroker().call(
+      { method: 'sessions.dispatch', params: { target_session_id: 'review', message: 'update' } },
+      new Set(['sessions.dispatch']), { schedule: schedule() },
+    )).rejects.toMatchObject({ code: 'UNSUPPORTED_CAPABILITY' });
+    expect(target.status).toBe(status);
+    expect(restoreArchivedSessionForSend).not.toHaveBeenCalled();
+    expect(sendToSessionMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { source: 'bot' },
+    { orcaRole: 'worker' },
+    { orcaRemoteLead: '{"leadSessionId":"lead"}' },
+  ])('leaves an archived managed dispatch target to its service lifecycle: %j', async (managed) => {
+    const target = { status: 'archived', ...managed };
+    getSessionRowSnapshotStrict.mockResolvedValue(target);
+    sendToSessionMock.mockResolvedValue({ ok: false, errorCode: 'ARCHIVED', message: 'Target archived' });
+    await expect(new SchedulerScriptCapabilityBroker().call(
+      { method: 'sessions.dispatch', params: { target_session_id: 'owner', message: 'update' } },
+      new Set(['sessions.dispatch']), { schedule: schedule() },
+    )).rejects.toMatchObject({ code: 'ARCHIVED' });
+    expect(target.status).toBe('archived');
+    expect(restoreArchivedSessionForSend).not.toHaveBeenCalled();
   });
 
   it('dispatches sessions with host-owned create defaults from the schedule', async () => {
@@ -543,6 +598,37 @@ describe('SchedulerScriptCapabilityBroker', () => {
       },
     });
     expect(result).toMatchObject({ target_session_id: 'session-1', wake_kind: 'created' });
+  });
+
+  // PR #6830 / unit: MCP may persist a different model Harness. Exercise the
+  // actual dispatch entry, which previously paired this Codex model with Claude.
+  it('dispatches a new task with the explicit model Harness', async () => {
+    sendToSessionMock.mockResolvedValue({ ok: true, targetSessionId: 'new', agentKind: 'codex', wakeKind: 'created' });
+    await new SchedulerScriptCapabilityBroker().call(
+      { method: 'sessions.dispatch', params: { message: 'run task' } },
+      new Set(['sessions.dispatch']),
+      { schedule: schedule({ agentKind: 'claude-code', modelAgentKind: 'codex', modelAgentDeviceId: '' }) },
+    );
+    expect(sendToSessionMock).toHaveBeenCalledWith(expect.objectContaining({
+      createDefaults: expect.objectContaining({ agentKind: 'codex', model: 'gpt-5.5', providerId: 'provider-1' }),
+    }));
+  });
+
+  // Integration regression: a persisted remote route must never become local
+  // create defaults merely because sessions.dispatch omits a target task.
+  it.each([
+    { modelAgentDeviceId: 'shared:owner', modelAgentKind: 'codex' as const },
+    { agentDeviceId: 'studio' },
+  ])('rejects remote script-dispatch defaults before opening a local session (%j)', async (location) => {
+    await expect(new SchedulerScriptCapabilityBroker().call(
+      { method: 'sessions.dispatch', params: { message: 'run task' } },
+      new Set(['sessions.dispatch']),
+      { schedule: schedule(location) },
+    )).rejects.toMatchObject({
+      code: 'PRECONDITION_FAILED',
+      message: expect.stringContaining('script execution does not support remote model sources'),
+    });
+    expect(sendToSessionMock).not.toHaveBeenCalled();
   });
 
   it('resolves blank Pi script-dispatch defaults as one model/provider route', async () => {
@@ -1041,3 +1127,15 @@ function wireRealChannel(tmp: string, installed = makeInstalledGhost('xd-atlassi
   finalizeCallMock.mockImplementation((callId: string) => cardService.finalizeCall(callId));
   return { cardService, fsSlot };
 }
+
+// Unit: retry after a lost receipt must retain the same Host delivery identity, scoped to schedule and target.
+it('keeps dispatch retry keys stable and separates different schedules', async () => {
+  sendToSessionMock.mockResolvedValue({ ok: true, targetSessionId: 'owner', agentKind: 'codex', wakeKind: 'queued' });
+  const broker = new SchedulerScriptCapabilityBroker();
+  const request = { method: 'sessions.dispatch', params: { message: 'update', idempotency_key: 'event-1' } };
+  const run = (id: string) => broker.call(request, new Set(['sessions.dispatch']), { schedule: schedule({ id, targetSessionId: 'owner' }) });
+  const a = await run('one'); const b = await run('one'); const c = await run('two');
+  expect(a).toMatchObject({ delivery_id: expect.stringMatching(/^schedule-delivery:/) });
+  expect(b).toEqual(a); expect(c).not.toEqual(a);
+  expect(sendToSessionMock.mock.calls.at(-1)?.[0]).toMatchObject({ targetSessionId: 'owner', deliveryClientId: (c as { delivery_id: string }).delivery_id });
+});

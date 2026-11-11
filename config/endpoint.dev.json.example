@@ -7,6 +7,7 @@
   "ossApiBaseUrl": "http://localhost:3340",
   "heartbeatUrl": "http://localhost:3338",
   "telegramHookWsUrl": "",
+  "feishuHookWsUrl": "",
   "slackHookWsUrl": "ws://localhost:3334",
   "websiteUrl": "http://localhost:3000",
   "modelAccessApiBaseUrl": "http://localhost:3339",
@@ -17,5 +18,6 @@
   "pluginApiBaseUrl": "http://localhost:3343",
   "cdnBaseUrl": "http://localhost:3345/cindy",
   "mobileUpdateBaseUrl": "http://localhost:3346",
-  "review": "0.1.0"
+  "review": "0.1.0",
+  "shareBaseUrl": "http://localhost:3350"
 }

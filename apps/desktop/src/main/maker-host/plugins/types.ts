@@ -91,9 +91,6 @@ export const HOSTED_ELSEWHERE_PLUGIN_IDS: ReadonlySet<string> = new Set([
   'android',
   'browser',
   'computer',
-  // 智能通讯录的开关在 Settings → 智能通讯录 专属页(contacts-settings-store),
-  // 「内置工具」列表再出现一个 toggle 会造成双开关困惑。
-  'contacts',
 ]);
 
 /** Builtin plugins that are intentionally opt-in by default.

@@ -47,7 +47,8 @@ describe('local update production source gate wiring', () => {
 
   it('uses the same source decision for Forge updates before entering the common locked transaction', () => {
     const body = bodyBetween('export async function installOrUpdateLocalGhostPackageFromForge(', 'export async function installOrUpdateMarketGhostPackage(');
-    expect(body).toContain('readLocalGhostUpdateSource(manager, existingForForge, inspected, installOrigin).authorizationOverrides');
+    expect(body).toContain('readLocalGhostUpdateSource(manager, existingForForge, inspected, installOrigin)');
+    expect(body).toContain('? updateSource.authorizationOverrides');
     expect(body).toContain('ghost: await updateLocalGhostPackageLocked(');
   });
 });

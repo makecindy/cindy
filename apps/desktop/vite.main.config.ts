@@ -130,6 +130,9 @@ export default defineConfig(({ mode }) => {
             if (norm.includes('/packages/browser-control-runtime/')) {
               return 'browser-control-runtime';
             }
+            if (norm.includes('/packages/opencli-vendor/')) {
+              return norm.endsWith('/cli-manifest.json') || norm.endsWith('/cindy/catalog.ts') || norm.endsWith('/cindy/selection.json') ? 'browser-recipe-catalog' : 'browser-recipes';
+            }
             return undefined;
           },
         },
