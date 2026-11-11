@@ -402,15 +402,15 @@ export class GhostFsSlot {
     const directory = this.deps.resolvePickedDirectory?.(ghostId, ref);
     if (!directory) return fail('目录引用不存在或已撤销，请重新选择');
     const owner = this.deps.ownerKey?.(), installation = installedGhostMutationTargetToken(ghost, '');
-    const current = (latest = this.deps.getGhost(ghostId)) => {
-      const selected = this.deps.resolvePickedDirectory?.(ghostId, ref);
+    const current = () => {
+      const latest = this.deps.getGhost(ghostId), selected = this.deps.resolvePickedDirectory?.(ghostId, ref);
       return pageCurrent() && hasPluginHostToolGroupApproval(latest, 'files') && latest?.dir === ghost.dir
         && installedGhostMutationTargetToken(latest!, '') === installation && this.deps.ownerKey?.() === owner
         && selected?.path === directory.path && selected.dev === directory.dev && selected.ino === directory.ino;
     };
-    const verify = async (latest?: InstalledGhost | null) => {
+    const verify = async () => {
       try {
-        if (!current(latest)) throw new Error('DIRECTORY_AUTHORIZATION_EXPIRED');
+        if (!current()) throw new Error('DIRECTORY_AUTHORIZATION_EXPIRED');
         const [real, stat] = await Promise.all([fs.promises.realpath(directory.path), fs.promises.lstat(directory.path, { bigint: true })]);
         if (real !== directory.path || !stat.isDirectory() || stat.isSymbolicLink() || stat.dev.toString() !== directory.dev || stat.ino.toString() !== directory.ino || !current()) throw new Error('DIRECTORY_IDENTITY_CHANGED');
       } catch (error) {
@@ -418,7 +418,7 @@ export class GhostFsSlot {
         throw error;
       }
     };
-    await verify(ghost);
+    await verify();
     const result = await this.handleDirectoryOperation(ghostId, op, req, {
       key: `picked:${ref}`, sessionId: null, session: null, root: directory.path, current, verify,
     });

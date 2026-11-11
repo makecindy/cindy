@@ -57,12 +57,13 @@ export class HostStorageService {
   async request(id: string, input: Record<string, unknown>, pageCurrent: () => boolean): Promise<Record<string, unknown>> {
     const owner = this.ports.ownerKey(), ghost = this.ports.getGhost(id);
     const revision = ghostInstallApprovalToken(ghost?.approval);
-    const current = (latest = this.ports.getGhost(id)) => {
+    const current = () => {
+      const latest = this.ports.getGhost(id);
       try { return pageCurrent() && this.ports.ownerKey() === owner && hasPluginHostToolGroupApproval(latest, 'storage') &&
         latest?.dir === ghost?.dir && ghostInstallApprovalToken(latest?.approval) === revision; } catch { return false; }
     };
     const check = () => { if (!current()) throw new Error('STORAGE_AUTHORIZATION_EXPIRED'); };
-    if (!ghost || !current(ghost)) return fail('PERMISSION_DENIED');
+    if (!ghost || !current()) return fail('PERMISSION_DENIED');
     try {
       if (input.op === 'providers') return { ok: true, providers: [...this.providers.values()]
         .filter(provider => provider.available(ghost)).map(provider => ({ id: provider.id, operations: [...provider.operations], snapshot: !!provider.snapshot })) };
@@ -80,6 +81,7 @@ export class HostStorageService {
         if (!provider?.available(ghost)) return fail('UNSUPPORTED_PROVIDER');
         if (!request || typeof request !== 'object' || Array.isArray(request) ||
           !provider.operations.includes(String((request as Record<string, unknown>).op))) return fail('INVALID_REQUEST');
+        check();
         const result = await provider.call(id, request as Record<string, unknown>, check);
         check();
         return result;
@@ -95,10 +97,10 @@ export class HostStorageService {
       const provider = this.providers.get(source.provider);
       if (!provider?.available(ghost) || !provider.snapshot) return fail('UNSUPPORTED_PROVIDER');
       const sharedCurrent = () => {
-        const latest = this.ports.getGhost(targetId), source = this.ports.getGhost(id);
-        return current(source) && latest?.dir === target.dir && ghostInstallApprovalToken(latest?.approval) === targetRevision &&
+        const latest = this.ports.getGhost(targetId);
+        return current() && latest?.dir === target.dir && ghostInstallApprovalToken(latest?.approval) === targetRevision &&
           hasPluginHostToolGroupApproval(latest, 'storage') && shareBoundary(latest!) === boundary &&
-          shareBoundary(source!) === boundary;
+          shareBoundary(this.ports.getGhost(id)!) === boundary;
       };
       const checkShare = () => { if (!sharedCurrent()) throw new Error('STORAGE_AUTHORIZATION_EXPIRED'); };
       this.sharing.add(id);

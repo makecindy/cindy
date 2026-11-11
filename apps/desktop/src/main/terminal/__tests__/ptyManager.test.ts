@@ -511,24 +511,6 @@ describe('HostTerminalService caller ownership', () => {
     await expect(call.call(context, 'terminal_list', {})).rejects.toThrow('TERMINAL_SCOPE_CHANGED');
     host.disposeScoped();
   });
-  // Unit performance contract: capture reuses the installation it just read;
-  // filesystem awaits and process creation still require fresh authority.
-  // Previous ownership cases asserted rejection but did not count receipt IO.
-  it('avoids duplicate synchronous installation reads while retaining checks after filesystem awaits', async () => {
-    const host = service();
-    const caller = { kind: 'plugin' as const, pluginId: 'p', dataOwnerId: 'owner', ownerGeneration: 1 };
-    const ghost = { enabled: true, dir: '/fixture/p', approval: { state: 'approved', revision: 'r1' },
-      approvedHostToolGroups: ['terminal'], manifest: { agent: { hostTools: ['terminal'] } } } as InstalledGhost;
-    const getGhost = vi.fn(() => ghost);
-    const executor = createTerminalToolExecutor({ service: host, owner: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }), pending: () => false,
-      getGhost, getSession: () => undefined, pluginDirectory: () => '/tmp',
-      pluginCall: () => ({ caller, server: 'cindy_helper', tool: 'terminal_start', argsJson: '{}', assertCurrent() {} }) });
-    const pending = executor.call({ agentKind: 'codex', workingDir: '', hostCaller: caller }, 'terminal_start', { cwd: '/tmp' });
-    expect(getGhost).toHaveBeenCalledTimes(2);
-    await expect(pending).resolves.toMatchObject({ job: { status: 'running' } });
-    expect(getGhost).toHaveBeenCalledTimes(4);
-    host.disposeScoped();
-  });
   it('binds ordinary tasks to the live Session instance and refuses local execution for SSH contexts', async () => {
     const host = service();
     const session = { instanceId: 'live', workDir: '/tmp' };

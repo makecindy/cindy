@@ -61,11 +61,9 @@ export class HostNetworkConnections {
     for (const wake of [...entry.waiters]) wake();
   }
 
-  private append(entry: Connection, event: Omit<GhostNetworkEvent, 'sequence'>, checked = false): void {
+  private append(entry: Connection, event: Omit<GhostNetworkEvent, 'sequence'>): void {
     if (entry.disposed) return;
-    if (!checked) {
-      try { entry.assertCurrent(); } catch { this.remove(entry); return; }
-    }
+    try { entry.assertCurrent(); } catch { this.remove(entry); return; }
     const next = { ...event, sequence: ++entry.sequence };
     entry.events.push(next);
     entry.bytes += Buffer.byteLength(event.data ?? '', 'utf8');
@@ -109,18 +107,16 @@ export class HostNetworkConnections {
           if (entry.disposed) break;
           entry.assertCurrent();
           if (chunk.done) break;
-          // One checked synchronous batch; every reader.read() await above
-          // still reloads authority before any bytes enter the retained ring.
           for (let offset = 0; offset < chunk.value.byteLength; offset += CHUNK_BYTES) {
             const text = decoder.decode(chunk.value.subarray(offset, offset + CHUNK_BYTES), { stream: true });
-            if (text) this.append(entry, { type: 'text', data: text }, true);
+            if (text) this.append(entry, { type: 'text', data: text });
           }
         }
         if (!entry.disposed) {
           const last = decoder.decode();
-          if (last) this.append(entry, { type: 'text', data: last }, true);
+          if (last) this.append(entry, { type: 'text', data: last });
           entry.closed = true;
-          this.append(entry, { type: 'end' }, true);
+          this.append(entry, { type: 'end' });
         }
       } catch {
         entry.closed = true;

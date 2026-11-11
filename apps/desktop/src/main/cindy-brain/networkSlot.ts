@@ -1532,9 +1532,7 @@ export class GhostNetworkSlot {
           body: response.body, signal,
           assertCurrent: () => {
             assertStillValid();
-            // hostGuard inside assertStillValid already reloads installation
-            // enablement in this synchronous segment.
-            if (agentMediated && !hasLiveAgentAuthorization()) throw new Error('PLUGIN_CALL_UNAVAILABLE');
+            if (!this.deps.getGhost(instanceKey)?.enabled || (agentMediated && !hasLiveAgentAuthorization())) throw new Error('PLUGIN_CALL_UNAVAILABLE');
           },
           release: async () => {
             controller.abort();

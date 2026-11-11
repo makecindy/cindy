@@ -5,60 +5,60 @@
   "receiptBytes": 497,
   "scope": "Isolated production Node Host tool assembly; real receipt IO, fake DB port; excludes app startup and GhostManager projection.",
   "idleControl": {
-    "elapsedMs": 2001.706291999999,
-    "cpuMs": 18.441,
-    "cpuPercentOfOneCore": 0.9212640272801825,
-    "heapUsedDelta": 34424,
-    "rssDelta": -59506688
+    "elapsedMs": 2001.721042000001,
+    "cpuMs": 20.38,
+    "cpuPercentOfOneCore": 1.0181238830180608,
+    "heapUsedDelta": 34480,
+    "rssDelta": -70238208
   },
-  "assemblyMs": 1.2178750000002765,
+  "assemblyMs": 0.7829160000001139,
   "resourcesBefore": [],
   "resourcesAfter": [],
   "idleUnusedAssembly": {
-    "elapsedMs": 2000.9871250000015,
-    "cpuMs": 27.652,
-    "cpuPercentOfOneCore": 1.3819179371281551,
-    "heapUsedDelta": 21176,
-    "rssDelta": -5636096
+    "elapsedMs": 2002.8127499999991,
+    "cpuMs": 23.66,
+    "cpuPercentOfOneCore": 1.1813385949335509,
+    "heapUsedDelta": 21256,
+    "rssDelta": -1769472
   },
   "calls": [
     {
       "tool": "terminal_list",
       "readsPerCall": [
-        28
+        29
       ],
-      "p50Ms": 6.85358400000041,
-      "p95Ms": 16.42412499999955,
-      "meanReceiptMsPerCall": 3.3553665000005277
+      "p50Ms": 9.743000000000393,
+      "p95Ms": 19.481832999999824,
+      "meanReceiptMsPerCall": 5.575612019999863
     },
     {
       "tool": "host_services",
       "readsPerCall": [
         27
       ],
-      "p50Ms": 3.8870000000006257,
-      "p95Ms": 7.57354099999975,
-      "meanReceiptMsPerCall": 2.0587863999997715
+      "p50Ms": 11.563374999999724,
+      "p95Ms": 24.25774999999885,
+      "meanReceiptMsPerCall": 6.524593320000094
     },
     {
       "tool": "storage_request",
       "op": "providers",
       "readsPerCall": [
-        27
+        28
       ],
-      "p50Ms": 9.643749999999272,
-      "p95Ms": 26.688624999998865,
-      "meanReceiptMsPerCall": 5.15364594000057
+      "p50Ms": 7.158791999998357,
+      "p95Ms": 16.42633399999977,
+      "meanReceiptMsPerCall": 3.7832178799995746
     },
     {
       "tool": "storage_request",
       "op": "call",
       "readsPerCall": [
-        30
+        34
       ],
-      "p50Ms": 10.772791999999754,
-      "p95Ms": 32.48504200000025,
-      "meanReceiptMsPerCall": 6.217877360000675
+      "p50Ms": 8.392250000000786,
+      "p95Ms": 14.710790999999517,
+      "meanReceiptMsPerCall": 3.871843739999895
     }
   ],
   "resourcesAfterClose": []

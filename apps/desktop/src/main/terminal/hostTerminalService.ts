@@ -89,9 +89,7 @@ export class HostTerminalService {
     }
     if (entry) {
       let valid = entry.revision === scope.revision;
-      if (entry.assertCurrent !== scope.assertCurrent) {
-        try { entry.assertCurrent(); } catch { valid = false; }
-      }
+      try { entry.assertCurrent(); } catch { valid = false; }
       if (!valid) { this.disposeEntry(scope.key, entry); entry = undefined; }
     }
     if (!entry && create) {
@@ -102,7 +100,7 @@ export class HostTerminalService {
   }
 
   async start(scope: HostTerminalScope, input: Partial<HostTerminalStart>, signal?: AbortSignal): Promise<PtySnapshot> {
-    signal?.throwIfAborted();
+    scope.assertCurrent(); signal?.throwIfAborted();
     if (!dimensions(input.cols) || !dimensions(input.rows)) throw new Error('INVALID_TERMINAL_SIZE');
     const requested = input.cwd ?? scope.defaultCwd;
     if (!path.isAbsolute(requested) || requested.includes('\0')) throw new Error('INVALID_TERMINAL_CWD');
@@ -117,7 +115,7 @@ export class HostTerminalService {
       if (input.cwd === undefined && scope.createDefaultCwd) await fs.mkdir(requested, { recursive: true });
       const cwd = await fs.realpath(requested);
       if (!(await fs.stat(cwd)).isDirectory()) throw new Error('INVALID_TERMINAL_CWD');
-      signal?.throwIfAborted();
+      scope.assertCurrent(); signal?.throwIfAborted();
       if (this.resolve(scope) !== entry) throw new Error('TERMINAL_SCOPE_CHANGED');
       this.manager.create({ ...input, id, cwd, owner: entry.owner, inheritEnv: false, env: scope.environment, retainOutput: true });
       scope.assertCurrent(); signal?.throwIfAborted();

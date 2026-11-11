@@ -183,18 +183,12 @@ describe('GhostFsSlot', () => {
     const { deps } = makeHarness(dataRoot);
     let notify!: (event: { path: string; type: 'create' | 'update' | 'delete' }) => void;
     const release = vi.fn(async () => {});
-    const getGhost = vi.fn(() => ghost);
-    const slot = new GhostFsSlot({ ...deps, getGhost,
+    const slot = new GhostFsSlot({ ...deps, getGhost: () => ghost,
       resolvePickedDirectory: (id, ref) => id === GHOST_ID && ref === directory.ref ? directory : null,
       watchDirectory: async (_root, changed) => { notify = changed; return release; },
     });
     const call = (op: string, args = {}) => slot.handleFsRequest(GHOST_ID, { root: 'picked', directoryRef: 'picked', op, ...args });
-    // Same synchronous segment reuses dispatch's receipt; filesystem awaits
-    // below still reload it so the existing revocation assertions remain valid.
-    const write = call('write', { path: 'folder/a.txt', content: 'selected' });
-    expect(getGhost).toHaveBeenCalledTimes(1);
-    expect(await write).toMatchObject({ ok: true, bytes: 8 });
-    expect(getGhost.mock.calls.length).toBeGreaterThan(1);
+    expect(await call('write', { path: 'folder/a.txt', content: 'selected' })).toMatchObject({ ok: true, bytes: 8 });
     expect(await call('read', { path: 'folder/a.txt' })).toMatchObject({ ok: true, content: 'selected' });
     expect(await call('list', { path: 'folder' })).toMatchObject({ ok: true, entries: [{ path: 'folder/a.txt', type: 'file' }] });
     const watch = await call('watch');

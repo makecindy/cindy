@@ -146,31 +146,6 @@ const BRAVE_URL = 'https://api.search.brave.com/res/v1/web/search?q=hi';
 // reconnect cursors, and revoke live sockets on an installation/owner boundary.
 // Existing buffered-fetch cases cannot observe these lifetime differences.
 describe('host network connections', () => {
-  // Unit performance regression: one transport read is split into cursor events
-  // synchronously. Re-reading its receipt for every event duplicates disk IO;
-  // the next awaited transport chunk must still observe revocation.
-  it('checks stream authority per read segment without rereading it for each cursor fragment', async () => {
-    let source!: ReadableStreamDefaultController<Uint8Array>;
-    const body = new ReadableStream<Uint8Array>({ start(controller) { source = controller; } });
-    const getGhost = vi.fn(() => fakeGhost());
-    const { slot } = makeSlot({ getGhost, fetchImpl: async () => new Response(body, { headers: { 'content-type': 'text/event-stream' } }) });
-    const opened = await slot.handleFetchRequest('web-search', { url: BRAVE_URL, as: 'stream' });
-    if (!opened.ok || !('connectionId' in opened)) throw new Error('stream unavailable');
-    try {
-      getGhost.mockClear();
-      source.enqueue(new TextEncoder().encode('x'.repeat(128 * 1024)));
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(getGhost).toHaveBeenCalledTimes(2);
-      const result = await slot.handleNetworkRequest('web-search', { op: 'read', connectionId: opened.connectionId });
-      expect(result).toMatchObject({ ok: true, events: [expect.objectContaining({ sequence: 1 }), expect.objectContaining({ sequence: 2 })] });
-      getGhost.mockImplementation(() => ({ ...fakeGhost(), enabled: false }));
-      source.enqueue(new TextEncoder().encode('revoked'));
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(await slot.handleNetworkRequest('web-search', { op: 'read', connectionId: opened.connectionId })).toMatchObject({ ok: false });
-    } finally { slot.disposeAll(); }
-  });
   it('returns headers before EOF, reads UTF-8 incrementally, and retains cursors', async () => {
     let source!: ReadableStreamDefaultController<Uint8Array>;
     const body = new ReadableStream<Uint8Array>({ start(controller) { source = controller; } });

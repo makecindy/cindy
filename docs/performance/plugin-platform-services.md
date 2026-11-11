@@ -1,14 +1,16 @@
 # 插件平台能力的客户端性能自查
 
-2026-11-11，PR #9825。对照基线 `fa54e46fab46ce535d1a9f526291202c00e55e3f`。
+2026-11-11，PR #9825。当前代码基线为 `2c0e66c8acb95d73f7a4818f5d9a0c94bf6e84f0`。
+receipt 同步段去重已撤回，存储、终端、亲选目录与流式分片恢复每次校验重新读取；
+不增加 AsyncResource、async hook 或 ALS。下文 renderer A/B 保留旧基线数据并明确标注。
 本轮只修性能回退，不补 PAT / 手机账号引用或 Node Host 生产调度器。
 下表区分未使用时的路径、使用后的预算与尚未具备的能力，不把代码路径证据当作完整客户端实测。
 
 | 热点 | 未使用时的开销 | 使用后的上限 | 证据 | 结论 |
 | --- | --- | --- | --- | --- |
 | Desktop 启动与服务登记 | 登记只保存 provider 引用；不构建 MCP runtime、不探测 enablement、不关闭异步 runtime。普通终端输出不进入新增 ring。 | 首次查询才生成目录；目录在 provider 更换时失效。 | `hostServiceCatalog.test.ts` 的 `does not construct or probe unused providers and caches metadata until replacement`；`ptyManager.test.ts` 的 `does not retain or measure UI output when no managed reader was requested`。 | 已修复两处未使用路径回退。存在静态模块求值和少量对象分配，未测完整 Desktop 冷启动时间。 |
-| Node Host 启动 | provider 工厂未被目录登记调用；装配后的新增活跃资源为 0，无 PTY 启动。 | 实际调用才生成 MCP server；终端按需 spawn。 | 隔离生产装配 1.22 ms；`resourcesBefore/After/AfterClose` 均 `[]`，见原始 JSON；`HostTerminalService` 构造函数仅建立 manager / sink / map。 | 无新增定时器、连接或子进程的代码路径与隔离资源证据；不代表完整 Host 启动耗时。 |
-| 每次 `host.call` | 没有调用时不执行 gateway；未声明的新服务组在工厂之前拒绝，未批准调用不创建输出目录。 | provider 查找是内存数组查找；computer runtime 按插件与安装 revision 缓存。批准事实实时读盘，不跨调用或跨 `await` 缓存。 | `hostToolSlot.test.ts` 的 `rejects undeclared service groups before constructing their runtime`、`creates a private output directory only for an approved Desktop service execution`；下文 50 次调用基准。 | 已移除新增的提前 `mkdirSync`；同步重复读已合并。公共授权链仍有较多读取，须在 #9801 新 head 上复测。 |
+| Node Host 启动 | provider 工厂未被目录登记调用；装配后的新增活跃资源为 0，无 PTY 启动。 | 实际调用才生成 MCP server；终端按需 spawn。 | 隔离生产装配 0.78 ms；`resourcesBefore/After/AfterClose` 均 `[]`，见原始 JSON；`HostTerminalService` 构造函数仅建立 manager / sink / map。 | 无新增定时器、连接或子进程的代码路径与隔离资源证据；不代表完整 Host 启动耗时。 |
+| 每次 `host.call` | 没有调用时不执行 gateway；未声明的新服务组在工厂之前拒绝，未批准调用不创建输出目录。 | provider 查找是内存数组查找；computer runtime 按插件与安装 revision 缓存。批准事实每次校验实时读盘，不做同步段或跨调用缓存。 | `hostToolSlot.test.ts` 的 `rejects undeclared service groups before constructing their runtime`、`creates a private output directory only for an approved Desktop service execution`；下文 50 次调用基准。 | 已移除新增的提前 `mkdirSync`。保留重复读取开销，沿用公共授权链，不增加去重机制。 |
 | 文件监听 | `GhostFsSlot` 仅建立空 map；没有 `watch` 请求不订阅 watcher。 | 每插件最多 32 个 watcher、每 watcher 256 条事件；同一目录 / 调用复用；插件显式批量拉取，无新增逐事件 renderer IPC 或轮询。 | `fsSlot.ts:505,529`；`fsSlot.test.ts` 的 `workdir:监听通过游标续读，拒绝他插件，交卷立即释放宿主 watcher`、`workdir:监听缓冲缺口明确要求重读，且取消建订阅不会留下 watcher`。 | 有数量、缓冲与生命周期上限。复用现有 watcher-host 原生批事件通道。 |
 | 大目录列举 | 无请求时不枚举目录。 | 列举回复最多 2000 条；共享 core 在 `readdir` 完成后检查，超限返回 `DIRECTORY_TOO_LARGE`。 | `fsSlot.ts:543`，`packages/file-browser-core/src/scanner.ts:308`。该 `listDir` 在基线已存在，文件浏览界面也使用。 | **未分页**；完整枚举的时间 / 临时内存不受 2000 限制。本 PR 保留主干行为，不新增分页语义。 |
 | 大文件读写 | 无请求时无文件 IO。 | 单次读写最多 16 MiB。授权目录读内部按 1 MiB 分块，再合成完整回复；写为有上限的单次原子写。handoff / media 存储读取按 64 KiB。 | `fsSlot.ts:550–560`、`shared/ghost.ts` 的 `GHOST_FS_READ_MAX_BYTES / GHOST_FS_WRITE_MAX_BYTES`；`storageProviders.ts:65`。 | 文件 IO 分块不等于插件 API 支持流式读写；完整回复仍可能占用 16 MiB 加编码开销，已明确记为边界。 |
@@ -30,14 +32,12 @@
 - `3ce52d61de`：未查询目录时，不在 provider 登记中构造 MCP runtime。
 - `c06c49f374`：没有 computer runtime 时，不构建批准投影。
 - `5673a6b94a`：未声明服务组在运行时工厂之前拒绝；目录准备移到批准后的异步执行阶段。
-- `ba2c1eaaea`：存储同步段复用已经读取的安装投影；分享复核每次只读一次来源。
-- `ea2781e957`：终端首次启动的安装读取从 7 次降到 4 次；相同回调不在同次 resolve 中重复校验。
-- `08c3af0977`：亲选目录首次文件 `await` 前的安装读取从 2 次降到 1 次。
 - `9fc4e3fb06`：无待决确认时不增加 confirm-dismissed 订阅。
 - `88a710b480`：新增 SSE 确认 writer 在发送积压或背压未排空时按无法送达拒绝。
-- `c1f0cd7ee0`：同一 128 KiB HTTP 读取批次拆为两个 cursor 事件时，安装查询从 8 次降到 2 次；下一次读取仍发现停用。
 
-同步段复用不越过 `await`；停用、换 owner、换安装、目录 inode 变化和确认后的迟到结果继续由原检查拒绝。
+以上短 SHA 是首次验证时的本地检查点标识，重放后以对应测试和当前代码为准。
+原四个同步段去重检查点已撤回。停用、换 owner、换安装、目录 inode 变化和确认后的迟到结果
+继续由每次重新读取的检查拒绝。
 
 ## 托管作业预算的来源与结果
 
@@ -72,22 +72,24 @@ Node 22.22.3 / macOS；每条路径预热 5 次、计数 50 次，读取临时�
 
 | 调用 | receipt 次数 / 调用 | p50 | p95 | 平均 receipt IO / 调用 |
 | --- | ---: | ---: | ---: | ---: |
-| `terminal_list` | 28 | 6.85 ms | 16.42 ms | 3.36 ms |
-| `host_services` | 27 | 3.89 ms | 7.57 ms | 2.06 ms |
-| `storage_request providers` | 27 | 9.64 ms | 26.69 ms | 5.15 ms |
-| `storage_request call` | 30 | 10.77 ms | 32.49 ms | 6.22 ms |
+| `terminal_list` | 29 | 9.74 ms | 19.48 ms | 5.58 ms |
+| `host_services` | 27 | 11.56 ms | 24.26 ms | 6.52 ms |
+| `storage_request providers` | 28 | 7.16 ms | 16.43 ms | 3.78 ms |
+| `storage_request call` | 34 | 8.39 ms | 14.71 ms | 3.87 ms |
 
-这是公共授权去重前的当前基线结果，**不是延迟门禁**：测量期间有其它类型检查并行，耗时受机器
-调度影响。数量在 50 次样本中一致。#9801 的同步段去重进入基线后，须用相同脚本再次记录对照。
-本 PR 自己的局部入口另由回归断言：存储 providers 从 2 次降到 1 次、provider 调用从 4 次
-降到 2 次；terminal 首次启动 7 → 4 次；picked 入口首个文件 `await` 前 2 → 1 次。
+这是在 `2c0e66c8ac` 上重放并撤回四处去重后的工作区结果，**不是延迟门禁**：测量期间
+有其它类型检查并行，耗时受机器调度影响。数量在 50 次样本中一致。公共授权层与本线均
+保留每次重新读取，不计划再加同步段去重或 mtime 缓存。
 
-隔离装配耗时 1.22 ms；装配前后及 close 后 `process.getActiveResourcesInfo()` 均为空。
-2 秒空闲控制样本 CPU 18.44 ms / 0.92% 单核，装配后 27.65 ms / 1.38%；heap 增量分别
-34,424 / 21,176 字节，RSS 分别下降约 56.75 / 5.38 MiB。这种短样本受 GC / 模块初始化
-与并行任务影响，不能用来判断 0.46 个百分点是否为功能回退，更不能外推完整 Electron 的 CPU / RSS。
+隔离装配耗时 0.78 ms；装配前后及 close 后 `process.getActiveResourcesInfo()` 均为空。
+2 秒空闲控制样本 CPU 20.38 ms / 1.02% 单核，装配后 23.66 ms / 1.18%；heap 增量分别
+34,480 / 21,256 字节，RSS 分别下降约 66.98 / 1.69 MiB。这种短样本受 GC / 模块初始化
+与并行任务影响，不能用来判断 CPU 差值是否为功能回退，更不能外推完整 Electron 的 CPU / RSS。
 
-## renderer 生产构建对照
+## renderer 生产构建对照（旧基线记录）
+
+以下对照基线为 `fa54e46fab46ce535d1a9f526291202c00e55e3f`，不是当前 `2c0e66c8ac`。
+尚未重跑新基线的 renderer 构建，不将这些数字描述为当前 head 的体积结论。
 
 [脚本](plugin-platform-services-renderer.mjs)从仓库根运行，使用真实 `vite.renderer.config.ts`，
 相同依赖、相同构建配置。基线通过 `git show` 源码覆盖载入，新增模块若意外被基线载入即失败；
@@ -115,8 +117,15 @@ NODE_OPTIONS=--max-old-space-size=12288 node docs/performance/plugin-platform-se
 
 ## 验证与剩余边界
 
+新基线恢复逐次读取后：六个 Desktop 文件共 432 项；首次因回调夹具缺少重放后的依赖，
+出现 24 项失败。补齐依赖后，失败集所在 `hostToolSlot.test.ts` 的 54 / 54 通过，其余五文件
+378 项已通过。MCP dispatcher / provider 两文件 66 / 66 通过。后续门禁结果另随提交记录更新。
+新增短路与确认生命周期三文件 16 / 16；Node Host 的 tools、server、plugins、input-queue
+四文件 82 / 82。Desktop / Host 类型检查、i18n 与术语检查、文档 11 / 11 及 Skill 105 检查通过。
+以下是此前基线的验证记录，不代表已在新基线全部重跑：
+
 - Desktop 七个服务测试文件：307 / 307，5.31 秒；包含文件、网络、存储、PTY、gateway、catalog、花名册路由。
-- 最后追加的流式批次去重：`networkSlot.test.ts` 138 / 138，1.52 秒，含新计数与下一批撤权回归。
+- 流式分片去重用例已随实现撤回；原网络撤权与缓冲行为用例保留。
 - MCP dispatcher：58 / 58，1.17 秒；含结构化配额错误。
 - Renderer 确认生命周期：6 / 6；回归复现阶段单独运行 3.22 秒，修正后在并行检查下 8.36 秒。
 - Node Host `host-tools.test.mjs` + `plugins.test.mjs`：12 / 12；最终回归 15.84 秒，使用真实 Worker / PTY 的已有用例。
@@ -130,7 +139,7 @@ NODE_OPTIONS=--max-old-space-size=12288 node docs/performance/plugin-platform-se
 且缓冲未排空时返回 false；沿用原确认桥的“无法送达”取消，不排队、不重试、不关闭其它
 控制端。原任务事件 writer 的同类问题是主干已有，未修改。
 
-后续 PR 风险段须保留：receipt 实时读取与待重测数量、主干完整枚举超大目录的行为、
+后续 PR 风险段须保留：receipt 每次实时读取及其开销、主干完整枚举超大目录的行为、
 16 MiB 的完整文件回复、网络接收丢旧语义、托管作业预算及错误结果，并明确区分 DSH 三个
 数值与 Cindy 额外的 100 条上限。PAT / 手机引用、Node Host 缺失的生产服务、完整安装产物链、
 真实第三方 OAuth 和跨平台原生输入的未验证项仍沿用既有 PR 风险，不在此次性能修正中扩范围。
