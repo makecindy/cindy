@@ -2067,13 +2067,19 @@ describe('provider group "switch to another computer" for shared users', () => {
     await reopened.client.close('close', 'navigation');
   });
 
-  it('offers another computer when the agent on the group computer itself ends in the middle of a turn', async () => {
+  it.each([false, true])('offers another computer when the local group agent ends mid-turn (idle snapshot=%s)', async idle => {
     const env = setup({ plans: [{ kind: 'local' }, { kind: 'member', ...MEMBER_MINI }] });
     const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
     const record = env.ownerStarted[0];
     record.running = true;
     record.emit({ type: 'text', data: { text: 'working' } } as AgentEvent);
     await waitFor(() => guest.stream.some((item) => item.t === 'state' && item.state.turnRunning === true));
+    if (idle) {
+      const beforeIdle = guest.stream.length;
+      record.running = false;
+      record.emit({ type: 'status', data: {} } as AgentEvent);
+      await waitFor(() => guest.stream.slice(beforeIdle).some(item => item.t === 'state' && item.state.turnRunning === false));
+    }
     // 本机的 Agent 进程退出：事件流没有 done 就结束了。
     record.end();
     await waitFor(() => guest.isClosed());
@@ -2104,6 +2110,79 @@ describe('provider group "switch to another computer" for shared users', () => {
       expect.objectContaining({ reason: 'remote_agent_closed' }),
       'claude-opus',
     );
+  });
+
+  // A transport EOF is not a product terminal, even if its last snapshot is idle.
+  it.each([
+    { reason: 'ended', idle: false }, { reason: 'ended', idle: true },
+    { reason: 'closed', idle: true }, { reason: 'detached', idle: true },
+  ] as const)('offers recovery for an unfinished ended stream ($reason, idle snapshot=$idle)', async ({ reason, idle }) => {
+    let memberRunId = '';
+    const env = setup({ plans: [{ kind: 'member', ...MEMBER_MINI }, { kind: 'member', ...MEMBER_MINI }, { kind: 'member', ...MEMBER_STUDIO }],
+      intercept: async (_device, request, forward) => {
+        if (request.op === 'open' && !memberRunId) memberRunId = request.runId as string;
+        return forward();
+      },
+    });
+    const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+    const healthy = await openAsGuest(env, GUEST_B, openPayload('healthy-task'));
+    try {
+      await healthy.client.call('send', [{ content: 'healthy work', attachments: [] }, {}]);
+      await guest.client.call('send', [{ content: 'work', attachments: [] }, {}]);
+      const record = env.memberStarted.mini[0];
+      record.running = true;
+      record.emit({ type: 'text', data: { text: 'working' } } as AgentEvent);
+      await waitFor(() => guest.stream.some(item => item.t === 'state' && item.state.turnRunning === true));
+      if (idle) {
+        const beforeIdle = guest.stream.length;
+        record.running = false;
+        record.emit({ type: 'status', data: {} } as AgentEvent);
+        await waitFor(() => guest.stream.slice(beforeIdle).some(item => item.t === 'state' && item.state.turnRunning === false));
+      }
+      if (reason === 'ended') record.end();
+      else await env.members.mini.handle(OWNER_DEVICE, { op: 'close', runId: memberRunId,
+        mode: reason === 'detached' ? 'detach' : 'close', reason: 'navigation' });
+      await waitFor(() => guest.isClosed());
+      expect(guest.closedReason()).toBe(reason);
+      expect(switchTokenIn(guest.stream)).toBeDefined();
+      expect(env.relay.noteRunFailure).toHaveBeenCalledOnce();
+      expect(env.relay.noteRunFailure).toHaveBeenCalledWith('shared-provider', MEMBER_MINI,
+        expect.objectContaining({ reason: 'remote_agent_closed' }), 'claude-opus');
+      expect(record.sends).toHaveLength(1);
+      expect(env.memberStarted.studio).toHaveLength(0);
+      expect(healthy.isClosed()).toBe(false);
+      await healthy.client.call('send', [{ content: 'still usable', attachments: [] }, {}]);
+      expect(env.memberStarted.mini[1].sends).toHaveLength(2);
+    } finally { await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose(); }
+  });
+
+  it.each(['done', 'abort', 'new-send', 'provider-start'])('uses product terminals rather than late busy snapshots after %s', async mode => {
+    const env = setup({ plans: [{ kind: 'member', ...MEMBER_MINI }, { kind: 'member', ...MEMBER_STUDIO }] });
+    const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+    try {
+      await guest.client.call('send', [{ content: 'first', attachments: [] }, {}]);
+      const record = env.memberStarted.mini[0];
+      if (mode === 'abort') await guest.client.call('abort', []);
+      else {
+        record.emit({ type: 'done', data: { status: 'completed' } } as AgentEvent);
+        await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'done'));
+      }
+      record.running = true;
+      record.emit({ type: 'status', data: {} } as AgentEvent);
+      await waitFor(() => guest.stream.some(item => item.t === 'state' && item.state.turnRunning === true));
+      if (mode === 'new-send') await guest.client.call('send', [{ content: 'second', attachments: [] }, {}]);
+      if (mode === 'provider-start') {
+        record.emit({ type: 'status', source: 'claude-code', data: { isRunning: true, providerInitiatedTurn: true } } as AgentEvent);
+        await waitFor(() => guest.stream.some(item => item.t === 'event'
+          && (item.event.data as { providerInitiatedTurn?: boolean })?.providerInitiatedTurn));
+      }
+      record.end();
+      await waitFor(() => guest.isClosed());
+      const unfinished = mode === 'new-send' || mode === 'provider-start';
+      expect(env.relay.noteRunFailure).toHaveBeenCalledTimes(unfinished ? 1 : 0);
+      expect(switchTokenIn(guest.stream) !== undefined).toBe(unfinished);
+      expect(record.sends).toHaveLength(mode === 'new-send' ? 2 : 1);
+    } finally { await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose(); }
   });
 
   it('stops offering once every computer has been tried this round', async () => {

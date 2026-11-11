@@ -35,6 +35,7 @@ import { isProviderShareCredentialSessionApproval } from '../../../shared/provid
 import { encodeSendOptions, encodeUserMessage } from '../wire';
 import { RemoteAgentRemoteError, type RemoteAgentRunClient } from './runClient';
 import { localPlanReview, RemoteEventProjection } from './eventProjection';
+import { startsRemoteProductTurn } from '../turnLifecycle';
 
 const MAX_REMEMBERED_SEND_CALLBACKS = 64;
 
@@ -251,7 +252,7 @@ export interface RemoteAgentHandleController {
   onEvent(event: unknown): void;
   onState(state: Record<string, unknown>): void;
   onRequest(request: RemoteAgentReverseRequest): Promise<RemoteAgentReply> | null;
-  onClosed(reason: string, message?: string): void;
+  onClosed(reason: string, message?: string, runId?: string): void;
   /** Supplier process disappeared; keep the local executor and let host recovery own the next send. */
   onInterrupted(): void;
   hasActiveTurn(): boolean;
@@ -282,6 +283,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
   let state: Record<string, unknown> = { ...started.state };
   let resolver: InteractionResolver | null = null;
   let disposed = false;
+  let teardownRequested = false;
   let disposal: Promise<void> | null = null;
   const sendCallbacks = new Map<string, {
     onTranscriptUserEntry?: (entryId: string) => void | Promise<void>;
@@ -293,9 +295,9 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
   let carriedUsage: unknown;
   /** 回到某条消息后、下一轮跑完前(Claude Code 要到下一次发送才在对方截断)：不能让出名额。 */
   let rewindPending = false;
-  // The provider terminal owns this turn's failure, including its quota reset.
-  // A later transport teardown must close the handle without replacing that error.
-  let terminalErrorDelivered = false;
+  // A delivered product terminal owns the turn. Transport teardown must not
+  // replace its outcome (including provider errors and quota reset details).
+  let terminalEventDelivered = false;
   let activeTurn = state.turnRunning === true;
   let interruption = 0;
 
@@ -313,6 +315,8 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
   };
 
   const teardown = async (mode: 'close' | 'detach', opts?: AgentSessionTeardownOptions) => {
+    // Mark intent before awaiting the remote ACK: its closed frame can arrive first.
+    teardownRequested = true;
     deps.cancelPendingConfirmations?.();
     const reason = opts?.reason ?? 'navigation';
     // 远端会话无项目资源启动快照,永不漂移,不存在资源回收关闭;资源刷新关闭由
@@ -408,7 +412,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
     if (encoded.wire.cindy?.autoReviewSourceContent) projectMessage(encoded.wire.cindy.autoReviewSourceContent);
     const beforeInterruption = interruption;
     if (method === 'send') {
-      terminalErrorDelivered = false;
+      terminalEventDelivered = false;
       activeTurn = true;
     }
     try {
@@ -598,9 +602,14 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
   return {
     handle,
     onEvent(event) {
+      if (disposed) return;
       if (!event || typeof event !== 'object' || typeof (event as AgentEvent).type !== 'string') return;
       let typed = event as AgentEvent;
-      if (isTerminalAgentErrorEvent(typed) && typed.turnScope !== 'background') terminalErrorDelivered = true;
+      if (terminalEventDelivered && startsRemoteProductTurn(typed)) {
+        terminalEventDelivered = false;
+        activeTurn = true;
+      }
+      if (typed.turnScope !== 'background' && (typed.type === 'done' || isTerminalAgentErrorEvent(typed))) terminalEventDelivered = true;
       if (typed.type === 'image' && typed.source === 'codex'
         && (typed.data as { kind?: unknown } | null)?.kind === 'generation') {
         typed = { ...typed, data: { ...(typed.data as object), pathOrigin: 'remote-agent' } };
@@ -610,9 +619,10 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       for (const projected of projection.project(deps.mapEvent ? deps.mapEvent(typed) : typed)) queue.push(projected);
     },
     onState(next) {
+      if (disposed) return;
       state = { ...state, ...next };
       // An idle state can precede the terminal event; only that event settles the turn.
-      if (next.turnRunning === true) activeTurn = true;
+      if (next.turnRunning === true && !terminalEventDelivered) activeTurn = true;
       if (carriedUsage !== undefined) {
         // 新进程开始干活或报了有内容的用量后，以它为准。
         if (state.turnRunning === true || !isEmptyUsage(state.usage)) carriedUsage = undefined;
@@ -682,13 +692,13 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
     },
     hasActiveTurn: () => activeTurn,
     onInterrupted() {
-      if (disposed || terminalErrorDelivered) return;
-      const running = activeTurn;
+      if (disposed) return;
+      const running = activeTurn && !terminalEventDelivered;
       activeTurn = false;
       state = { ...state, turnRunning: false, preparing: false };
       if (!running) return;
       interruption += 1;
-      terminalErrorDelivered = true;
+      terminalEventDelivered = true;
       for (const projected of projection.flush()) queue.push(projected);
       queue.push({ type: 'error', source: started.agentKind, data: {
         message: '[REMOTE_AGENT_UNAVAILABLE] The provider process stopped; reconnecting to the original conversation.',
@@ -698,15 +708,24 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       // the executor. The coordinator owns cancellation, provenance and continuation.
       queue.push({ type: 'done', source: started.agentKind, data: { reason: 'remote_agent_restarted' } });
     },
-    onClosed(reason, message) {
+    onClosed(reason, message, runId) {
+      if (disposed) return;
       for (const projected of projection.flush()) queue.push(projected);
-      // 'superseded'：同一任务被重新打开、旧实例让位给新实例，不是错误，静默收起。
-      if (!terminalErrorDelivered && reason !== 'closed' && reason !== 'detached' && reason !== 'ended' && reason !== 'superseded') {
+      const normalClose = reason === 'closed' || reason === 'detached' || reason === 'ended';
+      // Replacement cancels the old product turn; EOF by itself never completes it.
+      if (!teardownRequested && activeTurn && !terminalEventDelivered && reason === 'superseded') {
+        queue.push({ type: 'done', source: started.agentKind, data: { status: 'cancelled', reason,
+          remoteCloseReason: reason, ...(runId ? { remoteRunId: runId } : {}) } });
+      } else if (!teardownRequested && !terminalEventDelivered && reason !== 'superseded'
+        && (activeTurn || !normalClose)) {
         queue.push({
           type: 'error',
           data: {
             message: message ?? `[REMOTE_AGENT_UNAVAILABLE] The agent on the other computer stopped (${reason}).`,
             isTerminal: true,
+            remoteCloseReason: reason,
+            ...(runId ? { remoteRunId: runId } : {}),
+            sdkError: `Remote agent stream closed (${reason})${runId ? `; runId: ${runId}` : ''}`,
             // 拉不到那台(连续 2 分钟)只说明连接断了，那台本身可能没事：供应商组先等它恢复、恢复了留在原电脑继续；
             // 其余(对方出错收尾、撤权、流不可信等)是那台那边的问题(provider-group/failurePolicy)。
             // An explicit provider-owner disconnect is a user decision, not an
