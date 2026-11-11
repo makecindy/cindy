@@ -657,7 +657,7 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
             )}
           >
             <TriangleAlert size={32} className="text-[var(--msg-tool-card-chevron)]" />
-            <div className="text-14 font-semibold text-[var(--msg-tool-card-text)]">
+            <div className="text-14 font-medium text-[var(--msg-tool-card-text)]">
               {t('chat.textLightbox.cannotRead')}
             </div>
             <div className="text-13 text-[var(--msg-tool-card-chevron)]">
