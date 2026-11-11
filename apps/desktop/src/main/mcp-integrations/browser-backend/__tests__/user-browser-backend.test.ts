@@ -698,6 +698,38 @@ describe('UserBrowserBackend · 读取与动作', () => {
     expect(fake.jobs.slice(-2).map(([action]) => action)).toEqual(['evaluate', 'extract']);
     fake.responses.delete('evaluate');
     fake.responses.delete('extract');
+    // 声明式读取被桥接按字段截断到 4000 字符时,结果标出 capped:后面没有可续读的,不能当成整页。
+    fake.responses.set('evaluate', () => ({ ok: false, error: 'EVAL_BLOCKED_BY_PAGE', execution: 'not_executed' }));
+    fake.responses.set('extract', () => ({ ok: true, truncated: true, record: { text: 'y'.repeat(4000) } }));
+    expect(
+      await act({ kind: 'evaluate', fn: 'ignored', domRead: { kind: 'text', text: { maxChars: 20000 } } }),
+    ).toMatchObject({ ok: true, data: { result: { ok: true, length: 4000, capped: true } } });
+    fake.responses.delete('evaluate');
+    fake.responses.delete('extract');
+  });
+
+  // 规则:调用方给的 timeoutMs 管住文字读取。桥接对作业的默认期限是 45 秒,页面无响应时,
+  // 打开后 5 秒的内容探测不能被拖到 45 秒;页面脚本被拦后的声明式读取用的是剩下的时间,不是重新计时。
+  it('「我的浏览器」文字读取遵守 timeoutMs:页面无响应时按失败返回,两条路径共用剩余时间', async () => {
+    const fake = fakeControl({ version: '0.4.43' });
+    const b = backend(fake.control);
+    await call(b, { action: 'tabs' });
+    const act = (request: Record<string, unknown>) => call(b, { action: 'act', targetId: 't1', request });
+    const hang = () => new Promise(() => {}) as never;
+    fake.responses.set('evaluate', hang);
+    const started = Date.now();
+    expect(
+      await act({ kind: 'evaluate', fn: 'x', timeoutMs: 150, domRead: { kind: 'text', text: {} } }),
+    ).toMatchObject({ ok: false, message: expect.stringContaining('BROWSER_TIMEOUT') });
+    expect(Date.now() - started).toBeLessThan(3000);
+    // 脚本先被拦(很快),随后的声明式读取无响应:同样在预算内失败。
+    fake.responses.set('evaluate', () => ({ ok: false, error: 'EVAL_BLOCKED_BY_PAGE', execution: 'not_executed' }));
+    fake.responses.set('extract', hang);
+    const second = Date.now();
+    expect(
+      await act({ kind: 'evaluate', fn: 'x', timeoutMs: 150, domRead: { kind: 'text', text: {} } }),
+    ).toMatchObject({ ok: false, message: expect.stringContaining('BROWSER_TIMEOUT') });
+    expect(Date.now() - second).toBeLessThan(3000);
   });
 
   it('新版扩展:上传只读会话允许目录里的文件,并以字节交给扩展', async () => {

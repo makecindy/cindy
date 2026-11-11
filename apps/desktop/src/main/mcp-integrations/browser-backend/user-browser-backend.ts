@@ -474,6 +474,42 @@ export class UserBrowserBackend implements BrowserBackend {
     return job;
   }
 
+  /**
+   * 页面文字读取的作业:最多等 `budgetMs`(调用方给的剩余时间),到点按失败返回。桥接对一个作业的默认期限是
+   * 45 秒,不理会 payload 里的 timeoutMs;页面无响应时,调用方的 5 秒探测循环不能被它拖长。作业本身仍可能
+   * 在扩展里跑完,它的结果会被丢弃(只读,没有副作用)。
+   */
+  private async pageJobWithin(
+    budgetMs: number | undefined,
+    control: UserBrowserPageControl,
+    record: TargetRecord,
+    kind: string,
+    extra: Record<string, unknown> = {},
+  ): Promise<BrowserExtensionJobResult> {
+    const job = this.pageJob(control, record, kind, extra);
+    if (budgetMs === undefined) return job;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const expired = new Promise<BrowserExtensionJobResult>((resolve) => {
+      timer = setTimeout(
+        () =>
+          resolve({
+            ok: false,
+            error: 'BROWSER_TIMEOUT',
+            message: `页面在 ${budgetMs}ms 内没有响应`,
+            execution: 'unknown',
+          }),
+        budgetMs,
+      );
+    });
+    try {
+      return await Promise.race([job, expired]);
+    } finally {
+      clearTimeout(timer);
+      // The abandoned job may still reject later; nobody is waiting for it.
+      job.catch(() => undefined);
+    }
+  }
+
   /** 选连接:显式 profile(连接 id)优先;只有一条连接时直接用;多条且未指定时拒绝,不猜账号。 */
   private pickClient(
     action: BackendRequest['action'],
@@ -1651,8 +1687,13 @@ export class UserBrowserBackend implements BrowserBackend {
     if (domRead.kind === 'text') {
       // The rendered text of the page, as `{ok, url, title, readyState, found, length, text}`.
       const spec = (domRead as { text?: { selector?: string; offset?: number; maxChars?: number } }).text ?? {};
+      // The caller's time budget covers both paths below: the page script and, after it is refused, the extract.
+      const now = this.opts.now ?? Date.now;
+      const timeoutMs = (req.request as { timeoutMs?: unknown }).timeoutMs;
+      const deadline = typeof timeoutMs === 'number' && timeoutMs > 0 ? now() + timeoutMs : undefined;
+      const remaining = (): number | undefined => (deadline === undefined ? undefined : Math.max(100, deadline - now()));
       if (this.parity(control, record.clientId)) {
-        const job = await this.pageJob(control, record, 'evaluate', { fn: buildDomReadSource(domRead) });
+        const job = await this.pageJobWithin(remaining(), control, record, 'evaluate', { fn: buildDomReadSource(domRead) });
         if (job.ok)
           return actionOk(req.action, {
             backend: this.kind,
@@ -1664,9 +1705,12 @@ export class UserBrowserBackend implements BrowserBackend {
         if (job.error !== 'EVAL_BLOCKED_BY_PAGE') return this.failureResult(req.action, job);
       }
       // No page script here: an older extension, or a page whose Content Security Policy refuses them
-      // (seen on github.com). The extension's own extract reads the same rendered text, up to its
-      // 30,000 character limit; the load state is not reported, and `open` has already waited for it.
-      const job = await this.pageJob(control, record, 'extract', {
+      // (seen on github.com). The extension's own extract reads the same rendered text, but the bridge
+      // hands the model at most 4,000 characters of one field (`FIELD_VALUE_MAX`, whatever `maxChars` says) and
+      // flags the cut with `truncated`. Nothing past that prefix can be fetched, so the result says so
+      // (`capped`) instead of presenting the prefix as the whole page; a `selector` reads a narrower part.
+      // The load state is not reported, and `open` has already waited for it.
+      const job = await this.pageJobWithin(remaining(), control, record, 'extract', {
         fields: { text: { selector: ':self' } },
         ...(spec.selector ? { selector: spec.selector } : {}),
         maxChars: 30000,
@@ -1690,6 +1734,7 @@ export class UserBrowserBackend implements BrowserBackend {
           readyState: 'complete',
           found: typeof raw === 'string',
           length: text.length,
+          ...(job.truncated === true ? { capped: true } : {}),
           text: text.slice(offset, offset + (spec.maxChars ?? 8000)),
         },
         untrusted_content: true,

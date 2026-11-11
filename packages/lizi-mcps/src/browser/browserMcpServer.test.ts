@@ -2198,6 +2198,36 @@ describe('browser · batch, cdp and target-tailored rules', () => {
     } finally { await h.cleanup(); }
   });
 
+  // Rule protected: a backend that can only fetch a prefix of the text (My browser on a page that refuses scripts,
+  // 4,000 characters per field) must say so. Presenting the prefix as the whole page, or promising a nextOffset
+  // that cannot be served, makes the model answer from half a page without knowing it.
+  it('read says when a backend could only fetch a prefix of the text, and offers no nextOffset past it', async () => {
+    const h = await scripted(site({ 'https://a.test/': 'unused' }, (request) => {
+      if (isPageText(request)) return { ok: false, errorCode: 'BROWSER_RUNTIME_INVALID_REQUEST', message: 'needs a newer extension' };
+      const read = (request.request as { domRead?: { kind?: string } } | undefined)?.domRead;
+      if (read?.kind === 'extract') return { data: { url: 'https://a.test/', truncated: true, result: { ok: true, count: 1, records: [{ text: 'x'.repeat(4000) }] } } };
+      return undefined;
+    }));
+    try {
+      const { isError, body } = await h.invoke({ action: 'read', url: 'https://a.test/', maxChars: 20000 });
+      expect(isError).toBe(false);
+      expect(body.pages[0]).toMatchObject({ ok: true, chars: 4000, truncated: true, hint: expect.stringContaining('selector') });
+      expect(body.pages[0].text).toHaveLength(4000);
+      expect(body.pages[0]).not.toHaveProperty('nextOffset');
+    } finally { await h.cleanup(); }
+  });
+
+  // Rule protected: like extract, read refuses `frame` instead of reading the main document and reporting success.
+  it('read refuses a frame instead of answering with the text of the main document', async () => {
+    const h = await scripted(site({ 'https://a.test/': 'Main page text' }));
+    try {
+      const { isError, body } = await h.invoke({ action: 'read', url: 'https://a.test/', frame: 'embed' });
+      expect(isError).toBe(true);
+      expect(JSON.stringify(body)).toContain('frame');
+      expect(h.calls.filter((request) => request.action === 'open' || isPageText(request))).toHaveLength(0);
+    } finally { await h.cleanup(); }
+  });
+
   it('read answers a selector that matches nothing with the whole page, and says so', async () => {
     const h = await scripted(site({ 'https://a.test/': 'unused' }, (request) => {
       if (!isPageText(request)) return undefined;

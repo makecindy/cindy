@@ -375,6 +375,7 @@ async function readPageText(
     readyState: typeof page.readyState === 'string' ? page.readyState : 'complete',
     found: page.found !== false,
     length: page.length,
+    ...(page.capped === true ? { capped: true } : {}),
     text: page.text,
   } };
 }
@@ -1496,6 +1497,8 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
           if (bad !== undefined) return errorResult('read', `url 必须是 http(s);不支持 file:// / chrome:// / data: 等协议(收到 "${bad}")`);
           if (!addresses.length && (args.keep !== undefined || args.label !== undefined)) return errorResult('read', 'keep / label 只在 read 带 url 或 pages 时有意义');
           if (args.label !== undefined && addresses.length > 1) return errorResult('read', 'label 只能配一个 url;多个地址用返回的 targetId');
+          // Like extract: a frame would silently read the main document and report success.
+          if (args.frame) return errorResult('read', 'read 暂不支持 frame:它读的是主文档的文字。要看嵌入页面里的内容,先用 snapshot 的 frame 参数。');
         } else if (args.pages !== undefined || args.keep !== undefined) {
           return errorResult(args.action, 'pages / keep 仅用于 action=read');
         }
@@ -1520,14 +1523,15 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
                 action: 'act', profile: args.profile, targetId,
                 request: { kind: 'evaluate', fn: buildExtractFnSource(extract), domRead: { kind: 'extract', extract }, ...(args.timeoutMs ? { timeoutMs: args.timeoutMs } : {}) },
               } as BrowserControlRequest).catch((err: unknown) => ({ ok: false, message: err instanceof Error ? err.message : String(err) }) as BrowserControlResult);
-              const data = fallback.data as { url?: unknown; result?: { ok?: boolean; records?: Array<{ text?: unknown }> } } | undefined;
+              const data = fallback.data as { url?: unknown; truncated?: unknown; result?: { ok?: boolean; records?: Array<{ text?: unknown }> } } | undefined;
               const raw = data?.result?.records?.[0]?.text;
               if (!fallback.ok || data?.result?.ok === false) {
                 read = { state: 'failed', message: fallback.message ?? 'the page could not be read' };
               } else {
                 const text = typeof raw === 'string' ? raw.replace(/[ \t\u00a0]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim() : '';
                 read = { state: 'ok', page: { ok: true, url: typeof data?.url === 'string' ? data.url : '', title: '', readyState: 'complete',
-                  found: typeof raw === 'string', length: text.length, text: text.slice(spec.offset ?? 0, (spec.offset ?? 0) + (spec.maxChars ?? READ_DEFAULT_CHARS)) } };
+                  found: typeof raw === 'string', length: text.length, ...(data?.truncated === true ? { capped: true } : {}),
+                  text: text.slice(spec.offset ?? 0, (spec.offset ?? 0) + (spec.maxChars ?? READ_DEFAULT_CHARS)) } };
               }
             }
             // A selector that matches nothing is a guess about the page: answer with the page instead of
@@ -1550,9 +1554,14 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
               ...(loginWall ? { loginWall } : {}),
               text: page.text,
               chars: page.length,
-              ...(end < page.length ? { truncated: true, nextOffset: end } : {}),
-              ...(unmatched ? { hint: `selector "${spec.selector}" 没有匹配到元素,这是整页的文字。` }
-                : page.length === 0 ? { hint: '页面没有可见文字(可能是图片、画布或仍在加载):需要看画面用 screenshot,需要结构用 snapshot。' } : {}),
+              // `capped`: the backend could only fetch a prefix and has nothing past it, so no nextOffset.
+              ...(end < page.length ? { truncated: true, nextOffset: end } : page.capped ? { truncated: true } : {}),
+              ...(unmatched || page.capped || page.length === 0
+                ? { hint: [
+                  unmatched ? `selector "${spec.selector}" 没有匹配到元素,这是整页的文字。` : '',
+                  page.capped ? `这个浏览器在页面禁止脚本时只能读到开头约 ${page.length} 个字符,后面的读不到,chars 也不是整页长度;要读页面的其它部分,请用 selector 指向具体区域。` : '',
+                  !unmatched && !page.capped && page.length === 0 ? '页面没有可见文字(可能是图片、画布或仍在加载):需要看画面用 screenshot,需要结构用 snapshot。' : '',
+                ].filter(Boolean).join(' ') } : {}),
             };
           };
           const out: ReadPage[] = [];

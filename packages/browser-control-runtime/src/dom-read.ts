@@ -189,6 +189,11 @@ export interface PageText {
   found: boolean;
   /** Length of the whole text, not of the returned part. */
   length: number;
+  /**
+   * Set by a backend that could only fetch a prefix of the text and cannot continue past it (My browser on a
+   * page that refuses scripts): `length` is then the length of that prefix, not of the page.
+   */
+  capped?: boolean;
   text: string;
 }
 
