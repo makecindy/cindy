@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import type { HostToolCaller, LiziMcpProvider, LiziMcpSessionContext, ToolCallAuthorizer } from '@cindy/mcps';
 import { admitPluginTaskAction, runTaskActionRequest } from '../maker-ipc/taskActionAuthorization.js';
 import type { DataOwnerPushStamp } from '../../shared/dataOwnerPush.js';
+import type { ScheduleMutationGuard } from '@cindy/maker-scheduler';
 
 /** Attested by the plugin gateway, never reconstructed from tool arguments. */
 export interface PluginHostToolCaller {
@@ -9,6 +10,8 @@ export interface PluginHostToolCaller {
   server: string;
   tool: string;
   argsJson: string;
+  /** Existing scheduler execution precondition, valid only for this invocation. */
+  scheduleGuard?: ScheduleMutationGuard;
   /** Revalidates owner, installed revision, group and per-call confirmation. */
   assertCurrent(): void;
 }

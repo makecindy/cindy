@@ -1,7 +1,8 @@
 import type { HostToolCaller } from '@cindy/mcps';
+import type { ScheduleMutationGuard } from '@cindy/maker-scheduler';
 import type { PluginHostToolPorts } from './hostToolSlot.js';
 import { hasPluginHostToolGroupApproval } from './taskCapability.js';
-import { runPluginHostToolCall } from '../mcp-integrations/hostToolCaller.js';
+import { getPluginHostToolCaller, runPluginHostToolCall } from '../mcp-integrations/hostToolCaller.js';
 
 const record = (value: unknown): Record<string, unknown> | undefined =>
   value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
@@ -43,10 +44,17 @@ export function withPluginSchedulerApproval(id: string, ports: PluginHostToolPor
       if (remote && !group) throw new Error('UNSUPPORTED_CAPABILITY');
       const data = record(remote ? group!.data : payload.data);
       if (!data || data.id !== args.id) throw new Error('UNSUPPORTED_CAPABILITY');
-      return data;
+      // schedule_get adds display-only metadata and qualifies remote task IDs;
+      // the existing engine precondition compares the persisted definition.
+      const { webhookStatus: _status, ...schedule } = data;
+      if (remote) for (const key of ['targetSessionId', 'sessionId']) {
+        const value = schedule[key], prefix = `${args.device}::`;
+        if (typeof value === 'string' && value.startsWith(prefix)) schedule[key] = value.slice(prefix.length);
+      }
+      return schedule;
     } finally { await runtime.close(); }
   };
-  const check = async (server: string, tool: string, args: Record<string, unknown>) => {
+  const check = async (server: string, tool: string, args: Record<string, unknown>): Promise<ScheduleMutationGuard | undefined> => {
     if (server !== 'cindy_scheduler' || !noNode()) return;
     assertCurrent();
     if (tool === 'schedule_set_pre_run_hook'
@@ -58,6 +66,7 @@ export function withPluginSchedulerApproval(id: string, ports: PluginHostToolPor
       const schedule = await readSchedule(args);
       assertCurrent();
       if (hasShell(schedule)) throw new Error('UNSUPPORTED_CAPABILITY');
+      return schedule as unknown as ScheduleMutationGuard;
     }
   };
   return {
@@ -72,8 +81,11 @@ export function withPluginSchedulerApproval(id: string, ports: PluginHostToolPor
       const runtime = ports.createRuntime(server, identity);
       if (!runtime) return null;
       return { ...runtime, call: async (tool, args, signal) => {
-        await check(server, tool, args ?? {});
-        return runtime.call(tool, args, signal);
+        const scheduleGuard = await check(server, tool, args ?? {});
+        if (!scheduleGuard) return runtime.call(tool, args, signal);
+        const current = getPluginHostToolCaller();
+        if (!current) throw new Error('PERMISSION_DENIED');
+        return runPluginHostToolCall({ ...current, scheduleGuard }, () => runtime.call(tool, args, signal));
       } };
     },
     confirm: async input => {

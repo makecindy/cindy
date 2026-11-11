@@ -51,6 +51,7 @@ const archived = await cindy.host.call('cindy_helper', 'archive_sessions', {
 
 没有已批准 `node` 能力的插件，不支持提交或修改脚本、前置命令，以及运行或恢复已有脚本或前置命令的调度，
 统一返回 `UNSUPPORTED_CAPABILITY`，不提供额外确认放行。更新时也检查任务实际配置，不能通过只改 `recurring` 等字段重新激活脚本。
+普通调度的更新、运行与恢复复用主干 `expectedSchedule` 执行点检查：读后配置被另一处改动时按原不匹配结果拒绝，重新读取后再决定操作。
 普通定时任务的读改不受影响。已有 `node` 批准的插件沿用原共享风险规则；Agent 的工具分类与权限档保持原行为。
 
 `settings` 组使用 `list_app_settings` 发现分类，再用 `get_app_settings({section})` 读取当前值和修改 schema，

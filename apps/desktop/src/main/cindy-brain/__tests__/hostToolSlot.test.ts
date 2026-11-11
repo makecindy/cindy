@@ -6,7 +6,8 @@ import { createTaskToolCallAuthorizer } from '../../maker-ipc/taskToolCallAuthor
 import { captureTaskActionSyncGuard, captureTaskActionDeliveryGuard, hasTaskActionAuthorization } from '../../maker-ipc/taskActionAuthorization.js';
 import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixture.js';
 import { createGhostPageBridge } from '../../../shared/ghostPageBridge.js';
-import { createSchedulerMcpServer } from '@cindy/mcps';
+import { createSchedulerMcpServer, type SchedulerMcpDeps } from '@cindy/mcps';
+import { Scheduler, type Schedule } from '@cindy/maker-scheduler';
 import { getDesktopMcpToolApprovalPolicy } from '../../maker-host/mcp-tool-approval-policy.js';
 import { withPluginSchedulerApproval } from '../pluginSchedulerApproval.js';
 
@@ -175,6 +176,8 @@ describe('plugin scheduler command boundary', () => {
     const runNow = vi.fn(async () => 'run'), resume = vi.fn(async () => schedule);
     const get = vi.fn(async () => structuredClone(schedule));
     const installed = vi.fn();
+    let actualScheduler: Scheduler | undefined;
+    let remote: SchedulerMcpDeps['remote'];
     const install = vi.fn(async () => {
       const prepared = { command: 'node /fixture/project/precheck.mjs', filePath: '/fixture/project/precheck.mjs', content: 'process.exit(0)' };
       installed();
@@ -186,8 +189,10 @@ describe('plugin scheduler command boundary', () => {
       handlePluginHostToolRequest, withPluginSchedulerApproval, getDesktopMcpToolApprovalPolicy,
       findGhostForInstanceId: () => f.ghost, getActiveDataOwnerPushStamp: f.ports.owner,
       createHostToolRuntime: (_server: string, caller: NonNullable<Parameters<typeof createSchedulerMcpServer>[1]>['hostCaller']) =>
-        createSchedulerMcpServer({ getScheduler: () => ({ create, updateFromCurrent: update, runNow, resume, get }) as never,
+        createSchedulerMcpServer({ getScheduler: () => actualScheduler ?? ({ create, updateFromCurrent: update, runNow, resume, get }) as never,
           authorizeCall: authorizePluginHostToolCall,
+          getApprovedScheduleGuard: () => getPluginHostToolCaller()?.scheduleGuard,
+          remote,
           hookScript: { install } },
         { agentKind: 'codex', workingDir: '', hostCaller: caller }).hostTools,
       requestPluginTaskApproval: (id: string, active: () => boolean, _confirm: unknown, _explicit: boolean, capability: string) =>
@@ -199,6 +204,8 @@ describe('plugin scheduler command boundary', () => {
     const call = (tool: string, args: Record<string, unknown>) => entry.requestPluginHostToolCall('dashboard',
       { type: 'host-tool-request', server: 'cindy_scheduler', tool, args }, () => true);
     return { ...f, call, dialog, create, update, runNow, resume, get, installed,
+      useScheduler: (scheduler: Scheduler) => { actualScheduler = scheduler; },
+      useRemote: (value: NonNullable<SchedulerMcpDeps['remote']>) => { remote = value; },
       setHook: () => { Object.assign(schedule, { preRunHook: { command } }); } };
   }
 
@@ -237,7 +244,9 @@ describe('plugin scheduler command boundary', () => {
     await f.call(tool, { id: 'automation', ...(tool === 'schedule_update' ? { recurring: true } : {}) });
     expect(f.dialog.showMessageBox).not.toHaveBeenCalled();
     expect({ schedule_update: f.update, schedule_run_now: f.runNow, schedule_resume: f.resume }[tool]).toHaveBeenCalledOnce();
-    if (tool === 'schedule_run_now') expect(f.runNow).toHaveBeenCalledWith('automation', undefined);
+    if (tool === 'schedule_run_now') expect(f.runNow).toHaveBeenCalledWith('automation', {
+      expectedSchedule: expect.objectContaining({ id: 'automation', executionMode: 'agent' }),
+    });
   });
 
   it.each(['schedule_update', 'schedule_run_now', 'schedule_resume'] as const)('rejects a stored pre-run command during browser %s', async tool => {
@@ -255,6 +264,47 @@ describe('plugin scheduler command boundary', () => {
     expect(code(await f.call(tool, { id: 'automation', preRunHook: { command } }) as never)).toBe('UNSUPPORTED_CAPABILITY');
     expect(f.create).not.toHaveBeenCalled(); expect(f.update).not.toHaveBeenCalled();
     expect(f.dialog.showMessageBox).not.toHaveBeenCalled();
+  });
+
+  // Unit, #9801 / Greptile 4535245940: a real engine must reject an ordinary
+  // schedule changed to a script after schedule_get, before writes or runner fire.
+  // Prior tests only rejected a definition already containing a command.
+  it.each(['schedule_update', 'schedule_run_now', 'schedule_resume'] as const)('rejects a concurrent script change at the existing engine guard for %s', async tool => {
+    const f = schedulerFixture(false, true, false);
+    let stored: Schedule = { id: 'automation', name: 'Automation', prompt: 'run', kind: 'cron',
+      cronExpr: '0 9 * * *', timezone: 'UTC', recurring: true, manual: false, agentKind: 'codex',
+      workingDir: '/fixture/project', workspaceKind: 'project', useWorktree: false, executionMode: 'agent',
+      notify: { desktop: false, feishu: false }, status: 'paused', createdAt: 1, updatedAt: 1 };
+    let reads = 0;
+    const get = vi.fn(async () => {
+      const current = structuredClone(stored);
+      if (++reads === 1) stored = { ...stored, executionMode: 'script', scriptConfig: { command, capabilities: [] } };
+      return current;
+    });
+    const update = vi.fn(async (_id: string, patch: Partial<Schedule>) => stored = { ...stored, ...patch });
+    const insertRun = vi.fn(), fire = vi.fn(async () => ({ sessionId: 'result' }));
+    f.useScheduler(new Scheduler({ storage: { get, update, insertRun, updateRun: vi.fn() } as never, runner: { fire } }));
+    const result = await f.call(tool, { id: 'automation', ...(tool === 'schedule_update' ? { recurring: true } : {}) }) as { isError?: boolean; content: Array<{ text: string }> };
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(result.content[0]!.text).message).toContain('Schedule changed');
+    expect(update).not.toHaveBeenCalled(); expect(insertRun).not.toHaveBeenCalled(); expect(fire).not.toHaveBeenCalled();
+    expect(f.dialog.showMessageBox).not.toHaveBeenCalled();
+  });
+
+  // Unit, same boundary on the existing remote wire: schedule_get adds view
+  // metadata and qualified task IDs that must not enter the persisted comparison.
+  it.each(['schedule_update', 'schedule_run_now', 'schedule_resume'] as const)('passes the original remote definition to the existing %s guard', async tool => {
+    const f = schedulerFixture(false, true, false);
+    const definition = { id: 'automation', name: 'Automation', executionMode: 'agent', targetSessionId: 'task', sessionId: 'bound' };
+    const invoke = vi.fn(async (_device: string, op: string, _args: unknown[]) => ({ ok: true as const,
+      data: op === 'get' ? { ...definition, webhookStatus: { configured: true } } : { id: 'automation' } }));
+    f.useRemote({ listDevices: async () => [{ deviceId: 'computer', deviceName: 'Computer', local: false, available: true }], invoke });
+    const result = await f.call(tool, { id: 'automation', device: 'computer', ...(tool === 'schedule_update' ? { recurring: true } : {}) }) as { isError?: boolean };
+    expect(result.isError).not.toBe(true);
+    const args = invoke.mock.calls.find(([, op]) => op !== 'get')![2];
+    const expected = tool === 'schedule_update' ? args[2] : tool === 'schedule_resume' ? args[1]
+      : (args[1] as { expectedSchedule: unknown }).expectedSchedule;
+    expect(expected).toEqual(definition);
   });
 
   it('rejects a recurring update that reactivates a stored script even without a command in the input', async () => {

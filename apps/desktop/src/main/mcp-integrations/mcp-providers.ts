@@ -558,6 +558,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       withAccountDataAccess,
       authorizeCall: authorizeTaskToolCall,
       getScheduler: () => getScheduler(),
+      getApprovedScheduleGuard: () => getPluginHostToolCaller()?.scheduleGuard,
       // 其它电脑上的定时任务:与历史查询共用设备目录与 owner fence,走既有远程控制通道。
       ...(deps.historyRemote
         ? {
