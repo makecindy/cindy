@@ -107,6 +107,23 @@ describe('writeProviderGroupCooling (real file)', () => {
   // its payload or let a late write leak into the next test's assertions.
   beforeEach(() => { caseDir = fs.mkdtempSync(path.join(tmpDir, 'case-')); });
 
+  // PR #9998 review, unit: memory-only clearing was lost on restart. Queue an
+  // old write then clear one account; real-file reads must preserve other accounts.
+  it('clears an account after pending writes without reviving its cooldown on restart', async () => {
+    const until = Date.now() + 3_600_000;
+    const oldWrite = coolingStore.writeSubscriptionAccountCooling({ anthropic: {
+      default: { 'claude:sonnet': until }, second: { '': until },
+    }, openai: { default: { 'model:gpt-6': until } } });
+    const clear = coolingStore.clearSubscriptionAccountCooling('anthropic', 'default');
+    await Promise.all([oldWrite, clear]);
+    const expected = { anthropic: { second: { '': until } }, openai: { default: { 'model:gpt-6': until } } };
+    expect(JSON.parse(fs.readFileSync(path.join(caseDir, 'subscription-account-cooling.json'), 'utf8')).cooling).toEqual(expected);
+    // reset-modules: validate cleared account cooldowns in a fresh store instance.
+    vi.resetModules();
+    const restarted = await import('../coolingStore.js');
+    expect(restarted.readSubscriptionAccountCooling()).toEqual(expected);
+  });
+
   it('512 个成员各有 64 个模型范围时全部写入并在重启读取后保留', async () => {
     // PR #6322 review: 单范围用例低于旧 1 MiB 上限，无法发现多模型冷却整次写入失败。
     // unit: 经真实写入/重启读取入口覆盖超过旧预算的合法多范围记录。

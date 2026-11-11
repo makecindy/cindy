@@ -166,7 +166,7 @@ export async function handleProviderGroupRemote(
         if (pick.kind === 'unavailable')
           return {
             kind: 'unavailable',
-            ...(pick.usageLimit ? { usageLimit: pick.usageLimit } : {}),
+            ...(pick.full ? { full: true as const } : pick.usageLimit ? { usageLimit: pick.usageLimit } : {}),
           };
         const { key, kind, agentDeviceId, providerId: memberProviderId } = pick.member;
         try {
