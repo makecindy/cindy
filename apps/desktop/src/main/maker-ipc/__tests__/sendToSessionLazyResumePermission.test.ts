@@ -249,7 +249,7 @@ function botTaskDispatchHarness(
     runAcceptedCallback: async (callback?: () => unknown) => {
       await callback?.();
     },
-    contextOverflowRolloverHolder: undefined,
+    prepareUnhealthySessionForSend: vi.fn(async () => false),
     taskCompletionDeliveryForOwner: () => null,
     buildCreateOptsWithStderr: (opts: Record<string, unknown>) => ({ ...opts }),
     synthesizeOrcaVendorOptionsFromDb: asyncNoop,
