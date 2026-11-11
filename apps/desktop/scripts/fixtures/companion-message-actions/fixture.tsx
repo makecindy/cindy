@@ -1,3 +1,4 @@
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
 import { useState, type ComponentProps } from 'react';
 import { mountPage, subscription } from '../../ui-page/harness';
 import { ChatInput } from '../../../src/renderer/components/new-chat/ChatInput';
@@ -90,7 +91,7 @@ function Fixture({ kind }: { kind: string }) {
         <main className="flex h-screen bg-[var(--surface)] text-[var(--text-primary)]">
           <div className="mx-auto flex w-full min-w-0 max-w-[1014px] flex-col gap-6 overflow-y-auto px-[50px] py-6">
             <div data-owner>
-              <UserMessage
+              <UserMessage pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
                 workingDir="/fixture"
                 content={messages[0].content}
                 images={[]}
@@ -101,7 +102,7 @@ function Fixture({ kind }: { kind: string }) {
               />
             </div>
             <div data-answer>
-              <AssistantMessage
+              <AssistantMessage pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
                 workingDir="/fixture"
                 content={messages[1].content}
                 isStreaming={false}

@@ -8126,7 +8126,9 @@
         "mcpUi": "可在對話中顯示互動頁面",
         "mcpUiDomains": "頁面可連線網域：{{domains}}",
         "mcpAppOnly": "僅頁面可用",
-        "uiPageAccess": "頁面：{{pages}}；網域：{{domains}}；頁面可呼叫的工具：{{tools}}"
+        "uiPageAccess": "頁面：{{pages}}；網域：{{domains}}；頁面可呼叫的工具：{{tools}}",
+        "uiHost": "在 Cindy 中提供介面與主機操作",
+        "uiHostAccess": "{{subject}}：{{access}}"
       },
       "connections": {
         "confirmTitle": "新增連線地址",
@@ -19387,6 +19389,12 @@
       "failed": "儲存失敗，請重試。",
       "restore": "恢復預設"
     }
+  },
+  "pluginUi": {
+    "display": "顯示方式",
+    "original": "原文",
+    "menu": "插件頁面與命令",
+    "actionFailed": "此插件操作未完成。請重試。"
   },
   "mcpApps": {
     "sharedTaskReadOnly": "此卡片僅任務擁有者可操作。",

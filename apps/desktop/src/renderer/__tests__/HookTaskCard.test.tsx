@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from "@/cindy-brain/PluginUiContributions";
 
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -339,7 +340,7 @@ describe('HookTaskCard attached context', () => {
       <MemoryRouter>
         <ConfirmDialogProvider>
           <Tooltip.Provider>
-            <UserMessage
+            <UserMessage pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
               content="Please check the error"
               workingDir=""
               sessionId="clean-im-edit-session"
@@ -381,7 +382,7 @@ describe('teammate DM attachment-only bubbles in share images', () => {
         <MemoryRouter>
           <ConfirmDialogProvider>
             <Tooltip.Provider>
-              <UserMessage content="" workingDir="" simplifiedBotConversation {...attachments} />
+              <UserMessage pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} content="" workingDir="" simplifiedBotConversation {...attachments} />
             </Tooltip.Provider>
           </ConfirmDialogProvider>
         </MemoryRouter>,
