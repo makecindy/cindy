@@ -236,22 +236,31 @@ async function snapshot(
             auth = { ...auth, authenticated: false, errorReason: invalidated.reason };
           else if (state.invalidated.get(key) === invalidated) state.invalidated.delete(key);
         }
+        // Auth reads yield: quota events may have replaced the captured cache.
+        const current = state.cache.get(key);
+        const sameAccount = current?.auth.identity === auth.identity;
         const reuseUsage =
-          cached?.auth.identity === auth.identity &&
-          cached?.usageAt !== undefined &&
-          Date.now() - cached.usageAt < 180_000;
-        const usage = auth.authenticated
+          sameAccount &&
+          current?.usageAt !== undefined &&
+          Date.now() - current.usageAt < 180_000;
+        let usage = auth.authenticated
           ? reuseUsage
-            ? cached?.usage
+            ? current?.usage
             : await readNativeAccountUsage(provider, directory).catch(() =>
-                cached?.auth.identity === auth.identity ? cached?.usage : undefined,
+                state.cache.get(key)?.auth.identity === auth.identity ? state.cache.get(key)?.usage : undefined,
               )
           : undefined;
+        const latest = state.cache.get(key);
+        const eventDuringRead = auth.authenticated && latest?.auth.identity === auth.identity
+          && latest?.usage !== current?.usage;
+        // Preserve events received while the endpoint was in flight, including
+        // rejection status and Codex buckets. Do not renew their endpoint TTL.
+        if (eventDuringRead) usage = latest?.usage;
         result = {
           auth,
           usage,
           at: Date.now(),
-          usageAt: reuseUsage ? cached?.usageAt : Date.now(),
+          usageAt: eventDuringRead ? latest?.usageAt : reuseUsage ? current?.usageAt : Date.now(),
         };
       } catch {
         result = { auth: { authenticated: false }, unavailable: true, at: Date.now() };

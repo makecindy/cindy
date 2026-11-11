@@ -294,7 +294,7 @@ function RailButtonView({
 }) {
   const { t } = useTranslation();
   const remaining = quota ? Math.round(100 - quota.usedPercent) : null;
-  const quotaLabel = pool
+  const quotaLabel = pool?.hasAccountDetails
     ? pool.label
     : remaining === null
       ? null
@@ -303,7 +303,7 @@ function RailButtonView({
   // 供应商组：组名不带某一台的账号，账号跟在「当前在 {电脑} 上运行」后面。
   const displayLabel = groupNote ? label : providerAccountLabel(label, accountIdentity);
   const note = groupNote ? providerAccountLabel(groupNote, accountIdentity) : null;
-  const accountLines = pool?.members.map((member) =>
+  const accountLines = pool?.hasAccountDetails ? pool.members.map((member) =>
     [
       member.identity,
       member.remaining === null
@@ -316,9 +316,9 @@ function RailButtonView({
     ]
       .filter(Boolean)
       .join(' · '),
-  );
-  const description = [note, quotaLabel, ...(accountLines ?? [])].filter(Boolean).join(' · ');
-  const tooltip = pool ? (
+  ) : undefined;
+  const description = [note, quotaLabel, ...(!pool?.hasAccountDetails ? [pool?.warningLabel] : []), ...(accountLines ?? [])].filter(Boolean).join(' · ');
+  const tooltip = pool && (pool.hasAccountDetails || pool.warning) ? (
     <>
       <div>{displayLabel}</div>
       <ModelPoolQuotaDetails pool={pool} />

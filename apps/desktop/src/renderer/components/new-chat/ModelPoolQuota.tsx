@@ -56,6 +56,7 @@ export function useModelPoolQuota(providerId: string, deviceId?: string | null, 
   return {
     ...overview,
     isPool: members.length > 1,
+    hasAccountDetails: !!account,
     warning,
     warningLabel,
     resetParts: t('quotaCard.resetIn', { duration: '{time}' }).split('{time}'),
@@ -80,12 +81,12 @@ export function ModelPoolQuotaDetails({ pool }: { pool: ModelPoolQuota }) {
       </div>
       {pool.members.map((member, index) => (
         <div key={index}>
-          <div>
+          {pool.hasAccountDetails && <div>
             {member.identity} ·{' '}
             {member.remaining === null
               ? '—'
               : t('quotaCard.remainingPercent', { percent: member.remaining })}
-          </div>
+          </div>}
           {member.fiveHourLabel && <div className={member.status.limited ? 'text-[var(--quota-bar-crit)]' : member.status.low ? 'text-[var(--quota-bar-warn)]' : undefined}>{member.fiveHourLabel}</div>}
           {member.recovery && <div className="text-[var(--quota-bar-crit)]">{member.recovery}</div>}
           {member.reset && (
