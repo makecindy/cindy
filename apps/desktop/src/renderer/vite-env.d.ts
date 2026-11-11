@@ -3079,6 +3079,11 @@ interface ElectronAPI {
     inputHandoffRequestId?: string;
     remoteDeviceId?: string;
     /**
+     * Stable identity of a repeated needs-reply or error. Main turns two
+     * deliveries of the same id into one desktop toast. Completions omit it.
+     */
+    alertEventId?: string;
+    /**
      * 选择性走哪些通知通道; 缺省 / 未传 → 兼容旧行为(仅桌面)。
      * renderer 侧 gate(localStorage notifications.enabled /
      * notifications.feishuEnabled)后填入。
