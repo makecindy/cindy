@@ -135,13 +135,12 @@ export class ChatBridgeToolContext {
 
   static fromRequest(request: ResponsesRequest): ChatBridgeToolContext {
     const context = new ChatBridgeToolContext();
+    // Top-level tools always belong to this request, and the inline group that belongs to this
+    // turn is known up front. Snapshot them first so the rest of collectHistoryTools (replay) can
+    // never contribute a selector.
     for (const tool of request.tools ?? []) context.addResponseTool(tool);
-    // Top-level tools always belong to this request. When no inline group follows, this is the
-    // whole catalog; otherwise collectHistoryTools snapshots after the current inline group and
-    // before replay, so replayed entries never answer a selector.
-    if (!Array.isArray(request.input) || indexOfCurrentTurnInlineTools(request.input) < 0) {
-      context.recordCurrentSelectors();
-    }
+    context.addCurrentInlineTools(request.input);
+    context.recordCurrentSelectors();
     context.collectHistoryTools(request.input);
     return context;
   }
@@ -388,21 +387,18 @@ export class ChatBridgeToolContext {
     this.currentSelectors.set(key, existing === undefined || existing === chatName ? chatName : null);
   }
 
+/** Register the inline `additional_tools` group that belongs to this turn. */
+  private addCurrentInlineTools(input: ResponsesRequest['input']): void {
+    if (!Array.isArray(input)) return;
+    const index = indexOfCurrentTurnInlineTools(input);
+    if (index < 0) return;
+    const declared = (input[index] as { tools?: unknown }).tools;
+    if (!Array.isArray(declared)) return;
+    for (const tool of declared) this.addResponseTool(tool as ResponseTool);
+  }
+
   private collectHistoryTools(input: ResponsesRequest['input']): void {
     if (!Array.isArray(input)) return;
-    // Responses Lite / v2 inline top-level tool groups as input items. Only the newest group
-    // belongs to this turn: a replayed declaration is still reachable on the wire, but it must
-    // not widen the Chat catalog, or the provider could select a tool this turn never declared.
-    const currentInlineTools = indexOfCurrentTurnInlineTools(input);
-    // Declarations first, replays second: a replay only fills gaps, so a current declaration keeps
-    // its own description and grammar instead of losing them to a metadata-free replay placeholder.
-    if (currentInlineTools >= 0) {
-      const declared = (input[currentInlineTools] as { tools?: unknown }).tools;
-      if (Array.isArray(declared)) {
-        for (const tool of declared) this.addResponseTool(tool as ResponseTool);
-        this.recordCurrentSelectors();
-      }
-    }
     for (let index = 0; index < input.length; index += 1) {
       const item = input[index];
       if (!isPlainObject(item)) continue;
