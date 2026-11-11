@@ -77,8 +77,6 @@
 | Active | pt-BR | ativo | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Active** | tr | Aktif | 默认 |
 | Active | tr | aktif | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
-| **Agent** | tr | Agent | 默认 |
-| Agent | tr | agent | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Agent session** | es | Sesión de Agent | 默认 |
 | Agent session | es | sesión de Agent | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | Agent session | es | sesiones de Agent | Agent 运行时会话的复数。 |
@@ -95,7 +93,7 @@
 | Agent session | pt-BR | sessões de Agent | 不带定冠词的 Agent 运行时会话复数。 |
 | Agent session | pt-BR | sessão Pi Agent | 指定 Pi Agent 引擎的运行时会话。 |
 | **Agent session** | tr | Agent Oturumu | 默认 |
-| Agent session | tr | agent oturumu | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
+| Agent session | tr | Agent oturumu | Türkçe cümle içinde oturumu küçük harfle, Agent adı özgün biçimiyle yazılır. |
 | Agent session | tr | Agent oturum | Türkçe çekim ekleriyle Agent oturumu, oturumunda ve oturumlarına biçimlerinde kullanılır. |
 | **Author** | es | Autor | 默认 |
 | Author | es | autor | 句中使用小写首字母；标题仍可使用大写首字母。 |
@@ -187,8 +185,6 @@
 | Issue | pt-PT | Problema | 泛指问题的句首或状态标签，不是 GitHub Issue 类型。 |
 | **Issue** | pt-BR | Issue | 默认 |
 | Issue | pt-BR | issue | 句中使用小写首字母；标题仍可使用大写首字母。 |
-| **Issue** | tr | Issue | 默认 |
-| Issue | tr | ıssue | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Message** | es | Mensaje | 默认 |
 | Message | es | mensaje | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Message** | pt-PT | Mensagem | 默认 |
@@ -223,8 +219,6 @@
 | Provider | pt-BR | provedor | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Provider** | tr | Sağlayıcı | 默认 |
 | Provider | tr | sağlayıcı | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
-| **Proxy** | tr | Proxy | 默认 |
-| Proxy | tr | proxy | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Quota** | es | Cuota | 默认 |
 | Quota | es | cuota | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Quota** | pt-PT | Quota | 默认 |
@@ -271,10 +265,6 @@
 | Skill | es | habilidad | 句中使用小写首字母；复数 habilidades 使用同一词干。 |
 | **Skill** | tr | Beceri | 默认 |
 | Skill | tr | beceri | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
-| **SkillHub** | tr | SkillHub | 默认 |
-| SkillHub | tr | skillhub | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
-| **Subagent** | tr | Subagent | 默认 |
-| Subagent | tr | subagent | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Task** | es | Tarea | 默认 |
 | Task | es | tarea | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Task** | pt-PT | Tarefa | 默认 |
@@ -315,8 +305,6 @@
 | Usage | pt-BR | uso | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Usage** | tr | Kullanım | 默认 |
 | Usage | tr | kullanım | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
-| **Worker** | tr | Worker | 默认 |
-| Worker | tr | worker | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Working directory** | es | Directorio de trabajo | 默认 |
 | Working directory | es | directorio de trabajo | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Working directory** | pt-PT | Diretório de trabalho | 默认 |

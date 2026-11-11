@@ -493,7 +493,7 @@
           "provenance": {
             "locator": "newChat.createAgent.quickStarts.explore",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json",
-            "hash": "sha256:4d8164e34beed40e871f76e27f6e3832e6f1c920bd5242703538e75ab7d9476d"
+            "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015"
           }
         }
       }
@@ -617,7 +617,7 @@
           "provenance": {
             "locator": "newChat.createAgent.quickStarts.build",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json",
-            "hash": "sha256:4d8164e34beed40e871f76e27f6e3832e6f1c920bd5242703538e75ab7d9476d"
+            "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015"
           }
         }
       }
@@ -741,7 +741,7 @@
           "provenance": {
             "locator": "newChat.createAgent.quickStarts.review",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json",
-            "hash": "sha256:4d8164e34beed40e871f76e27f6e3832e6f1c920bd5242703538e75ab7d9476d"
+            "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015"
           }
         }
       }
@@ -865,7 +865,7 @@
           "provenance": {
             "locator": "newChat.createAgent.quickStarts.fix",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json",
-            "hash": "sha256:4d8164e34beed40e871f76e27f6e3832e6f1c920bd5242703538e75ab7d9476d"
+            "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015"
           }
         }
       }
@@ -1190,7 +1190,7 @@
         "provenance": {
           "locator": "newChat.createAgent.quickStart",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json",
-          "hash": "sha256:4d8164e34beed40e871f76e27f6e3832e6f1c920bd5242703538e75ab7d9476d"
+          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015"
         }
       }
     }

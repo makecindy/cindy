@@ -14463,11 +14463,11 @@
     },
     "botStartedTasks": {
       "started": "Başlatılan görevler",
-      "handedTo": "Devredilen görevler",
+      "handedTo": "İş devredilen görevler",
       "open": "“{{title}}” görevini aç",
       "untitled": "Başlıksız görev",
       "startedOne": "Başlatıldı",
-      "handedToOne": "Devredildi"
+      "handedToOne": "İşin devredildiği görev:"
     },
     "botTaskLetter": {
       "replied": "yanıtladı",
