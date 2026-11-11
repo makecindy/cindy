@@ -11748,7 +11748,7 @@
       "remove": "Remove",
       "removeAria": "Remove {{platform}}",
       "empty": "Add a bot you already have, or connect personal WeChat below, and {{name}} will reply there.",
-      "externalNote": "Anyone who messages this bot is talking to {{name}}. Your own messages run with {{name}}’s permissions; everyone else gets a separate hidden task with restricted permissions.",
+      "externalNote": "After binding, Telegram and Feishu/Lark accept private messages only from the owner. Groups follow each platform’s participation settings and {{name}}’s tool permissions. Separate tasks share files and memory.",
       "sharedMemoryNote": "{{name}} uses information from here and from other conversations together. To keep memories separate, use another teammate.",
       "groups": {
         "title": "Groups",
