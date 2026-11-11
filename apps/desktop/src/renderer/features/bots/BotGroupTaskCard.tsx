@@ -65,8 +65,8 @@ export function BotGroupLiveTaskCard({ task }: { task: NonNullable<BotGroupMessa
   const body = <>
     <ListTodo size={14} aria-hidden className="mt-[5px] shrink-0 text-[var(--text-tertiary)]" />
     <span className="flex min-w-0 flex-1 flex-col gap-0.5 text-left">
-      <span className="truncate text-13 font-medium leading-6 text-[var(--text-primary)]">{task.title || t('bots.groupChat.task.untitled')}</span>
-      <span title={status} className="min-w-0 truncate text-12 leading-5 text-[var(--text-tertiary)]">{status}</span>
+      <span className="truncate text-13 font-medium leading-[1.846] text-[var(--text-primary)]">{task.title || t('bots.groupChat.task.untitled')}</span>
+      <span title={status} className="min-w-0 truncate text-12 leading-[1.667] text-[var(--text-tertiary)]">{status}</span>
     </span>
   </>;
   const pr = task.prUrl ? <button type="button" onClick={() => void window.electronAPI.openExternal(task.prUrl!)}
