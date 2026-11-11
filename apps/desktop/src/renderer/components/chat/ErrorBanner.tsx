@@ -32,6 +32,7 @@ import {
   isResponsesLiteParallelToolCallsError,
   isRemoteCompactEncryptedContentError,
   parseAgentErrorCode,
+  localizeSubscriptionAccountError,
   requiresAgentErrorConfigurationChange,
 } from '@cindy/maker-shared/error-redaction';
 import { chatRemoteErrorGuidanceKey } from '@/lib/autoReviewUnavailableGuidance';
@@ -467,9 +468,13 @@ export function ErrorBanner({
   // hasSpecialGuidance: 是否命中下面任一「有专属可操作指引」的特殊分支。用一个在
   // else 兜底里翻转的标志, 而不是另写一遍条件取反，保证原始错误只在通用回退时展开。
   const sharedRecoveryReason = isCodexUsageLimitError ? undefined : sharedTaskRecoveryFor(error, agentDeviceId);
+  const subscriptionGuidance = localizeSubscriptionAccountError(error, t, i18n.resolvedLanguage ?? i18n.language);
   let displayError: string;
   let hasSpecialGuidance = true;
-  if (isResponsesLiteParallelToolCallsError(error)) {
+  if (subscriptionGuidance) {
+    displayError = subscriptionGuidance;
+    hasSpecialGuidance = false;
+  } else if (isResponsesLiteParallelToolCallsError(error)) {
     displayError = t('chat.errorBanner.requestFormatError');
   } else if (remoteGuidance && !localizedReasonError) {
     // The bracketed code is more specific than status words in its upstream

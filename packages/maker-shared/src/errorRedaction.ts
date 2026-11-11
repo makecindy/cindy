@@ -261,6 +261,10 @@ export function canOfferCodexHistoryRecovery(input: {
 }
 
 const AGENT_CHAT_ERROR_CODES: ReadonlySet<string> = new Set([
+  'SUBSCRIPTION_ACCOUNT_LIMITED',
+  'SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED',
+  'SUBSCRIPTION_ACCOUNT_SIGNING_IN',
+  'SUBSCRIPTION_ACCOUNT_UNAVAILABLE',
   'SSH_HARNESS_SWITCH_UNSUPPORTED',
   'MODEL_SELECTION_UNAVAILABLE',
   'HARNESS_SWITCH_NOT_READY',
@@ -298,4 +302,36 @@ export function requiresAgentErrorConfigurationChange(message: string): boolean 
     || code === 'REMOTE_COMPAT_MODE_UNSUPPORTED'
     || code === 'REMOTE_LOCAL_ONLY_PROVIDER'
     || code === 'DEVICE_LINK_CONTROL_DISABLED';
+}
+
+/** Presentation only: startup failures must not be mistaken for a new retry policy.
+ * Account identities are intentionally absent from the wire error. Old hosts have
+ * only an ambiguous message; never infer a login or limit cause from that text.
+ */
+export function localizeSubscriptionAccountError(
+  message: string,
+  translate: (key: string, options?: { resetAt: string }) => string,
+  locale?: string,
+): string | null {
+  const parsed = parseAgentErrorCode(message);
+  switch (parsed?.code) {
+    case 'SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED': return translate('chat.subscriptionAccountError.loginRequired');
+    case 'SUBSCRIPTION_ACCOUNT_SIGNING_IN': return translate('chat.subscriptionAccountError.signingIn');
+    case 'SUBSCRIPTION_ACCOUNT_UNAVAILABLE': return translate('chat.subscriptionAccountError.unavailable');
+    case 'SUBSCRIPTION_ACCOUNT_LIMITED': {
+      const reset = Number(/(?:^|\n)resetAtMs=(\d{1,16})(?:\n|$)/.exec(parsed.fallback)?.[1]);
+      if (Number.isSafeInteger(reset) && reset > Date.now() && reset <= 8.64e15) {
+        // Classical editions use the corresponding script for Intl formatting.
+        const language = locale?.replace(/-x-lzh$/, '');
+        const resetAt = new Intl.DateTimeFormat(language, {
+          dateStyle: 'medium', timeStyle: 'short',
+        }).format(new Date(reset));
+        return translate('chat.subscriptionAccountError.limitedUntil', { resetAt });
+      }
+      return translate('chat.subscriptionAccountError.limited');
+    }
+  }
+  if (/(?:^|: Error: )(?:\[IPC_ERROR\]\s*)?(?:LAZY_CREATE_FAILED:\s*)?The task subscription account requires login or quota reset$/.test(message))
+    return translate('chat.subscriptionAccountError.legacy');
+  return null;
 }
