@@ -26,7 +26,7 @@ import * as path from 'node:path';
 import * as fsSync from 'node:fs';
 import type Database from 'better-sqlite3';
 
-import { MakerMemoryStore, memoryScopeDirName, parseFilename } from './store.js';
+import { hasUndoableTidyRun, MakerMemoryStore, memoryScopeDirName, parseFilename } from './store.js';
 import {
   isUserMemoryScopeKey,
   MEMORY_INDEX_HEADING,
@@ -978,7 +978,8 @@ export class MakerMemoryManager {
       // 记忆放在自己项目文件夹里的作用域 (伙伴的项目) 不是 Cindy 记忆; 这里留下的只是搬走前的旧副本。
       if (this.deps.isIndependentScope?.(absPath) === true) continue;
       const count = await countCurated(dir);
-      if (count > 0) scopes.push({ scopeKey: absPath, kind: 'project', count });
+      // 记忆被删光、但还有没撤销的整理记录的项目也要列出, 否则记忆页进不去, 撤销不了。
+      if (count > 0 || (await hasUndoableTidyRun(dir))) scopes.push({ scopeKey: absPath, kind: 'project', count });
     }
     this.assertScopeUnchanged(scopeAtEntry);
     return scopes;

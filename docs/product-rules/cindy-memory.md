@@ -84,7 +84,7 @@ Claude Code、Codex、Pi 共用。开着时各 harness 的原生记忆不生效�
 
 入口是「Cindy」行的「查看记忆」，打开同页的子页（`/settings?tab=personalization&openPanel=memory`）。
 
-- **先选范围**：「关于你」（账号级）恒在首位，空的也列；之后是至少有一条记忆的项目，显示文件夹名，
+- **先选范围**：「关于你」（账号级）恒在首位，空的也列；之后是至少有一条记忆、或还有没撤销整理记录的项目（记忆删光了也要能进去撤销整理），显示文件夹名，
   路径作次要文字，SSH 项目另带主机；每个范围显示条数。范围列表只来自
   `MakerMemoryManager.listScopes()`。
 - **范围内与伙伴记忆页是同一个组件**（`MemoryEntriesView`）：按关于你 / 你的要求 / 项目 / 参考分组，

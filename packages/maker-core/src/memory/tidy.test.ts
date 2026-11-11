@@ -452,6 +452,26 @@ describe('MakerMemoryManager.tidy', () => {
     manager.dispose();
   });
 
+  // 评审 (Codex P2): 整理合并后用户又删光了剩下的条目, 记忆页仍要能进到这个项目撤销整理。
+  it('项目的记忆被删光但还有没撤销的整理记录: 仍在范围列表里, 撤销后记录不再保留它', async () => {
+    const { manager } = managerWith(() => mergePlan);
+    await write(manager, 'zh', '回复一律用中文');
+    await write(manager, 'zh2', '始终用中文回复');
+    expect((await manager.tidy(WORKDIR, 'manual')).status).toBe('done');
+    const store = await manager.getStore(WORKDIR);
+    await store.delete('feedback_zh2.md');
+    expect(await store.list()).toEqual([]);
+
+    expect((await manager.listScopes()).map((s) => `${s.kind}:${s.scopeKey}:${s.count}`)).toContain(`project:${WORKDIR}:0`);
+    const [run] = await manager.listTidyRuns(WORKDIR);
+    expect(await manager.undoTidy(WORKDIR, run!.id)).toMatchObject({ restored: expect.any(Number) });
+
+    // 撤销之后 (记录已标为已撤销) 且仍是空项目: 回到不列出。
+    await Promise.all((await store.list()).map((r) => store.delete(r.filename)));
+    expect((await manager.listScopes()).map((s) => s.scopeKey)).not.toContain(WORKDIR);
+    manager.dispose();
+  });
+
   it('伙伴的记忆不参与整理', async () => {
     const { manager, reviewOneShot } = managerWith(() => mergePlan);
     expect(await manager.tidy(buildBotMemoryScopeKey('bot-1'), 'manual')).toEqual({ status: 'unavailable' });

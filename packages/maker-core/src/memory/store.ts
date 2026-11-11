@@ -80,6 +80,19 @@ export interface ConsolidateResult {
   warningDetail?: WriteResult['warningDetail'];
 }
 
+/**
+ * 某个记忆目录里是否还有没撤销的整理记录。不打开 store (列范围时用): 记忆都被删光的项目
+ * 仍要能进到记忆页撤销之前的整理, 否则被合并掉的来源就再也恢复不回来。
+ */
+export async function hasUndoableTidyRun(dir: string): Promise<boolean> {
+  try {
+    const raw: unknown = JSON.parse(await fs.readFile(path.join(dir, TIDY_STATE_FILENAME), 'utf8'));
+    return normalizeTidyState(raw).runs.some((run) => !run.undoneAt);
+  } catch {
+    return false;
+  }
+}
+
 export class MakerMemoryStore {
   private readonly storage: MemoryStorage;
   private readonly fts: MemoryFts;
