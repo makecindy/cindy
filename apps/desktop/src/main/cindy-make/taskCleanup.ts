@@ -106,9 +106,12 @@ export async function manageCindyMakeWorkspace(
       };
     });
   const gitMarker = path.join(target, '.git');
-  let verifiedWorkspace =
-    options.preparedWorkspace?.branch === branch &&
-    samePath(options.preparedWorkspace.path, target);
+  // Persisted preparation paths can retain the profile's symlinked spelling.
+  // Compare directory identity after validating the managed roots above.
+  const preparedPath = options.preparedWorkspace?.branch === branch
+    ? await realpath(options.preparedWorkspace.path).catch(() => undefined)
+    : undefined;
+  let verifiedWorkspace = !!preparedPath && samePath(preparedPath, target);
   const canRemoveResidue = async () => {
     if (!discard || !verifiedWorkspace || !branchExists || (await exists(gitMarker))) return false;
     return !(await registrations()).some(
