@@ -109,10 +109,14 @@ Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此�
   模型清单变成网关的、会话请求可能发往网关）。直接拉起 CLI 时（含 Desktop 状态 worker，以及 Node host 用的
   `readClaudeCliLoginStatusBySpawn`）前置
   `--setting-sources '' --settings '{"apiKeyHelper":""}'`，模型探测用 `settingSources: []`，本机订阅
-  会话只加载 `project` / `local`（maker-core `subscription-settings-isolation`）。只作用于 Cindy 拉起的
+  会话只加载 `project` / `local`（maker-core `session-setting-sources`）。只作用于 Cindy 拉起的
   子进程，不改用户设置文件；API 路由、SSH 远端与终端 `claude` 照旧使用用户设置，订阅判定标准不变。
   这类会话的 `/` palette 同步不列 `~/.claude` 里的命令 / skill（运行时没加载，列出来选了也不生效），
   项目 `.claude` 与 Cindy 托管 skill 照常列出；由 live 会话句柄 `omitsUserSkills` 决定，调用方不能覆盖。
+  启动期 subagent 定义扫描（决定「Subagent 模型」默认值要不要压过手写 `model:`）必须按同一份
+  `settingSources` 选目录（maker-core `session-setting-sources`）：订阅 / 设备托管会话排除 `user` 时
+  `~/.claude/agents` 不会被 CLI 加载，扫描也不能把它算进判定，否则一份旧全局定义就会让真会加载的
+  内置 / 项目 agent 拿不到用户配置的默认值。
 - 登录态读取不得阻塞与订阅无关的路径：启动只在已连接时等待，列表类读取用缓存并后台刷新，
   读失败有退避。
 - 订阅会话由 SDK 拉起同一个 CLI，自己读凭证、直连 Anthropic：不设 `ANTHROPIC_BASE_URL`、

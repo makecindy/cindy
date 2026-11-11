@@ -46,6 +46,7 @@ import type {
   Settings,
 } from '@anthropic-ai/claude-agent-sdk';
 import { discoverSubagentDefinitions } from './subagent-definitions.js';
+import { resolveClaudeSettingSources } from './session-setting-sources.js';
 import { spawnObservedClaudeProcess } from './local-process-spawn.js';
 import { claudeMcpServerToolsReport, type ClaudeMcpServerStatusEntry } from './mcp-server-tools.js';
 import {
@@ -1501,6 +1502,16 @@ export class ClaudeCodeAgent extends BaseAgent {
       const override = await findWorkspaceSettingsOverride(opts.workingDir);
       if (override) throw new Error(workspaceSettingsOverrideMessage(override));
     }
+    // 本会话实际加载的设置来源:同一个值既交给 SDK 的 settingSources,也决定下面 subagent
+    // 定义的扫描范围(见 session-setting-sources.ts)。两者必须同源 —— 未加载目录里的定义
+    // 若被算进「有人声明 model」,会把「Subagent 模型」默认值静默停用。
+    const sessionSettingSources = resolveClaudeSettingSources({
+      reviewMode,
+      isolatedBotProfile: !!isolatedBotProfile(opts.botRuntimeProfile),
+      hostToolsOnly: opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly === true,
+      hosted: !!hosted,
+      nativeCliAuth,
+    });
 
     // 箭头别名捕获 this —— 下方 replayRuntimeDrift(普通 function)与 handle 对象
     // 字面量方法里没有类实例 this,统一经它取 wire 串。
@@ -1627,6 +1638,9 @@ export class ClaudeCodeAgent extends BaseAgent {
           workingDir: opts.workingDir,
           // 子进程真正会用的那份 env —— CLAUDE_CONFIG_DIR 在里面。
           env,
+          // 只扫 CLI 真会加载的作用域:订阅 / 设备托管不读用户级设置,`~/.claude/agents` 里
+          // 的旧定义不能把这份默认值压掉(PR #8605 P1)。
+          settingSources: sessionSettingSources,
         });
         subagentDefault = resolveSubagentModelDefault({
           configuredDefault: configuredSubagentDefault,
@@ -4656,9 +4670,8 @@ export class ClaudeCodeAgent extends BaseAgent {
           // 项目级设置来自同步过来的影子目录(只保留权限规则)。
           // 本机订阅会话同样不加载用户级设置：其中给终端 claude 配的 API / 网关会盖过订阅登录
           // (见 subscription-settings-isolation.ts)；API 路由照旧加载。
-          settingSources: reviewMode || !!isolatedBotProfile(opts.botRuntimeProfile) || opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly
-            ? []
-            : hosted || nativeCliAuth ? ['project', 'local'] : ['user', 'project', 'local'],
+          // 取值与 subagent 定义扫描同源(见上方 sessionSettingSources)。
+          settingSources: sessionSettingSources,
           // Settings (SDK "flag settings" 层, 优先级最高 — 覆盖 user/project/local 文件层):
           //  - showThinkingSummaries        : reasoning summary 展示开关
           //  - autoMemoryEnabled / autoDream: memory 联动 (host 通过 runtimeConfig.memoryEnabled 或
