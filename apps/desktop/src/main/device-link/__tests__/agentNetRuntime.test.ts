@@ -107,6 +107,32 @@ it('keeps the newest completed transport when an older factory finishes late', a
   newer.close();
 });
 
+// Unit: production /info → transport wiring. HTTPS and UDP may be published on
+// separate load balancers; relays without a valid stunHost keep the API host.
+it.each([
+  [{ udpPort: 3479, stunHost: 'agent-net-stun.example.test' }, 'agent-net-stun.example.test:3479'],
+  [{ udpPort: 3479 }, 'api'],
+  [{ udpPort: 3479, stunHost: 'agent-net-stun.example.test:9' }, 'api'],
+  [{ stunHost: 'agent-net-stun.example.test' }, null],
+])('queries STUN at the host advertised by /info: %j', async (info, expected) => {
+  state.secrets = { credential: 'unit', seed: generateKeyPairSync('ed25519').privateKey.export({ format: 'jwk' }).d! };
+  ensureOwnerAgentNetBootstrap(relayId, 'unit');
+  const base = currentAgentNetClient()!.base;
+  vi.spyOn(fs.promises, 'stat').mockRejectedValue(Object.assign(new Error('unit-cache-absent'), { code: 'ENOENT' }));
+  vi.spyOn(fs.promises, 'readFile').mockResolvedValue(Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]));
+  vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+  vi.mocked(outboundFetch).mockImplementation(async (url) => Response.json(String(url) === base + '/api/agent-net/info' ? info : {}));
+  const socket = Object.assign(new EventEmitter(), { close: vi.fn() });
+  socket.close.mockImplementation(() => socket.emit('close', 1000));
+  const open = vi.spyOn(AgentNetWorkerSocket, 'open')
+    .mockResolvedValue(socket as unknown as Awaited<ReturnType<typeof AgentNetWorkerSocket.open>>);
+  try {
+    expect(await createAgentNetAppSocket()).toBe(socket);
+    const server = expected === 'api' ? new URL(base).hostname + ':3479' : expected;
+    expect(open.mock.calls[0][0].stunServers).toEqual(server ? [server] : []);
+  } finally { socket.close(); vi.mocked(outboundFetch).mockReset(); }
+});
+
 // Unit: real Node SDK Fetch boundary + production mixed-directory adapter.
 // Runtime identity tests did not exercise a raw network failure after V1 succeeds.
 it('retains the live V1 directory when Node Fetch fails, except in encrypted-only mode', async () => {
