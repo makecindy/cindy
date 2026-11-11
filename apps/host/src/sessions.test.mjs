@@ -6,13 +6,13 @@ import { getTableColumns, getTableName } from 'drizzle-orm';
 
 import { listActiveSessions, listRunningSessions } from './sessions.mjs';
 import { readHostSessionList, readHostSession } from './session-reads.ts';
-import { createHostMessageStore } from './message-store.ts';
+import { createHostMessageStore, createHostMessageRecovery } from './message-store.ts';
 import { createHostEventPersistence } from './agent/event-persistence.ts';
 import { createInteractionBroker } from './agent/interactions.mjs';
 import { OwnerSessionStorage } from '../../desktop/src/main/localDb/sessionStorageAdapter.ts';
 import { setCurrentDbClient, clearCurrentDbClient, getCurrentDbClientSnapshot } from '../../desktop/src/main/localDb/client/current.ts';
 import { createDbClientForHandle } from '../../desktop/src/main/localDb/client/createDbClientForHandle.ts';
-import { sessions, messages, taskTags, sessionTaskTags, botSessionLinks, botProfiles } from '../../desktop/src/main/localDb/schema.ts';
+import { sessions, messages, taskTags, sessionTaskTags, botSessionLinks, botProfiles, mediaRefs, sessionPrRefs, migrationMeta } from '../../desktop/src/main/localDb/schema.ts';
 
 const row = (id, extra = {}) => ({ id, title: id, agentKind: 'claude-code', model: 'm', workDir: `/w/${id}`, updatedAt: 1, ...extra });
 
@@ -235,4 +235,93 @@ test('session storage readback stays with the owner that accepted the write', as
   const storage = new OwnerSessionStorage({ db: () => ({ drizzle: reads++ === 0 ? old.db : next.db }) });
   assert.equal((await storage.update('same-task', { title: 'old updated' })).title, 'old updated');
   assert.equal(next.sqlite.prepare('SELECT title FROM sessions').get().title, 'new');
+});
+
+
+// Unit with real in-memory SQL: Host previously left the shared recovery ports
+// disconnected. A persisted user row crossing clear must disappear once, retain
+// retry identity, and release only its own media refs (or discard a schedule row).
+for (const discard of [false, true]) {
+  test(`Host clear recovery cleans user history and media (discard=${discard})`, async t => {
+    const { sqlite, db } = sessionListDb(t);
+    for (const table of [mediaRefs, sessionPrRefs, migrationMeta]) {
+      sqlite.exec(`CREATE TABLE "${getTableName(table)}" (${Object.values(getTableColumns(table))
+        .map(column => `"${column.name}" ${column.getSQLType()}`).join(',')})`);
+    }
+    const hash = 'a'.repeat(64);
+    sqlite.exec("INSERT INTO sessions(id,status,created_at,updated_at,list_preview,list_message_count) VALUES ('task','active',0,1,'stale',2)");
+    const insert = sqlite.prepare("INSERT INTO messages(id,session_id,client_id,role,content,created_at) VALUES (?, 'task', ?, 'user', ?, 100)");
+    insert.run('row-a', 'user-a', `cindy-media://blobs/${hash}.png`);
+    insert.run('row-b', 'user-b', 'unrelated');
+    const ref = sqlite.prepare('INSERT INTO media_refs(id,hash,ref_kind,ref_id) VALUES (?,?,?,?)');
+    ref.run('ref-row', hash, 'message', 'row-a');
+    ref.run('ref-client', hash, 'message', 'user-a');
+    ref.run('ref-task', hash, 'session-attachment', 'task');
+    ref.run('ref-unrelated', hash, 'message', 'row-b');
+    const owner = { client: createDbClientForHandle({ db: sqlite, drizzle: db }), userId: 'isolated', clientEpoch: 1 };
+    const events = [];
+    const recovery = createHostMessageRecovery({ getOwner: () => owner, publish: event => events.push(event) });
+    await recovery.rewindPersistedUserMessageAfterClear('task', 'user-a', { discard });
+    const recovered = sqlite.prepare("SELECT rewind_at FROM messages WHERE client_id='user-a'").get();
+    if (discard) assert.equal(recovered, undefined);
+    else assert.equal(typeof recovered.rewind_at, 'number');
+    assert.deepEqual(sqlite.prepare('SELECT id FROM media_refs').all(), [{ id: 'ref-unrelated' }]);
+    assert.equal(sqlite.prepare("SELECT rewind_at FROM messages WHERE client_id='user-b'").get().rewind_at, null);
+    assert.equal(sqlite.prepare("SELECT list_preview FROM sessions WHERE id='task'").get().list_preview, null);
+    assert.deepEqual(events, [{ type: 'message_deleted', sessionId: 'task', clientId: 'user-a', clientIds: ['user-a'] }]);
+    await recovery.rewindPersistedUserMessageAfterClear('task', 'user-a', { discard });
+    assert.equal(events.length, 1);
+  });
+}
+
+// Unit: a clear rollback may finish after an account switch. Both accounts use
+// the same task/input identifiers; cleanup must not touch or notify the new one.
+test('Host clear recovery stops cleanup when the owner changes during the tombstone write', async t => {
+  const old = sessionListDb(t), next = sessionListDb(t);
+  for (const database of [old, next]) {
+    database.sqlite.exec(`CREATE TABLE media_refs (${Object.values(getTableColumns(mediaRefs))
+      .map(column => `"${column.name}" ${column.getSQLType()}`).join(',')})`);
+    database.sqlite.exec("INSERT INTO sessions(id,status,list_preview) VALUES ('task','active','preview')");
+    database.sqlite.exec("INSERT INTO messages(id,session_id,client_id,role,content,created_at) VALUES ('row','task','input','user','hello',100)");
+    database.sqlite.prepare('INSERT INTO media_refs(id,hash,ref_kind,ref_id) VALUES (?,?,?,?)')
+      .run('ref', 'b'.repeat(64), 'message', 'row');
+  }
+  const oldClient = createDbClientForHandle({ db: old.sqlite, drizzle: old.db });
+  const nextOwner = { client: createDbClientForHandle({ db: next.sqlite, drizzle: next.db }), userId: 'next', clientEpoch: 2 };
+  let owner = { client: oldClient, userId: 'old', clientEpoch: 1 };
+  const tx = oldClient.tx;
+  oldClient.tx = async (...args) => {
+    const result = await tx(...args);
+    owner = nextOwner;
+    return result;
+  };
+  const events = [];
+  const recovery = createHostMessageRecovery({ getOwner: () => owner, publish: event => events.push(event) });
+  await recovery.rewindPersistedUserMessageAfterClear('task', 'input');
+  assert.equal(typeof old.sqlite.prepare('SELECT rewind_at FROM messages').get().rewind_at, 'number');
+  assert.equal(next.sqlite.prepare('SELECT rewind_at FROM messages').get().rewind_at, null);
+  assert.equal(next.sqlite.prepare('SELECT list_preview FROM sessions').get().list_preview, 'preview');
+  for (const database of [old, next]) assert.deepEqual(database.sqlite.prepare('SELECT id FROM media_refs').all(), [{ id: 'ref' }]);
+  assert.deepEqual(events, []);
+});
+
+// Pi retry must reuse a native entry only while its Cindy row remains visible.
+// The old Host had neither linking nor lookup; same text cannot be a retry key.
+test('Host Pi recovery preserves message metadata and excludes cleared or rewound entries', async t => {
+  const { sqlite, db } = sessionListDb(t);
+  sqlite.exec("INSERT INTO sessions(id,status) VALUES ('task','active')");
+  sqlite.prepare("INSERT INTO messages(id,session_id,client_id,role,content,created_at,agent_meta) VALUES ('row','task','input','user','hello',100,?)")
+    .run(JSON.stringify({ uuid: 'native-message', delivery: 'turn', autoReviewUserText: 'hello' }));
+  const owner = { client: createDbClientForHandle({ db: sqlite, drizzle: db }), userId: 'isolated', clientEpoch: 1 };
+  const recovery = createHostMessageRecovery({ getOwner: () => owner, publish() {} });
+  assert.equal(await recovery.readPiUserEntry('task', 'input'), undefined);
+  assert.equal(await recovery.linkPiUserEntry('task', 'input', 'pi-entry'), true);
+  assert.equal(await recovery.readPiUserEntry('task', 'input'), 'pi-entry');
+  assert.deepEqual(JSON.parse(sqlite.prepare("SELECT agent_meta FROM messages WHERE id='row'").get().agent_meta),
+    { uuid: 'native-message', delivery: 'turn', autoReviewUserText: 'hello', piEntryId: 'pi-entry' });
+  sqlite.exec("UPDATE sessions SET cleared_at=100 WHERE id='task'");
+  assert.equal(await recovery.readPiUserEntry('task', 'input'), undefined);
+  sqlite.exec("UPDATE sessions SET cleared_at=NULL WHERE id='task'; UPDATE messages SET rewind_at=200 WHERE id='row'");
+  assert.equal(await recovery.readPiUserEntry('task', 'input'), undefined);
+  assert.equal(await recovery.linkPiUserEntry('task', 'missing', 'pi-entry'), false);
 });
