@@ -13630,8 +13630,8 @@
       "dismissTitle": "Descartar aviso de falla anterior"
     },
     "worktreeRestoreBanner": {
-      "text": "Se eliminó el worktree de esta sesión (falta el directorio).",
-      "textPendingSnapshot": "Esta sesión tiene una instantánea de cambios sin aplicar.",
+      "text": "Se eliminó el worktree «{{name}}» de esta sesión (falta el directorio).",
+      "textPendingSnapshot": "El worktree «{{name}}» de esta sesión tiene una instantánea de cambios sin aplicar.",
       "restoreAction": "Restaurar worktree",
       "applySnapshotAction": "Aplicar cambios",
       "restoring": "Restaurando…",

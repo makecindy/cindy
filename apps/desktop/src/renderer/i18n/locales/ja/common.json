@@ -13487,8 +13487,8 @@
       "dismissTitle": "過去の失敗通知を閉じる"
     },
     "worktreeRestoreBanner": {
-      "text": "このセッションのワークツリーは回収されました（ディレクトリが存在しません）。",
-      "textPendingSnapshot": "このセッションには未適用の変更スナップショットがあります。",
+      "text": "このセッションのワークツリー「{{name}}」は回収されました（ディレクトリが存在しません）。",
+      "textPendingSnapshot": "このセッションのワークツリー「{{name}}」には未適用の変更スナップショットがあります。",
       "restoreAction": "ワークツリーを復元",
       "applySnapshotAction": "変更を適用",
       "restoring": "復元中…",

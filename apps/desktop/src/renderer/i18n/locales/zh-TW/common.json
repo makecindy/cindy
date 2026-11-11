@@ -13486,8 +13486,8 @@
       "dismissTitle": "關閉歷史失敗提示"
     },
     "worktreeRestoreBanner": {
-      "text": "該任務的 worktree 已被回收（目錄不存在）。",
-      "textPendingSnapshot": "該任務有一份未應用的更改快照。",
+      "text": "該任務的 worktree「{{name}}」已被回收（目錄不存在）。",
+      "textPendingSnapshot": "該任務的 worktree「{{name}}」有一份未應用的更改快照。",
       "restoreAction": "恢復 worktree",
       "applySnapshotAction": "恢復更改",
       "restoring": "恢復中…",

@@ -13544,8 +13544,8 @@
       "dismissTitle": "Dismiss past failure notice"
     },
     "worktreeRestoreBanner": {
-      "text": "This session's worktree has been cleaned up (directory missing).",
-      "textPendingSnapshot": "This session has an unapplied change snapshot.",
+      "text": "This session's worktree “{{name}}” has been cleaned up (directory missing).",
+      "textPendingSnapshot": "This session's worktree “{{name}}” has an unapplied change snapshot.",
       "restoreAction": "Restore worktree",
       "applySnapshotAction": "Apply changes",
       "restoring": "Restoring…",

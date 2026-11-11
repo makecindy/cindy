@@ -13507,8 +13507,8 @@
       "dismissTitle": "Hinweis auf früheren Fehler schließen"
     },
     "worktreeRestoreBanner": {
-      "text": "Der Worktree dieser Sitzung wurde bereinigt (Verzeichnis fehlt).",
-      "textPendingSnapshot": "Diese Sitzung enthält einen noch nicht angewendeten Änderungs-Snapshot.",
+      "text": "Der Worktree „{{name}}“ dieser Sitzung wurde bereinigt (Verzeichnis fehlt).",
+      "textPendingSnapshot": "Der Worktree „{{name}}“ dieser Sitzung enthält einen noch nicht angewendeten Änderungs-Snapshot.",
       "restoreAction": "Worktree wiederherstellen",
       "applySnapshotAction": "Änderungen anwenden",
       "restoring": "Wiederherstellung läuft…",
