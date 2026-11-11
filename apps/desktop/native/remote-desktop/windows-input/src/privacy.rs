@@ -171,12 +171,14 @@ pub fn run(away: bool) {
         let mut previous_window = std::ptr::null_mut();
         status(if away { "away-ready" } else { "ready" });
         let mut locking: Option<Instant> = None;
+        let mut lock_failed = false;
         while GetMessageW(&mut message, std::ptr::null_mut(), 0, 0) > 0 {
             if message.message == COMMAND {
                 last_seen = Instant::now();
                 match message.wParam {
                     3 if away => {
-                        if locking.is_none() {
+                        if locking.is_none() || lock_failed {
+                            lock_failed = false;
                             GATE.with(|gate| gate.borrow_mut().phase = 1);
                             LockWorkStation();
                             locking = Some(Instant::now());
@@ -203,9 +205,11 @@ pub fn run(away: bool) {
                     status("locked");
                     break;
                 }
-                if locking.is_some_and(|at| at.elapsed() > Duration::from_secs(3)) {
+                if !lock_failed && locking.is_some_and(|at| at.elapsed() > Duration::from_secs(3)) {
+                    // Failure is not permission to expose the unlocked desktop.
+                    // Keep hooks until confirmed lock or an explicit release.
+                    lock_failed = true;
                     status("lock-failed");
-                    break;
                 }
                 if away && !crate::desktop::user_desktop_active() && locking.is_none() {
                     status("reason desktop");

@@ -150,8 +150,8 @@ pub fn locked() -> Option<bool> {
         let mut size = 0;
         if WTSQuerySessionInformationW(std::ptr::null_mut(), u32::MAX, WTSSessionInfoEx,
                                       &mut data, &mut size) == 0 { return None; }
-        let result = if size as usize >= std::mem::size_of::<WTSINFOEXW>() {
-            let info = &*(data as *const WTSINFOEXW);
+        let result = if !data.is_null() && size as usize >= std::mem::size_of::<WTSINFOEXW>() {
+            let info = std::ptr::read_unaligned(data as *const WTSINFOEXW);
             if info.Level == 1 {
                 match info.Data.WTSInfoExLevel1.SessionFlags as u32 {
                     WTS_SESSIONSTATE_LOCK => Some(true),

@@ -170,7 +170,8 @@ export async function watchAwayGuardInput(
         lockedNow?.();
         report();
       }
-      // `permission`, `error`, `released` and `lock-failed` all end with process exit.
+      // Windows lock-failed retains the helper and its input hooks; the bounded
+      // lock() call reports failure without removing them.
     }
   });
   void closed.then(() => {
@@ -183,9 +184,17 @@ export async function watchAwayGuardInput(
     // Once locked, the helper has stopped reading input and is exiting by itself.
     if (locked) return Promise.resolve();
     write(command);
-    const timer = setTimeout(() => child.kill(), timeoutMs);
-    timer.unref();
-    return Promise.race([closed, lockConfirmed]).finally(() => clearTimeout(timer));
+    let timer: ReturnType<typeof setTimeout>;
+    const timedOut = new Promise<void>((resolve) => {
+      timer = setTimeout(() => {
+        // Windows keeps its physical-input hooks when locking fails. Killing it
+        // here would undo that protection while the desktop remains unlocked.
+        if (process.platform === 'win32' && command === 'lock') resolve();
+        else child.kill();
+      }, timeoutMs);
+      timer.unref();
+    });
+    return Promise.race([closed, lockConfirmed, timedOut]).finally(() => clearTimeout(timer));
   };
   try {
     await readyPromise;
@@ -199,7 +208,7 @@ export async function watchAwayGuardInput(
     resume: () => Promise.reject(new Error('DESKTOP_PRIVACY_UNAVAILABLE')),
     stop: () => finish('release', 2000),
     lock: async () => {
-      // The helper waits up to 3 s for the OS to report the lock before giving up.
+      // A timeout returns failure; Windows keeps its hooks until confirmed lock.
       await finish('lock', 6000);
       return locked;
     },

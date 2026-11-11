@@ -37,3 +37,12 @@ Linux 在已有 Hyprland 0.56.2 / 匹配 ABI 的隐私后端上接入持续保�
 确认。本地输入或 Main 心跳丢失时原生侧请求系统锁屏，确认前不释放遮罩。远端开关不能
 撤掉该持续遮罩。GNOME、KDE、X11 尚无此隐私后端，继续原锁屏兜底，不能声明已实现
 持续隐私屏。此处新增命令只在本机 helper 与其匹配的 Main 之间使用，不跨 device-link。
+
+### 尚未解决：Hyprland 插件被外部卸载
+
+持续遮罩依赖正在加载的合成器插件。Hyprland 0.56.2 的
+[`CPluginSystem::unloadPlugin`](https://github.com/hyprwm/Hyprland/blob/v0.56.2/src/plugins/PluginSystem.cpp)
+在同步调用 `PLUGIN_EXIT` 后无条件移除 hooks 并 `dlclose`，没有异步锁屏交接或取消卸载接口。
+因此当前卸载回调的锁屏请求不代表锁屏已完成，外部卸载仍可能提前露出桌面；
+不能在该回调里阻塞等待依赖同一合成器事件循环的确认。这是未解决的保护缺口，
+不能把现有 watchdog 的锁屏保证扩展到外部插件卸载。

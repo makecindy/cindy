@@ -155,3 +155,24 @@ it.each(['ready', 'away-ready'])('Windows away startup requires its own acknowle
     expect(f.child.kill).not.toHaveBeenCalled();
   }
 });
+
+// Greptile r4534014236: a failed lock must keep the native physical-input fence.
+// Real monitor lock entry, fake stdio/timers; previous timeout killed the helper.
+// tier: unit; standalone duration: 0.925 s on 2026-11-11.
+it('keeps Windows away helper alive when lock confirmation times out', async () => {
+  vi.useFakeTimers();
+  Object.defineProperty(process, 'platform', { value: 'win32' });
+  const f = fixture();
+  const starting = watchAwayGuardInput(f.local, f.failed, f.runtime);
+  await Promise.resolve();
+  f.line('away-ready\n');
+  const monitor = await starting;
+  const locking = monitor.lock();
+  await vi.advanceTimersByTimeAsync(6000);
+  expect(await locking).toBe(false);
+  expect(f.child.kill).not.toHaveBeenCalled();
+  expect(f.local).not.toHaveBeenCalled();
+  f.line('locked\n');
+  expect(f.local).toHaveBeenCalledWith(true);
+  f.child.emit('close');
+});
