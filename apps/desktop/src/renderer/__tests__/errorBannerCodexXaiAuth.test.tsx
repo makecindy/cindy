@@ -1,8 +1,18 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render as renderView, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createElement } from 'react';
+import { createElement, type ReactElement } from 'react';
+import { MemoryRouter, useLocation } from 'react-router-dom';
+
+function LocationProbe() {
+  const location = useLocation();
+  return <output data-testid="location">{location.pathname}{location.search}</output>;
+}
+
+function render(view: ReactElement) {
+  return renderView(<MemoryRouter>{view}<LocationProbe /></MemoryRouter>);
+}
 
 const { useCodexRuntimeRouteMock } = vi.hoisted(() => ({
   useCodexRuntimeRouteMock: vi.fn(),
@@ -26,6 +36,13 @@ vi.mock('@/components/ui/confirm-dialog-provider', () => ({
 
 vi.mock('@/hooks/useCodexRuntimeRoute', () => ({
   useCodexRuntimeRoute: useCodexRuntimeRouteMock,
+}));
+
+vi.mock('@/hooks/useProviders', () => ({
+  useProviders: () => ({
+    providers: [{ id: 'work-openai', name: 'Work account', auth: { method: 'oauth', native: 'codex' } }],
+    refetch: vi.fn(),
+  }),
 }));
 
 vi.mock('@/hooks/useCodexSessionExpiredPrompt', () => ({
@@ -74,6 +91,36 @@ describe('ErrorBanner Codex xAI auth classification', () => {
 
     expect(screen.queryByTitle('chat.errorBanner.retryTitle')).toBeNull();
     expect(screen.getByText('chat.errorBanner.codexAuthMissingLocal')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'logic.confirm.goToSettings' }));
+    expect(screen.getByTestId('location').textContent).toBe('/settings?tab=providers&connect=openai');
+  });
+
+  // Unit: generic authentication failures previously had no actionable recovery,
+  // and a changed model selection could send the user to the wrong account.
+  it.each([
+    ['401 Unauthorized', 'openai'],
+    ['Missing bearer token', 'openai'],
+    ['401 Unauthorized', 'work-openai'],
+  ])(
+    'offers the failed connection even after runtime fallback: %s / %s', (error, failedProvider) => {
+      useCodexRuntimeRouteMock.mockReturnValue({ authInjection: 'env-key' });
+      render(<ErrorBanner error={error} agentKind="codex" providerId="xai"
+        errorSourceProviderId={failedProvider} onRetry={vi.fn()} retryText="original" />);
+      expect(screen.queryByTitle('chat.errorBanner.retryTitle')).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'logic.confirm.goToSettings' }));
+      expect(screen.getByTestId('location').textContent).toBe(`/settings?tab=providers&connect=${failedProvider}`);
+    },
+  );
+
+  it.each([
+    { providerId: 'openai', errorSourceProviderId: 'custom-deepseek' },
+    { providerId: 'openai', agentDeviceId: 'other-computer' },
+    { providerId: 'openai', deviceLinkDeviceId: 'other-computer' },
+    { providerId: 'openai', remoteHostId: 'ssh-computer' },
+  ])('does not repair a different provider or computer locally: %j', props => {
+    render(<ErrorBanner error="401 Unauthorized" agentKind="codex" onRetry={vi.fn()} {...props} />);
+    expect(screen.queryByRole('button', { name: 'logic.confirm.goToSettings' })).toBeNull();
+    expect(screen.queryByText('chat.errorBanner.codexAuthMissingLocal')).toBeNull();
   });
 });
 
