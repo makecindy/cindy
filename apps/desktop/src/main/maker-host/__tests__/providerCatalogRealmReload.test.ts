@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
   endpoint: 'https://model.cn.example',
   buildEndpoint: 'https://model.cn.example',
   owner: 'owner-default',
+  generation: 0,
   imageKeys: new Map<string, string>(),
   speechKey: null as string | null,
   secretsClearedListeners: new Set<() => void>(),
@@ -105,7 +106,7 @@ vi.mock('../../authManager.js', () => ({
   getAuthState: () => ({ mode: 'signed-out', user: null }),
 }));
 vi.mock('../../appSessionState.js', () => ({
-  getActiveAppSession: () => ({ mode: 'signed-out', dataOwnerId: h.owner }),
+  getActiveAppSession: () => ({ mode: 'signed-out', dataOwnerId: h.owner, generation: h.generation }),
   activeOwnerScopeKey: () => `signed-out:${h.owner ?? 'none'}`,
   isAppSessionBoundaryPending: () => false,
   ownerScopedUserDataPath: (...segments: string[]) =>
@@ -254,6 +255,54 @@ function activeMarker(): string | undefined {
 }
 
 describe('provider catalog realm reload', () => {
+  // #9882 review: deferred catalog reads must honor readiness-barrier adoption,
+  // while ordinary refreshes and invalidated ABA work cannot publish. Unit tier;
+  // existing tests did not vary the session generation during a pending read.
+  // Standalone file after review fixes: 7.54s (1.59s tests), 2026-11-11.
+  it.each(['adopted', 'ordinary', 'invalidated'] as const)('handles %s same-owner generation changes', async scenario => {
+    const config: CustomProviderConfig = { id: 'adoption-test', name: 'Adoption', runtimes: {} };
+    let resolve!: (configs: CustomProviderConfig[]) => void;
+    let live = true;
+    h.customProviderRead.mockReturnValueOnce(new Promise<CustomProviderConfig[]>(done => { resolve = done; }));
+    setCustomProviders([]);
+    try {
+      const pending = scenario === 'ordinary'
+        ? refreshCustomProvidersIntoCatalog()
+        : refreshCustomProvidersIntoCatalog(() => live);
+      h.generation++;
+      if (scenario === 'invalidated') live = false;
+      resolve([config]);
+      await pending;
+      expect(getActiveCatalog().providers.some(provider => provider.id === config.id)).toBe(scenario === 'adopted');
+    } finally {
+      h.customProviderRead.mockReset();
+      setCustomProviders([]);
+    }
+  });
+
+  // #9882 review: a repeated automatic load must produce zero catalog events;
+  // a real configuration edit must still publish. Unit, actual service + setter.
+  it('does not republish unchanged custom providers on automatic refresh', async () => {
+    const config: CustomProviderConfig = { id: 'no-op-test', name: 'Original', runtimes: {} };
+    h.customProviderRead.mockResolvedValue([config]);
+    await refreshCustomProvidersIntoCatalog();
+    const events: number[] = [];
+    setActiveCatalogChangedListener(revision => events.push(revision));
+    try {
+      h.customProviderRead.mockResolvedValue(structuredClone([config]));
+      await refreshCustomProvidersIntoCatalog();
+      expect(events).toHaveLength(0);
+      h.customProviderRead.mockResolvedValue([{ ...config, name: 'Edited' }]);
+      await refreshCustomProvidersIntoCatalog();
+      expect(events).toHaveLength(1);
+      expect(getActiveCatalog().providers.find(provider => provider.id === config.id)?.name).toBe('Edited');
+    } finally {
+      setActiveCatalogChangedListener(null);
+      h.customProviderRead.mockReset();
+      setCustomProviders([]);
+    }
+  });
+
   // Unit regression: the real catalog-load entry hid saved Magpie labels after
   // restart and never rediscovered them. Existing restart coverage only checked
   // suppression/manual recovery. One old-epoch route per engine is sufficient;

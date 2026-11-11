@@ -2210,15 +2210,22 @@ export function setCustomProviders(providers: Provider[]): void {
  * 保存当前 owner 的原始配置并按生效 Registry 展开。配置本身不改写、不持久化；目录刷新时
  * 可在同一个 revision 内重算 effort 投影。
  */
-export function setCustomProviderConfigs(configs: CustomProviderConfig[]): void {
-  customConfigs = [...configs];
-  custom = customConfigs.map((config) =>
+export function setCustomProviderConfigs(
+  configs: CustomProviderConfig[],
+  options: { skipUnchanged?: boolean } = {},
+): void {
+  const next = configs.map((config) =>
     buildUserProvider(config, {
       modelRegistry: trustedCustomProviderRegistry,
       presets: (base ?? BUNDLED_CATALOG).presets,
       getDiscoveredModelMetadata,
     }),
   );
+  // Compare the projection too: unchanged raw configs can acquire new engine
+  // capabilities or Registry metadata. Ordinary no-op reloads emit no revision.
+  if (options.skipUnchanged && isDeepStrictEqual(customConfigs, configs) && isDeepStrictEqual(custom, next)) return;
+  customConfigs = [...configs];
+  custom = next;
   markChanged();
 }
 

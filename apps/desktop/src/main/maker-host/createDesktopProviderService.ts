@@ -695,9 +695,9 @@ function recoverCustomProviderModelSources(
 }
 
 export async function refreshCustomProvidersIntoCatalog(
-  shouldApply: () => boolean = () => true,
+  shouldApply?: () => boolean,
 ): Promise<void> {
-  if (!shouldApply()) {
+  if (shouldApply && !shouldApply()) {
     log.info('discarded stale custom provider catalog refresh');
     return;
   }
@@ -705,7 +705,11 @@ export async function refreshCustomProvidersIntoCatalog(
   const owner = getActiveAppSession();
   const ownerIsCurrent = (): boolean => {
     const current = getActiveAppSession();
-    return shouldApply() && owner.dataOwnerId === current.dataOwnerId && owner.generation === current.generation;
+    // The readiness barrier can adopt same-owner work across a generation bump.
+    // Its predicate also invalidates real owner/ABA transitions. Unscoped callers
+    // have no adoption authority and must retain the strict generation check.
+    return owner.dataOwnerId === current.dataOwnerId
+      && (shouldApply ? shouldApply() : owner.generation === current.generation);
   };
   const isCurrent = (): boolean =>
     generation === customProviderCatalogRefreshGeneration && ownerIsCurrent();
@@ -748,13 +752,13 @@ export async function refreshCustomProvidersIntoCatalog(
         log.info('discarded stale custom provider catalog refresh after cas miss');
         return;
       }
-      setCustomProviderConfigs(fresh);
+      setCustomProviderConfigs(fresh, { skipUnchanged: true });
       recoverCustomProviderModelSources(fresh, ownerIsCurrent);
       requestCodexApiModelProbe();
       log.info('custom providers merged into active catalog after cas miss', { count: fresh.length });
       return;
     }
-    setCustomProviderConfigs(next);
+    setCustomProviderConfigs(next, { skipUnchanged: true });
     recoverCustomProviderModelSources(next, ownerIsCurrent);
     requestCodexApiModelProbe();
     log.info('custom providers merged into active catalog', { count: next.length });
