@@ -1314,9 +1314,11 @@ export function registerRemoteDesktopIpc(
     assertTrustedAppRendererEvent(event);
     if (checkWindowsSupport !== undefined && typeof checkWindowsSupport !== 'boolean')
       throwIpcError('INVALID_PARAMS', 'Invalid Windows support status request');
+    const active = remoteDesktop.state;
     return {
       enabled: readDeviceLinkSettings().remoteDesktopEnabled,
-      active: remoteDesktop.state,
+      // Like the desktop overlay, the fallback notice excludes plugin-only screens.
+      active: liveSession ? null : active,
       overlay: controlledOverlay.visible,
       permissionGuide: permissions.guideOpen,
       ...(checkWindowsSupport === true
