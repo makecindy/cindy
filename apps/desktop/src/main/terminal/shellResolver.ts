@@ -18,7 +18,12 @@
  *   * 无 PATH 走子进程的额外依赖 —— 简单 PATH 步进即可，不引 `which` npm 包
  */
 
-import { existsSync, statSync } from 'node:fs';
+import {
+  existsSync,
+  lstatSync,
+  readlinkSync,
+  statSync,
+} from 'node:fs';
 import path from 'node:path';
 
 /**
@@ -67,6 +72,35 @@ const WIN_PATHEXT_DEFAULT = '.EXE;.CMD;.BAT';
 const GIT_BASH_ARGS = ['--login', '-i'];
 
 /**
+ * WindowsApps 的 AppExecLink 可启动，但 stat/exists 会因 EACCES/EPERM 漏检。
+ * 仅补验该目录下的链接及其文件目标；保留别名用于启动，避免钉住 Store 包版本。
+ * 不把普通权限拒绝、已禁用（别名被移除）或目标失效的链接当作可用 shell。
+ */
+function isAvailableWindowsAppAlias(candidate: string): boolean {
+  const localAppData = process.env.LOCALAPPDATA;
+  if (!localAppData) return false;
+  const relative = path.win32.relative(
+    path.win32.join(localAppData, 'Microsoft', 'WindowsApps'),
+    candidate,
+  );
+  if (
+    !relative ||
+    relative === '..' ||
+    relative.startsWith('..\\') ||
+    path.win32.isAbsolute(relative)
+  ) {
+    return false;
+  }
+  try {
+    if (!lstatSync(candidate).isSymbolicLink()) return false;
+    const target = path.win32.resolve(path.win32.dirname(candidate), readlinkSync(candidate));
+    return statSync(target).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
  * 在 PATH 里找一个可执行文件。Windows 自动按 PATHEXT 追加扩展名（若 bin 已带匹配扩展则不重复追）。
  * 找到返回绝对路径，找不到回 null。不抛错（权限拒绝静默跳过）。
  */
@@ -84,9 +118,13 @@ function whichSync(bin: string): string | null {
       for (const ext of exts) {
         const candidate = joinForPlatform(dir, bin + ext);
         try {
-          if (existsSync(candidate) && statSync(candidate).isFile()) return candidate;
-        } catch {
-          /* 权限拒绝跳过 */
+          // 不能先用 existsSync：它会将有效 AppExecLink 的 EACCES 吞成 false。
+          if (statSync(candidate).isFile()) return candidate;
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if ((code === 'EACCES' || code === 'EPERM') && isAvailableWindowsAppAlias(candidate)) {
+            return candidate;
+          }
         }
       }
     }
