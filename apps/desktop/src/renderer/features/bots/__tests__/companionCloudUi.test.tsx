@@ -235,6 +235,32 @@ describe('CloudCompanionOfflineView', () => {
     expect(h.navigate).not.toHaveBeenCalled();
   });
 
+  // #9960: a demoted copy can still reserve this computer's singleton, but its settings
+  // are read-only in BotSettingsDrawer. Do not offer a route that cannot open that drawer.
+  it.each(['already demoted', 'demoted during profile read'])('respects settings eligibility when the conflict is %s', async boundary => {
+    const cloud = snapshot('laptop');
+    if (boundary === 'already demoted') cloud.demotedBotIds = ['local-orphan'];
+    resetCompanionCloudStoreForTests(cloud);
+    maker.getCompanionCloudState.mockResolvedValue(cloud);
+    maker.getCompanionTranscript.mockResolvedValue(page);
+    maker.takeOverCompanion.mockResolvedValue({ ok: false, code: 'LOCAL_CINDY_CONFLICT', conflictingBotId: 'local-orphan', conflictingDeviceId: 'desk' });
+    let finish!: (rows: Array<{ id: string; status: string }>) => void;
+    h.ensureLoaded.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    renderView();
+    fireEvent.click(screen.getByText('bots.cloud.continueHere'));
+    await screen.findByText('bots.cloud.localCindyConflict:{"name":"Mia"}');
+    if (boundary === 'already demoted') {
+      expect(screen.queryByRole('button', { name: 'bots.cloud.localCindyConflictAction' })).toBeNull();
+      expect(h.ensureLoaded).not.toHaveBeenCalled();
+    } else {
+      fireEvent.click(await screen.findByRole('button', { name: 'bots.cloud.localCindyConflictAction' }));
+      resetCompanionCloudStoreForTests({ ...cloud, demotedBotIds: ['local-orphan'] });
+      await act(async () => finish([{ id: 'local-orphan', status: 'active' }]));
+      expect(h.toast).toHaveBeenCalledWith('bots.lifecycle.actionFailed');
+    }
+    expect(h.navigate).not.toHaveBeenCalled();
+  });
+
   it.each(['owner switch', 'unmount'])('ignores a delayed local profile read after %s', async boundary => {
     resetCompanionCloudStoreForTests(snapshot('laptop'));
     maker.getCompanionCloudState.mockResolvedValue(snapshot('laptop'));

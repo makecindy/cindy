@@ -26,7 +26,8 @@ export function useCompanionCindyConflictAction() {
     const owner = getDataOwnerGeneration();
     // A conflict reported by another computer must never open or clean up a local same-ID copy.
     if (result.ok || result.code !== 'LOCAL_CINDY_CONFLICT' || !result.conflictingBotId
-      || !cloud.selfDeviceId || result.conflictingDeviceId !== cloud.selfDeviceId) {
+      || !cloud.selfDeviceId || result.conflictingDeviceId !== cloud.selfDeviceId
+      || cloud.demotedBotIds.includes(result.conflictingBotId)) {
       clear();
       return undefined;
     }
@@ -40,6 +41,8 @@ export function useCompanionCindyConflictAction() {
         void ensureBotProfilesLoaded(true).then(profiles => {
           if (!current()) return;
           if (!profiles.some(profile => profile.id === botId)) throw new Error('NOT_FOUND');
+          // Match BotSettingsDrawer's read-only boundary, including a demotion while loading.
+          if (getCompanionCloudSnapshot().demotedBotIds.includes(botId)) throw new Error('NOT_EDITABLE');
           navigate(`/bots/${encodeURIComponent(botId)}?settings=1`);
         }).catch(() => {
           if (current()) toast.error(t('bots.lifecycle.actionFailed'));
