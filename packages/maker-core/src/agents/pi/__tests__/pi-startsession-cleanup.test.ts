@@ -372,8 +372,9 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
   /**
    * Fire timers one at a time until `assertion` passes. Before each timer the
    * assertion is retried after a real macrotask turn, so a result that needs no
-   * timer is seen before the clock moves. When nothing is scheduled, the clock
-   * stays put while file I/O started by a poll finishes.
+   * timer is seen before the clock moves. While a file request is in flight the
+   * clock stays put, so a poll's I/O finishes before the next poll fires however
+   * slow the disk is; otherwise the clock could race to the fake deadline first.
    */
   async function pollUntil(assertion: () => void): Promise<void> {
     const fakeDeadline = Date.now() + 60_000;
@@ -390,9 +391,13 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     while (!passes()) {
       await new Promise((resolve) => setImmediate(resolve));
       if (passes()) return;
+      if (fileIoPending()) continue;
       await vi.advanceTimersToNextTimerAsync();
     }
   }
+
+  const fileIoPending = (): boolean =>
+    process.getActiveResourcesInfo().some((resource) => resource.startsWith('FSReq'));
 
   /** Drive the poll clock until `promise` settles; resolves or rejects with it. */
   async function settle<T>(promise: Promise<T>): Promise<T> {
