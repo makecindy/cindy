@@ -35,7 +35,7 @@ export function assertBundleVersion(candidate, history) {
   }
   for (const previous of history) {
     if (previous.version > candidate.version) {
-      throw new Error(`Built-in Skill bundle ${candidate.version} is older than ${previous.version} at ${previous.ref}; add a record file under ${SKILLS_ROOT}/${RECORDS_DIRECTORY}/ instead of deleting records or lowering the base.`);
+      throw new Error(`Built-in Skill bundle ${candidate.version} is older than ${previous.version} at ${previous.ref}. If main moved ahead of your base, merge it and raise BUILT_IN_SKILLS_BUNDLE_VERSION_BASE in ${VERSION_FILE} to main's value (keep your own record files); otherwise add a record file under ${SKILLS_ROOT}/${RECORDS_DIRECTORY}/. Never delete records or lower the base.`);
     }
     if (previous.version === candidate.version && previous.fingerprint !== candidate.fingerprint) {
       throw new Error(`Built-in Skill bundle version ${candidate.version} was reused for different bytes (history: ${previous.ref}). Add one new record file under ${SKILLS_ROOT}/${RECORDS_DIRECTORY}/ for this change; never edit or reuse an existing record.`);
