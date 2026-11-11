@@ -215,6 +215,20 @@ describe('manual model refresh for saved OAuth providers', () => {
     });
   }
 
+  // #9882, unit: production saved-OAuth discovery must inherit the background
+  // first-page byte bound; earlier limit tests only covered direct API fetches.
+  it('bounds the first saved-OAuth background catalog response', async () => {
+    seedBlob('scoped-account', { access_token: 'fake-oauth-access' });
+    const cancel = vi.fn();
+    const response = new Response(new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new Uint8Array(8 * 1024 * 1024 + 1)); }, cancel,
+    }));
+    const result = await fetchSavedOAuthProviderModels(savedProvider('nous'), 'pi', 'scoped-account', () => true,
+      async () => response, undefined, { requireComplete: true });
+    expect(result.ok).toBe(false);
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
   it('renews an expiring login before fetching the model list', async () => {
     const provider = savedProvider('nous');
     seedBlob('scoped-account', { access_token: 'fake-expired', refresh_token: 'fake-refresh', expires_at: nowMs + 1000 });

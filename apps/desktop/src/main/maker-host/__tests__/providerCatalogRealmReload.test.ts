@@ -275,8 +275,10 @@ describe('provider catalog realm reload', () => {
   // #9882 latest review: a good first page plus a failed second page must not
   // erase a saved source. Unit via production recovery + HTTP parser + CAS;
   // prior restart coverage only used a complete single-page response.
-  it('preserves saved Magpie sources when a later discovery page fails', async () => {
-    const saved: CustomProviderConfig = { id: 'magpie-partial', name: 'Magpie', auth: { method: 'none' }, runtimes: { pi: {
+  // Latest review adds HTTP-200 business errors and unbounded first-page reads
+  // to the same unit recovery/CAS preservation contract.
+  it.each(['later-page', 'business-error', 'oversized'] as const)('preserves saved Magpie sources on %s failure', async failure => {
+    const saved: CustomProviderConfig = { id: `magpie-partial-${failure}`, name: 'Magpie', auth: { method: 'none' }, runtimes: { pi: {
       baseUrl: 'http://127.0.0.1:3425/v1', modelsUrl: 'http://127.0.0.1:3425/v1/models', wireProtocol: 'openai-chat', models: [{
         id: 'b/foo', name: 'My model', discoveredSource: { kind: 'magpie', providerId: 'Saved', snapshotId: 'old:receipt' },
       }],
@@ -284,7 +286,12 @@ describe('provider catalog realm reload', () => {
     const before = structuredClone(saved);
     h.customProviderRead.mockResolvedValue([saved]);
     h.casUpdate.mockClear();
-    h.outboundFetch.mockImplementation(async url => {
+    const cancel = vi.fn();
+    h.outboundFetch.mockClear().mockImplementation(async url => {
+      if (failure === 'business-error') return new Response(JSON.stringify({ error: 'unavailable', data: [] }));
+      if (failure === 'oversized') return new Response(new ReadableStream<Uint8Array>({
+        start(controller) { controller.enqueue(new Uint8Array(8 * 1024 * 1024 + 1)); }, cancel,
+      }));
       if (String(url).includes('page=2')) throw new Error('offline');
       return new Response(JSON.stringify({ data: [{ id: 'a/foo', owned_by: 'A', magpie_label: 'Foo · A' }], next: '?page=2' }));
     });
@@ -292,11 +299,13 @@ describe('provider catalog realm reload', () => {
     setActiveCatalogChangedListener(revision => events.push(revision));
     try {
       await refreshCustomProviderModelSources();
-      expect(h.outboundFetch).toHaveBeenCalledTimes(2);
+      const requests = failure === 'later-page' ? 2 : 1;
+      expect(h.outboundFetch).toHaveBeenCalledTimes(requests);
+      if (failure === 'oversized') expect(cancel).toHaveBeenCalledOnce();
       expect(h.casUpdate).not.toHaveBeenCalled();
       expect(saved).toEqual(before);
       await refreshCustomProviderModelSources();
-      expect(h.outboundFetch).toHaveBeenCalledTimes(2);
+      expect(h.outboundFetch).toHaveBeenCalledTimes(requests);
       expect(events).toHaveLength(0);
     } finally {
       setActiveCatalogChangedListener(null);

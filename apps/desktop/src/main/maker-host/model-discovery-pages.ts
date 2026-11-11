@@ -1,5 +1,12 @@
 import { isOpenRouterModelsUrl, mergeModelMetadata, parseModelsListResponse, type DiscoveredModel } from '@cindy/model-providers';
 
+function isBusinessError(page: unknown): boolean {
+  if (!page || typeof page !== 'object' || Array.isArray(page)) return false;
+  const data = page as { error?: unknown; error_code?: unknown };
+  return (data.error != null && data.error !== '')
+    || (data.error_code !== undefined && data.error_code !== 0);
+}
+
 /** Follow catalog cursors only on the original endpoint. Never forward credentials to a next-link host. */
 export async function collectModelDiscoveryPages(
   first: unknown,
@@ -29,6 +36,8 @@ export async function collectModelDiscoveryPages(
   let current = origin;
   let complete = false;
   for (let count = 0; count < 100; count++) {
+    // A successful HTTP status does not prove a complete, authoritative catalog.
+    if (options.requireComplete && isBusinessError(page)) return null;
     const parsed = parseModelsListResponse(page, endpoint);
     if (!parsed) return !options.requireComplete && models.size ? [...models.values()] : null;
     append(parsed);
@@ -67,7 +76,9 @@ export async function collectModelDiscoveryPages(
     const speech = new URL(origin);
     speech.searchParams.set('output_modalities', 'speech');
     try {
-      const parsed = parseModelsListResponse(await fetchPage(speech.toString()), speech.toString());
+      const page = await fetchPage(speech.toString());
+      if (options.requireComplete && isBusinessError(page)) return null;
+      const parsed = parseModelsListResponse(page, speech.toString());
       if (!parsed && options.requireComplete) return null;
       append((parsed ?? []).filter(model => model.discoveredMetadata?.mode === 'audio_speech'));
     } catch {

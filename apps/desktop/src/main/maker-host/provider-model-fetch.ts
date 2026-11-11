@@ -300,6 +300,9 @@ export async function fetchProviderModels(
   spec: ProviderModelsFetchSpec,
   fetchImpl: typeof fetch = outboundFetch,
 ): Promise<ProviderModelsFetchResult> {
+  // Background provenance recovery requires bounded reads from its first byte,
+  // including OAuth callers. Keep ordinary manual discovery's existing policy.
+  const responseByteLimit = spec.responseByteLimit ?? (spec.requireComplete ? 8 * 1024 * 1024 : undefined);
   if (
     spec.authMethod === 'none' &&
     (!isLoopbackProviderUrl(spec.baseUrl) ||
@@ -336,9 +339,9 @@ export async function fetchProviderModels(
     }
     let bodyText = '';
     try {
-      bodyText = spec.responseByteLimit === undefined
+      bodyText = responseByteLimit === undefined
         ? (await res.text()).slice(0, MAX_ERROR_BODY_BYTES)
-        : await readLimitedBody(res, Math.min(spec.responseByteLimit, MAX_ERROR_BODY_BYTES));
+        : await readLimitedBody(res, Math.min(responseByteLimit, MAX_ERROR_BODY_BYTES));
     } catch {
       /* 读体失败按空体分类 */
     }
@@ -347,9 +350,9 @@ export async function fetchProviderModels(
   }
   let json: unknown;
   try {
-    json = spec.responseByteLimit === undefined
+    json = responseByteLimit === undefined
       ? await res.json()
-      : JSON.parse(await readLimitedBody(res, spec.responseByteLimit));
+      : JSON.parse(await readLimitedBody(res, responseByteLimit));
   } catch {
     return {
       ok: false,
@@ -363,7 +366,7 @@ export async function fetchProviderModels(
     if (Date.now() >= pageDeadline) throw new Error('catalog deadline exceeded');
     const page = await fetchImpl(nextUrl, { ...init, redirect: 'error', signal: AbortSignal.timeout(Math.max(1, Math.min(FETCH_TIMEOUT_MS, pageDeadline - Date.now()))) });
     if (!page.ok) { await page.body?.cancel(); throw new Error('catalog page failed'); }
-    return JSON.parse(await readLimitedBody(page, spec.responseByteLimit ?? 8 * 1024 * 1024));
+    return JSON.parse(await readLimitedBody(page, responseByteLimit ?? 8 * 1024 * 1024));
   }, { requireComplete: spec.requireComplete });
   // These exact OpenAI-compatible catalog views can legitimately be empty. Keep
   // that success distinct in every consumer (wizard, edit and saved refresh),

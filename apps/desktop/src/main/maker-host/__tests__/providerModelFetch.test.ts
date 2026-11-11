@@ -27,6 +27,34 @@ function fakeResponse(status: number, body: string): Response {
 }
 
 describe('import discovery limits', () => {
+  // #9882 review: allowEmpty must not turn business failures into deletions.
+  // Unit via production fetch; prior error tests only covered named gateways.
+  it.each([{ error: 'unavailable', data: [] }, { error_code: 503, data: [] }])(
+    'rejects business failures on every strict discovery page: %j', async failure => {
+      for (const later of [false, true]) {
+        const result = await fetchProviderModels(spec({ allowEmpty: true, requireComplete: true }), async url =>
+          fakeResponse(200, JSON.stringify(later && !String(url).includes('page=2')
+            ? { data: ['one'], next: '?page=2' } : failure)));
+        expect(result.ok).toBe(false);
+      }
+      expect(await fetchProviderModels(spec({ allowEmpty: true, requireComplete: true }),
+        async () => fakeResponse(200, JSON.stringify({ error_code: 0, data: [] })))).toMatchObject({ ok: true, models: [] });
+    },
+  );
+
+  // Unit: background strict discovery must bound the first response without an
+  // explicit byte option; existing stream tests only exercised caller-supplied limits.
+  it.each([undefined, '1'])('bounds the first strict response with content-length %s', async length => {
+    const cancel = vi.fn();
+    const response = new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(' '.repeat(8 * 1024 * 1024) + JSON.stringify({ data: [] })));
+      }, cancel,
+    }), { headers: length ? { 'content-length': length } : {} });
+    expect((await fetchProviderModels(spec({ allowEmpty: true, requireComplete: true }), async () => response)).ok).toBe(false);
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
   // #9882: background provenance recovery must require every page; ordinary
   // settings import keeps its best-effort behavior. Unit, real fetch entry.
   it('rejects partial discovery only when complete results are required', async () => {
