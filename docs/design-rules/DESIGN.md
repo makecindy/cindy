@@ -219,7 +219,7 @@ Desktop roles (rewritten 2026-11-11, audit B-02 / B-03 / B-11). Sizes are `text-
 | Dialog title | 18px `text-18` / `text-lg` | 500 | — | `ConfirmDialog` and every form dialog (provider, MCP, voice, input handoff…); one weight for all dialogs |
 | Section title | 16px `text-16` | 500 | 1.2 | `SettingsSection`; compact dialogs that use a 16px title |
 | Chat body, composer, card title | 15px `text-15` | 400 body, 500 titles | 1.6 chat body (`CHAT_BODY_CLASS`), 1.467 composer | Message body, composer input; titles of in-chat prompt cards (permission, plugin grant, rename confirmation) and system cards |
-| Reading text | 14px `text-14` / `text-sm` | 400 | — | Longer descriptions, Input lg |
+| Reading text, prompt and panel title | 14px `text-14` / `text-sm` | 400 text, 500 titles | — | Longer descriptions, Input lg; titles of composer interaction prompts (plan review, plugin setup, collapsed prompt shell), the handoff card, the update banner and side-panel headers |
 | UI text and controls | 13px `text-13` | 400; 500 for buttons and labels | 1.5 for multi-line descriptions | Button label (all sizes, 13/500), settings row label (13/500), settings descriptions, Tooltip body, Input md. 13px **is** a reading size: descriptions and tooltips are read sentence by sentence |
 | Small | 12px `text-12` / `text-xs` | 400 / 500 | — | Metadata, timestamps, Input sm; smallest size for sentences |
 | Micro label | 10–11px `text-10` / `text-11` | 400 / 500 | — | **Non-reading** labels only — counts, badges, eyebrows, scope chips, tag pills; floor 10px |
@@ -247,7 +247,7 @@ Brand canvases (§16 login / Splash family and its self-contained pages) keep th
 | 600 | Semibold | 限量强调(徽标、表头、选中态等局部加重)，**不用于标题**。新增使用要能说出「为什么 500 不够」 |
 | 700 | Bold     | **仅限下方豁免登记表中的域**,禁止出现在普通 UI chrome                       |
 
-- **标题一律 500**(2026-11-11 维护者裁决,设计审核 B-03 方案 B):桌面端标题不再按「普通确认框 / 表单弹窗 / 紧凑提示」区分字重,原先 600 的表单弹窗标题与紧凑提示标题已改回 500;层级靠字号区分(见上方 Hierarchy)。唯一例外是品牌画布:登录 / Splash 家族按下方豁免登记表「登录 / Splash 品牌画布」行使用 700,范围只限该行列出的文件;登录相关但不在该行的界面(如设置里的账号页、其他弹窗)仍按本条用 500。手机端按自己的角色表选字重(见下一条),不受本条约束。
+- **标题一律 500**(2026-11-11 维护者裁决,设计审核 B-03 方案 B):桌面端标题不再按「普通确认框 / 表单弹窗 / 紧凑提示」区分字重,原先 600 的表单弹窗标题、紧凑提示与交互提示卡标题已改回 500;分组小标签、表头与名称(服务商名、目录名等)不是标题,仍可按 600 的限量强调使用;层级靠字号区分(见上方 Hierarchy)。唯一例外是品牌画布:登录 / Splash 家族按下方豁免登记表「登录 / Splash 品牌画布」行使用 700,范围只限该行列出的文件;登录相关但不在该行的界面(如设置里的账号页、其他弹窗)仍按本条用 500。手机端按自己的角色表选字重(见下一条),不受本条约束。
 - 与手机端 `apps/mobile/src/theme/tokens.ts` 的 `fontWeight` token(regular / medium / semibold / bold)一一对应 —— 两端一张梯子。
 - **手机端按角色选字重**(2026-09-26 用户定稿):标题 600、列表行 / 按钮 500、正文与说明 400、分组小标签 600;浅色字不配粗字重。角色表正本见 `apps/mobile/docs/mobile-design-guide.md` §3。
 - **两端 700 口径**:手机端 UI chrome 的上限仍是 600（正本为 `apps/mobile/docs/mobile-design-guide.md`,该文已同步登记本例外）。`bold` / 700 在手机端**只允许**出现在下表登记的域——原生 Markdown strong 与登录品牌画布。也就是说「四档梯子」是两端共用的**档位定义**,不等于两端 chrome 都可用 700。
