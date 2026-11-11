@@ -1,20 +1,19 @@
 /**
- * 模型选择器「模型组」一格里的内容：用户在设置里建的模式与路线。选中后新任务第一条消息发出前
+ * 模型选择器「模型组」一格里的内容：用户在设置里建的路线。选中后新任务第一条消息发出前
  * 由 Cindy 按这一项的规则选一个具体模型，之后任务不再换；手动选普通模型即取消。
  * 行样式与模型行一致：18px 图标盒、名字 14/500、说明 12 次级色，选中整行底色。
  */
-import { Settings2, SlidersHorizontal, Waypoints } from 'lucide-react';
-import { displayNameOfStoredModelId } from '@cindy/model-providers';
+import { Settings2, Waypoints } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { COMPOSER_MENU_ROW, menuRowAttrs } from '@/components/ui/menu-row';
 import { cn } from '@/lib/utils';
 
-import type { ModelGroupSelection, ModelGroupsConfig } from '../../../shared/modelGroups';
+import type { ModelGroupRoute, ModelGroupSelection, ModelGroupsConfig } from '../../../shared/modelGroups';
 
 export interface ModelGroupsPickerProps {
   config: ModelGroupsConfig;
-  /** 当前选中的模式或路线；null = 用普通模型。 */
+  /** 当前选中的路线；null = 用普通模型。 */
   active: ModelGroupSelection | null;
   onSelect(selection: ModelGroupSelection): void;
   /** 打开设置里的「模型组」。 */
@@ -27,24 +26,14 @@ interface PickerRow {
   hint: string;
 }
 
-export function useModelGroupPickerRows(config: ModelGroupsConfig): { modes: PickerRow[]; routes: PickerRow[] } {
+export function useModelGroupPickerRows(config: ModelGroupsConfig): PickerRow[] {
   const { t } = useTranslation();
-  const routeHint = (routeId: string) => {
-    const route = config.routes.find((item) => item.id === routeId);
-    return route
-      ? `${t('modelGroups.sourceCount', { count: route.candidates.length })} · ${t(`modelGroups.strategy.${route.strategy}.title`)}`
-      : '';
-  };
-  return {
-    modes: config.modes.map((mode) => {
-      const target = mode.target.type === 'route'
-        ? config.routes.find((route) => route.id === (mode.target as { routeId: string }).routeId)?.name ?? ''
-        : displayNameOfStoredModelId(mode.target.model);
-      const effort = mode.effort ? t(`effortLevels.${mode.effort}`, { defaultValue: mode.effort }) : '';
-      return { selection: { type: 'mode', id: mode.id }, name: mode.name, hint: [target, effort].filter(Boolean).join(' · ') };
-    }),
-    routes: config.routes.map((route) => ({ selection: { type: 'route', id: route.id }, name: route.name, hint: routeHint(route.id) })),
-  };
+  const hint = (route: ModelGroupRoute) => [
+    t('modelGroups.sourceCount', { count: route.candidates.length }),
+    t(`modelGroups.strategy.${route.strategy}.title`),
+    route.effort ? t(`effortLevels.${route.effort}`, { defaultValue: route.effort }) : '',
+  ].filter(Boolean).join(' · ');
+  return config.routes.map((route) => ({ selection: { type: 'route', id: route.id }, name: route.name, hint: hint(route) }));
 }
 
 function matches(rows: readonly PickerRow[], query: string): PickerRow[] {
@@ -53,13 +42,12 @@ function matches(rows: readonly PickerRow[], query: string): PickerRow[] {
 }
 
 /** 搜索命中了几行；面板用它判断搜索有没有结果。 */
-export function matchModelGroupRows(rows: { modes: PickerRow[]; routes: PickerRow[] }, query: string): number {
-  return matches(rows.modes, query).length + matches(rows.routes, query).length;
+export function matchModelGroupRows(rows: readonly PickerRow[], query: string): number {
+  return matches(rows, query).length;
 }
 
-export function ModelGroupIcon({ type, size }: { type: ModelGroupSelection['type']; size: number }) {
-  const Icon = type === 'mode' ? SlidersHorizontal : Waypoints;
-  return <Icon size={size} aria-hidden className="shrink-0 text-[var(--text-secondary)]" />;
+export function ModelGroupIcon({ size }: { size: number }) {
+  return <Waypoints size={size} aria-hidden className="shrink-0 text-[var(--text-secondary)]" />;
 }
 
 export function ModelGroupsPickerSection({
@@ -77,8 +65,7 @@ export function ModelGroupsPickerSection({
   const { t } = useTranslation();
   const rows = useModelGroupPickerRows(picker.config);
   const groups = [
-    { key: 'modes', label: t('modelGroups.modes'), rows: matches(rows.modes, query) },
-    { key: 'routes', label: t('modelGroups.routes'), rows: matches(rows.routes, query) },
+    { key: 'routes', label: t('modelGroups.routes'), rows: matches(rows, query) },
   ].filter((group) => group.rows.length > 0);
   const manage = () => {
     picker.onManage();
@@ -126,7 +113,7 @@ export function ModelGroupsPickerSection({
               >
                 <div className="flex items-center gap-2">
                   <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-center">
-                    <ModelGroupIcon type={row.selection.type} size={16} />
+                    <ModelGroupIcon size={16} />
                   </span>
                   <span className="min-w-0 truncate font-medium leading-5">{row.name}</span>
                 </div>

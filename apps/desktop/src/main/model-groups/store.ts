@@ -1,6 +1,6 @@
 /**
  * 模型组配置的 main 进程事实源。文件：<userData>/model-groups.json，按账号分开。
- * 默认没有任何路线与模式；只保存用户建的内容，全部删光即恢复默认(删除文件)。
+ * 默认没有任何路线；只保存用户建的内容，全部删光即恢复默认(删除文件)。
  */
 import {
   MODEL_GROUPS_DEFAULTS,
@@ -17,10 +17,7 @@ const store = createOverrideSettingsFile<ModelGroupsConfig>({
   filePath: () => ownerScopedPath('model-groups.json'),
   defaults: MODEL_GROUPS_DEFAULTS,
   normalize: normalizeModelGroupsConfig,
-  mergeOverrides: ({ next }) => ({
-    ...(next.routes.length > 0 ? { routes: next.routes } : {}),
-    ...(next.modes.length > 0 ? { modes: next.modes } : {}),
-  }),
+  mergeOverrides: ({ next }) => (next.routes.length > 0 ? { routes: next.routes } : {}),
   log,
   label: 'model groups',
   maxBytes: 512 * 1024,
@@ -36,7 +33,7 @@ export function readModelGroupsConfig(): ModelGroupsConfig {
 export function writeModelGroupsConfig(config: ModelGroupsConfig): ModelGroupsConfig {
   store.writePatch(config);
   const saved = store.read();
-  log.info('model groups written', { routes: saved.routes.length, modes: saved.modes.length });
+  log.info('model groups written', { routes: saved.routes.length });
   return saved;
 }
 

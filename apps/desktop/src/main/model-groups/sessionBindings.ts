@@ -1,8 +1,8 @@
 /**
- * 哪个任务是经哪条路线或模式建的：<userData>/owners/<账号>/model-group-session-bindings.json，
+ * 哪个任务是经哪条路线建的：<userData>/owners/<账号>/model-group-session-bindings.json，
  * `{ bindings: { [任务 id]: { selection, pickedKey, at } } }`，最多保留最新的 MODEL_GROUP_SESSION_BINDINGS_MAX 条。
  * 只记组的 id 与选中的候选(引擎 + 供应商连接 ID + 模型)，不记消息、任务标题、账号或凭证。
- * 账号作用域未提交时不读不写；文件坏了按没有记录处理，下次写入覆盖。
+ * 账号作用域未提交时不读不写；文件坏了按没有记录处理，下次写入覆盖。旧版经模式建的记录读取时丢弃。
  * 用途：任务撞上配额时，提示「换到同一条路线里的下一个来源继续」(model-groups.md §6.1)。
  */
 import {

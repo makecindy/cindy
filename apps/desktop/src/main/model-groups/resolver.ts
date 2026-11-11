@@ -1,5 +1,5 @@
 /**
- * 把选中的路线或模式解析成一个现在能用的具体模型。事实全部来自已有来源：供应商目录决定能不能选，
+ * 把选中的路线解析成一个现在能用的具体模型。事实全部来自已有来源：供应商目录决定能不能选，
  * 额度总览给出订阅窗口；这里不发模型请求、不读凭证。读不到额度的来源按未知处理，不当作没用过。
  */
 import { isByokProviderId, type AgentKind, type CatalogModel, type ProviderView } from '@cindy/model-providers';
@@ -111,7 +111,9 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
     const now = deps.now();
     const target = modelGroupRouteFor(deps.config(), request.selection, now);
     if (target.outcome === 'missing') return { outcome: 'missing', groupName: target.groupName, trace: [] };
-    const { groupName, effort, route, via } = target;
+    const { groupName, route, via } = target;
+    // 改走了另一条路线时，用那条路线自己的推理强度。
+    const { effort } = route;
     const needsImage = request.context?.hasImages === true && !!route.exceptions?.some((item) => item.when.type === 'image');
     const views = await deps.views();
     const picked = pickModelGroupCandidate(route, await facts(route, views), {

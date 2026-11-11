@@ -205,7 +205,7 @@ export interface NewMakerDraft {
   /** 选中的插件模型；底下的模型设置保留，插件没给结果时用它们。 */
   pluginModel: { pluginId: string; modelId: string } | null;
   /**
-   * 新任务选中的模型组(用户建的模式或路线)：第一条消息发出前按它选一个具体模型；记住为新任务默认，
+   * 新任务选中的模型组(用户建的路线；旧版的模式读取时丢弃)：第一条消息发出前按它选一个具体模型；记住为新任务默认，
    * 手动选任何模型或插件模型即清除。底下的模型设置保留，组里没有能用的模型时用它们。
    */
   modelGroup: ModelGroupSelection | null;

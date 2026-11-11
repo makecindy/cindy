@@ -1,10 +1,10 @@
 /**
- * 设置 → 模型组：把模型供应商里已有的来源合成路线，或把一条路线 / 一个模型连同思考深度存成模式。
+ * 设置 → 模型组：把模型供应商里已有的来源合成路线，可连同推理强度一起存。
  * 来源本身仍在「模型供应商」里连接和管理；这里只引用已连接的模型。每次改动立即保存。
  * 产品规则见 docs/product-rules/model-groups.md。
  */
 import { useCallback, useMemo, useState, type ReactNode } from 'react';
-import { ArrowDown, ArrowUp, Check, CornerDownRight, Minus, Play, Plus, SlidersHorizontal, Waypoints, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, Check, CornerDownRight, Minus, Play, Plus, Waypoints, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { ProviderView } from '@cindy/model-providers';
 
@@ -34,7 +34,6 @@ import {
   MODEL_GROUP_STRATEGIES,
   modelGroupCandidateKey,
   type ModelGroupCandidate,
-  type ModelGroupMode,
   type ModelGroupResolveResult,
   type ModelGroupRoute,
   type ModelGroupsConfig,
@@ -47,10 +46,9 @@ import { SettingsTextInput } from './SettingsTextInput';
 
 const log = createLogger('ModelGroupsSection');
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
-const DEFAULT_EFFORT = '__default__';
-const ONE_MODEL = '__model__';
+const UNSET_EFFORT = '__unset__';
 
-type View = { kind: 'list' } | { kind: 'route'; id: string } | { kind: 'mode'; id: string };
+type View = { kind: 'list' } | { kind: 'route'; id: string };
 
 function useCandidateNames(providers: readonly ProviderView[]) {
   return useCallback((candidate: Pick<ModelGroupCandidate, 'agentKind' | 'providerId' | 'model'>) => {
@@ -99,7 +97,7 @@ function NameRow({ value, label, hint, onCommit }: { value: string; label: strin
       trailing={
         <SettingsTextInput
           aria-label={label}
-          data-settings-search-action="Renames one user-created route or mode; the lists are indexed by their section entries"
+          data-settings-search-action="Renames one user-created route; the list is indexed by its section entry"
           value={draft}
           maxLength={MODEL_GROUP_LIMITS.name}
           onChange={setDraft}
@@ -136,31 +134,27 @@ export function ModelGroupsSection() {
   }, [t]);
   const updateRoute = (id: string, patch: (route: ModelGroupRoute) => ModelGroupRoute) =>
     save((latest) => ({ ...latest, routes: latest.routes.map((route) => (route.id === id ? patch(route) : route)) }));
-  const updateMode = (id: string, patch: (mode: ModelGroupMode) => ModelGroupMode) =>
-    save((latest) => ({ ...latest, modes: latest.modes.map((mode) => (mode.id === id ? patch(mode) : mode)) }));
 
   const strategyOptions = useMemo(
     () => MODEL_GROUP_STRATEGIES.map((value) => ({ value, label: t(`modelGroups.strategy.${value}.title`) })),
     [t],
   );
-  const routeSummary = (route: ModelGroupRoute) =>
-    `${t('modelGroups.sourceCount', { count: route.candidates.length })} · ${t(`modelGroups.strategy.${route.strategy}.title`)}`;
-  const modeSummary = (mode: ModelGroupMode) => {
-    const target = mode.target.type === 'route'
-      ? config.routes.find((route) => route.id === (mode.target as { routeId: string }).routeId)?.name ?? ''
-      : `${namesOf(mode.target).modelName} · ${namesOf(mode.target).sourceName}`;
-    return [target, mode.effort ? t(`effortLevels.${mode.effort}`, { defaultValue: mode.effort }) : ''].filter(Boolean).join(' · ');
-  };
+  const effortOptions = useMemo(
+    () => [
+      { value: UNSET_EFFORT, label: t('modelGroups.settings.effortUnset') },
+      ...EFFORTS.map((value) => ({ value, label: t(`effortLevels.${value}`) })),
+    ],
+    [t],
+  );
+  const routeSummary = (route: ModelGroupRoute) => [
+    t('modelGroups.sourceCount', { count: route.candidates.length }),
+    t(`modelGroups.strategy.${route.strategy}.title`),
+    route.effort ? t(`effortLevels.${route.effort}`, { defaultValue: route.effort }) : '',
+  ].filter(Boolean).join(' · ');
 
   const addRoute = async () => {
     const route: ModelGroupRoute = { id: crypto.randomUUID(), name: t('modelGroups.settings.newRouteName'), strategy: 'expiring', candidates: [] };
     if (await save((latest) => ({ ...latest, routes: [...latest.routes, route] }))) setView({ kind: 'route', id: route.id });
-  };
-  const addMode = async () => {
-    const first = config.routes[0];
-    if (!first) return;
-    const mode: ModelGroupMode = { id: crypto.randomUUID(), name: t('modelGroups.settings.newModeName'), target: { type: 'route', routeId: first.id } };
-    if (await save((latest) => ({ ...latest, modes: [...latest.modes, mode] }))) setView({ kind: 'mode', id: mode.id });
   };
   const back = () => setView({ kind: 'list' });
 
@@ -222,6 +216,25 @@ export function ModelGroupsSection() {
                       options={strategyOptions}
                       width="sm"
                       onValueChange={(value) => void updateRoute(route.id, (current) => ({ ...current, strategy: value as ModelGroupStrategy }))}
+                    />
+                  }
+                />
+                <SettingsRow
+                  title={t('modelGroups.settings.effort')}
+                  hint={t('modelGroups.settings.effortHint')}
+                  wrap
+                  trailing={
+                    <Select
+                      data-setting-id={modelGroupsSettings.routes.id}
+                      label={t('modelGroups.settings.effort')}
+                      value={route.effort ?? UNSET_EFFORT}
+                      options={effortOptions}
+                      width="sm"
+                      onValueChange={(value) => void updateRoute(route.id, (current) => {
+                        const { effort: _previous, ...rest } = current;
+                        void _previous;
+                        return value === UNSET_EFFORT ? rest : { ...rest, effort: value };
+                      })}
                     />
                   }
                 />
@@ -367,122 +380,10 @@ export function ModelGroupsSection() {
     );
   }
 
-  // ── 模式详情 ───────────────────────────────────────────────────────────────
-  const mode = view.kind === 'mode' ? config.modes.find((item) => item.id === view.id) : undefined;
-  if (view.kind === 'mode' && mode) {
-    const target = mode.target;
-    const removeMode = async () => {
-      if (!await confirm({
-        title: t('modelGroups.settings.deleteModeConfirmTitle', { name: mode.name }),
-        description: t('modelGroups.settings.deleteModeConfirmDescription'),
-        confirmText: t('modelGroups.settings.delete'),
-        cancelText: t('modelGroups.settings.cancel'),
-      })) return;
-      if (await save((latest) => ({ ...latest, modes: latest.modes.filter((item) => item.id !== mode.id) }))) back();
-    };
-    const targetNames = target.type === 'model' ? namesOf(target) : null;
-    return (
-      <SettingsPageScope>
-        <section className="flex min-w-0 flex-col" data-testid="model-group-mode-detail">
-          <SettingsPageHeader
-            title={mode.name}
-            description={t('modelGroups.settings.modeShownAs')}
-            onBack={back}
-            backLabel={t('modelGroups.settings.back')}
-            backProps={{ 'data-settings-search-action': 'Return from a mode to the model groups list' }}
-          />
-          <div className="mt-6 flex min-w-0 flex-col gap-9">
-            <SettingsSection>
-              <SettingsCard>
-                <NameRow key={mode.id} value={mode.name} label={t('modelGroups.settings.name')} hint={t('modelGroups.settings.nameHint')}
-                  onCommit={(name) => void updateMode(mode.id, (current) => ({ ...current, name }))} />
-                <SettingsRow
-                  title={t('modelGroups.settings.mode.target')}
-                  hint={t('modelGroups.settings.mode.targetHint')}
-                  wrap
-                  trailing={
-                    <Select
-                      data-setting-id={modelGroupsSettings.modes.id}
-                      label={t('modelGroups.settings.mode.target')}
-                      value={target.type === 'route' ? target.routeId : ONE_MODEL}
-                      groups={[
-                        { label: t('modelGroups.routes'), options: config.routes.map((item) => ({ value: item.id, label: item.name })) },
-                        { options: [{ value: ONE_MODEL, label: t('modelGroups.settings.mode.oneModel'), disabled: target.type !== 'model' && !targetNames }] },
-                      ]}
-                      width="sm"
-                      onValueChange={(value) => {
-                        if (value !== ONE_MODEL) void updateMode(mode.id, (current) => ({ ...current, target: { type: 'route', routeId: value } }));
-                      }}
-                    />
-                  }
-                />
-                <SettingsRow
-                  title={t('modelGroups.settings.mode.model')}
-                  hint={targetNames ? targetNames.sourceName : t('modelGroups.settings.mode.modelHint')}
-                  wrap
-                  trailing={
-                    <div className="w-[280px] max-w-full">
-                      <ModelSelector
-                        data-setting-id={modelGroupsSettings.modes.id}
-                        localOnlyReason="model-group-local-source"
-                        modelId={target.type === 'model' ? target.model : ''}
-                        vendorKey={target.type === 'model' ? target.agentKind : undefined}
-                        currentProviderId={target.type === 'model' ? target.providerId : null}
-                        effort=""
-                        onModelChange={() => false}
-                        onEffortChange={() => undefined}
-                        configurationEnabled={false}
-                        triggerVariant="field"
-                        popoverSide="bottom"
-                        ariaContext={t('modelGroups.settings.mode.model')}
-                        unknownModelLabel={(id) => id}
-                        fallbackOption={{ active: target.type !== 'model', label: t('modelGroups.settings.mode.followRoute'), onSelect: () => undefined }}
-                        onUnifiedSelect={({ engine, providerId, modelId }) =>
-                          updateMode(mode.id, (current) => ({ ...current, target: { type: 'model', agentKind: engine, providerId, model: modelId } }))}
-                      />
-                    </div>
-                  }
-                />
-                <SettingsRow
-                  title={t('modelGroups.settings.mode.effort')}
-                  hint={t('modelGroups.settings.mode.effortHint')}
-                  wrap
-                  trailing={
-                    <Select
-                      data-setting-id={modelGroupsSettings.modes.id}
-                      label={t('modelGroups.settings.mode.effort')}
-                      value={mode.effort ?? DEFAULT_EFFORT}
-                      options={[
-                        { value: DEFAULT_EFFORT, label: t('modelGroups.settings.mode.effortDefault') },
-                        ...EFFORTS.map((value) => ({ value, label: t(`effortLevels.${value}`) })),
-                      ]}
-                      width="sm"
-                      onValueChange={(value) => void updateMode(mode.id, (current) => {
-                        const { effort: _previous, ...rest } = current;
-                        void _previous;
-                        return value === DEFAULT_EFFORT ? rest : { ...rest, effort: value };
-                      })}
-                    />
-                  }
-                />
-              </SettingsCard>
-            </SettingsSection>
-            <SettingsSection>
-              <SettingsCard>
-                <SettingsRow danger title={t('modelGroups.settings.deleteMode')} onClick={() => void removeMode()}
-                  data-settings-search-action="Deletes this mode after confirmation" />
-              </SettingsCard>
-            </SettingsSection>
-          </div>
-        </section>
-      </SettingsPageScope>
-    );
-  }
-
   // ── 列表 ───────────────────────────────────────────────────────────────────
   return (
     <SettingsSection variant="page" title={t('modelGroups.title')} description={t('modelGroups.description')} testId="model-groups-settings">
-      <ModelGroupsOverview config={config} onOpenRoute={(id) => setView({ kind: 'route', id })} onOpenMode={(id) => setView({ kind: 'mode', id })} />
+      <ModelGroupsOverview config={config} onOpenRoute={(id) => setView({ kind: 'route', id })} />
       <SettingsSection
         title={t('modelGroups.routes')}
         titleId={modelGroupsSettings.routes.targetId}
@@ -512,40 +413,6 @@ export function ModelGroupsSection() {
           ))}
           {config.routes.length === 0 && (
             <SettingsBlock className="text-13 leading-[1.5] text-[var(--text-secondary)]">{t('modelGroups.settings.routesEmpty')}</SettingsBlock>
-          )}
-        </SettingsCard>
-      </SettingsSection>
-
-      <SettingsSection
-        title={t('modelGroups.modes')}
-        titleId={modelGroupsSettings.modes.targetId}
-        description={t('modelGroups.modesDescription')}
-        action={
-          <Button variant="secondary" size="md" onClick={() => void addMode()} disabled={config.routes.length === 0 || config.modes.length >= MODEL_GROUP_LIMITS.modes}
-            data-settings-search-action="Creates a mode and opens it">
-            <Plus size={14} aria-hidden />
-            {t('modelGroups.settings.newMode')}
-          </Button>
-        }
-      >
-        <SettingsCard>
-          {config.modes.map((item) => (
-            <SettingsRow
-              key={item.id}
-              media
-              data-model-group-mode={item.id}
-              data-settings-search-action="Opens one mode"
-              lead={<SettingsRowIcon><SlidersHorizontal size={16} aria-hidden /></SettingsRowIcon>}
-              title={item.name}
-              hint={modeSummary(item)}
-              chevron
-              onClick={() => setView({ kind: 'mode', id: item.id })}
-            />
-          ))}
-          {config.modes.length === 0 && (
-            <SettingsBlock className="text-13 leading-[1.5] text-[var(--text-secondary)]">
-              {t(config.routes.length === 0 ? 'modelGroups.settings.modesNeedRoute' : 'modelGroups.settings.modesEmpty')}
-            </SettingsBlock>
           )}
         </SettingsCard>
       </SettingsSection>

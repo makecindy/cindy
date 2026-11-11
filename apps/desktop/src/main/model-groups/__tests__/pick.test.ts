@@ -8,6 +8,8 @@
  * - 最省钱：还有配额的订阅不另外花钱，排在任何标价之前；没有标价的排在有标价的后面；一样便宜按列表顺序。
  * - 例外(§3)：有图片时只在能看图的来源里选，一个都没有就照常选；时段例外改走另一条路线，跨午夜也算，
  *   指向已删除或绕回来的路线时整条改道作废、按原路线选。
+ * - 推理强度(§4)：用最后实际走的那条路线的；选中的模型不支持这一档时不带。旧版存下的模式与选中的模式读取时
+ *   忽略，不报错。
  * - tier：unit，纯函数与注入依赖。
  */
 import { describe, expect, it } from 'vitest';
@@ -16,7 +18,9 @@ import type { ProviderView } from '@cindy/model-providers';
 
 import {
   normalizeModelGroupsConfig,
+  sanitizeModelGroupSelection,
   type ModelGroupRoute,
+  type ModelGroupSelection,
   type ModelGroupsConfig,
   type ModelGroupTraceQuota,
 } from '../../../shared/modelGroups.js';
@@ -118,13 +122,7 @@ describe('createModelGroupResolver', () => {
     id, name, source: 'user', connected: true, agents: ['codex'], routing: { codex: { enabled: true } },
     models: { codex: [{ id: 'gpt', name: 'GPT-5.6', mode: 'chat', efforts: ['low', 'high'], supportsImageInput }] },
   }) as unknown as ProviderView;
-  const config: ModelGroupsConfig = {
-    routes: [route('rotate')],
-    modes: [
-      { id: 'm1', name: '深入', target: { type: 'route', routeId: 'r1' }, effort: 'high' },
-      { id: 'm2', name: '怪档', target: { type: 'model', agentKind: 'codex', providerId: 'a', model: 'gpt' }, effort: 'xhigh' },
-    ],
-  };
+  const config: ModelGroupsConfig = { routes: [route('rotate')] };
   const make = (groups: ModelGroupsConfig = config, now = NOW) => createModelGroupResolver({
     config: () => groups,
     views: async () => [view('a', 'ChatGPT Pro'), view('b', 'ChatGPT Plus', true)],
@@ -148,12 +146,6 @@ describe('createModelGroupResolver', () => {
     expect(third.trace[2]).toMatchObject({ why: 'unavailable' });
   });
 
-  it('applies a mode\'s thinking depth only when the picked model supports it', async () => {
-    const resolver = make();
-    expect(await resolver.resolve({ selection: { type: 'mode', id: 'm1' } })).toMatchObject({ outcome: 'routed', groupName: '深入', route: { effort: 'high' } });
-    const unsupported = await resolver.resolve({ selection: { type: 'mode', id: 'm2' } });
-    expect(unsupported.outcome === 'routed' && 'effort' in unsupported.route).toBe(false);
-  });
 
   // PR #9974 review：分模型周配额的窗口按模型家族归属，不看用户改过的显示名，也不要求显示名包含整个窗口标签。
   it.each([
@@ -169,7 +161,6 @@ describe('createModelGroupResolver', () => {
       routes: [{ id: 'r1', name: 'R', strategy: 'order', candidates: [
         { agentKind: 'codex', providerId: 'a', model: modelId }, { agentKind: 'codex', providerId: 'b', model: modelId },
       ] }],
-      modes: [],
     };
     const resolver = createModelGroupResolver({
       config: () => groups,
@@ -195,7 +186,6 @@ describe('createModelGroupResolver', () => {
       { ...route('order'), exceptions },
       { id: 'r2', name: '省着用', strategy: 'order', candidates: [{ agentKind: 'codex', providerId: 'b', model: 'gpt' }], ...(back ? { exceptions: back } : {}) },
     ],
-    modes: [],
   });
   const toR2 = (from: number, to: number) => [{ when: { type: 'hours', from, to }, use: { type: 'route', routeId: 'r2' } }] as ModelGroupRoute['exceptions'];
 
@@ -209,6 +199,33 @@ describe('createModelGroupResolver', () => {
     const result = await make(hoursConfig([...exceptions!]), at(hour)).resolve({ selection: { type: 'route', id: 'r1' } });
     expect(result).toMatchObject({ outcome: 'routed', groupName: '主力编程', route: { providerId } });
     expect(result.outcome === 'routed' ? result.exceptions : null).toEqual(providerId === 'b' ? [{ type: 'hours', viaRouteName: '省着用' }] : undefined);
+  });
+
+  /** 模型只支持 low / high。 */
+  it.each([
+    ['the route\'s own effort', 20, 'high', undefined, 'high'],
+    ['nothing when the picked model does not support it', 20, 'xhigh', undefined, undefined],
+    ['the effort of the route an hours exception switched to', 14, 'high', 'low', 'low'],
+    ['no effort when the switched-to route has none', 14, 'high', undefined, undefined],
+  ] as const)('applies %s', async (_name, hour, ownEffort, otherEffort, expected) => {
+    const groups = hoursConfig(toR2(9, 18));
+    groups.routes[0] = { ...groups.routes[0], effort: ownEffort };
+    if (otherEffort) groups.routes[1] = { ...groups.routes[1], effort: otherEffort };
+    const result = await make(groups, at(hour)).resolve({ selection: { type: 'route', id: 'r1' } });
+    expect(result.outcome).toBe('routed');
+    expect(result.outcome === 'routed' ? result.route.effort : 'unrouted').toBe(expected);
+  });
+
+  it('reads a config and a selection saved before modes were merged into routes', async () => {
+    const saved = normalizeModelGroupsConfig({
+      routes: [{ ...route('order'), effort: 'high' }],
+      modes: [{ id: 'm1', name: '深入', target: { type: 'route', routeId: 'r1' }, effort: 'high' }],
+    });
+    expect(saved).toEqual({ routes: [{ ...route('order'), effort: 'high' }] });
+    expect(sanitizeModelGroupSelection({ type: 'mode', id: 'm1' })).toBeNull();
+    // 草稿里还留着旧模式的 id 时也只按没有选处理。
+    const old = { type: 'mode', id: 'r1' } as unknown as ModelGroupSelection;
+    expect((await make(saved).resolve({ selection: old })).outcome).toBe('missing');
   });
 
   it('drops a reroute that loops back and picks from the original route', async () => {

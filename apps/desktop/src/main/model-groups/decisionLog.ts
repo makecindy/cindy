@@ -2,6 +2,7 @@
  * 模型组「最近的选择」的本机记录：<userData>/owners/<账号>/model-group-decisions.json，`{ decisions: [...] }`，
  * 最新在前、最多 MODEL_GROUP_DECISIONS_MAX 条。只记组、选中的模型与来源、原因和当时的额度，
  * 不记消息、任务标题、账号或凭证。账号作用域未提交时不读不写。文件坏了按没有记录处理，下次写入覆盖。
+ * 旧版经模式(2026-11-11 并入路线)留下的条目读取时丢弃。
  */
 import {
   MODEL_GROUP_DECISIONS_MAX,
@@ -59,7 +60,7 @@ function decision(value: unknown): ModelGroupDecision | null {
   const at = finite(raw.at);
   const groupId = text(raw.groupId);
   const groupName = text(raw.groupName);
-  const groupType = raw.groupType === 'route' || raw.groupType === 'mode' ? raw.groupType : null;
+  const groupType = raw.groupType === 'route' ? raw.groupType : null;
   const outcome = raw.outcome === 'routed' || raw.outcome === 'unavailable' ? raw.outcome : null;
   if (at === null || !groupId || !groupName || !groupType || !outcome) return null;
   const entry: ModelGroupDecision = { at, groupType, groupId, groupName, outcome };

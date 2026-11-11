@@ -1,12 +1,12 @@
 /**
- * 设置 → 模型组 → 总览：一张「现在怎么走」的关系图（模式 → 路线或单个模型 → 来源）和「最近的选择」。
+ * 设置 → 模型组 → 总览：一张「现在怎么走」的关系图（路线 → 来源）和「最近的选择」。
  * 连线按节点的实际位置画在一层 SVG 上，尺寸变化时重画；悬停或聚焦一个节点时，与它相连的整条路径换成深一档的线色。
  * 来源后面的余量来自最近一次选中它时记下的额度，已过重置时刻的不显示。
  * 产品规则见 docs/product-rules/model-groups.md。
  */
 import { agentOptionOf } from '@/components/new-chat/agentOptions';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { SlidersHorizontal, Waypoints } from 'lucide-react';
+import { Waypoints } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { ProviderView } from '@cindy/model-providers';
 
@@ -44,12 +44,12 @@ function useCandidateNames(providers: readonly ProviderView[]) {
   }, [providers]);
 }
 
-type NodeKind = 'mode' | 'route' | 'model' | 'source';
+type NodeKind = 'route' | 'source';
 interface MapNode {
   id: string;
   kind: NodeKind;
   name: string;
-  /** 打开对应的路线或模式；来源节点没有。 */
+  /** 打开对应的路线；来源节点没有。 */
   open?: () => void;
   /** 打开时的读屏名称，如「打开路线：主力编程」。 */
   openLabel?: string;
@@ -113,20 +113,18 @@ function MapNodeButton({ node, active, latest, enterDelayMs, onHover, register, 
   providers: ReturnType<typeof useCandidateNames>;
 }) {
   const names = node.candidate ? providers(node.candidate) : null;
-  const icon = node.kind === 'mode'
-    ? <SlidersHorizontal size={14} aria-hidden className="shrink-0 text-[var(--text-secondary)]" />
-    : node.kind === 'route'
-      ? <Waypoints size={14} aria-hidden className="shrink-0 text-[var(--text-secondary)]" />
-      : node.candidate
-        ? <ProviderMark providerId={node.candidate.providerId} name={names?.provider?.name} routing={names?.provider?.routing}
-            logoKind={names?.provider?.logoKind} colorClass="text-[var(--text-primary)]" withMargin={false} dense />
-        : null;
+  const icon = node.kind === 'route'
+    ? <Waypoints size={14} aria-hidden className="shrink-0 text-[var(--text-secondary)]" />
+    : node.candidate
+      ? <ProviderMark providerId={node.candidate.providerId} name={names?.provider?.name} routing={names?.provider?.routing}
+          logoKind={names?.provider?.logoKind} colorClass="text-[var(--text-primary)]" withMargin={false} dense />
+      : null;
   return (
     <button
       ref={(element) => register(node.id, element)}
       type="button"
       data-model-group-node={node.id}
-      data-settings-search-action="Opens the route or mode behind a map node, or highlights the paths reaching a source; changes no setting"
+      data-settings-search-action="Opens the route behind a map node, or highlights the paths reaching a source; changes no setting"
       title={node.name}
       aria-label={node.openLabel ?? node.name}
       onClick={node.open}
@@ -155,11 +153,10 @@ function MapNodeButton({ node, active, latest, enterDelayMs, onHover, register, 
   );
 }
 
-function RelationMap({ config, decisions, onOpenRoute, onOpenMode }: {
+function RelationMap({ config, decisions, onOpenRoute }: {
   config: ModelGroupsConfig;
   decisions: readonly ModelGroupDecision[];
   onOpenRoute(id: string): void;
-  onOpenMode(id: string): void;
 }) {
   const { t } = useTranslation();
   const { providers } = useProviders();
@@ -168,7 +165,6 @@ function RelationMap({ config, decisions, onOpenRoute, onOpenMode }: {
   const { columns, edges } = useMemo(() => {
     const now = Date.now();
     const sources = new Map<string, MapNode>();
-    const models = new Map<string, MapNode>();
     const list: MapEdge[] = [];
     const source = (candidate: CandidateRef) => {
       const key = modelGroupCandidateKey(candidate);
@@ -184,34 +180,14 @@ function RelationMap({ config, decisions, onOpenRoute, onOpenMode }: {
       for (const candidate of route.candidates) list.push({ from: id, to: source(candidate), off: candidate.off });
       return { id, kind: 'route', name: route.name, open: () => onOpenRoute(route.id), openLabel: t('modelGroups.overview.openRoute', { name: route.name }) };
     });
-    const modes: MapNode[] = config.modes.map((mode) => {
-      const id = nodeId('mode', mode.id);
-      const target = mode.target;
-      if (target.type === 'route') {
-        list.push({ from: id, to: nodeId('route', target.routeId) });
-      } else {
-        const key = modelGroupCandidateKey(target);
-        const modelId = nodeId('model', key);
-        if (!models.has(key)) {
-          models.set(key, {
-            id: modelId, kind: 'model', name: namesOf(target).modelName, candidate: target,
-            open: () => onOpenMode(mode.id), openLabel: t('modelGroups.overview.openMode', { name: mode.name }),
-          });
-          list.push({ from: modelId, to: source(target) });
-        }
-        list.push({ from: id, to: modelId });
-      }
-      return { id, kind: 'mode', name: mode.name, open: () => onOpenMode(mode.id), openLabel: t('modelGroups.overview.openMode', { name: mode.name }) };
-    });
     return {
       columns: [
-        { key: 'modes', title: t('modelGroups.overview.columnModes'), nodes: modes },
-        { key: 'routes', title: t('modelGroups.overview.columnRoutes'), nodes: [...routes, ...models.values()] },
+        { key: 'routes', title: t('modelGroups.routes'), nodes: routes },
         { key: 'sources', title: t('modelGroups.overview.columnSources'), nodes: withEngineWhenAmbiguous([...sources.values()]) },
       ],
       edges: list,
     };
-  }, [config, decisions, namesOf, onOpenMode, onOpenRoute, t]);
+  }, [config, decisions, namesOf, onOpenRoute, t]);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const nodeRefs = useRef(new Map<string, HTMLButtonElement>());
@@ -244,20 +220,18 @@ function RelationMap({ config, decisions, onOpenRoute, onOpenMode }: {
   }, [measure, columns]);
 
   const related = useMemo(() => (hovered ? relatedNodes(hovered, edges) : null), [hovered, edges]);
-  // 最近一次任务实际走的路：选的那一项、它走的路线、最后落到的来源。例外改了道时，只标得出图上有的那几格。
+  // 最近一次任务实际走的路：选的路线和最后落到的来源。时段例外改走了别的路线时，选的路线连不到那个来源，不标。
   const latest = useMemo(() => {
     const last = decisions.find((item) => item.outcome === 'routed' && item.agentKind && item.providerId && item.model);
     const out = new Set<string>();
     if (!last?.agentKind || !last.providerId || !last.model) return out;
     const sourceKey = modelGroupCandidateKey({ agentKind: last.agentKind, providerId: last.providerId, model: last.model });
     const group = nodeId(last.groupType, last.groupId);
-    const ends = [nodeId('source', sourceKey), nodeId('model', sourceKey)];
-    // 从选中的那一项出发，只留下能通到这次来源的那条路。
-    const reach = (from: string, trail: string[]): boolean => {
-      if (ends.includes(from)) { for (const id of [...trail, from]) out.add(id); return true; }
-      return edges.filter((edge) => edge.from === from && !trail.includes(edge.to)).map((edge) => reach(edge.to, [...trail, from])).some(Boolean);
-    };
-    reach(group, []);
+    const end = nodeId('source', sourceKey);
+    if (edges.some((edge) => edge.from === group && edge.to === end)) {
+      out.add(group);
+      out.add(end);
+    }
     return out;
   }, [decisions, edges]);
   const paths = edges
@@ -279,7 +253,7 @@ function RelationMap({ config, decisions, onOpenRoute, onOpenMode }: {
     .sort((x, y) => (Number(x.on) * 2 + Number(x.latest)) - (Number(y.on) * 2 + Number(y.latest)));
 
   return (
-    <div ref={containerRef} className="relative grid grid-cols-[minmax(0,0.9fr)_minmax(0,1fr)_minmax(0,1.4fr)] gap-x-12 px-4 pb-4 pt-3" data-testid="model-groups-map">
+    <div ref={containerRef} className="relative grid grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] gap-x-12 px-4 pb-4 pt-3" data-testid="model-groups-map">
       {/* 连线跟在格子后面淡入；动的是外层 HTML 元素，不在 SVG 上做动画。 */}
       <div className="pointer-events-none absolute inset-0 animate-fade-in motion-reduce:animate-none" style={{ animationDelay: '220ms', animationFillMode: 'both' }} aria-hidden>
       <svg className="absolute inset-0 size-full overflow-visible">
@@ -394,10 +368,9 @@ function withEngineWhenAmbiguous(nodes: MapNode[]): MapNode[] {
     : node));
 }
 
-export function ModelGroupsOverview({ config, onOpenRoute, onOpenMode }: {
+export function ModelGroupsOverview({ config, onOpenRoute }: {
   config: ModelGroupsConfig;
   onOpenRoute(id: string): void;
-  onOpenMode(id: string): void;
 }) {
   const { t } = useTranslation();
   const [decisions, setDecisions] = useState<ModelGroupDecision[] | null>(null);
@@ -413,12 +386,12 @@ export function ModelGroupsOverview({ config, onOpenRoute, onOpenMode }: {
     return () => { cancelled = true; };
   }, []);
 
-  if (config.routes.length === 0 && config.modes.length === 0) return null;
+  if (config.routes.length === 0) return null;
   return (
     <>
       <SettingsSection title={t('modelGroups.overview.mapTitle')} description={t('modelGroups.overview.mapDescription')}>
         <SettingsCard>
-          <RelationMap config={config} decisions={decisions ?? []} onOpenRoute={onOpenRoute} onOpenMode={onOpenMode} />
+          <RelationMap config={config} decisions={decisions ?? []} onOpenRoute={onOpenRoute} />
           {(decisions ?? []).some((item) => item.outcome === 'routed') && (
             <div className="flex items-center gap-1.5 border-t border-[var(--settings-theme-card-border)] px-4 py-2.5 text-12 leading-[1.33] text-[var(--text-tertiary)]">
               <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-[var(--text-secondary)]" />

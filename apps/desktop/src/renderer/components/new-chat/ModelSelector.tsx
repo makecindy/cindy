@@ -4651,7 +4651,7 @@ export function ModelSelector({
   const activePluginModel = pluginModels?.active ?? null;
   const modelGroupRows = useModelGroupPickerRows(modelGroups?.config ?? MODEL_GROUPS_DEFAULTS);
   const activeModelGroupRow = modelGroups?.active
-    ? [...modelGroupRows.modes, ...modelGroupRows.routes].find((row) =>
+    ? modelGroupRows.find((row) =>
         row.selection.type === modelGroups.active?.type && row.selection.id === modelGroups.active.id) ?? null
     : null;
   const triggerTitleBase = withAgentDeviceLabel(pendingSelectionTitle
@@ -4801,7 +4801,7 @@ export function ModelSelector({
         </>
       ) : activeModelGroupRow ? (
         <>
-          <ModelGroupIcon type={activeModelGroupRow.selection.type} size={14} />
+          <ModelGroupIcon size={14} />
           <span className={cn('min-w-0 truncate font-medium text-[var(--text-primary)]', dense ? 'text-12' : 'text-13', isUltraCompactToolbar && 'hidden')}>
             {activeModelGroupRow.name}
           </span>

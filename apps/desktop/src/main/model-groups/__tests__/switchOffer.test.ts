@@ -6,7 +6,7 @@
  *   (按账号存放、有上限、损坏不阻断)。
  * - 现有覆盖缺口：pick.test.ts 只覆盖新任务选谁，不覆盖「排除正在用的账号后还剩谁」与哪些任务不该提议。
  * - 最小失败输入：同一供应商连接的另一个模型(同一份配额)被提议；配额已用完、停用或不可选的被提议；
- *   用户已自己换过模型仍提议；目标 / 定时 / 远程 / 共享任务被提议；记录文件不是 JSON；第 2001 条记录。
+ *   用户已自己换过模型仍提议；目标 / 定时 / 远程 / 共享任务被提议；记录文件不是 JSON；旧版经模式留下的记录；第 2001 条记录。
  * - tier：unit，注入依赖的纯函数；记录用临时目录里的真实文件，账号目录经 mock 指过去。
  * - 实测耗时：单独运行约 1 秒（pnpm exec vitest run src/main/model-groups/__tests__/switchOffer.test.ts）。
  */
@@ -83,7 +83,7 @@ function deps(overrides: {
     readSession: vi.fn(async () => ({ ...ROW, ...overrides.row })),
     isShared: () => overrides.shared === true,
     hasGoal: async () => overrides.goal === true,
-    config: () => overrides.config ?? { routes: [route('order')], modes: [] },
+    config: () => overrides.config ?? { routes: [route('order')] },
     candidateFacts: vi.fn(async () => overrides.facts ?? FACTS),
     now: () => NOW,
   };
@@ -93,10 +93,10 @@ describe('computeModelGroupSwitchOffer', () => {
   it.each([
     ['skips the same account and offers the next source, across engines', {}, { providerId: 'anthropic', agentKind: 'cc', crossEngine: true, sourceName: 'Claude' }],
     ['skips a source whose quota is used up', { facts: [FACTS[0], FACTS[1], fact('Claude', used(100)), FACTS[3]] }, { providerId: 'acct-b', crossEngine: false }],
-    ['skips a source the route has turned off', { config: { routes: [route('order', [2])], modes: [] } }, { providerId: 'acct-b' }],
+    ['skips a source the route has turned off', { config: { routes: [route('order', [2])] } }, { providerId: 'acct-b' }],
     ['skips a source that cannot be picked now', { facts: [FACTS[0], FACTS[1], fact('Claude', null, false), FACTS[3]] }, { providerId: 'acct-b' }],
     ['rotate counts on from the source in use', {
-      config: { routes: [route('rotate')], modes: [] }, row: { providerId: 'anthropic', agentKind: 'cc', model: 'opus' },
+      config: { routes: [route('rotate')] }, row: { providerId: 'anthropic', agentKind: 'cc', model: 'opus' },
       pickedKey: modelGroupCandidateKey({ agentKind: 'cc', providerId: 'anthropic', model: 'opus' }),
       facts: [fact('A', used(10)), fact('A', used(10)), fact('Claude', used(100)), fact('B', used(10))],
     }, { providerId: 'acct-b', crossEngine: true }],
@@ -106,7 +106,7 @@ describe('computeModelGroupSwitchOffer', () => {
   });
 
   it('gives the same answer when asked again (no rotate cursor or decision is advanced)', async () => {
-    const d = deps({ config: { routes: [route('rotate')], modes: [] } });
+    const d = deps({ config: { routes: [route('rotate')] } });
     const first = await computeModelGroupSwitchOffer(d, 's1');
     expect(await computeModelGroupSwitchOffer(d, 's1')).toEqual(first);
     expect(first).toMatchObject({ providerId: 'anthropic' });
@@ -114,7 +114,7 @@ describe('computeModelGroupSwitchOffer', () => {
 
   it.each([
     ['every other source is used up or the same account', { facts: [FACTS[0], FACTS[1], fact('Claude', used(100)), fact('B', used(100))] }],
-    ['the route was deleted', { config: { routes: [], modes: [] } }],
+    ['the route was deleted', { config: { routes: [] } }],
     ['a goal task', { goal: true }],
     ['a shared task', { shared: true }],
     ['a scheduled run', { row: { source: 'scheduler' } }],
@@ -157,14 +157,16 @@ describe('model group session bindings', () => {
     const bindings = Object.fromEntries(Array.from({ length: MODEL_GROUP_SESSION_BINDINGS_MAX }, (_, n) =>
       [`s${n}`, { selection: { type: 'route', id: 'r1' }, pickedKey: CURRENT, at: n + 1 }]));
     fs.writeFileSync(paths.file, JSON.stringify({ bindings }));
-    bindModelGroupSession('new', { type: 'mode', id: 'm1' }, CURRENT, 10_000);
+    bindModelGroupSession('new', { type: 'route', id: 'r2' }, CURRENT, 10_000);
     const saved = JSON.parse(fs.readFileSync(paths.file, 'utf8')) as { bindings: Record<string, unknown> };
     expect(Object.keys(saved.bindings)).toHaveLength(MODEL_GROUP_SESSION_BINDINGS_MAX);
     expect(readModelGroupSessionBinding('s0')).toBeNull();
-    expect(readModelGroupSessionBinding('new')).toEqual({ selection: { type: 'mode', id: 'm1' }, pickedKey: CURRENT, at: 10_000 });
+    expect(readModelGroupSessionBinding('new')).toEqual({ selection: { type: 'route', id: 'r2' }, pickedKey: CURRENT, at: 10_000 });
   });
 
-  it('reads a damaged file as no records and overwrites it on the next write', () => {
+  it('reads a damaged file or a record left by an old mode as no record, and overwrites it on the next write', () => {
+    fs.writeFileSync(paths.file, JSON.stringify({ bindings: { s1: { selection: { type: 'mode', id: 'm1' }, pickedKey: CURRENT, at: 1 } } }));
+    expect(readModelGroupSessionBinding('s1')).toBeNull();
     fs.writeFileSync(paths.file, '{not json');
     expect(readModelGroupSessionBinding('s1')).toBeNull();
     bindModelGroupSession('s1', { type: 'route', id: 'r1' }, CURRENT, 5);

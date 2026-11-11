@@ -1,5 +1,5 @@
 /**
- * 模型组「最近的选择」：新任务把路线或模式解析成具体模型后留下的一条记录，设置页总览按时间倒序列出。
+ * 模型组「最近的选择」：新任务把路线解析成具体模型后留下的一条记录，设置页总览按时间倒序列出。
  * 只记组、选中的模型与来源、原因和当时的额度；不记消息、任务标题、账号或凭证。
  */
 import type {
@@ -15,7 +15,8 @@ export const MODEL_GROUP_DECISIONS_MAX = 50;
 
 export interface ModelGroupDecision {
   at: number;
-  groupType: 'route' | 'mode';
+  /** 只有路线；旧版的模式条目读取时丢弃。 */
+  groupType: 'route';
   groupId: string;
   groupName: string;
   /** unavailable = 里面没有能用的模型，沿用了原来的模型。 */

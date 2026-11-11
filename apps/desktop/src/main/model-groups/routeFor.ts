@@ -1,8 +1,8 @@
 /**
- * 选中的路线或模式此刻实际要走哪条路线。纯函数：新任务解析(resolver.ts)与撞配额时的提议(switchOffer.ts)共用。
+ * 选中的路线此刻实际要走哪条路线。纯函数：新任务解析(resolver.ts)与撞配额时的提议(switchOffer.ts)共用。
  */
 import {
-  findModelGroupSelection,
+  findModelGroupRoute,
   modelGroupHoursMatch,
   type ModelGroupAppliedException,
   type ModelGroupRoute,
@@ -36,8 +36,8 @@ function followHours(start: ModelGroupRoute, config: ModelGroupsConfig, localHou
 }
 
 /**
- * 选中的路线或模式此刻实际要走的路线：模式指向的路线、指定一个模型的模式当作只有它的一条路线，再看时段例外。
- * 组已删除或模式指向的路线已删除为 missing。新任务解析与撞配额时的「换来源继续」共用这一份。
+ * 选中的路线此刻实际要走的路线：先看时段例外，推理强度取最后走的那条路线的。组已删除为 missing。
+ * 新任务解析与撞配额时的「换来源继续」共用这一份。
  */
 export function modelGroupRouteFor(
   config: ModelGroupsConfig,
@@ -45,22 +45,9 @@ export function modelGroupRouteFor(
   now: number,
 ):
   | { outcome: 'missing'; groupName: string }
-  | { outcome: 'found'; groupName: string; effort?: string; route: ModelGroupRoute; via: ModelGroupAppliedException[] } {
-  const found = findModelGroupSelection(config, selection);
-  if (!found) return { outcome: 'missing', groupName: '' };
-  const groupName = found.type === 'route' ? found.route.name : found.mode.name;
-  const effort = found.type === 'mode' ? found.mode.effort : undefined;
-  let base: ModelGroupRoute;
-  if (found.type === 'route') base = found.route;
-  else if (found.mode.target.type === 'route') {
-    const routeId = found.mode.target.routeId;
-    const target = config.routes.find((item) => item.id === routeId);
-    if (!target) return { outcome: 'missing', groupName };
-    base = target;
-  } else {
-    const { agentKind, providerId, model } = found.mode.target;
-    base = { id: found.mode.id, name: groupName, strategy: 'order', candidates: [{ agentKind, providerId, model }] };
-  }
+  | { outcome: 'found'; groupName: string; route: ModelGroupRoute; via: ModelGroupAppliedException[] } {
+  const base = findModelGroupRoute(config, selection);
+  if (!base) return { outcome: 'missing', groupName: '' };
   const { route, via } = followHours(base, config, new Date(now).getHours());
-  return { outcome: 'found', groupName, ...(effort ? { effort } : {}), route, via };
+  return { outcome: 'found', groupName: base.name, route, via };
 }

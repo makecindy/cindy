@@ -1,6 +1,6 @@
 /**
- * 模型组：把模型供应商里已有的几个来源合成一个可选项（路线），或把一条路线 / 一个模型连同思考深度
- * 存成模式。只决定新任务用哪个已连接的模型，不保存凭证，也不改变供应商、供应商组与账号池各自的规则。
+ * 模型组：把模型供应商里已有的几个来源合成一个可选项（路线），可连同推理强度一起存。
+ * 只决定新任务用哪个已连接的模型，不保存凭证，也不改变供应商、供应商组与账号池各自的规则。
  * 产品规则见 docs/product-rules/model-groups.md。
  */
 
@@ -8,7 +8,7 @@ export const MODEL_GROUPS_IPC = {
   GET: 'model-groups:get',
   SET: 'model-groups:set',
   RESOLVE: 'model-groups:resolve',
-  /** 记下这个任务是经哪条路线或模式建的、用着哪个候选(撞配额时据此提议换来源)。 */
+  /** 记下这个任务是经哪条路线建的、用着哪个候选(撞配额时据此提议换来源)。 */
   BIND_SESSION: 'model-groups:bind-session',
   /** 撞配额时同一条路线里还能接着用的下一个来源；没有为 null。 */
   SWITCH_OFFER: 'model-groups:switch-offer',
@@ -47,32 +47,22 @@ export interface ModelGroupRoute {
   strategy: ModelGroupStrategy;
   candidates: ModelGroupCandidate[];
   exceptions?: ModelGroupException[];
-}
-
-export type ModelGroupModeTarget =
-  | { type: 'route'; routeId: string }
-  | { type: 'model'; agentKind: ModelGroupAgentKind; providerId: string; model: string };
-
-export interface ModelGroupMode {
-  id: string;
-  name: string;
-  target: ModelGroupModeTarget;
-  /** 思考深度；选中的模型不支持这一档时按该模型的默认档运行。 */
+  /** 推理强度；不设或选中的模型不支持这一档时不带，按该模型的默认档运行。 */
   effort?: string;
 }
 
+/** 2026-11-11 起只有路线；旧版存下的 modes 读取时忽略。 */
 export interface ModelGroupsConfig {
   routes: ModelGroupRoute[];
-  modes: ModelGroupMode[];
 }
 
-export const MODEL_GROUPS_DEFAULTS: ModelGroupsConfig = { routes: [], modes: [] };
+export const MODEL_GROUPS_DEFAULTS: ModelGroupsConfig = { routes: [] };
 
-export const MODEL_GROUP_LIMITS = { routes: 32, modes: 32, candidates: 16, exceptions: 8, name: 40, id: 64, field: 256 } as const;
+export const MODEL_GROUP_LIMITS = { routes: 32, candidates: 16, exceptions: 8, name: 40, id: 64, field: 256, effort: 32 } as const;
 
-/** 草稿与选择器里选中的那一项。 */
+/** 草稿与选择器里选中的那一项。旧版的 type: 'mode' 读取时按没有选处理。 */
 export interface ModelGroupSelection {
-  type: 'route' | 'mode';
+  type: 'route';
   id: string;
 }
 
@@ -138,7 +128,7 @@ export type ModelGroupResolveResult =
       /** 起作用的例外，按发生顺序(先改走路线，再按图片筛)；没有就省略。 */
       exceptions?: ModelGroupAppliedException[];
     }
-  /** missing = 这条路线或模式已被删除；unavailable = 里面没有现在能用的模型。两者都沿用用户原来选的模型。 */
+  /** missing = 这条路线已被删除；unavailable = 里面没有现在能用的模型。两者都沿用用户原来选的模型。 */
   | { outcome: 'missing' | 'unavailable'; groupName: string; trace: ModelGroupTraceEntry[] };
 
 /** 撞配额时「换到下一个来源继续」的提议(model-groups.md §6.1)。 */
@@ -207,7 +197,8 @@ function normalizeModelGroupRoute(raw: unknown): ModelGroupRoute | null {
     .map(exception)
     .filter((item): item is ModelGroupException => !!item)
     .slice(0, MODEL_GROUP_LIMITS.exceptions);
-  return { id, name, strategy, candidates, ...(exceptions.length > 0 ? { exceptions } : {}) };
+  const effort = text(value.effort, MODEL_GROUP_LIMITS.effort);
+  return { id, name, strategy, candidates, ...(exceptions.length > 0 ? { exceptions } : {}), ...(effort ? { effort } : {}) };
 }
 
 function hour(value: unknown): number | null {
@@ -250,33 +241,15 @@ function pruneExceptions(route: ModelGroupRoute, routeIds: ReadonlySet<string>):
   return rest;
 }
 
-function mode(raw: unknown, routeIds: ReadonlySet<string>): ModelGroupMode | null {
-  if (!raw || typeof raw !== 'object') return null;
-  const value = raw as Record<string, unknown>;
-  const id = text(value.id, MODEL_GROUP_LIMITS.id);
-  const name = text(value.name, MODEL_GROUP_LIMITS.name);
-  const rawTarget = value.target && typeof value.target === 'object' ? value.target as Record<string, unknown> : null;
-  if (!id || !name || !rawTarget) return null;
-  let target: ModelGroupModeTarget | null = null;
-  if (rawTarget.type === 'route') {
-    const routeId = text(rawTarget.routeId, MODEL_GROUP_LIMITS.id);
-    // 指向已删除路线的模式一并去掉：保存路线与模式是同一次写入，留下它只会在选择器里出现一个必然失败的项。
-    if (routeId && routeIds.has(routeId)) target = { type: 'route', routeId };
-  } else if (rawTarget.type === 'model') {
-    const model = candidate(rawTarget);
-    if (model) target = { type: 'model', agentKind: model.agentKind, providerId: model.providerId, model: model.model };
-  }
-  if (!target) return null;
-  const effort = text(value.effort, 32);
-  return { id, name, target, ...(effort ? { effort } : {}) };
-}
-
 function uniqueById<T extends { id: string }>(items: readonly T[], max: number): T[] {
   const seen = new Set<string>();
   return items.filter((item) => !seen.has(item.id) && !!seen.add(item.id)).slice(0, max);
 }
 
-/** 磁盘与 IPC 的同一道归一：坏条目丢弃，不让一条坏数据使整份配置读不出来。 */
+/**
+ * 磁盘与 IPC 的同一道归一：坏条目丢弃，不让一条坏数据使整份配置读不出来。
+ * 旧版的 modes(2026-11-11 并入路线)不读，下次保存时随之去掉。
+ */
 export function normalizeModelGroupsConfig(raw: unknown): ModelGroupsConfig {
   const value = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
   const routes = uniqueById(
@@ -284,30 +257,21 @@ export function normalizeModelGroupsConfig(raw: unknown): ModelGroupsConfig {
     MODEL_GROUP_LIMITS.routes,
   );
   const routeIds = new Set(routes.map((route) => route.id));
-  const prunedRoutes = routes.map((route) => pruneExceptions(route, routeIds));
-  const modes = uniqueById(
-    (Array.isArray(value.modes) ? value.modes : []).map((item) => mode(item, routeIds)).filter((item): item is ModelGroupMode => !!item),
-    MODEL_GROUP_LIMITS.modes,
-  );
-  return { routes: prunedRoutes, modes };
+  return { routes: routes.map((route) => pruneExceptions(route, routeIds)) };
 }
 
-export function findModelGroupSelection(
+export function findModelGroupRoute(
   config: ModelGroupsConfig,
   selection: ModelGroupSelection | null | undefined,
-): { type: 'route'; route: ModelGroupRoute } | { type: 'mode'; mode: ModelGroupMode } | null {
-  if (!selection) return null;
-  if (selection.type === 'route') {
-    const route = config.routes.find((item) => item.id === selection.id);
-    return route ? { type: 'route', route } : null;
-  }
-  const found = config.modes.find((item) => item.id === selection.id);
-  return found ? { type: 'mode', mode: found } : null;
+): ModelGroupRoute | null {
+  if (selection?.type !== 'route') return null;
+  return config.routes.find((item) => item.id === selection.id) ?? null;
 }
 
+/** 草稿、任务记录与 IPC 里的选择；旧版的模式(type: 'mode')按没有选处理。 */
 export function sanitizeModelGroupSelection(raw: unknown): ModelGroupSelection | null {
   if (!raw || typeof raw !== 'object') return null;
   const value = raw as Record<string, unknown>;
   const id = text(value.id, MODEL_GROUP_LIMITS.id);
-  return id && (value.type === 'route' || value.type === 'mode') ? { type: value.type, id } : null;
+  return id && value.type === 'route' ? { type: 'route', id } : null;
 }

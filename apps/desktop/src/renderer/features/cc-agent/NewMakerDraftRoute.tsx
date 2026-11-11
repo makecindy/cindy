@@ -1,7 +1,7 @@
 import { PluginUiEnablePrompt } from '@/components/new-chat/PluginUiEnablePrompt';
 import { askPluginModelRoute, usePluginModels, writePluginModelRouteNote } from './pluginModelRoute';
 import { bindModelGroupSession, resolveModelGroup, useModelGroups, writeModelGroupRouteNote } from '../model-groups/modelGroupsClient';
-import { findModelGroupSelection, type ModelGroupSelection } from '../../../shared/modelGroups';
+import { findModelGroupRoute, type ModelGroupSelection } from '../../../shared/modelGroups';
 import type { GhostModelRoute, GhostPickerModel } from '../../../shared/ghost';
 import { deviceDisplayName } from '@/lib/deviceName';
 import { useRemoteDraftDefaults, useRemoteDraftSelection, useRemoteDraftPush } from './useRemoteDraftDefaults';
@@ -1132,7 +1132,7 @@ export function NewMakerDraftRoute() {
   // 模型组与插件模型同一个条件：只在本机新任务提供。记住的那一项后来被删掉时按没选处理。
   const { config: modelGroupsConfig } = useModelGroups(pluginModelsAllowed);
   const activeModelGroup = useMemo(
-    () => (pluginModelsAllowed && !activePluginModel && findModelGroupSelection(modelGroupsConfig, draft.modelGroup)
+    () => (pluginModelsAllowed && !activePluginModel && findModelGroupRoute(modelGroupsConfig, draft.modelGroup)
       ? draft.modelGroup
       : null),
     [pluginModelsAllowed, activePluginModel, modelGroupsConfig, draft.modelGroup],

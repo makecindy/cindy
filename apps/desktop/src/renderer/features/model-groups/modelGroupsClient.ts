@@ -91,7 +91,7 @@ export async function resolveModelGroup(
 }
 
 /**
- * 记下这个任务经哪条路线或模式建、现在用着哪个候选；只在模型组真的选了一个(routed)时记。
+ * 记下这个任务经哪条路线建、现在用着哪个候选；只在模型组真的选了一个(routed)时记。
  * 失败只记日志：没有记录时撞配额就不提议换来源，其余一切照旧。
  */
 export function bindModelGroupSession(

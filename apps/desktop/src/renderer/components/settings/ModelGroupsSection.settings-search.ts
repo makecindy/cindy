@@ -27,19 +27,9 @@ export const modelGroupsSettings = defineSettings({
       'modelGroups.settings.exceptions.title',
       'modelGroups.settings.sources',
       'modelGroups.settings.try.title',
+      'modelGroups.settings.effort',
     ],
-    aliases: ['路由', '额度', '订阅', '多账号', '自动选模型', 'routing', 'quota', 'fallback', 'failover', 'load balance'],
-  },
-  modes: {
-    id: 'modelGroups.modes',
-    tab: 'model-groups',
-    targetId: 'settings-model-groups-modes',
-    fallbackTargetId: 'settings-panel-model-groups',
-    titleKey: 'modelGroups.modes',
-    descriptionKey: 'modelGroups.modesDescription',
-    sectionKey: 'settings.tabs.modelGroups',
-    keywordKeys: ['modelGroups.settings.mode.effort', 'modelGroups.settings.mode.target'],
-    aliases: ['预设', '思考深度', 'preset', 'profile', 'thinking'],
+    aliases: ['路由', '额度', '订阅', '多账号', '自动选模型', 'routing', 'quota', 'fallback', 'failover', 'load balance', 'thinking'],
   },
 });
 

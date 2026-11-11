@@ -5,7 +5,8 @@
  * - Bug／规则依据：docs/product-rules/model-groups.md 总览「最近的选择」；docs/dev-rules/credentials-and-local-storage.md
  *   （按账号存放、有上限、损坏不阻断）。
  * - 现有覆盖缺口：pick.test.ts 只覆盖选谁，不覆盖选完后的记录。
- * - 最小失败输入：连记 51 次（第 1 条应被挤掉、最新在前）；文件内容不是 JSON；组已被删除（missing）。
+ * - 最小失败输入：连记 51 次（第 1 条应被挤掉、最新在前）；文件内容不是 JSON；组已被删除（missing）；
+ *   旧版经模式留下的条目（2026-11-11 模式并入路线）。
  * - tier：unit，临时目录里的真实文件读写，账号目录经 mock 指过去。
  * - 实测耗时：单独运行约 1.2 秒（pnpm exec vitest run src/main/model-groups/__tests__/decisionLog.test.ts）。
  */
@@ -63,12 +64,13 @@ describe('model group decision log', () => {
     expect(decisions.at(-1)?.groupId).toBe('r2');
   });
 
-  it('records unavailable but not a deleted group, and treats a corrupt file as no history', () => {
-    recordModelGroupDecision({ type: 'mode', id: 'gone' }, { outcome: 'missing', groupName: '旧模式', trace: [] }, 1);
+  it('records unavailable but not a deleted group, drops entries left by old modes, and treats a corrupt file as no history', () => {
+    recordModelGroupDecision({ type: 'route', id: 'gone' }, { outcome: 'missing', groupName: '旧路线', trace: [] }, 1);
     expect(fs.existsSync(paths.file)).toBe(false);
 
-    recordModelGroupDecision({ type: 'mode', id: 'm1' }, { outcome: 'unavailable', groupName: '深入', trace: [] }, 2);
-    expect(readModelGroupDecisions()).toEqual([{ at: 2, groupType: 'mode', groupId: 'm1', groupName: '深入', outcome: 'unavailable' }]);
+    fs.writeFileSync(paths.file, JSON.stringify({ decisions: [{ at: 1, groupType: 'mode', groupId: 'm1', groupName: '深入', outcome: 'unavailable' }] }));
+    recordModelGroupDecision({ type: 'route', id: 'r9' }, { outcome: 'unavailable', groupName: '省着用', trace: [] }, 2);
+    expect(readModelGroupDecisions()).toEqual([{ at: 2, groupType: 'route', groupId: 'r9', groupName: '省着用', outcome: 'unavailable' }]);
 
     fs.writeFileSync(paths.file, '{not json');
     expect(readModelGroupDecisions()).toEqual([]);
