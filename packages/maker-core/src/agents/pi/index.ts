@@ -111,6 +111,9 @@ import {
   projectPiRequestDiagnostics,
   CINDY_BRIDGE_EXTENSION_SOURCE } from './cindy-bridge-source.js';
 import { nativeProviderAdapterAliases } from './native-provider-adapter-source.js';
+import {
+  CINDY_TOOL_FOLD_EXTENSION_FILENAME,
+  CINDY_TOOL_FOLD_EXTENSION_SOURCE } from './pi-tool-fold-source.js';
 import { parsePiNativeRuntimeSettings, resolvePiNativeReserve, type PiNativeRuntimeSettings } from './native-runtime-settings.js';
 import {
   CINDY_SUBAGENT_ENV,
@@ -3406,6 +3409,9 @@ export class PiAgent extends BaseAgent {
     // 会导致 bridge/subagent 静默失效)。
     const bridgeExtensionPath = joinRemotePosixPath(extensionsDir, CINDY_BRIDGE_EXTENSION_FILENAME);
     await writeFile(bridgeExtensionPath, CINDY_BRIDGE_EXTENSION_SOURCE);
+    // cindy-tool-fold: 老工具往返折叠成一行。默认开，CINDY_PI_TOOL_FOLD=off 可关。
+    const toolFoldExtensionPath = joinRemotePosixPath(extensionsDir, CINDY_TOOL_FOLD_EXTENSION_FILENAME);
+    await writeFile(toolFoldExtensionPath, CINDY_TOOL_FOLD_EXTENSION_SOURCE);
     // cindy-subagent extension:与 bridge 并列的独立扩展(职责分离 —— bridge 管权限门与
     // MCP 桥,这个只管子代理)。子进程继承 PI_CODING_AGENT_DIR,因此同样加载 bridge,
     // 权限门对子代理照样生效;递归由扩展内的 depth env 自己截断。
@@ -4170,6 +4176,8 @@ export class PiAgent extends BaseAgent {
         ...(guestContextExtensionPath ? ['--extension', guestContextExtensionPath] : []),
         '--extension',
         bridgeExtensionPath,
+        '--extension',
+        toolFoldExtensionPath,
         ...(localSubagentSupported ? ['--extension', subagentExtensionPath] : []),
         ...(!reviewMode && !opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly && planModeExtAvailable ? ['--extension', planModeExtPath] : []),
         ...(loadProjectResourcesInPlace
@@ -5777,6 +5785,8 @@ export class PiAgent extends BaseAgent {
         spawnEnv[PI_PERMISSION_HASH_ENV] = permissionSnapshotHash;
         spawnEnv[PI_EXTENSION_BUNDLE_HASH_ENV] = createHash('sha256')
           .update(CINDY_BRIDGE_EXTENSION_SOURCE)
+          .update('\n')
+          .update(CINDY_TOOL_FOLD_EXTENSION_SOURCE)
           .update('\n')
           .update(CINDY_SUBAGENT_EXTENSION_SOURCE)
           .digest('hex')

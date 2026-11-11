@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.setConfig({ testTimeout: 30_000 });
 
 import { CINDY_BRIDGE_EXTENSION_SOURCE } from "../cindy-bridge-source.js";
+import { CINDY_TOOL_FOLD_EXTENSION_SOURCE } from "../pi-tool-fold-source.js";
 import { CINDY_SUBAGENT_EXTENSION_SOURCE } from "../cindy-subagent-source.js";
 import { piCacheRouteKey } from '../cache-compatibility.js';
 import * as piSubagentRuns from '../pi-subagent-runs.js';
@@ -8320,6 +8321,8 @@ describe("Pi provider-aware model routing", () => {
     await startRemote();
     const expected = createHash("sha256")
       .update(CINDY_BRIDGE_EXTENSION_SOURCE)
+      .update("\n")
+      .update(CINDY_TOOL_FOLD_EXTENSION_SOURCE)
       .update("\n")
       .update(CINDY_SUBAGENT_EXTENSION_SOURCE)
       .digest("hex")

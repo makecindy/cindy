@@ -2766,6 +2766,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       // 轮 40-w4-t15:argv 里的 extension 路径是 posix join(远端派生路径统一
       // POSIX),对比也用 posix —— 平台 path.join 在 Windows 拼反斜杠不匹配。
       path.posix.join(configHome, 'internal-extensions', 'cindy-bridge.ts'),
+      path.posix.join(configHome, 'internal-extensions', 'cindy-tool-fold.ts'),
       path.posix.join(configHome, 'internal-extensions', 'cindy-subagent.ts'),
     ]);
     await vi.waitFor(() => {
@@ -2799,6 +2800,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     ]);
     expect(repeatedArgValues(args, '--extension')).toEqual([
       path.posix.join(configHome, 'internal-extensions', 'cindy-bridge.ts'),
+      path.posix.join(configHome, 'internal-extensions', 'cindy-tool-fold.ts'),
       path.posix.join(configHome, 'internal-extensions', 'cindy-subagent.ts'),
       realpathSync(path.join(cwd, '.pi', 'extensions', 'hook.ts')),
     ]);
@@ -2819,6 +2821,11 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
         knobs.spawnedEnvs[0]!.PI_CODING_AGENT_DIR!,
         'internal-extensions',
         'cindy-bridge.ts',
+      ),
+      path.posix.join(
+        knobs.spawnedEnvs[0]!.PI_CODING_AGENT_DIR!,
+        'internal-extensions',
+        'cindy-tool-fold.ts',
       ),
     ]);
     await reviewHandle.close();
@@ -3319,10 +3326,12 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     expect(repeatedArgValues(knobs.spawnedArgs[reviewIndex]!, '--skill')).toEqual([]);
     expect(repeatedArgValues(knobs.spawnedArgs[approvedIndex]!, '--extension')).toEqual([
       path.posix.join(approvedHome, 'internal-extensions', 'cindy-bridge.ts'),
+      path.posix.join(approvedHome, 'internal-extensions', 'cindy-tool-fold.ts'),
       path.posix.join(approvedHome, 'internal-extensions', 'cindy-subagent.ts'),
     ]);
     expect(repeatedArgValues(knobs.spawnedArgs[reviewIndex]!, '--extension')).toEqual([
       path.posix.join(reviewHome, 'internal-extensions', 'cindy-bridge.ts'),
+      path.posix.join(reviewHome, 'internal-extensions', 'cindy-tool-fold.ts'),
     ]);
     expect(repeatedArgValues(knobs.spawnedArgs[approvedIndex]!, '--prompt-template')).toEqual([]);
     expect(repeatedArgValues(knobs.spawnedArgs[reviewIndex]!, '--prompt-template')).toEqual([]);

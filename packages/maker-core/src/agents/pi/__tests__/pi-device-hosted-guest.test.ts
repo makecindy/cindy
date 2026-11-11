@@ -239,6 +239,7 @@ describe('Pi device-hosted guest sessions', () => {
       expect(repeatedArgValues(args, '--extension')).toEqual([
         path.posix.join(extensionsDir, CINDY_GUEST_CONTEXT_EXTENSION_FILENAME),
         path.posix.join(extensionsDir, 'cindy-bridge.ts'),
+        path.posix.join(extensionsDir, 'cindy-tool-fold.ts'),
         path.posix.join(extensionsDir, 'cindy-subagent.ts'),
       ]);
       // 受邀者的项目技能与提示词模板照常加载；本机目录里的 Agent Skills 与托管技能不加载。
@@ -450,6 +451,7 @@ describe('Pi device-hosted guest sessions', () => {
       }
       expect(repeatedArgValues(args, '--extension')).toEqual([
         path.posix.join(extensionsDir, 'cindy-bridge.ts'),
+        path.posix.join(extensionsDir, 'cindy-tool-fold.ts'),
         path.posix.join(extensionsDir, 'cindy-subagent.ts'),
         realpathSync(path.join(cwd, '.pi', 'extensions', 'hook.ts')),
       ]);

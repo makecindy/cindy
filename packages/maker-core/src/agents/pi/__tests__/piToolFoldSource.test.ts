@@ -1,0 +1,170 @@
+import { describe, expect, it } from 'vitest';
+import { CINDY_TOOL_FOLD_EXTENSION_SOURCE } from '../pi-tool-fold-source.js';
+
+type Block = { type: string; [key: string]: unknown };
+type Message = { role?: string; toolCallId?: string; toolName?: string; isError?: boolean; content?: Block[]; [key: string]: unknown };
+type Handler = (event: unknown) => unknown;
+type Tool = { execute: (id: string, params: unknown) => Promise<{ content?: Block[]; isError?: boolean }> };
+
+/** Run the shipped extension source the way pi loads it, capturing handlers and tools. */
+function loadExtension(env: Record<string, string> = {}) {
+  for (const [key, value] of Object.entries(env)) process.env[key] = value;
+  const body = CINDY_TOOL_FOLD_EXTENSION_SOURCE.replace(/^export default /m, '');
+  const handlers: Record<string, Handler> = {};
+  const tools: Record<string, Tool> = {};
+  const pi = {
+    on(name: string, fn: Handler) { handlers[name] = fn; },
+    registerTool(tool: Tool & { name: string }) { tools[tool.name] = tool; },
+  };
+  new Function('pi', `const extension = ${body};\nextension(pi);`)(pi);
+  if (!handlers.context) throw new Error('context handler was not registered');
+  return { context: handlers.context, toolResult: handlers.tool_result, tool: tools.toolfold_read };
+}
+
+function call(id: string, name: string, args: Record<string, unknown>): Message {
+  return { role: 'assistant', content: [{ type: 'toolCall', id, name, arguments: args }] };
+}
+
+function result(id: string, name: string, text: string, isError = false): Message {
+  return { role: 'toolResult', toolCallId: id, toolName: name, isError, content: [{ type: 'text', text }] };
+}
+
+function pairs(count: number, textLength = 2000): Message[] {
+  const messages: Message[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const id = `call-${index}`;
+    messages.push(call(id, 'bash', { command: `run step ${index} with a reasonably long command line` }));
+    messages.push(result(id, 'bash', `step ${index} ok ${'x'.repeat(textLength)}`));
+  }
+  return messages;
+}
+
+function isFolded(message: Message): boolean {
+  const args = message.content?.[0]?.arguments as Record<string, unknown> | undefined;
+  return args?.__folded === true;
+}
+
+function projection(handler: Handler, messages: Message[]): Message[] {
+  const changed = handler({ messages }) as { messages: Message[] } | undefined;
+  return changed ? changed.messages : messages;
+}
+
+describe('cindy-tool-fold extension source', () => {
+  it('leaves the transcript alone until the backlog reaches a batch', () => {
+    const { context } = loadExtension();
+    // 10 pairs, newest 8 stay resident: backlog 2 is below MIN_PAIRS and below MIN_CHARS.
+    expect(context({ messages: pairs(10) })).toBeUndefined();
+  });
+
+  it('folds the whole backlog at once, keeps the newest 8 pairs verbatim and names the recovery id', () => {
+    const { context } = loadExtension();
+    const messages = pairs(40);
+    const out = projection(context, messages);
+    expect(out).toHaveLength(messages.length);
+    const residentFrom = messages.length - 16;
+    for (let index = 0; index < residentFrom; index += 1) {
+      if (messages[index].role === 'assistant') expect(isFolded(out[index])).toBe(true);
+    }
+    for (let index = residentFrom; index < messages.length; index += 1) {
+      expect(out[index]).toBe(messages[index]);
+    }
+    // Protocol shape survives: every result still answers an existing call, ids unchanged.
+    const ids = new Set<string>();
+    for (const message of out) {
+      if (message.role === 'assistant') {
+        for (const block of message.content ?? []) if (block.type === 'toolCall') ids.add(String(block.id));
+      } else if (message.role === 'toolResult') {
+        expect(ids.has(String(message.toolCallId))).toBe(true);
+      }
+    }
+    const foldedText = String(out[1].content![0].text);
+    expect(foldedText).toContain('[folded] ok');
+    expect(foldedText).toContain('toolfold_read("call-0")');
+    expect(foldedText).toContain('step 0 ok');
+    expect(String((out[0].content![0].arguments as Record<string, unknown>).summary)).toContain('run step 0');
+  });
+
+  it('keeps folds sticky and does not rewrite them again until the next batch', () => {
+    const { context } = loadExtension();
+    const first = projection(context, pairs(40));
+    const firstFolded = String((first[0].content![0].arguments as Record<string, unknown>).summary);
+    const firstSavings = JSON.stringify(first).length;
+    const again = projection(context, pairs(40));
+    expect(String((again[0].content![0].arguments as Record<string, unknown>).summary)).toBe(firstFolded);
+    expect(JSON.stringify(again).length).toBe(firstSavings);
+    const grown = projection(context, pairs(41));
+    expect(String((grown[0].content![0].arguments as Record<string, unknown>).summary)).toBe(firstFolded);
+    expect(isFolded(grown[grown.length - 4])).toBe(false);
+  });
+
+  it('never folds a round-trip that carries an image', () => {
+    const { context } = loadExtension();
+    const messages = pairs(40);
+    messages[1] = {
+      role: 'toolResult',
+      toolCallId: 'call-0',
+      toolName: 'read',
+      content: [
+        { type: 'text', text: 'image follows' },
+        { type: 'image', data: 'a'.repeat(200) },
+      ],
+    };
+    const out = projection(context, messages);
+    expect(isFolded(out[0])).toBe(false);
+    expect(out[1]).toBe(messages[1]);
+  });
+
+  it('recovers a folded original via toolfold_read and pins it until the next user message', async () => {
+    const { context, tool } = loadExtension();
+    const messages = pairs(40);
+    projection(context, messages);
+    const recovered = await tool.execute('t1', { call_id: 'call-5' });
+    const text = String(recovered.content![0].text);
+    expect(text).toContain('call: bash');
+    expect(text).toContain('run step 5');
+    expect(text).toContain('step 5 ok');
+    // Pinned: the pair projects as originals again while everything else stays folded.
+    const pinnedView = projection(context, messages);
+    expect(isFolded(pinnedView[10])).toBe(false);
+    expect(pinnedView[11]).toBe(messages[11]);
+    expect(isFolded(pinnedView[0])).toBe(true);
+    // Turn boundary: a new user message releases the pin and the pair re-folds.
+    const nextTurn = [...messages, { role: 'user', content: [{ type: 'text', text: 'next turn' }] }];
+    const released = projection(context, nextTurn);
+    expect(isFolded(released[10])).toBe(true);
+  });
+
+  it('evicts the least-recently-recovered pin when the pin budget is exceeded', async () => {
+    const { context, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_PIN_BUDGET: '1' });
+    const messages = pairs(40);
+    projection(context, messages);
+    await tool.execute('t1', { call_id: 'call-2' });
+    await tool.execute('t2', { call_id: 'call-6' }); // budget 1 char -> evicts call-2
+    const view = projection(context, messages);
+    expect(isFolded(view[4])).toBe(true); // call-2 re-folded: oldest recovery evicted
+    expect(isFolded(view[12])).toBe(false); // call-6 still pinned
+  });
+
+  it('truncates giant results at ingestion and recovers the full text from the in-memory registry', async () => {
+    const { context, toolResult, tool } = loadExtension();
+    const giant = 'y'.repeat(25000);
+    const truncated = toolResult({ toolName: 'bash', toolCallId: 'giant-1', content: [{ type: 'text', text: giant }] }) as { content: Block[] } | undefined;
+    expect(truncated).toBeDefined();
+    const kept = (truncated!.content ?? []).map((b) => String(b.text ?? '')).join('\n');
+    expect(kept.startsWith('y'.repeat(2000))).toBe(true);
+    expect(kept.length).toBeLessThan(2600);
+    expect(kept).toContain('toolfold_read("giant-1")');
+    expect(toolResult({ toolName: 'bash', toolCallId: 'giant-2', content: [{ type: 'text', text: 'small' }] })).toBeUndefined();
+    // structuredContent must survive a rewrite (pi drops it when only content is returned).
+    const structured = toolResult({ toolName: 'mcp__x__y', toolCallId: 'giant-3', content: [{ type: 'text', text: giant }], structuredContent: { ok: true } }) as { structuredContent?: unknown };
+    expect(structured.structuredContent).toEqual({ ok: true });
+    // The full original is recoverable even though the transcript only holds the truncation.
+    const recovered = await tool.execute('t1', { call_id: 'giant-1' });
+    expect(String(recovered.content![0].text)).toBe(giant);
+    // A truncated result still folds normally afterwards.
+    const messages = pairs(40);
+    messages[1] = { role: 'toolResult', toolCallId: 'call-0', toolName: 'bash', content: [{ type: 'text', text: kept }] };
+    const out = projection(context, messages);
+    expect(isFolded(out[0])).toBe(true);
+  });
+});
