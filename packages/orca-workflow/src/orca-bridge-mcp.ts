@@ -1020,6 +1020,13 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
               worker_id,
             }, true);
           }
+          // progress 是内部遥测：带问题说明它不是进度，拒在派发前，防止内部问题漏进用户通知。
+          if (report?.state === 'progress' && report.question?.trim()) {
+            return text({
+              error: 'a progress report is internal telemetry and must not carry a question; send state=blocked with report.question instead',
+              worker_id,
+            }, true);
+          }
           const authorization = authorizeSendToLeadCaller(resolveRuntimeMcpContext(ctx));
           if (!authorization.ok) return text(authorization.error, true);
           // progress 只走 Worker link：不 rehydrate Lead（resolveLead 可能拉起/重连 Lead 会话，

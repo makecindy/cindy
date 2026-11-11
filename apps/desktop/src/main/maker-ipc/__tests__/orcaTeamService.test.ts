@@ -1853,6 +1853,33 @@ describe('OrcaTeamService', () => {
     expect(deps.setWorkerLatestReport).toHaveBeenCalledWith('worker-1', expect.objectContaining({ state: 'waiting' }));
   });
 
+  // 排队回报被改写/撤回/合并后，latest_report 投影必须失效（否则面板继续声称旧「等回复」）。
+  it('invalidates the projected report when its queued message is rewritten', async () => {
+    const { deps, getWorker, service } = createDeps();
+    await service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '干活' });
+    // 回报进 Lead 队列（带 queuedMessageId），投影来源即该条。
+    await service.captureLocalWorkerReport('worker-session-1')(true, {
+      delivered: false,
+      queuedMessageId: 'queued-1',
+      report: { state: 'blocked', question: '选 A 还是 B' },
+    });
+    expect(getWorker().latestReport).toMatchObject({ state: 'blocked' });
+
+    // Worker 改写了这条排队回报：投影不再描述真实内容，清空而不是继续显示。
+    await service.workerReportQueuedContentMutated('worker-session-1', ['queued-1']);
+    expect(getWorker().latestReport).toBeNull();
+    expect(deps.setWorkerLatestReport).toHaveBeenLastCalledWith('worker-1', null);
+
+    // 与投影无关的队列条目改写不触发失效。
+    await service.captureLocalWorkerReport('worker-session-1')(true, {
+      delivered: false,
+      queuedMessageId: 'queued-2',
+      report: { state: 'blocked', question: '另一个问题' },
+    });
+    await service.workerReportQueuedContentMutated('worker-session-1', ['queued-other']);
+    expect(getWorker().latestReport).toMatchObject({ state: 'blocked', question: '另一个问题' });
+  });
+
   // progress 只是进度，不是本轮结论：终态不得拿它做映射，否则后续报的结论会被跳过。
   it('never maps a progress report into the worker status at the terminal', async () => {
     const { deps, getWorker, service } = createDeps();

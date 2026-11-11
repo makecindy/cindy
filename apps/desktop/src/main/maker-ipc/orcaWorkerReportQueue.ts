@@ -70,6 +70,11 @@ export type WorkerReportQueueMergeResult =
 
 export interface OrcaWorkerReportQueueDeps
   extends Pick<SessionQueueControlDeps, 'replaceQueuedMessage' | 'removeQueuedMessage'> {
+  /**
+   * 排队回报内容被改写/撤回/合并后回调（含受影响的全部 id，merge 含存留 id）。
+   * latest_report 投影若来自其中一条，必须失效——否则面板继续声称已改掉的「等回复」。
+   */
+  onReportContentMutated?(workerSessionId: string, queuedMessageIds: readonly string[]): Promise<void>;
   getSessionQueueSnapshot(sessionId: string): Promise<{
     pendingQueue: AgentInputQueuedMessage[];
     consumingClientIds: string[];
@@ -206,6 +211,7 @@ export function createOrcaWorkerReportQueue(deps: OrcaWorkerReportQueueDeps): Or
             rebuildQueuedOrcaWorkerMessage(entry, message, params.workerId, role),
         });
         if (!controlled.ok) return mapFailure(controlled);
+        await deps.onReportContentMutated?.(params.workerSessionId, [params.queuedMessageId]);
         deps.log.info('orca worker updated queued report', {
           workerId: params.workerId,
           leadSessionId: params.leadSessionId,
@@ -241,6 +247,7 @@ export function createOrcaWorkerReportQueue(deps: OrcaWorkerReportQueueDeps): Or
           authorize: authorizeOwnReport(params, params.queuedMessageId),
         });
         if (!controlled.ok) return mapFailure(controlled);
+        await deps.onReportContentMutated?.(params.workerSessionId, [params.queuedMessageId]);
         deps.log.info('orca worker cancelled queued report', {
           workerId: params.workerId,
           leadSessionId: params.leadSessionId,
@@ -311,6 +318,8 @@ export function createOrcaWorkerReportQueue(deps: OrcaWorkerReportQueueDeps): Or
         if (carriesCurrentAssignment) {
           deps.adoptQueuedReport(params.workerSessionId, params.queuedMessageIds[0]!);
         }
+        // 合并改写了全部目标（含存留条）的内容，投影来源命中任意一条都要失效。
+        await deps.onReportContentMutated?.(params.workerSessionId, params.queuedMessageIds);
         deps.log.info('orca worker merged queued reports', {
           workerId: params.workerId,
           leadSessionId: params.leadSessionId,

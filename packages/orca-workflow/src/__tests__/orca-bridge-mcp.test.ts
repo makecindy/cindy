@@ -739,6 +739,21 @@ describe('orca_worker_bridge MCP helpers', () => {
     expect(h.finishReport).not.toHaveBeenCalled();
   });
 
+  // progress 是内部遥测：带 question 即拒，防止内部问题经 latest_report 漏进用户通知。
+  it('rejects a progress report that carries a question', async () => {
+    const lead = makeSession('lead-1');
+    const h = makeWorkerBridgeLeadHarness(lead);
+    const json = expectToolError(await h.server._registeredTools.send_to_lead.handler({
+      worker_id: 'worker-1',
+      message: '做到一半',
+      report: { state: 'progress', question: '顺便问一下选哪个？' },
+    }));
+
+    expect(json).toMatchObject({ error: expect.stringContaining('must not carry a question') });
+    expect(lead.sent).toEqual([]);
+    expect(h.captureLocalWorkerReport).not.toHaveBeenCalled();
+  });
+
   it('rejects a blocked report without a question before dispatch', async () => {
     const lead = makeSession('lead-1');
     const h = makeWorkerBridgeLeadHarness(lead);

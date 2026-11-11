@@ -16760,6 +16760,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     reportWithdrawalStanding: (workerSessionId, queuedMessageId) =>
       orcaTeamService.workerReportWithdrawalStanding(workerSessionId, queuedMessageId),
+    onReportContentMutated: (workerSessionId, queuedMessageIds) =>
+      orcaTeamService.workerReportQueuedContentMutated(workerSessionId, queuedMessageIds),
     adoptQueuedReport: (workerSessionId, queuedMessageId) =>
       orcaTeamService.adoptWorkerQueuedReport(workerSessionId, queuedMessageId),
     log,

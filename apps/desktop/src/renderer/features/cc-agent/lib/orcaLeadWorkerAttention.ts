@@ -223,12 +223,24 @@ export function getSessionAttentionKindsWithOrcaLeads(): ReadonlyMap<string, Att
   return cachedMergedKinds;
 }
 
+/**
+ * 只有等人回答/失败的状态，其问题才该出现在用户通知里。
+ * progress / waiting / ready / dropped 的问题（历史数据或旧端写下的）一律不外显。
+ */
+export function actionableWorkerReportQuestion(
+  report: { state: string; question?: string } | null | undefined,
+): string | null {
+  if (!report || (report.state !== 'blocked' && report.state !== 'failed')) return null;
+  const question = report.question?.trim();
+  return question || null;
+}
+
 /** Worker 最新结构化回报里的问题，最多 60 字；把「等回复」具体化到通知标题。 */
 export function findOrcaWorkerReportQuestion(workerSessionId: string): string | null {
   for (const [, snapshot] of listRetainedWorkerProjections()) {
     const worker = snapshot.workers.find((item) => item.sessionId === workerSessionId);
     if (!worker) continue;
-    const question = worker.latestReport?.question?.trim();
+    const question = actionableWorkerReportQuestion(worker.latestReport);
     if (!question) return null;
     const chars = Array.from(question);
     return chars.length > 60 ? `${chars.slice(0, 60).join('')}…` : question;
