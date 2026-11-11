@@ -64,7 +64,8 @@
       "discord": "Discord",
       "wechat": "WeChat",
       "wecom": "WeCom",
-      "dingtalk": "DingTalk"
+      "dingtalk": "DingTalk",
+      "imessage": "iMessage"
     },
     "modelMismatch": "이번 턴은 선택한 {{selected}}이(가) 아니라 {{actual}}이(가) 응답했습니다(서버 측 임시 다운그레이드)",
     "copyStateCopying": "복사 중",
