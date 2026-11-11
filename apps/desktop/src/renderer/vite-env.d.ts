@@ -1253,6 +1253,7 @@ interface ElectronAPI {
   accessibilitySupport: import('../shared/accessibilitySupport').AccessibilitySupportBridge;
   appPreferenceControl?: import('../shared/appPreferenceControl').AppPreferenceControlBridge;
   appearanceSettings: {
+    loadPluginFont?: (role: string) => Promise<{ family: string; bytes: ArrayBuffer }>;
     importWallpaper: () => Promise<import('../shared/appearanceSettings').AppearanceSettings | null>;
     ensureWallpaperVideo?: (id: import('../shared/appearanceSettings').WallpaperId) => Promise<string | null>;
     ensureWallpaperImage?: (id: import('../shared/appearanceSettings').WallpaperId) => Promise<string | null>;
@@ -1448,7 +1449,8 @@ interface ElectronAPI {
     requestUiApproval: (id: string) => Promise<{ granted: boolean }>;
     requestTaskApproval: (id: string, capability?: 'observe' | 'companions') => Promise<{ granted: boolean }>;
     getControlPoints: (id: string) => Promise<import('../shared/ghost').GhostControlPointInfo[]>;
-    listControlPointCandidates: (point: 'will-schedule-run' | 'will-routine-run' | 'will-start-task') => Promise<import('../shared/ghost').GhostControlPointCandidate[]>;
+    listControlPointCandidates: (point: import('../shared/ghost').GhostControlPointId) => Promise<import('../shared/ghost').GhostControlPointCandidate[]>;
+    runtimePlugins: (sessionId: string, settings?: import('../shared/pluginRuntime').RuntimePluginSettings) => Promise<import('../shared/pluginRuntime').RuntimePluginSettings>;
     listPickerModels: () => Promise<import('../shared/ghost').GhostPickerModel[]>;
     routeNewTask: (pluginId: string, data: import('../shared/ghost').GhostStartTaskPointData) => Promise<import('../shared/ghost').GhostStartTaskRouteResult>;
     /** 详情页「后台任务」:本插件转入后台(hidden)且未删除的任务。 */
@@ -3079,6 +3081,11 @@ interface ElectronAPI {
     inputHandoffRequestId?: string;
     remoteDeviceId?: string;
     /**
+     * Stable identity of a repeated needs-reply or error. Main turns two
+     * deliveries of the same id into one desktop toast. Completions omit it.
+     */
+    alertEventId?: string;
+    /**
      * 选择性走哪些通知通道; 缺省 / 未传 → 兼容旧行为(仅桌面)。
      * renderer 侧 gate(localStorage notifications.enabled /
      * notifications.feishuEnabled)后填入。
@@ -4276,6 +4283,8 @@ interface ElectronAPI {
   subscriptionAccounts: {
     onChanged(cb: (event: { providerId: import('../shared/subscriptionAccounts').SubscriptionProvider }) => void): () => void;
     command(command: import('../shared/subscriptionAccounts').SubscriptionAccountCommand): Promise<import('../shared/subscriptionAccounts').SubscriptionPoolView>;
+    /** Validate the reply with parseSubscriptionSessionAccountView. */
+    sessionAccount?(query: import('../shared/subscriptionAccounts').SubscriptionSessionAccountQuery): Promise<unknown>;
   };
   providerGroup: {
     command<C extends import('../shared/providerGroup').ProviderGroupCommand>(
@@ -4665,19 +4674,23 @@ interface ElectronAPI {
     cancelPendingBind: () => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     providerBindStart: (
       provider: 'telegram' | 'x' | 'feishu',
+      scopeId?: string,
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     providerBindCancel: (
       provider: 'telegram' | 'x' | 'feishu',
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     providerBindSelect: (
       provider: 'telegram' | 'x' | 'feishu',
+      bindingId?: string,
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     providerBindRevoke: (
       provider: 'telegram' | 'x' | 'feishu',
+      bindingId?: string,
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     openProviderAction: (
       provider: 'telegram' | 'x' | 'feishu',
       action: import('../shared/hookControlIpc').ProviderOpenAction,
+      scopeId?: string,
     ) => Promise<{ ok: true }>;
     getWorkspacePrefs: () => Promise<{
       prefs: import('../shared/hookControlIpc').HookPrefsView;
@@ -5952,7 +5965,9 @@ interface ElectronAPI {
     /** 自定义供应商变更广播订阅（返回 off）。 */
     onProvidersChanged: (cb: () => void) => () => void;
 
-    mcpApps: (sessionId: string, input: unknown) => Promise<unknown>;
+    mcpApps: (sessionId: string | null, input: unknown) => Promise<unknown>;
+    onPluginUiAction: (callback: (input: unknown) => void) => () => void;
+    onPluginUiState: (callback: (input: { epoch: string; updates: import('../shared/pluginUi').PluginUiStateChange[] }) => void) => () => void;
     // 自定义 MCP 服务器配置 CRUD（可选 bearer token 另走通用 safeStorage IPC，不经这里）。
     listCustomMcpServers: (
       context?: import('../shared/customMcp').CustomMcpListContext,
@@ -5985,6 +6000,8 @@ interface ElectronAPI {
       options?: { releaseOwner?: boolean; ownerId?: string },
     ) => Promise<{ ok: true }>;
     importProviderFile: () => Promise<string | string[] | null>;
+    scanLocalProviderImports: () => Promise<import('../shared/localProviderImport').LocalProviderImportScan>;
+    editLocalProviderImport: (id: string, input: import('../shared/localProviderImport').LocalProviderImportEdit) => Promise<import('../shared/localProviderImport').LocalProviderImportItem>;
     previewProviderImport: (
       importId: string,
       targetProviderId?: string,

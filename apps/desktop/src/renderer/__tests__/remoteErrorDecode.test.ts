@@ -5,6 +5,23 @@ import { sharedTaskRecoveryError, sharedTaskRecoveryFor } from '../../shared/sha
 import { i18n } from '@/i18n';
 
 describe('decodeRemoteErrorMessage', () => {
+  // Unit: a real lazy-create rejection must retain the account code and reset
+  // metadata until the banner translates them in its active locale.
+  it('preserves subscription guidance through the actual enqueue rejection', async () => {
+    const raw = 'LAZY_CREATE_FAILED: [SUBSCRIPTION_ACCOUNT_LIMITED] waiting for reset\nresetAtMs=1900000000000';
+    const enqueue = vi.fn().mockRejectedValue(new Error(raw));
+    vi.stubGlobal('window', { dispatchEvent: vi.fn(), electronAPI: { maker: { input: { enqueue },
+      autoTitle: vi.fn().mockResolvedValue({ applied: true, done: true }) } } });
+    try {
+      const id = 'local-task-subscription-reject';
+      expect(await makerChatStore.sendMessage(id, 'continue', 'test-model', 'medium', 'auto', '/test')).toBe(false);
+      expect(makerChatStore.getSnapshot(id).error).toBe(raw);
+      expect(decodeRemoteErrorMessage(raw)).toBe(i18n.t('chat.subscriptionAccountError.limitedUntil', {
+        resetAt: new Intl.DateTimeFormat(i18n.language, { dateStyle: 'medium', timeStyle: 'short' }).format(1900000000000),
+      }));
+    } finally { vi.unstubAllGlobals(); }
+  });
+
   // Unit: local task storage can run a shared provider through main. Its
   // lazy-create rejection does not use the device-link optimistic outbox.
   it('preserves recovery reason and stage through the actual enqueue rejection', async () => {

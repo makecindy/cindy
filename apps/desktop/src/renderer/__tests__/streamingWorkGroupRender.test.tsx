@@ -1,3 +1,4 @@
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -33,6 +34,7 @@ import type { HistoryChatMessage } from '@/lib/makerChatStore';
 
 type Group = Extract<RenderItem, { type: 'work_group' }>;
 const context: ComponentProps<typeof WorkGroupRenderItemView>['context'] = {
+  pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
   workingDir: '/project',
   isSessionStreaming: true,
   firstUserMessageClientId: 'u1',

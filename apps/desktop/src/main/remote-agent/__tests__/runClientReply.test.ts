@@ -2,6 +2,9 @@
  * 反向请求回包交付：链路抖动导致 reply 发送失败时必须重试——对方一直在等同一
  * requestId 的回包，只记日志不重试会让任务停在权限确认 / 工具请求上无法推进。
  */
+import { randomBytes, randomUUID } from 'node:crypto';
+import { gunzipSync } from 'node:zlib';
+import { parseRemoteAgentRequest, type RemoteAgentPayload } from '@cindy/device-link';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createDeviceUnresponsiveError } from '../../device-link/responsivenessTracker';
@@ -9,6 +12,165 @@ import type { RemoteAgentPoller } from '../controller/poller';
 import { remoteAgentLinkError, RemoteAgentRunClient } from '../controller/runClient';
 
 afterEach(() => vi.useRealTimers());
+
+// Unit regression: the production open/payload entry must deliver over a slow
+// relay without a single upload/inline request outliving its 30s deadline.
+// Reply-retry coverage did not exercise byte-paced delivery or old receivers'
+// chunk-count ceiling. The link below models 16 KiB/s + 1s RTT without waiting;
+// gzip, request parsing and complete payload reconstruction remain real.
+describe('RemoteAgentRunClient slow payload delivery', () => {
+  it.each(['small', 'inline', 'utf8', 'upload', 'large-compatible'] as const)(
+    'starts exactly once with an intact %s payload over the bounded link', async kind => {
+      const text = kind === 'small' ? 'hello'
+        : kind === 'utf8' ? '🙂'.repeat(150 * 1024)
+          : randomBytes((kind === 'inline' ? 450 : kind === 'upload' ? 800 : 10 * 1024) * 1024).toString('base64');
+      const input = { sessionId: 'slow-payload-fixture', text };
+      const uploads = new Map<number, Buffer>();
+      const deliveryTimes: number[] = [];
+      let opened = 0;
+      let delivered: unknown;
+      let reference: RemoteAgentPayload | undefined;
+      const invoke = async (args: unknown[]) => {
+        const request = parseRemoteAgentRequest(args[0]);
+        const wireBytes = Buffer.byteLength(JSON.stringify({ channel: 'maker:remote-agent:v1', args }));
+        const deliveryMs = Math.ceil(wireBytes / (16 * 1024) * 1000) + 1000;
+        deliveryTimes.push(deliveryMs);
+        if (deliveryMs > 30_000) throw new Error('INVOKE_TIMEOUT: payload exceeded the response deadline');
+        if (request.op === 'upload') {
+          uploads.set(request.index, Buffer.from(request.data, 'base64'));
+        } else if (request.op === 'open') {
+          opened++;
+          reference = request.payload;
+          delivered = 'json' in request.payload ? request.payload.json
+            : JSON.parse(gunzipSync(Buffer.concat(Array.from({ length: request.payload.chunks }, (_, index) => {
+              const chunk = uploads.get(index);
+              if (!chunk) throw new Error('Missing upload chunk');
+              return chunk;
+            }))).toString('utf8'));
+        }
+        return {};
+      };
+      const client = new RemoteAgentRunClient(randomUUID(), {
+        invoke,
+        register(run: { onData(data: Buffer, done: boolean): void }) {
+          run.onData(Buffer.from(`${JSON.stringify({ t: 'started', handle: { id: 'native-fixture' } })}\n`), false);
+        },
+        unregister() {},
+      } as unknown as RemoteAgentPoller, {
+        onEvent() {}, onState() {}, onWs() {}, onClosed() {},
+        onRequest: async () => ({ type: 'callback', value: null }),
+      }, randomUUID);
+      await expect(client.open('claude-code', input)).resolves.toEqual({ id: 'native-fixture' });
+      expect(opened).toBe(1);
+      expect(delivered).toEqual(input);
+      expect(Math.max(...deliveryTimes)).toBeLessThan(30_000);
+      if (kind === 'small') {
+        expect(uploads.size).toBe(0);
+        expect(reference).toEqual({ json: input });
+      } else {
+        expect(uploads.size).toBeGreaterThan(0);
+      }
+      if (kind === 'large-compatible') {
+        // Preserve the released wire contract, including payloads that need
+        // larger slices to stay within its 128-part upload reference.
+        expect(uploads.size).toBeLessThanOrEqual(128);
+        expect(Math.max(...[...uploads.values()].map(chunk => chunk.length))).toBeGreaterThan(64 * 1024);
+      }
+      client.abandon('fixture-complete');
+    },
+  );
+
+  // Unit regression: Stop must overtake an upload without letting the old
+  // send/steer start afterwards. Existing abandon tests close the whole client
+  // and miss cancellation while the connection remains usable for a new send.
+  it.each(['abort', 'requestGracefulStop', 'signal'] as const)(
+    '%s cancels a pending send during compression and a steer during upload', async stop => {
+      for (const phase of ['compression', 'upload'] as const) {
+        let release!: () => void;
+        const held = new Promise<void>(resolve => { release = resolve; });
+        let uploading!: () => void;
+        const firstUpload = new Promise<void>(resolve => { uploading = resolve; });
+        const requests: Array<{ op: string; method?: string }> = [];
+        const client = new RemoteAgentRunClient(randomUUID(), {
+          async invoke(args: unknown[]) {
+            const request = parseRemoteAgentRequest(args[0]);
+            requests.push(request);
+            if (request.op === 'upload' && phase === 'upload') {
+              uploading();
+              await held;
+            }
+            if (request.op === 'call') client.onData(Buffer.from(`${JSON.stringify({
+              t: 'result', callId: request.callId, ok: true, value: null,
+            })}\n`), false);
+            return {};
+          },
+          unregister() {},
+        } as unknown as RemoteAgentPoller, {
+          onEvent() {}, onState() {}, onWs() {}, onClosed() {},
+          onRequest: async () => ({ type: 'callback', value: null }),
+        }, randomUUID);
+        const abort = new AbortController();
+        const sending = client.callWithId(randomUUID(), phase === 'compression' ? 'send' : 'steer',
+          [randomBytes(70 * 1024).toString('base64')], stop === 'signal' ? abort.signal : undefined);
+        const outcome = sending.then(() => null, error => error as Error);
+        if (phase === 'upload') await firstUpload;
+        if (stop === 'signal') abort.abort();
+        else await client.call(stop, []);
+        release();
+        expect(await outcome).toMatchObject({ name: 'AbortError' });
+        expect(requests.filter(request => request.op === 'call').map(request => request.method))
+          .toEqual(stop === 'signal' ? [] : [stop]);
+        expect(requests.filter(request => request.op === 'upload')).toHaveLength(phase === 'upload' ? 1 : 0);
+        await expect(client.call('send', ['fresh message'])).resolves.toBeNull();
+        expect(client.hasPendingWork).toBe(false);
+        client.abandon('fixture-complete');
+      }
+    },
+  );
+
+  it('keeps the original result when cancellation follows business dispatch', async () => {
+    let entered!: () => void;
+    const dispatched = new Promise<void>(resolve => { entered = resolve; });
+    let complete!: () => void;
+    const acknowledged = new Promise<void>(resolve => { complete = resolve; });
+    const callId = randomUUID();
+    const client = new RemoteAgentRunClient(randomUUID(), {
+      async invoke() { entered(); await acknowledged; return {}; },
+      unregister() {},
+    } as unknown as RemoteAgentPoller, {
+      onEvent() {}, onState() {}, onWs() {}, onClosed() {},
+      onRequest: async () => ({ type: 'callback', value: null }),
+    }, randomUUID);
+    const abort = new AbortController();
+    const sending = client.callWithId(callId, 'send', ['accepted message'], abort.signal);
+    await dispatched;
+    abort.abort();
+    client.onData(Buffer.from(`${JSON.stringify({ t: 'result', callId, ok: true, value: 'accepted' })}\n`), false);
+    complete();
+    await expect(sending).resolves.toBe('accepted');
+    expect(client.hasPendingWork).toBe(false);
+    client.abandon('fixture-complete');
+  });
+
+  // Closing during preparation rejects both the internal result and the public
+  // call. Vitest must see no orphaned rejection after the caller handles it.
+  it('rejects a preparing call on close without an unhandled internal result', async () => {
+    const invoke = vi.fn(async () => ({}));
+    const client = new RemoteAgentRunClient(randomUUID(), {
+      invoke, unregister() {},
+    } as unknown as RemoteAgentPoller, {
+      onEvent() {}, onState() {}, onWs() {}, onClosed() {},
+      onRequest: async () => ({ type: 'callback', value: null }),
+    }, randomUUID);
+    const sending = client.call('send', ['small message']);
+    const rejected = expect(sending).rejects.toThrow('REMOTE_AGENT_EXPIRED');
+    client.abandon('fixture-close');
+    await rejected;
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(invoke).not.toHaveBeenCalled();
+    expect(client.hasPendingWork).toBe(false);
+  });
+});
 
 describe('RemoteAgentRunClient delivery', () => {
   // Unit regression: the shared retry classifier also protects idempotent replies.

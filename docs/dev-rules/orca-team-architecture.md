@@ -475,6 +475,27 @@ runtime 已在线的 session 之后才成为 Lead（例如从协同面板开启�
    `imageFiles` / `agentMessageTextWithImages`、`orcaImageAttachments.ts` 与 `register.ts` 的
    `validateImageAttachments`。
 
+1d. **系统兜底回报在 Lead drain 前合批（状态：不变量）**<br>
+   只有 `sendAutoBridgeToLead` 经 dispatcher 盖章 `origin.autoBridge=true` 的 Worker 回报可合批；主动
+   `send_to_lead`、Lead 派单、用户消息、scheduler / 插件 / 会话来源都不得命中。coordinator 在真正 drain 队首前，
+   只把连续且派发配置（model / effort / permissionMode / workingDir / createOpts / vendorOptions）相同的系统兜底回报
+   原子合并为一条：保留首条 `clientId`、`hostAcceptedAtMs`、队列位置与创建时间，移除项走既有 discard settlement；
+   合并本身一次交换、一次 emit/持久化，随后 drain 取出队首会再投影一次（中间态是“已合批仍在队首”，崩溃恢复按
+   clientId 与已落库行去重，不会二次发送）。发给模型的批次正文以 `[Auto-bridged batch: N worker reports]` 开头，按原顺序
+   保留每条 Worker 的 `[From Orca Worker ...(worker_id)]` 身份前缀、`[Auto-bridged: ...]` 状态与完整正文（供 Lead 路由）；
+   可见/持久化正文剥掉模型向批次头与 `worker_id` 内部标识、保留 role 前缀以区分多 Worker（单条可见正文无 role 行）；
+   共享访客的消息与排队投影都只拿这份可见正文，看不到 worker_id。持久化仍用既有
+   `{orcaSource:'worker',content}` 信封，`origin.autoBridgeBatchCount` 记录该批条数；origin 保留首条 `senderSessionId` 作
+   Host 团队授权证据（`taskActionHost.readOrcaTeam` 承重，仅宿主校验用）。所有展示/投影消费点必须对批次加闸门、不据此归属首个 Worker：
+   `messageSourceIdEntries`（悬停/长按 ID）、`describeHandoffUserSource`（交接摘要）、两端数量型标题与访客脱敏均已按 `autoBridge/autoBridgeBatchCount` 提前返回。不跨用户消息、不重排、不额外等待；
+   构造失败、附件 / 引用、非法计数或配置不一致时保留原条目逐条派发。合批受上限约束（均衡档：最多 8 条、批次正文累计 ≤32000 字符，
+   字符预算为主、条数兜底，见 `AUTO_BRIDGE_BATCH_MAX_ITEMS / AUTO_BRIDGE_BATCH_MAX_CHARS`）：条数按真实报告数累计（已合批项按其 `autoBridgeBatchCount`，而非队列行数），retry/re-flatten 不绕过上限；字符预算按含批次头/分隔符的最终正文预估（builder 再兜底校验最终条数与长度）；加入下一条会超限即停止合批，剩余回报留到
+   下一轮 drain 再合批，以保留轮间 compact 机会；队首必发（哪怕单条超预算也单独派发），不截断任何单条回报。暂停、编辑锁、插话、恢复与重试沿用 coordinator
+   既有守卫。批次界面用数量型标题，不把整批归到首个 Worker，也不提供只跳首个 Worker 的来源链接。Lead prompt 规则 7
+   只声明按批次头一次处理批内各回报，不改变派单 / 静默 / 终态验收边界。实现指针：`orcaAutoBridgeBatch.ts`、
+   `agent-input-coordinator.ts` 的 `coalesceAutoBridgeHead`、`orcaInterAgentDispatcher.ts` 的 `resolveOrigin`；回归见
+   `orcaInterAgentDispatcher.test.ts` 的 auto-bridge queue coalescing 用例。
+
 2. **accepted 才能产生运行副作用（状态：不变量）**<br>
    只有底层 send accepted 后，才能把 worker 标成 `running`、建立 auto-bridge pending 并广播 UI；dispatch 失败必须 rollback 到 accepted 前状态，且 rollback 不得覆盖已有终态。实现指针：`orcaTeamService.ts` 的 `dispatchResolvedWorker` 与 `rollbackAcceptedDispatchState`。
 

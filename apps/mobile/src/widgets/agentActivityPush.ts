@@ -1,4 +1,4 @@
-import { Platform } from "react-native";
+import { AppState, Platform } from "react-native";
 import { requireOptionalNativeModule } from "expo-modules-core";
 import type { ClientEndpointRegion } from "@cindy/maker-shared/client-endpoints";
 import {
@@ -13,6 +13,7 @@ import {
 } from "@/auth/authOwnerGeneration";
 import { resolvePushAppVariant } from "@/notifications/pushRegistrationModel";
 import { readIosPushEnvironment } from "@/notifications/nativePushEnvironment";
+import { mobileDebugLog } from "@/debug/mobileDebugLog";
 import type { AgentActivitySink } from "./agentActivitySync";
 
 export interface ActivityPushRegistration {
@@ -23,6 +24,8 @@ export interface ActivityPushRegistration {
   activityId: string | null;
   dismissed: boolean;
   supportsInputPushToken: boolean;
+  /** Local observation only; never added to the registration wire payload. */
+  isStale?: boolean;
 }
 export interface AgentActivityNative extends AgentActivitySink {
   configureAccount?(accountScope: string | null): Promise<void>;
@@ -95,11 +98,14 @@ export function startActivityPushSync(options: {
   >;
   urlScheme: string;
   onRegistered(hasActivity: boolean): void;
+  /** The service already owns this account's activity (known from an earlier
+   * syncer before a reconnect); a failed later attempt must not hand it back. */
+  initiallyRegistered?: boolean;
 }) {
   const native = agentActivityNative;
   if (!native?.getPushRegistration || getActiveSelfHostedRelay()) {
     options.onRegistered(false);
-    return { sync() {}, dispose() {} };
+    return { sync(_refresh = false) {}, dispose() {} };
   }
   const captured = generation;
   const owner = getMobileAuthOwner();
@@ -108,7 +114,10 @@ export function startActivityPushSync(options: {
   const controller = new AbortController();
   let tail = Promise.resolve();
   let last: string | undefined;
+  let accepted = options.initiallyRegistered === true;
   let unsupported = false;
+  let lastRefreshAt = -Infinity;
+  let wasStale = false;
   const assertCurrent = () => {
     if (
       controller.signal.aborted ||
@@ -118,7 +127,7 @@ export function startActivityPushSync(options: {
     )
       throw new Error("stale-activity-owner");
   };
-  const sync = () => {
+  const sync = (refresh = false) => {
     tail = tail
       .then(async () => {
         assertCurrent();
@@ -138,8 +147,14 @@ export function startActivityPushSync(options: {
         }
         // A native token is not evidence that the service received it. The
         // bridge keeps its initial discovery pending until this attempt settles.
+        const { isStale, ...wireRegistration } = registration;
+        const becameStale = isStale === true && !wasStale;
+        wasStale = isStale === true;
+        if (becameStale) mobileDebugLog("info", "lifecycle", "activity-stale");
+        const shouldRefresh = (refresh || becameStale) && isStale !== false &&
+          AppState.currentState === "active" && Date.now() - lastRefreshAt >= 30_000;
         const body = {
-          ...registration,
+          ...wireRegistration,
           schemaVersion: 1,
           labels: options.labels,
           urlScheme: options.urlScheme,
@@ -147,7 +162,7 @@ export function startActivityPushSync(options: {
           apnsEnv: environment === "development" ? "sandbox" : "prod",
         };
         const key = JSON.stringify(body);
-        if (key === last) return;
+        if (key === last && !shouldRefresh) return;
         if (
           registration.enabled &&
           !registration.startToken &&
@@ -159,9 +174,10 @@ export function startActivityPushSync(options: {
         const token = await options.getAccessToken();
         assertCurrent();
         if (!token) {
-          options.onRegistered(false);
+          if (!accepted) options.onRegistered(false);
           return;
         }
+        if (shouldRefresh) lastRefreshAt = Date.now();
         await sendRegistration(
           baseUrl,
           token,
@@ -170,6 +186,10 @@ export function startActivityPushSync(options: {
         );
         assertCurrent();
         last = key;
+        accepted = true;
+        mobileDebugLog("info", "lifecycle", "activity-registration", {
+          outcome: "accepted", refresh: shouldRefresh, hasUpdateToken: !!registration.updateToken,
+        });
         // A start token is permission to try, not proof that APNs created an
         // activity. Keep foreground creation until an actual update token exists.
         options.onRegistered(
@@ -188,14 +208,21 @@ export function startActivityPushSync(options: {
           unsupported = true;
         try {
           assertCurrent();
-          options.onRegistered(false);
+          mobileDebugLog("warn", "lifecycle", "activity-registration", {
+            outcome: "failed",
+            status: error && typeof error === "object" && "status" in error && typeof error.status === "number"
+              ? error.status : undefined,
+          });
+          // A failed refresh of an already registered activity must not transfer
+          // ownership to the partial Home projection. Initial discovery still falls back.
+          if (!accepted) options.onRegistered(false);
         } catch {
           /* disposed or previous account */
         }
       });
     return tail;
   };
-  const listener = native.addListener?.("pushRegistrationChanged", sync);
+  const listener = native.addListener?.("pushRegistrationChanged", () => { void sync(); });
   sync();
   return {
     sync,

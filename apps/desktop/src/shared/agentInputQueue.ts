@@ -355,6 +355,8 @@ export interface AgentInputQueuedMessage {
         displayText?: string;
         /** 发出本条的 Lead / Worker 会话；接收方据此渲染可点击的来源标签。老快照没有。 */
         senderSessionId?: string;
+        autoBridge?: true;
+        autoBridgeBatchCount?: number;
       }
     | {
         /**

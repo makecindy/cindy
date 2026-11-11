@@ -69,7 +69,8 @@
       "react-native-screens@4.30.1": "dependency-patches/react-native-screens@4.30.1.patch",
       "expo-router@58.0.30": "dependency-patches/expo-router@58.0.30.patch",
       "react-native-gesture-handler@3.3.0": "dependency-patches/react-native-gesture-handler@3.3.0.patch",
-      "expo-modules-core@58.0.30": "dependency-patches/expo-modules-core@58.0.30.patch"
+      "expo-modules-core@58.0.30": "dependency-patches/expo-modules-core@58.0.30.patch",
+      "expo-image@58.0.18": "dependency-patches/expo-image@58.0.18.patch"
     },
     "allowUnusedPatches": true
   },
@@ -94,6 +95,7 @@
     "ensure-deps": "node scripts/ensure-deps.mjs",
     "sync:browser-runtime": "node scripts/browser-runtime/sync.mjs",
     "repo:worktrees": "node scripts/repo-worktrees.mjs",
+    "repo:conflict-hotspots": "node scripts/repo-conflict-hotspots.mjs",
     "update:claude": "node tools/claude/update.mjs",
     "update:codex": "node tools/codex/update.mjs",
     "update:codex-package": "node tools/codex-package/update.mjs",

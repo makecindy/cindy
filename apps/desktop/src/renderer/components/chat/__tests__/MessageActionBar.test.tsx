@@ -1,8 +1,14 @@
 // @vitest-environment jsdom
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from "@/cindy-brain/PluginUiContributions";
 
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ghostHostUiApprovalTokens, type InstalledGhost } from '../../../../shared/ghost';
+import { pluginUiInterestKey, type PluginUiStateChange } from '../../../../shared/pluginUi';
+
+const installed = vi.hoisted(() => ({ ghosts: [] as InstalledGhost[] }));
+vi.mock('@/cindy-brain/useInstalledGhosts', () => ({ useInstalledGhosts: () => installed.ghosts }));
 
 vi.mock('react-i18next', async () => {
   const { default: en } = await import('@/i18n/locales/en/common.json');
@@ -42,11 +48,115 @@ vi.mock('@/hooks/useRelativeTime', () => ({
 }));
 
 vi.mock('@/lib/toast', () => ({
-  toast: { success: vi.fn(), warning: vi.fn() },
+  toast: { success: vi.fn(), warning: vi.fn(), error: vi.fn() },
 }));
 
 import { MessageActionBar } from '../MessageActionBar';
+import { PluginUiProvider, usePluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
+import { ChatMessageActions } from '@/features/bots/ChatServerControls';
+import type { GhostMcpApps } from '@cindy/plugin-protocol';
 import { MessageReadAloudContext, type MessageReadAloud } from '../MessageReadAloudContext';
+
+// 真实菜单消费入口：只替换已装插件投影与 IPC，保留声明批准、菜单和按需订阅实现。
+// 验收：关闭菜单不订阅，打开只消费当前消息，点击沿原动作执行一次，关闭释放。tier: unit。
+describe('plugin entries in the message More menu', () => {
+  let receive: ((update: { epoch: string; updates: PluginUiStateChange[] }) => void) | undefined;
+  const invoke = vi.fn(async (_session: unknown, _input: Record<string, unknown>) => ({ updates: [] }));
+  const stop = vi.fn();
+  const listen = vi.fn((listener: NonNullable<typeof receive>) => {
+    receive = listener;
+    return () => { receive = undefined; stop(); };
+  });
+  const ghost = (role: 'user' | 'assistant' = 'assistant'): InstalledGhost => {
+    const value: InstalledGhost = { enabled: true, dir: '/fixture', uiCapabilityApproved: true,
+      approval: { state: 'approved', revision: 'one' }, manifest: { schemaVersion: 3, id: 'planner', name: 'Planner',
+        kind: 'chip', entry: 'main.js', version: '1', tools: [{ name: 'help', description: 'Help' }], mcpApps: {
+          ui: { resources: [], tools: { help: { visibility: ['app'] } } },
+          host: { contributions: [{ id: 'message-menu', title: 'Analyze message', position: 'message.menu',
+            tool: 'help', match: { roles: [role] } }] },
+        } } };
+    value.approvedHostUi = ghostHostUiApprovalTokens(value.manifest);
+    return value;
+  };
+  const Bar = ({ group = false }: { group?: boolean }) => {
+    const pluginUi = usePluginUiMessageCandidates(group ? undefined : 'task-a');
+    return group ? <ChatMessageActions pluginUi={pluginUi} shareScope="group:fixture" message={{ id: 'group-message', content: 'body' } as import('../../../../shared/botGroupChat').BotGroupMessageView} onChanged={vi.fn()} />
+      : <MessageActionBar pluginUi={pluginUi} copyText="body" align="left" hovered sessionId="task-a" clientId="message-a" />;
+  };
+  const renderBar = () => render(<PluginUiProvider><Bar /></PluginUiProvider>);
+  const openMenu = () => fireEvent.pointerDown(screen.getByRole('button', { name: 'chat.messageActionBar.moreActions' }), { button: 0, ctrlKey: false });
+
+  beforeEach(() => {
+    installed.ghosts = [];
+    receive = undefined;
+    invoke.mockReset(); invoke.mockResolvedValue({ updates: [] });
+    listen.mockClear(); stop.mockClear();
+    window.electronAPI = { maker: { mcpApps: invoke, onPluginUiState: listen } } as unknown as typeof window.electronAPI;
+  });
+
+  it('keeps group message menus and actions available without a task session', async () => {
+    const value = ghost();
+    (value.manifest.mcpApps as GhostMcpApps).host!.contributions!.push({ id: 'message-action', title: 'Group action', position: 'message.actions', tool: 'help' });
+    value.approvedHostUi = ghostHostUiApprovalTokens(value.manifest);
+    installed.ghosts = [value];
+    render(<PluginUiProvider><Bar group /></PluginUiProvider>);
+    expect(screen.getByRole('button', { name: 'Group action' })).toBeTruthy();
+    openMenu();
+    const item = await screen.findByRole('menuitem', { name: /Analyze message/ });
+    fireEvent.click(item);
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith(null, expect.objectContaining({ op: 'plugin-action', instanceId: 'planner', id: 'message-menu' })));
+  });
+
+  it.each(['none', 'disabled', 'unapproved', 'other-role'])('adds no menu or subscription for %s consumers', mode => {
+    const value = ghost(mode === 'other-role' ? 'user' : 'assistant');
+    if (mode === 'disabled') value.enabled = false;
+    if (mode === 'unapproved') value.approvedHostUi = [];
+    installed.ghosts = mode === 'none' ? [] : [value];
+    renderBar();
+    expect(screen.queryByRole('button', { name: 'chat.messageActionBar.moreActions' })).toBeNull();
+    expect(invoke).not.toHaveBeenCalled(); expect(listen).not.toHaveBeenCalled();
+  });
+
+  it('opens an approved plugin-only menu and runs its original action once while preserving the pending guard', async () => {
+    installed.ghosts = [ghost()];
+    let finish!: (value: { updates: never[] }) => void;
+    const pending = new Promise<{ updates: never[] }>(resolve => { finish = resolve; });
+    invoke.mockImplementation(async (_session, input) => input.op === 'plugin-action' ? pending : { updates: [] });
+    renderBar();
+    const trigger = screen.getByRole('button', { name: 'chat.messageActionBar.moreActions' });
+    expect(invoke).not.toHaveBeenCalled(); expect(listen).not.toHaveBeenCalled();
+    openMenu();
+    const item = screen.getByRole('menuitem', { name: /Analyze message/ });
+    await waitFor(() => expect(listen).toHaveBeenCalledTimes(1));
+    fireEvent.click(item);
+    await waitFor(() => expect(invoke.mock.calls.filter(([, input]) => input.op === 'plugin-action')).toHaveLength(1));
+    expect(invoke).toHaveBeenCalledWith('task-a', { op: 'plugin-action', instanceId: 'planner', id: 'message-menu', value: undefined });
+    expect(trigger.hasAttribute('disabled')).toBe(true);
+    fireEvent.click(trigger);
+    expect(invoke.mock.calls.filter(([, input]) => input.op === 'plugin-action')).toHaveLength(1);
+    await act(async () => { finish({ updates: [] }); });
+    await waitFor(() => expect(trigger.hasAttribute('disabled')).toBe(false));
+    await waitFor(() => expect(stop).toHaveBeenCalledTimes(1));
+    expect(invoke.mock.calls.filter(([, input]) => input.op === 'native-interest').at(-1)?.[1].entries).toEqual([]);
+  });
+
+  it('consumes state only while open and honors the original contribution disabled state', async () => {
+    installed.ghosts = [ghost()];
+    renderBar(); openMenu();
+    await waitFor(() => expect(invoke.mock.calls.some(([, input]) => input.op === 'native-interest')).toBe(true));
+    const subscription = invoke.mock.calls.find(([, input]) => input.op === 'native-interest')![1];
+    act(() => receive?.({ epoch: String(subscription.epoch), updates: [{
+      key: pluginUiInterestKey({ instanceId: 'planner', id: 'message-menu', sessionId: 'task-a', clientId: 'message-a' }),
+      revision: 1, state: { title: 'Unavailable', disabled: true },
+    }] }));
+    const item = screen.getByRole('menuitem', { name: /Unavailable/ });
+    expect(item.getAttribute('aria-disabled')).toBe('true');
+    fireEvent.click(item);
+    expect(invoke.mock.calls.some(([, input]) => input.op === 'plugin-action')).toBe(false);
+    fireEvent.keyDown(item, { key: 'Escape' });
+    await waitFor(() => expect(stop).toHaveBeenCalledTimes(1));
+  });
+});
 
 describe('companion message read-aloud', () => {
   const identity = { sessionId: 'companion-task', messageId: 'reply' };
@@ -56,7 +166,7 @@ describe('companion message read-aloud', () => {
   });
   const bar = (value: MessageReadAloud | null, companion = true, eligible = true, compact = false) => (
     <MessageReadAloudContext.Provider value={value}>
-      <MessageActionBar copyText="Saved reply" align="left" hovered={false}
+      <MessageActionBar pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} copyText="Saved reply" align="left" hovered={false}
         simplifiedBotConversation={companion}
         compact={compact}
         readAloudMessage={eligible ? identity : undefined} />
@@ -116,7 +226,7 @@ describe('MessageActionBar', () => {
     const onAddToChat = vi.fn();
     let opener: Element | null = null;
     const openTopic = vi.fn(() => { opener = document.activeElement; });
-    render(<MessageActionBar copyText="private reply" align="left" hovered={false}
+    render(<MessageActionBar pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} copyText="private reply" align="left" hovered={false}
       simplifiedBotConversation companionFooter onAddToChat={onAddToChat}
       replyAction={{ label: 'Open topic', count: 3, onClick: openTopic }} />);
     fireEvent.click(screen.getByRole('button', { name: 'chat.messageActionBar.reply' }));
@@ -141,7 +251,7 @@ describe('MessageActionBar', () => {
     const deepLink = 'cindy://session/session-a?message=message-a';
 
     render(
-      <MessageActionBar
+      <MessageActionBar pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
         copyText="message body"
         copyLinkText={deepLink}
         align="right"
@@ -223,7 +333,7 @@ describe('MessageActionBar', () => {
   it.each(['left', 'right'] as const)('preserves edit and rewind callbacks with %s alignment', (align) => {
     const onEdit = vi.fn();
     const onRewind = vi.fn();
-    render(<MessageActionBar copyText="body" align={align} hovered onEdit={onEdit} onRewind={onRewind} />);
+    render(<MessageActionBar pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} copyText="body" align={align} hovered onEdit={onEdit} onRewind={onRewind} />);
     fireEvent.click(screen.getByRole('button', { name: 'chat.messageActionBar.edit' }));
     expect(onEdit).toHaveBeenCalledTimes(1);
     fireEvent.pointerDown(screen.getByRole('button', { name: 'chat.messageActionBar.moreActions' }), { button: 0, ctrlKey: false });
@@ -234,7 +344,7 @@ describe('MessageActionBar', () => {
   // 任务运行中编辑不外显(点编辑不中断任务),只能从 More 菜单进入;停下后按钮回到操作行。
   it('moves edit into the More menu while the task is running', () => {
     const onEdit = vi.fn();
-    render(<MessageActionBar copyText="body" align="right" hovered onEdit={onEdit} editInMenu />);
+    render(<MessageActionBar pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} copyText="body" align="right" hovered onEdit={onEdit} editInMenu />);
     expect(screen.queryByRole('button', { name: 'chat.messageActionBar.edit' })).toBeNull();
     fireEvent.pointerDown(screen.getByRole('button', { name: 'chat.messageActionBar.moreActions' }), { button: 0, ctrlKey: false });
     fireEvent.click(screen.getByRole('menuitem', { name: 'chat.messageActionBar.edit' }));
@@ -242,7 +352,7 @@ describe('MessageActionBar', () => {
   });
 
   it.each(['left', 'right'] as const)('does not invent user actions without callbacks with %s alignment', (align) => {
-    render(<MessageActionBar copyText="body" align={align} hovered />);
+    render(<MessageActionBar pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} copyText="body" align={align} hovered />);
     expect(screen.queryByRole('button', { name: 'chat.messageActionBar.edit' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'chat.messageActionBar.moreActions' })).toBeNull();
   });
@@ -254,7 +364,7 @@ describe('MessageActionBar', () => {
     const deepLink = 'cindy://session/session-a?message=message-a';
 
     const { container } = render(
-      <MessageActionBar
+      <MessageActionBar pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
         copyText="message body"
         copyLinkText={deepLink}
         align="left"
@@ -302,7 +412,7 @@ describe('MessageActionBar', () => {
 
   it('does not restore pointer focus to the ellipsis trigger after close', async () => {
     render(
-      <MessageActionBar
+      <MessageActionBar pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
         copyText="message body"
         align="left"
         hovered
@@ -333,7 +443,7 @@ describe('MessageActionBar', () => {
     const onEdit = vi.fn();
 
     render(
-      <MessageActionBar
+      <MessageActionBar pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
         copyText="message body"
         align="right"
         hovered
@@ -382,7 +492,7 @@ describe('MessageActionBar', () => {
       });
     });
     const bar = (hovered: boolean) => (
-      <MessageActionBar copyText="message body" align="left" hovered={hovered} onFork={onFork} />
+      <MessageActionBar pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} copyText="message body" align="left" hovered={hovered} onFork={onFork} />
     );
 
     const { container, rerender } = render(bar(true));
@@ -418,7 +528,7 @@ describe('MessageActionBar', () => {
 
   it('restores focus to the ellipsis trigger for keyboard users', async () => {
     render(
-      <MessageActionBar
+      <MessageActionBar pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
         copyText="message body"
         align="left"
         hovered
@@ -441,7 +551,7 @@ describe('MessageActionBar', () => {
 
   it('renders the user-turn total and aggregated details on separate lines', () => {
     render(
-      <MessageActionBar
+      <MessageActionBar pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
         copyText="message body"
         align="left"
         hovered
@@ -513,7 +623,7 @@ describe('MessageActionBar', () => {
 
     it('无金额 + 有 token 明细 → 显示 token,tooltip 说明取不到报价', () => {
       render(
-        <MessageActionBar
+        <MessageActionBar pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
           copyText="message body"
           align="left"
           hovered
@@ -540,7 +650,7 @@ describe('MessageActionBar', () => {
 
     it('有金额 → 仍显示金额,不出现 token 回退', () => {
       render(
-        <MessageActionBar
+        <MessageActionBar pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
           copyText="message body"
           align="left"
           hovered
@@ -555,7 +665,7 @@ describe('MessageActionBar', () => {
 
     it('金额为 0 → 视同无金额,走 token 回退(绝不显示 ¥0.00)', () => {
       render(
-        <MessageActionBar
+        <MessageActionBar pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
           copyText="message body"
           align="left"
           hovered
@@ -569,13 +679,13 @@ describe('MessageActionBar', () => {
     });
 
     it('既无金额也无明细 → 那一格不渲染', () => {
-      render(<MessageActionBar copyText="message body" align="left" hovered />);
+      render(<MessageActionBar pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} copyText="message body" align="left" hovered />);
       expect(screen.queryByText('chat.messageActionBar.turnTokens')).toBeNull();
     });
 
     it('明细存在但 totalTokens 为 0 → 不渲染(没有可展示的事实)', () => {
       render(
-        <MessageActionBar
+        <MessageActionBar pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
           copyText="message body"
           align="left"
           hovered
@@ -594,7 +704,7 @@ describe('MessageActionBar', () => {
 
     it('user 侧(align=right)不出现 token 格', () => {
       render(
-        <MessageActionBar
+        <MessageActionBar pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
           copyText="message body"
           align="right"
           hovered

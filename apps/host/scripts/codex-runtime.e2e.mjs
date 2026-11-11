@@ -51,7 +51,7 @@ const { createCredentialStore } = await import('../src/credentials/store.mjs');
 const { hostRuntimeLayout } = await import('../src/runtime-layout.mjs');
 const { openOwnerDatabase } = await import('../../desktop/src/main/localDb/startupCore.ts');
 const { createDbClientForHandle } = await import('../../desktop/src/main/localDb/client/createDbClientForHandle.ts');
-const { setCurrentDbClient, clearCurrentDbClient } = await import('../../desktop/src/main/localDb/client/current.ts');
+const { setCurrentDbClient, clearCurrentDbClient, getCurrentDbClientSnapshot } = await import('../../desktop/src/main/localDb/client/current.ts');
 const { OwnerSessionStorage } = await import('../../desktop/src/main/localDb/sessionStorageAdapter.ts');
 const { createAvailabilityPolicy } = await import('../../desktop/src/main/device-link/providerShareAvailabilityPolicyCore.ts');
 const { createCustomProvider } = await import('../../desktop/src/main/maker-host/custom-provider-store.ts');
@@ -59,10 +59,19 @@ const { setSessionProvider, clearSessionProvider } = await import('../../desktop
 const { customProviderSecretStorageKey } = await import('../../desktop/src/shared/providerSecrets.ts');
 const { dataOwnerStorageKey } = await import('../../desktop/src/main/dataOwnerPath.ts');
 const { initLogger } = await import('../../desktop/src/main/logger.ts');
+const { eq } = await import('drizzle-orm');
+const { sessions, messages } = await import('../../desktop/src/main/localDb/schema.ts');
+const { markSessionTurnStarted, markSessionTurnEnded, drainSessionActiveTurnWrites } = await import('../../desktop/src/main/localDb/sessionActiveTurn.ts');
+const { createInputQueue } = await import('../src/agent/input-queue.mjs');
+const { createHostAttachments } = await import('../src/attachments.ts');
+const { createEventHub } = await import('../src/events.mjs');
+const { createHostMessageStore } = await import('../src/message-store.ts');
+const { createChatHandler } = await import('../src/chat.mjs');
 initLogger({ logDir: path.join(root, 'logs'), isDev: true, level: 'debug' });
 const profile = path.join(root, 'profile');
 const ownerId = 'native-runtime-fixture';
-let database, config, modelAccess, mcp, runtime, graph;
+let database, config, modelAccess, mcp, runtime, graph, queue, chatServer;
+let releaseBlockedResponse;
 const handles = [];
 try {
   await fs.mkdir(profile, { recursive: true });
@@ -130,9 +139,110 @@ try {
     clearSessionProvider(sessionId);
     graph.gatewayRestart.onSessionSettled();
   }
+  // Shared-send integration: earlier checks bypass the queue. Use the real
+  // HTTP/queue/Maker pipeline, isolated SQLite and a synthetic local upstream.
+  const sessionId = 'queued-native-fixture';
+  await new OwnerSessionStorage({ db: () => database }).create({ id: sessionId,
+    title: 'Shared send fixture', agentKind: 'codex', model: 'fixture-model', workDir: root });
+  await database.drizzle.update(sessions).set({ providerId: 'cprov-fixture' }).where(eq(sessions.id, sessionId));
+  const hub = createEventHub();
+  const readSession = async id => {
+    const [row] = await database.drizzle.select().from(sessions).where(eq(sessions.id, id)).limit(1);
+    return row;
+  };
+  const makeQueue = () => createInputQueue({ getMaker: () => graph.maker, hub, readSession,
+    getOwner: getCurrentDbClientSnapshot,
+    createAttachments: ({ assertCurrent }) => createHostAttachments({ getOwner: getCurrentDbClientSnapshot, assertCurrent }),
+    persistMessage: createHostMessageStore({ getOwner: getCurrentDbClientSnapshot, publish: event => hub.publish(event) }),
+    markStarted: async id => { markSessionTurnStarted(id); await drainSessionActiveTurnWrites(id); },
+    markEnded: async (id, at) => { markSessionTurnEnded(id, at); await drainSessionActiveTurnWrites(id); },
+  });
+  queue = makeQueue();
+  const handler = createChatHandler({ readSession, events: hub,
+    enqueue: (id, input) => queue.enqueue(id, input), inputStatus: (id, clientId) => queue.inputStatus(id, clientId) });
+  chatServer = createServer((req, res) => { void handler(req, res); });
+  await new Promise(resolve => chatServer.listen(0, '127.0.0.1', resolve));
+  const postChat = clientId => fetch(`http://127.0.0.1:${chatServer.address().port}/chat`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ sessionId, clientId, prompt: 'return synthetic complete' }), signal: AbortSignal.timeout(45_000),
+  }).then(async response => { assert.equal(response.status, 200); return response.text(); });
+  const blockNextResponse = () => {
+    let entered;
+    const reached = new Promise(resolve => { entered = resolve; });
+    const gate = new Promise(resolve => { releaseBlockedResponse = resolve; });
+    onNextResponse = async () => { entered(); await gate; };
+    return reached;
+  };
+  const reached = blockNextResponse();
+  const firstReply = postChat('queued-first');
+  await Promise.race([reached, firstReply.then(body => { throw new Error(`Turn ended before upstream: ${body}`); })]);
+  await queue.steer(sessionId, { clientId: 'queued-steer', text: 'also keep it concise' });
+  releaseBlockedResponse();
+  const completedBody = await firstReply;
+  assert.match(completedBody, /synthetic complete/);
+  assert.match(completedBody, /"type":"done"/);
+  await queue.dispose();
+  const rows = await database.drizzle.select().from(messages).where(eq(messages.sessionId, sessionId));
+  assert.equal(rows.filter(row => row.clientId === 'queued-first').length, 1);
+  assert.ok(JSON.parse(rows.find(row => row.clientId === 'queued-first').agentMeta).uuid);
+  assert.ok(rows.some(row => row.clientId === 'queued-steer'));
+  assert.ok(rows.some(row => row.role === 'assistant'));
+  // Reopen the runtime over the same DB. This is not a whole-process restart.
+  queue = makeQueue();
+  const reachedAgain = blockNextResponse();
+  const stoppedReply = postChat('queued-stop');
+  await Promise.race([reachedAgain, stoppedReply.then(body => { throw new Error(`Resume ended before upstream: ${body}`); })]);
+  await queue.stop(sessionId);
+  releaseBlockedResponse();
+  await stoppedReply;
+  assert.equal(queue.projection(sessionId).turnInProgress, false);
+  // Real native input conversion, beyond the fake Session unit tests: the
+  // provider must receive image bytes and a local file through the shared path.
+  const attachmentTask = 'attachment-native-fixture';
+  await new OwnerSessionStorage({ db: () => database }).create({ id: attachmentTask,
+    title: 'Attachment fixture', agentKind: 'codex', model: 'fixture-model', workDir: root });
+  await database.drizzle.update(sessions).set({ providerId: 'cprov-fixture' }).where(eq(sessions.id, attachmentTask));
+  const imagePath = path.join(root, 'image.png');
+  await fs.copyFile(new URL('../../desktop/src/renderer/assets/login/wordmark.png', import.meta.url), imagePath);
+  const filePath = path.join(root, 'note.txt');
+  await fs.writeFile(filePath, 'native attachment fixture');
+  let timer, unsubscribe;
+  const completedAttachment = new Promise((resolve, reject) => {
+    timer = setTimeout(() => reject(new Error('Native attachment turn timed out')), 45_000);
+    unsubscribe = hub.subscribe(event => {
+      if (event.sessionId !== attachmentTask) return;
+      if (event.event?.type === 'done') resolve();
+      if (event.event?.type === 'error') reject(new Error(`Native attachment failed: ${JSON.stringify(event.event.data)}`));
+    });
+  });
+  void completedAttachment.catch(() => {});
+  const beforeAttachments = requests.length;
+  try {
+    await queue.enqueue(attachmentTask, { clientId: 'native-attachment', text: 'return synthetic complete',
+      files: [{ path: imagePath, category: 'image', ext: '.png', name: 'image.png' },
+        { path: filePath, category: 'file', ext: '.txt', name: 'note.txt' }],
+      persistedContent: JSON.stringify({ text: 'return synthetic complete', images: [{ url: imagePath }], files: [{ path: filePath }] }) });
+    await completedAttachment;
+    const wireInput = JSON.stringify(requests.slice(beforeAttachments).map(request => request.body.input));
+    assert.match(wireInput, /data:image\/png;base64,/);
+    assert.ok(wireInput.includes(filePath));
+    const attachmentRows = await database.drizzle.select().from(messages).where(eq(messages.sessionId, attachmentTask));
+    assert.match(attachmentRows.find(row => row.clientId === 'native-attachment').content, /cindy-media:\/\/blobs\//);
+  } finally { clearTimeout(timer); unsubscribe?.(); }
+  console.log('PASS production Host attachments + native Codex: local image bytes reach upstream, file path is preserved and managed image URL is persisted (synthetic local upstream)');
+  console.log('PASS shared Host HTTP + queue + native Codex: send, persisted UUID/reply, steer, runtime reopen and stop (synthetic local upstream)');
   assert.ok(requests.length >= 3);
   console.log('PASS native Codex + production Host: gateway and custom provider turns; key rotation during a live turn preserves completion and the next gateway task uses the new key');
+} catch (error) {
+  // The application logger owns uncaughtException handling. Preserve a failed
+  // acceptance command's exit status even when that handler consumes the throw.
+  process.exitCode = 1;
+  throw error;
 } finally {
+  releaseBlockedResponse?.();
+  chatServer?.closeAllConnections();
+  if (chatServer) await new Promise(resolve => chatServer.close(resolve));
+  await queue?.dispose();
   for (const handle of handles) await handle.close().catch(() => {});
   graph?.gatewayRestart.clear();
   await graph?.maker.shutdown();

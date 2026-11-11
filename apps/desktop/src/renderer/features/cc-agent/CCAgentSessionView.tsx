@@ -92,6 +92,11 @@ import { Spinner } from '@/components/ui/spinner';
 import { setRemoteReceiptDisplayReady } from '@/lib/sessionAttentionStore';
 import { shortSessionId } from '@/lib/sessionId';
 import { ChatInput } from '@/components/new-chat/ChatInput';
+import { PluginUiSlot, usePluginUiHas } from '@/cindy-brain/PluginUiContributions';
+import {
+  SessionSubscriptionAccountProvider,
+  sessionSubscriptionPoolProvider,
+} from '@/components/new-chat/SessionSubscriptionAccount';
 import { CindyMakeComposerMask } from '@/components/cindy-make/CindyMakeComposerMask';
 import {
   getCindyMakeTestRecovery,
@@ -867,6 +872,7 @@ function CCAgentSessionContent({
   onBotReadThrough,
 }: CCAgentSessionViewProps = {}) {
   const { t } = useTranslation();
+  const hasPluginStatusbar = usePluginUiHas('statusbar');
   const { sessionId: paramSessionId } = useParams<{ sessionId: string }>();
   const sessionId = sessionIdProp ?? paramSessionId;
   const navigate = useNavigate();
@@ -2382,6 +2388,22 @@ function CCAgentSessionContent({
       session?.remoteHostId,
     ],
   );
+  // 账号池：任务固定在执行电脑上的某个账号，模型列表与底部用量都按它显示，读的是与用量 chip
+  // 同一台电脑(读不到那份账号时不读)。
+  const taskAccountProviderId =
+    usageAccount.kind === 'unreadable'
+      ? null
+      : sessionSubscriptionPoolProvider(
+          normalizeDbAgentKind(displayAgentKind),
+          usageChipProviderId,
+          session?.remoteHostId,
+        );
+  const taskAccountDeviceId =
+    usageAccount.kind === 'device'
+      ? usageAccount.deviceId
+      : usageAccount.kind === 'task'
+        ? (remoteDeviceId ?? null)
+        : null;
   const catalogDeviceId = modelCatalogKey(
     controlledAgentDeviceId ?? remoteDeviceId ?? agentDeviceId, controlledModelRoute.catalogHostDeviceId,
   );
@@ -4209,15 +4231,24 @@ function CCAgentSessionContent({
         session.runtimeBaselineRecoveryPending === true && !session.runtimePending && !agentSwitchIntent &&
         model === session.runtimeEffective?.model && displayAgentKind === session.runtimeEffective.agentKind &&
         (opts.providerId ?? null) === (session.runtimeEffective.providerId ?? null);
-      if (!remoteDeviceId && !recoveringBaseline) {
-        const authVendor = displayAgentKind === 'pi' ? 'pi' : isCodex ? 'codex' : 'cc';
-        const { proceed } = await vendorAuthGate.checkAndConfirm(authVendor, {
-          // 已建会话:suspended 来源计入(停用不打断运行中会话,门禁只看凭证连接态,
-          // PR #744 review 第十七轮)。
-          existingSessionRoute: true,
-        });
-        if (!proceed) return false;
+      const authVendor = displayAgentKind === 'pi' ? 'pi' : isCodex ? 'codex' : 'cc';
+      const passesVendorAuthGate = async () => (await vendorAuthGate.checkAndConfirm(authVendor, {
+        // 已建会话:suspended 来源计入(停用不打断运行中会话,门禁只看凭证连接态,
+        // PR #744 review 第十七轮)。
+        existingSessionRoute: true,
+      })).proceed;
+      // 输入框在点击时就已清空。普通发送把这项检查交给 store 的 beforeEnqueue:
+      // 气泡先上屏,和清空同一帧出现,不再等这次主进程往返;不通过时 store 按
+      // clientId 撤回气泡、返回 false,输入框原样恢复草稿。还没选目录(走目录选择
+      // 续发)、本地插话和内置技能分派不经过 store 的乐观插入,仍在这里先查。
+      // 归档任务也先查,避免认证拒绝后仍留下自动取消归档的副作用。
+      const deferVendorAuthGate = Boolean(session?.workingDir) && !opts?.builtInSkillIntent &&
+        deliveryMode !== 'steer' && session?.status !== 'archived';
+      if (!remoteDeviceId && !recoveringBaseline && !deferVendorAuthGate) {
+        if (!(await passesVendorAuthGate())) return false;
       }
+      const vendorAuthBeforeEnqueue =
+        !remoteDeviceId && !recoveringBaseline && deferVendorAuthGate ? passesVendorAuthGate : undefined;
 
       if (opts?.beforeEnqueue && !(await opts.beforeEnqueue())) return false;
       // Popover open → prevent re-entry
@@ -4323,13 +4354,16 @@ function CCAgentSessionContent({
       let rebalanceClientId: string | undefined;
       // 伙伴私聊引用回复:点发送时的待发引用随这条消息一起落库,送出后从输入框上方撤下。
       const replyQuote = botChatIdentity && !opts?.independent ? getPendingBotReplyQuote(sessionId) : null;
+      const callerBeforeEnqueue = opts?.beforeEnqueue;
       const sendOptions = {
         ...(replyQuote ? { replyQuote } : {}),
-        beforeEnqueue: recordRebalance ? async () => {
-          if (await opts?.beforeEnqueue?.() === false) return false;
-          if (rebalanceClientId) await recordRebalance(rebalanceClientId);
+        // 顺序:供应商检查 → 调用方钩子 → 记录换号选择(只有确定发出才记)。
+        beforeEnqueue: vendorAuthBeforeEnqueue || recordRebalance ? async () => {
+          if (vendorAuthBeforeEnqueue && !(await vendorAuthBeforeEnqueue())) return false;
+          if (callerBeforeEnqueue && !(await callerBeforeEnqueue())) return false;
+          if (recordRebalance && rebalanceClientId) await recordRebalance(rebalanceClientId);
           return true;
-        } : opts?.beforeEnqueue,
+        } : callerBeforeEnqueue,
         onInputCreated: recordRebalance ? (clientId: string) => {
           rebalanceClientId = clientId;
           opts?.onInputCreated?.(clientId);
@@ -5347,10 +5381,10 @@ function CCAgentSessionContent({
   }, [sessionId]);
   const pendingMessages = useMemo(() => pendingQueue.map((entry) => entry.chatMessage), [pendingQueue]);
   const queueStopIndex = findStopIndex(pendingQueue);
-  const renderPendingMessage = (message: ChatMessage) => {
+  const renderPendingMessage = (message: ChatMessage, pluginUi: import('@/cindy-brain/PluginUiContributions').PluginUiMessageCandidates) => {
     const index = pendingQueue.findIndex((entry) => entry.clientId === message.clientId);
     const entry = pendingQueue[index];
-    return entry ? <PendingQueueBubble entry={entry} sessionId={sessionId} index={index} count={pendingQueue.length}
+    return entry ? <PendingQueueBubble pluginUi={pluginUi} entry={entry} sessionId={sessionId} index={index} count={pendingQueue.length}
       stopIndex={queueStopIndex} onHold={setQueueHold} onReleaseHold={() => setQueueHold(null)}
       editingClientId={activeQueueComposerEdit?.clientId ?? null}
       steeringClientIds={steeringQueueClientIds} editLocks={queueEditLocks} interactionLocks={queueInteractionLocks}
@@ -5683,6 +5717,7 @@ function CCAgentSessionContent({
       )}
       <section
         className="relative flex h-full w-full flex-col bg-content-area"
+        data-plugin-ui-task={!session?.remoteHostId && !session?.deviceLinkDeviceId ? sessionId : undefined}
         aria-label={t('ccAgent.layout.chatDropAreaAria')}
         onDragEnter={(e) => {
           if (hasSplitGroupSessionType(e.dataTransfer.types)) return;
@@ -5829,6 +5864,7 @@ function CCAgentSessionContent({
            refs, and ResizeObservers are fresh — guarantees per-session isolation. */}
         <div
           className="wallpaper-message-viewport relative min-h-0 flex-1"
+          data-plugin-ui-element="messages"
           style={{ '--wallpaper-composer-height': `${overlayHeight}px` } as CSSProperties}
         >
           {/* perf/session-switch 探针纯诊断:仅 DEV 用 Profiler 量 MessageStream commit,
@@ -6009,6 +6045,7 @@ function CCAgentSessionContent({
                  InteractionPromptHost: 普通模式下行为不变(直接 inline 渲染)。
                  当外部 (workdir-browse 等窄 rail 场景) 挂了 InteractionPromptSlot
                  时,卡片会被 portal 出去,这里就显占位。 */}
+              <div className="contents" data-plugin-ui-keep-visible>
               <InteractionPromptHost
                 hasInteraction={
                   !!(
@@ -6118,6 +6155,7 @@ function CCAgentSessionContent({
                   />
                 ) : null}
               </InteractionPromptHost>
+              </div>
               {/* 会话内 /goal 进行中状态条(composer 上方);无 goal 时返回 null 不占位。 */}
               {!isSharedTaskPeer(remoteDeviceId ?? '') && <GoalIndicator sessionId={sessionId} />}
               {/* Only the compact bar reserves composer space; its transcript is a
@@ -6362,7 +6400,7 @@ function CCAgentSessionContent({
                 <div
                   className={cn(
                     'mt-1.5 flex w-full items-center justify-between gap-3 px-1',
-                    !session?.workingDir && !worktreeCreation && 'invisible',
+                    !session?.workingDir && !worktreeCreation && !hasPluginStatusbar && 'invisible',
                   )}
                 >
                   {/* Left: workingDir — 点击在系统文件管理器中打开;
@@ -6425,6 +6463,14 @@ function CCAgentSessionContent({
                         </button>
                       )}
                     </WorkingDirectoryTip>
+                  )}
+
+                  {hasPluginStatusbar && (
+                    <div className="min-w-0 flex-1 overflow-x-auto">
+                      <div className="w-max">
+                        <PluginUiSlot position="statusbar" sessionId={sessionId} disabled={!!session?.remoteHostId || !!session?.deviceLinkDeviceId} />
+                      </div>
+                    </div>
                   )}
 
                   {/* Right: quota segments may wrap before the context indicator. */}
@@ -6493,7 +6539,9 @@ function CCAgentSessionContent({
                     />
                   </div>
                 </div>
-              ) : null}
+              ) : (
+                <PluginUiSlot position="statusbar" sessionId={sessionId} disabled={!!session?.remoteHostId || !!session?.deviceLinkDeviceId} />
+              )}
             </div>
           </div>
         </div>
@@ -6539,7 +6587,16 @@ function CCAgentSessionContent({
         }
       >
         <ChatDisplaySnapshotProvider value={chatDisplaySnapshot}>
-          <TopRightChipStackProvider>{content}</TopRightChipStackProvider>
+          {/* 模型列表与底部用量共用：任务实际在用的订阅账号。 */}
+          <SessionSubscriptionAccountProvider
+            providerId={taskAccountProviderId}
+            deviceId={taskAccountDeviceId}
+            sessionId={sessionId}
+            nativeSessionId={session?.sdkSessionId}
+            refreshKey={agentStatus.isRunning}
+          >
+            <TopRightChipStackProvider>{content}</TopRightChipStackProvider>
+          </SessionSubscriptionAccountProvider>
         </ChatDisplaySnapshotProvider>
       </SessionNavigationModeProvider>
       <CreateWorkerPopover

@@ -1,8 +1,17 @@
 import { describe, expect, it } from 'vitest';
 
 import { buildClaudeSystemPromptAppend } from '../index';
+import { assembleSystemPromptSections } from '../../shared/system-prompt-sections';
 
 describe('Claude Bot Profile prompt assembly', () => {
+  it('appends selected task fragments after the existing system prefix', () => {
+    const base = { hostSystemPrompt: 'HOST', makerMemoryIndex: 'MEMORY', userPrompt: 'Original task instructions' };
+    const before = buildClaudeSystemPromptAppend(base);
+    const after = buildClaudeSystemPromptAppend({ ...base,
+      userPrompt: assembleSystemPromptSections(base.userPrompt, [{ name: 'task', order: 0, text: 'STATIC FRAGMENT' }]) });
+    expect(after).toBe(before + '\n\nSTATIC FRAGMENT');
+    expect(buildClaudeSystemPromptAppend({ ...base })).toBe(before);
+  });
   it('keeps the Bot SOUL as the first Cindy-owned stable segment', () => {
     const prompt = buildClaudeSystemPromptAppend({
       botProfilePrompt: 'BOT SOUL',

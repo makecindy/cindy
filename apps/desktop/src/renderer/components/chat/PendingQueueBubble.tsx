@@ -15,6 +15,7 @@ import { resolveQueueHoldRow } from '../new-chat/pendingQueueHold';
 import { UserMessage } from './UserMessage';
 
 export interface PendingQueueBubbleProps {
+  pluginUi: import('@/cindy-brain/PluginUiContributions').PluginUiMessageCandidates;
   entry: QueuedMessage;
   /** Owning task: remote images in a device-linked task resolve through it. */
   sessionId?: string;
@@ -39,6 +40,7 @@ export interface PendingQueueBubbleProps {
 
 /** Same full-content bubble as delivered input, with mobile's single queue menu. */
 export function PendingQueueBubble({
+  pluginUi,
   entry,
   sessionId,
   index,
@@ -230,6 +232,7 @@ export function PendingQueueBubble({
         <div className="mb-1 text-right text-12 text-[var(--text-secondary)]">{senderLabel}</div>
       )}
       <UserMessage
+        pluginUi={pluginUi}
         {...entry.chatMessage}
         {...(presentation.isSyntheticTrigger
           ? {

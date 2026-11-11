@@ -1,3 +1,4 @@
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
 import { useState } from 'react';
 import { ctx, mountPage } from '../../ui-page/harness';
 import { BotGroupTimelineItem } from '../../../src/renderer/features/bots/BotGroupTimelineItem';
@@ -11,13 +12,16 @@ const initial: BotGroupPlanView = {
   workDir: null, branch: null, createdAt: 1, updatedAt: 1,
   steps: names.map((botName, position) => ({ position, botId: `bot-${position}`, botName, task: '',
     status: position === 0 ? 'done' : position === 1 ? ctx.case === 'waiting' ? 'done' : 'running' : 'pending',
+    // #9909: a finished turn that published no message answered NO_REPLY and reads as skipped.
+    ...(position === 0 && ctx.case === 'no-reply' ? { resultMessageId: null } : {}),
+    ...(position === 0 && ctx.case !== 'no-reply' && ctx.case !== 'legacy' ? { resultMessageId: 'answered-0' } : {}),
     ...(position === 1 && ctx.case !== 'legacy' ? { executionId: 'queued-attempt', executionStatus: ctx.case === 'running' ? 'running' : 'queued' } : {}),
   })),
 };
 function Fixture() {
   const [plan, setPlan] = useState(initial);
   const [pending, setPending] = useState<'edit' | null>(ctx.case === 'busy' ? 'edit' : null);
-  return <main className="p-4"><BotGroupTimelineItem plan={plan} members={[]}
+  return <main className="p-4"><BotGroupTimelineItem pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} plan={plan} members={[]}
     message={{ id: 'queue-message', sequence: 1, kind: 'plan', authorKind: 'bot',
       authorBotId: 'bot-0', authorName: names[0], content: '', mentions: { all: false, botIds: [] },
       noticeCode: null, planId: plan.id, files: [], attachments: [], createdAt: 1 }}

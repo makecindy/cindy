@@ -34,7 +34,7 @@ import * as cindyMediaBlobStore from '../cindy-media/blobStore.desktop.js';
 import { getSensitiveMediaBlocklist, isPathAllowedAgainst } from '../filePathPolicy.js';
 import { materializeSshRemoteMedia } from '../file-browser/ssh-media.js';
 import { getSessionFsSnapshot } from '../localDb/ipc/sessions.js';
-import { mimeOf, uploadLocalFile } from './mediaTransfer.js';
+import { mimeOf, uploadLocalFile } from './mediaTransfer.desktop.js';
 import { createLogger } from '../logger.js';
 import { getDeviceLinkInvokeContext } from './invoke-context.js';
 import { sharedTaskMediaId, withSharedTaskMedia } from './sharedTaskMediaContext.js';
