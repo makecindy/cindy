@@ -141,9 +141,9 @@ export class ChatBridgeToolContext {
     for (const tool of request.tools ?? []) context.addResponseTool(tool);
     context.addCurrentInlineTools(request.input);
     // `tool_search_output` loads definitions into the current catalog, so a later turn may force
-    // one by qualified name. Record those into the snapshot only; the adapter itself is still
-    // registered by collectHistoryTools so its position in `tools` stays unchanged.
-    context.recordLoadedToolSearchSelectors(request.input);
+    // one by name. Register them before the snapshot: the reserved Chat name is only known after
+    // reservation, so a predicted name could shadow or collide with a real declaration.
+    context.addLoadedToolSearchTools(request.input);
     context.recordCurrentSelectors();
     context.collectHistoryTools(request.input);
     return context;
@@ -358,50 +358,13 @@ export class ChatBridgeToolContext {
   }
 
   /**
-   * Snapshot the bare selectors this turn's own declarations may answer for `tool_choice`.
+   * Register the tool-search definitions this turn loaded.
    *
-   * Taken from the catalog after the current declarations are registered, so aliases and
-   * collisions keep exactly the names the Chat request advertises. Replayed history is excluded:
-   * a name that only appears there must not become a forced selector.
+   * They belong to the current catalog: a follow-up may force one by name. Registering them
+   * here (rather than predicting their Chat names) means the snapshot sees whatever
+   * `reserveName` actually chose, including hash suffixes from a collision.
    */
-  private recordCurrentSelectors(): void {
-    for (const [identity, chatName] of this.chatNamesByResponseName) {
-      const [kind, namespace, name] = identity.split('\0');
-      if (!name) continue;
-      // A bare declaration answers its own name; when a namespaced child claims the same bare
-      // name the snapshot records null, so the selector stays ambiguous instead of silently
-      // preferring whichever entry happened to be registered first.
-      const identityKey = kind + '\0' + (namespace === undefined ? '' : namespace) + '\0' + name;
-      this.currentIdentities.set(identityKey, chatName);
-      if (!namespace) {
-        this.recordCurrentSelector(kind, name, chatName);
-        this.currentBareSelectors.set(kind + '\0' + name, chatName);
-        continue;
-      }
-      // Codex accepts both the bare child name and the dotted `namespace.name` spelling for a
-      // selector; index both so either choice resolves to the flattened Chat name, using the
-      // same ambiguity rule for each. `exec` keeps only the dotted alias: a bare `exec` would
-      // switch on upstream nested-helper normalization, but `clock.exec` still names this tool.
-      if (name !== CODE_MODE_EXEC_TOOL_NAME) this.recordCurrentSelector(kind, name, chatName);
-      this.recordCurrentSelector(kind, namespace + '.' + name, chatName);
-      // The flattened spelling is what the Chat catalog advertises, so a selector written that
-      // way must also see the collision when a bare declaration owns the same name.
-      this.recordCurrentSelector(kind, `${namespace}__${name}`, chatName);
-    }
-  }
-
-  private recordCurrentSelector(kind: string, selector: string, chatName: string): void {
-    const key = kind + '\0' + selector;
-    const existing = this.currentSelectors.get(key);
-    this.currentSelectors.set(key, existing === undefined || existing === chatName ? chatName : null);
-  }
-
-/**
- * Index the tool-search definitions this turn loaded, without advertising them again.
- *
- * Only outputs at or after this turn's inline group count; anything earlier is replay.
- */
-  private recordLoadedToolSearchSelectors(input: ResponsesRequest['input']): void {
+  private addLoadedToolSearchTools(input: ResponsesRequest['input']): void {
     if (!Array.isArray(input)) return;
     const boundary = indexOfCurrentTurnInlineTools(input);
     for (let index = 0; index < input.length; index += 1) {
@@ -411,34 +374,9 @@ export class ChatBridgeToolContext {
       const loaded = item.tools;
       if (!Array.isArray(loaded)) continue;
       if (boundary >= 0 && index < boundary) continue;
-      for (const tool of loaded) this.recordLoadedToolIdentity(tool);
+      for (const tool of loaded) this.addResponseTool(tool as ResponseTool);
     }
   }
-
-  /** Mirror what addResponseTool advertises, but only into the selector snapshot. */
-  private recordLoadedToolIdentity(tool: unknown): void {
-    if (!isPlainObject(tool)) return;
-    const group = typeof tool.namespace === 'string' ? tool.namespace : undefined;
-    if (tool.type === 'namespace') {
-      const children = Array.isArray(tool.tools) ? tool.tools : Array.isArray(tool.children) ? tool.children : undefined;
-      const name = typeof tool.name === 'string' ? tool.name : undefined;
-      if (name === undefined || children === undefined) return;
-      for (const child of children) {
-        if (!isPlainObject(child)) continue;
-        this.recordLoadedToolIdentity({ ...child, namespace: name });
-      }
-      return;
-    }
-    const name = typeof tool.name === 'string' ? tool.name : undefined;
-    if (name === undefined || name.length === 0) return;
-    const kind = tool.type === 'custom' ? 'custom' : 'function';
-    const folded = group === undefined || group === BUILTIN_FUNCTIONS_NAMESPACE
-      ? name
-      : group + '__' + name;
-    const identity = kind + '\0' + (group === undefined ? '' : group) + '\0' + name;
-    this.currentIdentities.set(identity, clampChatToolName(folded));
-  }
-
   private addCurrentInlineTools(input: ResponsesRequest['input']): void {
     if (!Array.isArray(input)) return;
     const index = indexOfCurrentTurnInlineTools(input);
@@ -450,6 +388,7 @@ export class ChatBridgeToolContext {
 
   private collectHistoryTools(input: ResponsesRequest['input']): void {
     if (!Array.isArray(input)) return;
+    const currentBoundary = indexOfCurrentTurnInlineTools(input);
     for (let index = 0; index < input.length; index += 1) {
       const item = input[index];
       if (!isPlainObject(item)) continue;
@@ -464,8 +403,9 @@ export class ChatBridgeToolContext {
         (item.type === 'tool_search_output' || item.type === 'tool_search_call_output')
         && Array.isArray(item.tools)
       ) {
-        for (const tool of item.tools) {
-          this.addResponseTool(tool as ResponseTool);
+        // Current-turn outputs were registered before the snapshot; only replay reaches here.
+        if (currentBoundary >= 0 && index < currentBoundary) {
+          for (const tool of item.tools) this.addResponseTool(tool as ResponseTool);
         }
       }
     }
