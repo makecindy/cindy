@@ -154,7 +154,7 @@ vi.mock('../../device-link', () => ({
   },
 }));
 vi.mock('../../device-link/filePeer', () => ({ tryUploadPeerAttachment: async () => null }));
-vi.mock('../../device-link/mediaTransfer', () => ({
+vi.mock('../../device-link/mediaTransfer.desktop', () => ({
   MAX_MEDIA_BYTES: 2 * 1024 ** 3,
   removeRemote: (key: string) => state.remove(key),
   uploadLocalFile: async (

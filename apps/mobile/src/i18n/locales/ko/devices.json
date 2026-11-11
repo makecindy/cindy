@@ -972,5 +972,8 @@
       "disk-full": "가져오지 못함: 디스크 공간이 부족합니다",
       "native-unloadable": "가져오지 못함: 원본 기록을 불러올 수 없습니다"
     }
+  },
+  "liveActivity": {
+    "waitingForUpdate": "업데이트 대기 중"
   }
 }

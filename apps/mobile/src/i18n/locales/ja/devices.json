@@ -972,5 +972,8 @@
       "disk-full": "インポートできませんでした：ディスクの空き容量が足りません",
       "native-unloadable": "インポートできませんでした：元の記録を読み込めません"
     }
+  },
+  "liveActivity": {
+    "waitingForUpdate": "更新待ち"
   }
 }

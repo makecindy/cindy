@@ -15,6 +15,7 @@ import { CINDY_EXEC_MCP_SERVER, handleExecMcpRequest } from '../executor/ccMcp';
 import { ExecutorRequestError, type RemoteExecutor } from '../executor/executor';
 import { resolveExecutorShell } from '../executor/shell';
 import { pathTextContext } from '../executor/workspace';
+import { localText } from './eventProjection';
 
 /** 本任务可用的一个本机 MCP 服务：完整地址(已带本任务身份)与要附加的请求头。 */
 export interface LocalMcpTarget {
@@ -34,7 +35,7 @@ export interface ReverseHttpRouterDeps {
 const FORWARD_REQUEST_HEADERS = new Set(['content-type', 'accept', 'mcp-session-id', 'mcp-protocol-version', 'last-event-id']);
 const FORWARD_RESPONSE_HEADERS = new Set(['content-type', 'mcp-session-id', 'mcp-protocol-version']);
 
-/** 本机工具已有的路径参数；兼容 MCP snake_case 与宿主 camelCase，除 prompt 外正文和插件业务参数不做文本替换。 */
+/** 本机工具已有的路径参数；兼容 MCP snake_case 与宿主 camelCase。 */
 const PATH_ARGUMENTS = new Set([
   'path', 'paths', 'filepath', 'filepaths', 'directory', 'directories', 'dir', 'dirs',
   'workingdir', 'workdir', 'cwd', 'root', 'libraryroot', 'sourcepath', 'destinationpath',
@@ -42,12 +43,34 @@ const PATH_ARGUMENTS = new Set([
   'debugimageout',
 ]);
 
+/** 只还原明确的正文参数；标识、凭证及其它不透明业务字符串保持原样。 */
+const TEXT_ARGUMENTS = new Set(['message', 'commitmessage', 'body', 'content', 'text', 'description']);
+const ENCODED_TEXT_ARGUMENTS = new Set(['message', 'body', 'content', 'text']);
+
+function isTextEncoding(encoding: unknown): boolean {
+  return encoding === undefined || (typeof encoding === 'string' && /^(?:text|utf-?8)$/i.test(encoding));
+}
+
+/** 序列化正文没有载荷 schema；内层存在非文本数据时保留整段，不能让 JSON 解码绕过保护。 */
+function hasNonTextContent(value: unknown): boolean {
+  if (typeof value === 'string') {
+    if (value.includes('\0')) return true;
+    if (/^\s*[{["]/.test(value)) {
+      try { return hasNonTextContent(JSON.parse(value)); } catch { /* 普通正文继续检查逐行 JSON。 */ }
+    }
+    return value.includes('\n') && value.split('\n').some(hasNonTextContent);
+  }
+  if (Array.isArray(value)) return value.some(hasNonTextContent);
+  if (!value || typeof value !== 'object') return false;
+  return !isTextEncoding((value as Record<string, unknown>).encoding) || Object.values(value).some(hasNonTextContent);
+}
+
 /**
  * 交给另一个任务读取并执行的正文：协同的派活与回报、任务之间的消息。远程 Agent 写下的是它自己
  * 虚拟工作区里的路径，接收方（哪怕也是远程 Agent）有自己的一套虚拟路径，原样转交对方读不到
  * （2026-11-10 现场：Lead 给五个 Worker 的任务说明路径全部读不到）。与 prompt 同理，入站时
  * 还原成本机路径，接收方出站时再按它自己的工作区投影。只认下列服务的这几个字段，
- * 不触碰插件的业务参数。
+ * 插件正文另走 TEXT_ARGUMENTS 的文本保真与编码判据。
  */
 const HANDOFF_TEXT_ARGUMENTS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ['cindy_orca', new Set(['message', 'initial_task'])],
@@ -87,12 +110,12 @@ export function createReverseHttpRouter(deps: ReverseHttpRouterDeps) {
   const doFetch = deps.fetch ?? fetch;
   const workspace = deps.executor.workspace;
 
-  const mapArguments = (value: unknown, handoffText: ReadonlySet<string> | undefined, key = ''): unknown => {
+  const mapArguments = (value: unknown, handoffText: ReadonlySet<string> | undefined, key = '', textContent = true): unknown => {
     if (typeof value === 'string') {
       if (key === 'args') {
         try {
           const parsed = JSON.parse(value);
-          if (parsed && typeof parsed === 'object') return JSON.stringify(mapArguments(parsed, handoffText));
+          if (parsed && typeof parsed === 'object') return JSON.stringify(mapArguments(parsed, handoffText, '', textContent));
         } catch { /* 普通字符串参数保持原样。 */ }
       }
       if (/^(?:cmd|command)$/.test(key)) return workspace.mapCommand(value, resolveExecutorShell().dialect);
@@ -101,11 +124,22 @@ export function createReverseHttpRouter(deps: ReverseHttpRouterDeps) {
       const fieldContext = pathTextContext(key);
       if (fieldContext === 'ambiguous-path') return workspace.mapTextFromAgent(value, fieldContext);
       if (fieldContext === 'path' || PATH_ARGUMENTS.has(key.replace(/_/g, '').toLowerCase())) return workspace.mapAlias(value);
+      if (textContent && TEXT_ARGUMENTS.has(key.replace(/_/g, '').toLowerCase()) && !hasNonTextContent(value)) {
+        return localText(value, workspace);
+      }
       return value;
     }
-    if (Array.isArray(value)) return value.map((item) => mapArguments(item, handoffText, key));
+    if (Array.isArray(value)) return value.map((item) => mapArguments(item, handoffText, key, textContent));
     if (!value || typeof value !== 'object') return value;
-    return Object.fromEntries(Object.entries(value).map(([name, item]) => [name, mapArguments(item, handoffText, name)]));
+    // 如 GitLab 文件写入：encoding 约束 content，不影响同级 commit_message 等正文。
+    // 没有 content 的载荷仍认可 message/body/text 的显式编码；路径参数沿用原规则。
+    const encoding = (value as Record<string, unknown>).encoding;
+    const hasContent = Object.keys(value).some((name) => name.toLowerCase() === 'content');
+    return Object.fromEntries(Object.entries(value).map(([name, item]) => {
+      const field = name.toLowerCase();
+      const encoded = hasContent ? field === 'content' : ENCODED_TEXT_ARGUMENTS.has(field);
+      return [name, mapArguments(item, handoffText, name, textContent && (!encoded || isTextEncoding(encoding)))];
+    }));
   };
   const projectResult = (value: unknown, key = ''): unknown => {
     if (typeof value === 'string') {

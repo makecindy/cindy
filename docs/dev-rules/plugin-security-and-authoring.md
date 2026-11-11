@@ -300,13 +300,48 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   **伙伴例行任务退役（2026-11-08，存量兼容）**：`will-routine-run` 与 manifest `routineEvents` 照常解析、
   安装和保留批准记录，但不再触发；`routineEvents` 不再让插件常驻；`routine-request` 管子（`cindy.routines.request`）
   的 status / publish 照旧校验与限额后返回稳定的空操作（publish 为 `accepted: 0`），不报错。插件与用户无需重装或重新确认。
-  `will-start-task`（新任务选模型）是唯一能回 `route` 的节点：只在本机新任务第一条消息发出前、
+  `will-start-task`（新任务选模型）能回 `route`：只在本机新任务第一条消息发出前、
   用户在模型选择器里选了这个插件发布的模型时询问一次，任务中途和伙伴任务都不问（换模型会让提示缓存失效）。
   Gateway 只保留 route 的 `agentKind` / `model` / `providerId` / `effort` 四个字段；Main 再按当前已连接、
   可用于新任务的模型核验（档位不合法先去掉档位），不合格、超时或出错都沿用用户原选的模型。
 - **插件提供的模型（2026-11-01）**：清单 `models.types` 声明能力，列表经 `PUT /models` 运行时发布，存在插件自己的
   `/kv` 之外，读时重新校验。`route` 模型必须声明 `will-start-task`，节点批准后才显示；选择器只读落盘列表，
   不调用插件，文案全部来自插件。`route` 模型不进执行目录。
+- **任务运行时控制点**：`will-start-turn` 在 App 正常发送入口为 Claude Code／Codex／Pi 新轮开始前选模，
+  复用任务原有模型控制服务；`will-model-request` 仅本机 Pi 支持，使用原生虚拟模型与
+  `before_provider_request`，分 `select` 和 `payload` 两阶段。后者可变更参数和请求正文，
+  只要求结果仍是合法请求；认证头、连接凭证不进入数据。权限行、批准、停用、超时与熔断复用
+  原控制点；用户在任务菜单的「任务插件」多选并逐插件指定出错策略。无人选时不查询消息、
+  模型目录或唤醒插件；流式事件不扫描插件。异步结果在应用前复核账号、任务选择及安装批准。
+  日志只记录来源插件和阶段，不记录请求正文。
+  新增节点时限分别为 turn 1s、context 2s、memory 1.5s、model-request 的 select＋payload
+  每请求合计 1s；turn/context/model 三点共用每轮 5s，工具续轮不重置；同轮插话不另行询问提供者或建立预算。并行重叠等待按墙钟计一次，
+  包括插件唤醒；宿主 readRoute／applyRoute／Agent 进程恢复、模型 HTTP 和工具执行不计入。
+  耗尽按任务中各插件 onFailure 处理，不擅自放行。共享 memory_search 不参与 App 每轮累计预算，
+  每次检索的插件等待独立最多 1.5s；一个 App 轮的插件总等待不包含记忆，每次额外检索最多再加 1.5s。
+  资料和记忆并行询问后按选择顺序归并，
+  路由与正文变换串行；未选择任务不创建预算或定时器。旧控制点时限不变。
+- **运行时资料与记忆**：`will-compose-context` 返回有界静态资料块，复用普通附带资料通道，
+  不进 system prompt、不改主人原话、不进入自动审核的用户授权来源。`sessionContext` 仍只供工具参数。
+  仅 App 正常发起的新轮次把未装饰的当前原文交给资料提供者，引用历史只交给模型，
+  授权来源保留原内容和附件边界；IM、hook 和同轮插话不接入轮前准备／资料收集，
+  不经这些入口装配或更新静态片段、安装逐请求回调。既有 App 轮次内的 Pi 请求控制不变，
+  已有会话内容不因入口变化被清空。原生非模型命令不添加资料。
+  `will-search-memory` 接在现有 `cindy_memory.memory_search`，不加工具或第二个记忆库，沿用
+  原有启用与账号守卫；这是共享工具，按任务选择生效，不受发送入口限定。只投当前查询，Host 给完整条目标注插件来源，交替合并并遵守总 limit；
+  超时／停用／非法结果保留 Cindy 原结果。记忆节点只能配置 allow-on-failure，不允许插件阻断记忆检索。
+  多插件记忆按选择顺序填充，全局最多 50 条且 content 合计不超过 32768 字符，超出截断；
+  memory_search 的 data 与被截短的插件条目以可选 truncated:true 标明。普通资料含来源与
+  分隔符的装配总量不超过 32768 字符，不把多插件的单批上限累加成无界上下文。
+- **任务系统提示词片段**：清单 `systemPrompt` 只允许静态文本，显式声明整数顺序与
+  `scope: "selected-task"`，可按引擎过滤。安装／更新确认独立展示完整原文，内容或顺序变化
+  进入原有新增权限比较；沿用 `approvedControlPoints` 中的 `system-prompt`，不新增授权账本。
+  只读任务选中的插件，装配到既有固定前缀之后，未选时保持原提示词字节不变且不启动插件。
+  Claude Code／Codex 复用现有任务级系统通道；本机／SSH Pi 通过宿主内部 Symbol 与既有会话
+  快照目录交给原生 `before_agent_start` 追加完整提示词尾部，环境只传路径并在读取后清除，
+  内容参与 SSH 启动指纹；设备托管 Pi 暂不支持。
+  不可用时遵守任务指定的出错策略；变更片段后通过既有运行时关闭／恢复流程在下一次输入应用。
+  历史插件曾携带不合法的同名未知字段时，只丢弃新能力，保留已装插件原有功能与批准状态。
 - 安装／更新确认只决定这次落位是否进行，不以弹窗点击作为运行期能力授权事实；
   **prompt 和前端展示都不构成运行期安全边界**。确认结论由 Main 在安装锁内按真实包复核，
   不能由 Renderer 或 Agent 自报（第 3.1 节）。
@@ -324,6 +359,12 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   调用 `ghost_market_install` 安装选定的缺失插件，用户在「迁移助理」中选择并确认的
   市场插件（[新电脑设置](../product-rules/new-device-setup-migration.md)），或服务端为当前
   owner 下发 `defaultInstall`。安装成功默认启用。
+- **后台更新不降级**：市场按客户端兼容性筛选出的 `currentRelease` 可能比已装版本旧，
+  release ID 不同不代表版本更高。普通市场更新、自定义来源更新、默认下发接管和种子交还
+  商店时，按实际已装 manifest 的 SemVer 比较；候选更旧则保留当前安装与账本，不下载覆盖。
+  同版本修复和显式安装沿用既有流程；非 SemVer 历史版本保留原有判法，不猜测大小。
+  实现与回归见 `main/plugin-market/service.ts`、`__tests__/service.test.ts` 与
+  `__tests__/service-custom-sources.test.ts`（均在 `apps/desktop/src/` 下）。
 - **安装／更新确认**（`shared/ghostInstallConsent.ts` 判据，`main/cindy-brain/ghostInstallConsent.ts`
   两段式实现）：
   - 判据：「权限」与插件详情页权限区同口径，即 `ghostPermissionItems` 中除 Agent 工具外的
@@ -701,8 +742,10 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   Guide 失败必须局部隔离，不能阻断其余模型或插件面板。响应仍只把归一化后的
   `modalities.input/output` 原样交给插件，不得包含 Guide、endpoint、凭证或内部兼容判定；
   付费请求前 Core 必须再次校验。新媒体生成请求只能由当前 Agent 调用永久 Core `media`
-  工具发起，插件沙箱和 panel 不得直接提交、轮询或下载。存量 `cindy-request` 媒体代办仅作
-  兼容，不得作为新 Guide 模型的接入路径。插件工具通过现有 `tool-result` 返回普通 JSON，
+  工具发起，插件沙箱和 panel 不得直接提交、轮询或下载。存量 `cindy-request` 媒体代办保留
+  原接口：Host 完成原有权限、配额、参考图归属与账号校验后，将旧参数适配到已有 Core
+  `prepare/request/poll`；可用模型由 Server operation 的输入是否可表达决定，不按 Guide ID
+  筛选。兼容入口不向插件开放任意 Core 操作，不另起 Agent，也不重复入仓。插件工具通过现有 `tool-result` 返回普通 JSON，
   Agent 读取后自行决定下一次 `media` 调用；Host 不识别插件专用媒体意图字段，也不自动
   转发。插件需要结果时，Agent 调用普通接收工具，并通过顶层
   `ghost_call.attachments` 显式交接；Host 复用已有的通用授权链，将授权后的指纹注入
@@ -909,7 +952,10 @@ Host receipt 的 `simulatorPreviousRelId` 只允许这对 ID 和 root 路径，�
 调用按原章节号读取。不要在 TypeScript、工具描述或界面文案中另存一套编写流程。
 页面手册 `PAGE-GENERATION.md` 另以 `FORGE_PAGE_MANUAL` 导出，`ghost_forge_guide({section:"pages"})` 整份返回，
 不拼进 `FORGE_GUIDE`（手册自带 `## ` 小节，拼进去会被当成章节切开）。
-修改随包 Skill 字节时同步递增 `BUILT_IN_SKILLS_BUNDLE_VERSION`。改动其中的《Cindy MCP Apps 页面生成手册》
+修改随包 Skill 字节时，在 `apps/desktop/resources/system-skills/_versions/` 新增一个记录文件
+（版本号 = `BUILT_IN_SKILLS_BUNDLE_VERSION_BASE` + 记录数；不要把旧式 `BUILT_IN_SKILLS_BUNDLE_VERSION = N`
+常量加回来，门禁会阻断），规则见 [`credentials-and-local-storage.md`](credentials-and-local-storage.md)
+「Cindy 托管的预装技能」。改动其中的《Cindy MCP Apps 页面生成手册》
 （`PAGE-GENERATION.md`）时，还要在对应客户端上线前把新手册发布到各区域 CDN，用法与发版前检查见
 [`media-storage-and-protocols.md`](media-storage-and-protocols.md) 的《Cindy MCP Apps 页面生成手册》一条。
 手册 CDN 路径带客户端版本号与 sha256（`mcp-apps/manual/<版本号>/<sha256>.md`），发布脚本从打包产出的

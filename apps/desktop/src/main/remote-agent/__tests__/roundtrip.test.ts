@@ -1627,6 +1627,33 @@ describe('shared startup lease budget', () => {
     await resumed.close();
   });
 
+  // Unit, direct group quota recovery: capture through the real starter, then
+  // close its handle. Existing history cases tested reopen, not the recovery
+  // capability which must survive runtime drain without surviving user/grant boundaries.
+  it.each(['runtime-close', 'explicit-close', 'revoked', 'link-closed', 'expired', 'replaced'] as const)(
+    'retains the original direct recovery grant only across runtime close: %s', async mode => {
+      const f = fixture(); f.state.ready = true; f.state.duration = 60_000;
+      const handle = await f.open('historical');
+      const recovery = liveDirectGuestSession('historical')?.captureRecovery?.();
+      expect(recovery?.isCurrent()).toBe(true);
+      await handle.close({ reason: mode === 'explicit-close' ? 'account-boundary' : 'navigation' });
+      expect(liveDirectGuestSession('historical')).toBeNull();
+      let replacement: AgentSessionHandle | undefined;
+      try {
+        if (mode === 'revoked') guestPermission.epoch++;
+        if (mode === 'link-closed') historyCloseEpoch.mockReturnValue(1);
+        if (mode === 'expired') await vi.advanceTimersByTimeAsync(60_001);
+        if (mode === 'replaced') replacement = await f.open('historical');
+        expect(recovery?.isCurrent()).toBe(mode === 'runtime-close');
+        if (mode !== 'runtime-close') {
+          const before = f.calls.length;
+          expect(await recovery?.requestSwitch()).toBeUndefined();
+          expect(f.calls).toHaveLength(before);
+        }
+      } finally { await replacement?.close({ reason: 'account-boundary' }); }
+    },
+  );
+
   it('does not renew a reused historical grant after its original renewal window', async () => {
     const f = fixture(); f.state.ready = true; f.state.duration = 30 * 60_000;
     const first = await f.open('history-renew'); await first.close({ reason: 'navigation' });
@@ -2341,7 +2368,7 @@ describe('shared startup lease budget upload cancellation', () => {
       onEvent() {}, onState() {}, onWs() {}, onClosed() {},
       onRequest: async () => ({ type: 'error', error: { code: 'UNUSED', message: 'fixture' } }),
     }, randomUUID);
-    // Just crosses the inline threshold; gzip is a bounded two-chunk fixture above.
+    // Large payload; gzip completion and its bounded output are controlled above.
     const payload = { sessionId: 'upload-task', text: 'x'.repeat(1024 * 1024) };
     return { client, payload, requests, reply, hold: () => { hold = true; } };
   }
@@ -2367,13 +2394,15 @@ describe('shared startup lease budget upload cancellation', () => {
     expect(f.requests).toEqual([]);
   });
 
-  it('completes both chunks when not cancelled and rejects an already-closed payload before compression', async () => {
+  it('completes the upload when not cancelled and rejects an already-closed payload before compression', async () => {
     const f = fixture();
-    await expect(f.client.payload(f.payload)).resolves.toMatchObject({ chunks: 2, bytes: 512 * 1024 + 1 });
-    expect(f.requests.map(request => request.index)).toEqual([0, 1]);
+    const payload = await f.client.payload(f.payload);
+    expect(payload).toMatchObject({ bytes: 512 * 1024 + 1 });
+    if ('json' in payload) throw new Error('Expected an uploaded payload');
+    expect(f.requests.map(request => request.index)).toEqual(Array.from({ length: payload.chunks }, (_, index) => index));
     f.client.abandon('closed');
     await expect(f.client.payload(f.payload)).rejects.toThrow('REMOTE_AGENT_EXPIRED');
     expect(payloadCompression.calls).toBe(1);
-    expect(f.requests).toHaveLength(2);
+    expect(f.requests).toHaveLength(payload.chunks);
   });
 });

@@ -9,25 +9,36 @@ import { fileURLToPath } from 'node:url';
 
 export const SKILLS_ROOT = 'apps/desktop/resources/system-skills';
 export const VERSION_FILE = 'apps/desktop/src/main/maker-host/built-in-skills.ts';
+/** Inside SKILLS_ROOT: one `*.md` record per bundle change; the version is base + count. */
+export const RECORDS_DIRECTORY = '_versions';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const VERSION_PATTERN = /^export const BUILT_IN_SKILLS_BUNDLE_VERSION = (\d+);\r?$/m;
+// Up to bundle 96 the version was one hand-incremented number that every Skill change edited.
+const LEGACY_VERSION_PATTERN = /^export const BUILT_IN_SKILLS_BUNDLE_VERSION = (\d+);\r?$/m;
+const BASE_PATTERN = /^export const BUILT_IN_SKILLS_BUNDLE_VERSION_BASE = (\d+);\r?$/m;
+const isRecord = name => name.endsWith('.md');
 
-function versionOf(source) {
-  const match = VERSION_PATTERN.exec(source);
-  return match ? Number(match[1]) : null;
+/** Mirrors readBuiltInSkillsBundleVersion; `records` is only consulted for the record scheme. */
+function versionOf(source, records) {
+  const base = BASE_PATTERN.exec(source);
+  if (!base) {
+    const legacy = LEGACY_VERSION_PATTERN.exec(source);
+    return legacy ? Number(legacy[1]) : null;
+  }
+  const count = records();
+  return count > 0 ? Number(base[1]) + count : null;
 }
 
 /** Compare the candidate with *all* reachable versions, including merge side parents. */
 export function assertBundleVersion(candidate, history) {
   if (!Number.isSafeInteger(candidate.version) || candidate.version < 1) {
-    throw new Error('BUILT_IN_SKILLS_BUNDLE_VERSION must be a positive safe integer');
+    throw new Error(`The built-in Skill bundle version must be a positive safe integer: ${VERSION_FILE} needs BUILT_IN_SKILLS_BUNDLE_VERSION_BASE and ${SKILLS_ROOT}/${RECORDS_DIRECTORY}/ needs at least one record file.`);
   }
   for (const previous of history) {
     if (previous.version > candidate.version) {
-      throw new Error(`Built-in Skill bundle ${candidate.version} is older than ${previous.version} at ${previous.ref}; increment BUILT_IN_SKILLS_BUNDLE_VERSION above it.`);
+      throw new Error(`Built-in Skill bundle ${candidate.version} is older than ${previous.version} at ${previous.ref}. If main moved ahead of your base, merge it and raise BUILT_IN_SKILLS_BUNDLE_VERSION_BASE in ${VERSION_FILE} to main's value (keep your own record files); otherwise add a record file under ${SKILLS_ROOT}/${RECORDS_DIRECTORY}/. Never delete records or lower the base.`);
     }
     if (previous.version === candidate.version && previous.fingerprint !== candidate.fingerprint) {
-      throw new Error(`Built-in Skill bundle version ${candidate.version} was reused for different bytes (history: ${previous.ref}). Increment BUILT_IN_SKILLS_BUNDLE_VERSION above every composed source version before building.`);
+      throw new Error(`Built-in Skill bundle version ${candidate.version} was reused for different bytes (history: ${previous.ref}). Add one new record file under ${SKILLS_ROOT}/${RECORDS_DIRECTORY}/ for this change; never edit or reuse an existing record.`);
     }
   }
 }
@@ -77,7 +88,17 @@ export function checkBuiltInSkills({ repoRoot = ROOT, baseRefs = [] } = {}) {
   }
   const refs = [...new Set(['HEAD', ...baseRefs].map(ref =>
     git(['rev-parse', '--verify', `${ref}^{commit}`]).toString().trim()))];
-  const version = versionOf(fs.readFileSync(path.join(repoRoot, VERSION_FILE), 'utf8'));
+  const recordsRoot = path.join(repoRoot, SKILLS_ROOT, RECORDS_DIRECTORY);
+  const versionSource = fs.readFileSync(path.join(repoRoot, VERSION_FILE), 'utf8');
+  // A merge that keeps a branch's old-style bump would pass this gate on a number the
+  // runtime no longer reads, and ship changed bytes under an unchanged version.
+  if (BASE_PATTERN.test(versionSource) && LEGACY_VERSION_PATTERN.test(versionSource)) {
+    throw new Error(`${VERSION_FILE} still declares BUILT_IN_SKILLS_BUNDLE_VERSION; delete that line and add a record file under ${SKILLS_ROOT}/${RECORDS_DIRECTORY}/ instead.`);
+  }
+  const version = versionOf(versionSource, () =>
+    fs.existsSync(recordsRoot)
+      ? fs.readdirSync(recordsRoot, { withFileTypes: true }).filter(entry => entry.isFile() && isRecord(entry.name)).length
+      : 0);
   const fingerprint = workingFingerprint(path.join(repoRoot, SKILLS_ROOT),
     git(['rev-parse', '--show-object-format']).toString().trim());
   assertBundleVersion({ version, fingerprint }, []);
@@ -95,7 +116,7 @@ export function checkBuiltInSkills({ repoRoot = ROOT, baseRefs = [] } = {}) {
     return source && tree ? [{ ref, source: source[1], tree: tree[1] }] : [];
   });
   const sources = [...new Set(snapshots.map(s => s.source))];
-  const versions = new Map();
+  const sourceTexts = new Map();
   if (sources.length) {
     const batch = git(['cat-file', '--batch'], sources.join('\n') + '\n');
     let offset = 0;
@@ -105,13 +126,22 @@ export function checkBuiltInSkills({ repoRoot = ROOT, baseRefs = [] } = {}) {
       if (!header || header[1] !== source) throw new Error('Cannot read built-in Skill version history');
       offset = newline + 1;
       const size = Number(header[2]);
-      versions.set(source, versionOf(batch.subarray(offset, offset + size).toString('utf8')));
+      sourceTexts.set(source, batch.subarray(offset, offset + size).toString('utf8'));
       offset += size + 1;
     }
   }
+  // Record counts are read per distinct Skill tree, and only for commits on the record scheme.
+  const recordCounts = new Map();
+  const recordsIn = tree => {
+    if (!recordCounts.has(tree)) {
+      recordCounts.set(tree, git(['ls-tree', '-z', tree, `${RECORDS_DIRECTORY}/`]).toString('utf8')
+        .split('\0').filter(entry => /^(100644|100755) blob [a-f0-9]+\t/.test(entry) && isRecord(entry)).length);
+    }
+    return recordCounts.get(tree);
+  };
   const trees = new Map();
   for (const snapshot of snapshots) {
-    const previousVersion = versions.get(snapshot.source);
+    const previousVersion = versionOf(sourceTexts.get(snapshot.source), () => recordsIn(snapshot.tree));
     // Older, already shipped conflicts are not retroactively rejected by a new version.
     if (previousVersion === null || previousVersion < version) continue;
     let previousFingerprint;

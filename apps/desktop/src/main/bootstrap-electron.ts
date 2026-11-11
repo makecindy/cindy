@@ -135,6 +135,7 @@ import {
   readPersistedWindowMaximized,
   type MainWindowMaximizeRecoveryController,
 } from './mainWindowMaximizeRecovery';
+import { installWindowsTransparentTitleBar } from './windowsTransparentTitleBar';
 import {
   commitReplacedNormalBounds,
   fitReplacementStartupBounds,
@@ -669,6 +670,7 @@ import { sidebarWindowExpansion } from './sidebarWindowExpansion';
 import { registerSidebarWindowExpansionIpc } from './sidebarWindowExpansionIpc';
 import { WindowManualDragController } from './windowManualDrag';
 import { loadWindowsTaskbarNative } from './windowsTaskbarNative';
+import { setWindowsWindowDarkMode } from './windowsWindowDarkMode';
 import {
   issueWritableDirectoryPickerGrant,
   issueWritableDirectoryRecentGrant,
@@ -1237,7 +1239,7 @@ import {
 } from './cindy-brain/index.js';
 import { setCodexImageAuthBinding } from './cindy-brain/codexImageAuthBinding.js';
 import { configureMailAttachmentHost } from './cindy-brain/mailAttachmentUpload.js';
-import { writeTempFile, materializeDirectSendOssAttachments } from './maker-ipc/normalizeAttachments.js';
+import { writeTempFile, materializeDirectSendOssAttachments } from './maker-ipc/normalizeAttachments.desktop.js';
 import { listActiveClaudeBackgroundActivitySessions } from './maker-host/claude-session-background-activity.js';
 import { registerRelaunchBusyActivityIpc } from './relaunchBusyActivityIpc.js';
 import { describeRelaunchTurns } from './relaunchTurnFacts.js';
@@ -4446,6 +4448,9 @@ const createWindow = () => {
     },
   });
   markAppContentWindow(mainWindow);
+  installWindowsTransparentTitleBar(mainWindow, () => {
+    mainWindowMaximizeRecoveryController?.notifyUserUnmaximizeIntent();
+  });
   installSelectionContextMenu(mainWindow);
   installWindowResponsivenessDiagnostics(mainWindow, { label: 'main' });
   mainWindowRef = mainWindow;
@@ -4609,7 +4614,7 @@ const createWindow = () => {
       markDesktopDevWindowReady(mainWindow.webContents.getOSProcessId());
     worktreeMaintenanceReadyWindows.add(mainWindow);
     startReadyWorktreeMaintenance();
-    void runComputerUseSmokeIfRequested();
+    void runComputerUseSmokeIfRequested(mainWindow);
     // 资源用量窗口不应与主窗口首帧争 CPU。主窗口可见后再后台完成 BrowserWindow、
     // renderer 和首份进程快照预热；回调绑定当代主窗口，重建/退出后不会创建孤儿窗。
     resourceUsagePrewarmTimer = setTimeout(() => {
@@ -5165,6 +5170,8 @@ const registerIpcHandlers = () => {
       win.setBackgroundMaterial(config.backgroundMaterial);
       win.webContents.send(WINDOW_BACKDROP_MATERIAL_CHANGED_CHANNEL, config.backgroundMaterial);
     }
+    // The Windows 11 backdrop is tinted by the window's mode: follow Cindy's theme.
+    setWindowsWindowDarkMode(win, isDark);
     if (process.platform === 'darwin') applyMacWindowBackdrop(win, config);
     else win.setBackgroundColor(config.backgroundColor);
     applyVibrancyToSecondaryWindows(familyId, isDark);

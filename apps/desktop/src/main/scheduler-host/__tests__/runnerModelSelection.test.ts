@@ -346,6 +346,66 @@ describe('MakerScheduleRunner model selection', () => {
     mocks.getSessionFsSnapshot.mockResolvedValue({ permissionMode: 'ask', planModeEnabled: false });
   });
 
+  // Unit regression: a bound task runs on another computer, but an explicit
+  // automation model belongs to the host. Saving must use the inherited catalog
+  // and reject before starting/switching the task; explicit local must succeed.
+  it('validates the bound execution location before saving an explicit model', async () => {
+    const h = createSessionHarness();
+    mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active', agentDeviceId: 'other-computer' });
+    const resolveModelSelection = vi.fn(async (choice: Parameters<typeof resolveScheduledModelSelection>[0]) => {
+      if (choice.agentDeviceId) throw new Error('[MODEL_SELECTION_UNAVAILABLE] not offered');
+      return choice;
+    });
+    const harness = createRunnerHarness(h, null, { resolveModelSelection });
+    const schedule = baseSchedule({ targetSessionId: 'bound', modelAgentKind: 'codex',
+      model: 'local-model', providerId: 'local-account' });
+    await expect(harness.runner.validateModelSelection(schedule)).rejects.toThrow('modelAgentDeviceId');
+    expect(resolveModelSelection).toHaveBeenLastCalledWith(expect.objectContaining({
+      agentDeviceId: 'other-computer', model: 'local-model', providerId: 'local-account',
+    }));
+    await expect(harness.runner.validateModelSelection({ ...schedule, modelAgentDeviceId: '' })).resolves.toBeUndefined();
+    expect(resolveModelSelection).toHaveBeenLastCalledWith(expect.objectContaining({ agentDeviceId: null }));
+    expect(harness.createSession).not.toHaveBeenCalled();
+    expect(h.setModel).not.toHaveBeenCalled();
+    expect(h.send).not.toHaveBeenCalled();
+  });
+
+  it('does not require a live catalog for unrelated edits or legacy followed models', async () => {
+    const resolveModelSelection = vi.fn(async () => { throw new Error('offline'); });
+    const harness = createRunnerHarness(createSessionHarness(), null, { resolveModelSelection });
+    const saved = baseSchedule({ targetSessionId: 'bound', modelAgentKind: 'codex', model: 'saved' });
+    await harness.runner.validateModelSelection({ ...saved, name: 'renamed' }, saved);
+    await harness.runner.validateModelSelection({ ...saved, modelAgentKind: undefined });
+    await harness.runner.validateModelSelection({ ...saved, executionMode: 'script' });
+    expect(resolveModelSelection).not.toHaveBeenCalled();
+    expect(mocks.getSessionRowSnapshot).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { target: { status: 'archived', agentDeviceId: 'bound-computer' }, location: undefined, expected: 'bound-computer' },
+    { target: { status: 'deleted', agentDeviceId: 'old-computer' }, location: undefined, expected: 'fresh-computer' },
+    { target: { status: 'archived', source: 'bot', agentDeviceId: 'old-computer' }, location: undefined, expected: 'fresh-computer' },
+    { target: null, location: undefined, expected: 'fresh-computer' },
+    { target: { status: 'active', agentDeviceId: 'bound-computer' }, location: 'chosen-computer', expected: 'chosen-computer' },
+  ])('preserves dispatch location semantics during save: %j', async ({ target, location, expected }) => {
+    mocks.getSessionRowSnapshot.mockResolvedValue(target);
+    const resolveModelSelection = vi.fn(async (choice: Parameters<typeof resolveScheduledModelSelection>[0]) => choice);
+    const harness = createRunnerHarness(createSessionHarness(), null, { resolveModelSelection });
+    const saved = baseSchedule({ targetSessionId: 'bound', persistentSession: true,
+      agentDeviceId: 'fresh-computer', modelAgentKind: 'codex', model: 'saved-model' });
+    await harness.runner.validateModelSelection({ ...saved, modelAgentDeviceId: location });
+    expect(resolveModelSelection).toHaveBeenCalledWith(expect.objectContaining({ agentDeviceId: expected }));
+  });
+
+  it('does not validate SSH models against the controller catalog', async () => {
+    mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active', remoteHostId: 'ssh-host' });
+    const resolveModelSelection = vi.fn();
+    const harness = createRunnerHarness(createSessionHarness(), null, { resolveModelSelection });
+    await harness.runner.validateModelSelection(baseSchedule({ targetSessionId: 'bound',
+      modelAgentKind: 'codex', model: 'ssh-only-model' }));
+    expect(resolveModelSelection).not.toHaveBeenCalled();
+  });
+
   it('lets the ordinary startup funnel allocate a remote group and persists the selected member provider', async () => {
     const h = createSessionHarness();
     const bootstrapSession = vi.fn(async (options: Parameters<Maker['createSession']>[0], signal?: AbortSignal) => {

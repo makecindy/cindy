@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { groupExecutionVisualFixture } from '@/debug/groupExecutionVisualFixture';
 import { getRemoteResource } from '@/device-link/remoteResources';
 import type { HostedRemoteCollectionItem } from '@/device-link/remoteResources';
-import { botGroupComposerPlanState, chatGroupMembership, openBotGroupPlan } from '@cindy/maker-shared/botGroupPresentation';
+import { botGroupComposerPlanState, botGroupPlanStepState, chatGroupMembership, openBotGroupPlan } from '@cindy/maker-shared/botGroupPresentation';
 import {
   botGroupChatDataFromResource,
   botGroupErrorCode,
@@ -75,6 +75,16 @@ describe('parseBotGroupChatData', () => {
     expect(legacy.plans[0].canManage).toBeUndefined();
     expect(legacy.plans[0].supportsPendingSkip).toBe(false);
     expect(legacy.plans[0].canSetAutoContinue).toBe(false);
+    // #9909: an explicit null says the turn published nothing; a missing field is an older
+    // projection. Only the former reads as skipped, so the null must survive the computer's
+    // projection instead of collapsing into "not reported".
+    const reported = parseBotGroupChatData(chatData({ plans: [{ ...base, kind: 'talk', steps: [
+      { ...base.steps[0], status: 'done', resultMessageId: null },
+      { ...base.steps[1], status: 'done' },
+    ] }] }))!;
+    expect(reported.plans[0]!.steps.map(step => step.resultMessageId)).toEqual([null, undefined]);
+    expect(botGroupPlanStepState(reported.plans[0]!, reported.plans[0]!.steps[0]!)).toBe('skipped');
+    expect(botGroupPlanStepState(reported.plans[0]!, reported.plans[0]!.steps[1]!)).toBe('done');
   });
   // The remote resource must preserve the queue semantics before choosing composer copy.
   it.each([
