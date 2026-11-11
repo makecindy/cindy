@@ -1,4 +1,12 @@
 {
+  "runtimePlugins": {
+    "save": "保存",
+    "promptUnsupported": "この Pi の実行場所ではシステム指示の追加に対応していません。",
+    "title": "タスクのプラグイン",
+    "description": "このタスクで使うプラグインを選択します。変更は次のメッセージから反映されます。",
+    "unsupported": "リクエストごとの処理はローカルの Pi のみ対応しています。このタスクのエンジンでは利用できません。",
+    "failed": "設定を読み込めないか保存できませんでした。このパネルを開き直して再試行してください。"
+  },
   "sharedTaskRecovery": {
     "title": "元のコンピューターでセッションを再開できません",
     "description": "別のコンピューターまたはプロバイダーを選び、コンテキストを引き継いで続行できます。メッセージは保持されますが、元のコンピューターの実行状態全体は移行されません。",
@@ -3779,6 +3787,10 @@
           "openaiImagesHint": "この接続のアドレスと API Key で /images/generations と /images/edits を呼び出します。有効にすると、プロバイダーの画像接続はこの接続のみになります。不足するモデル ID は手動で追加し、モデル詳細で画像機能を指定してください。",
           "xaiVideos": "xAI 互換の動画 API を使用",
           "xaiVideosHint": "この接続のアドレスと API キーで動画タスクを送信・確認します。有効にすると、この接続がプロバイダーの唯一の動画接続になります。不足するモデル ID を追加し、モデル詳細で動画機能を設定してください。",
+          "minimaxVideos": "MiniMax 互換の動画 API を使用",
+          "minimaxVideosHint": "この接続のアドレスと API キーで MiniMax-H3 などの MiniMax 動画タスクを送信・確認します。プロバイダーが使える動画 API は 1 つだけです。不足するモデル ID を追加し、モデル詳細で動画機能を設定してください。",
+          "openaiVideos": "OpenAI 互換の動画 API を使用（/v1/videos）",
+          "openaiVideosHint": "この接続のアドレスと API キーで、tu-zi など多くの中継サービスが使う POST /v1/videos 形式のタスクを送信・確認します。MiniMax-H3 などのモデルもこの形式で使えます。プロバイダーが使える動画 API は 1 つだけです。不足するモデル ID を追加し、モデル詳細で動画機能を設定してください。",
           "runtimeSupportsImageGeneration": "画像の生成と編集に対応",
           "runtimeSupportsImageGenerationHelpLabel": "画像の生成と編集への対応について",
           "runtimeSupportsImageGenerationConditionTitle": "適用条件",
@@ -6603,8 +6615,27 @@
             "copied": "連携コードをコピーしました",
             "hint": "または Feishu / Lark で Cindy bot にこのコードをダイレクトメッセージで送信してください"
           },
+          "linkedAccounts": "連携済みアカウント：{{count}}",
+          "connectionTenant": "所属企業：{{tenant}}",
           "setWorkingDevice": "作業用パソコンに設定",
-          "workingDeviceSet": "作業用パソコンに設定しました"
+          "workingDeviceSet": "作業用パソコンに設定しました",
+          "appType": {
+            "self_built": "組織のカスタムアプリ",
+            "store": "ストアアプリ"
+          },
+          "linkedBotsSummary": "連携済みボット: {{bots}} · アカウント: {{accounts}}",
+          "chooseBot": "連携するボットを選んでください。複数のボットを同時に使えます。",
+          "connectBot": "このボットを連携",
+          "linkAnotherAccount": "別の Feishu アカウントを連携",
+          "botFallback": "Cindy ボット",
+          "bridgeTitle": "Feishu / Lark ボット",
+          "bridgeDescription": "ボットは Feishu / Lark のメッセージを Cindy に届けるだけです。各アカウントのメッセージはその作業用パソコンで処理され、セッションはボットとアカウントごとに分かれます。",
+          "settingsTitle": "作業ディレクトリとモデル",
+          "settingsDescription": "Cindy アカウントとこのパソコンに属する設定で、ボットや Feishu / Lark アカウントごとには変わりません。すべての Feishu / Lark ボットで共通です。ディレクトリ一覧は他のチャンネルとも共通です。",
+          "workingDeviceLabel": "作業用パソコン：{{name}}",
+          "workingDeviceThisComputer": "このパソコン",
+          "workingDeviceUnknown": "作業用パソコンはまだ同期されていません",
+          "workingDeviceUnnamed": "名前のないパソコン"
         }
       },
       "summary": {
@@ -8042,8 +8073,18 @@
         "subscribeScheduleRunDetail": "「事前チェック」でこのプラグインを選んだ自動化は、実行前に先に確認します。自動化の名前と指示を参照でき、今回をスキップまたは停止できますが、代わりに承認することはできません。",
         "subscribeRoutineRun": "選んだチームメイトのルーティンの実行前にチェックできます",
         "subscribeRoutineRunDetail": "「事前チェック」でこのプラグインを選んだルーティンは、トリガーされるたびに先に確認します。ルーティンの指示とトリガーしたイベントの内容を参照でき、今回をスキップまたは停止できますが、代わりに承認することはできません。",
+        "systemPrompt": "選択したタスクにシステム指示を追加できます",
+        "systemPromptDetail": "以下の静的な文章を、このプラグインを選択したタスクに限り Cindy の固定指示の後へ追加します。順序と対応エンジンはパッケージで指定します。変更は次のメッセージから反映され、エラーはタスクの設定に従います。",
+        "subscribeComposeContext": "選択したタスクの返信前に参考資料を追加できます",
+        "subscribeComposeContextDetail": "選択したタスクの現在のメッセージだけを共有します。結果は通常の参考資料として扱われ、システム指示や承認にはなりません。エラー時はタスクの設定に従います。",
+        "subscribeSearchMemory": "選択したタスクにメモリを提供できます",
+        "subscribeSearchMemoryDetail": "既存の memory_search にプラグイン名付きの全文結果を追加します。メモリ検索を有効にしてください。選択したタスクの検索語だけを共有し、失敗時は Cindy の結果を保持します。",
+        "subscribeStartTurn": "選択したタスクで返信前にモデルを選べます",
+        "subscribeStartTurnDetail": "タスクでこのプラグインを選んだ場合のみ、現在のメッセージを読み、接続済みモデル、推論強度、Fast を選べます。エラー時はタスクの設定に従い、操作を代わりに承認することはできません。",
+        "subscribeModelRequest": "選択したタスクの各モデルリクエストを処理できます",
+        "subscribeModelRequestDetail": "タスクでこのプラグインを選んだ場合のみ、モデルへのリクエストを読み、モデル、パラメーター、内容を調整できます。現在はローカルの Pi のみ対応し、エラー時はタスクの設定に従います。接続の認証情報は含まれません。",
         "subscribeStartTask": "新しいタスクのモデルを選べます",
-        "subscribeStartTaskDetail": "新しいタスクでこのプラグインのモデルを選ぶと、最初のメッセージを読んで、接続済みのモデルから 1 つ選びます。選ぶのは 1 回だけで、タスクの途中でモデルは変わりません。",
+        "subscribeStartTaskDetail": "新しいタスクでこのプラグインのモデルを選ぶと、最初のメッセージを読んで、接続済みのモデルから 1 つ選びます。この処理は最初のメッセージを送る前に一度だけ実行されます。",
         "card": "メッセージカードを描画",
         "cardExternalLink": "カード内で外部リンクを宣言でき、確認後にブラウザで開きます",
         "cardExternalLinkDetail": "カード内のリンクをクリックすると確認ダイアログが表示され、承認後にシステムブラウザで開きます。http/https アドレスのみ許可されます。",
@@ -11751,7 +11792,7 @@
       "remove": "削除",
       "removeAria": "{{platform}} を削除",
       "empty": "既存のボットを追加するか、下で個人用 WeChat を接続すると、{{name}} がそこで返信します。",
-      "externalNote": "このボットにメッセージを送る人は全員 {{name}} と話すことになります。あなた自身のメッセージは {{name}} の権限で実行され、それ以外の人には権限を制限した非表示のタスクが個別に用意されます。",
+      "externalNote": "連携後、Telegram と Feishu/Lark の個別メッセージはオーナーからのみ受け付けます。グループへの参加は各プラットフォームの設定に従い、ツールは {{name}} の権限で動作します。別々のセッションでも資料とメモリは共有されます。",
       "sharedMemoryNote": "{{name}} はここでの情報と他の会話の情報をまとめて使います。記憶を分けたい場合は別の仲間を使ってください。",
       "groups": {
         "title": "グループ",

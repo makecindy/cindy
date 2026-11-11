@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import { createIMessageMcpServer } from './imessageMcpServer';
+import { searchGhostRuntimeMemories } from '../cindy-brain/index.js';
 import { getPiKernelManager } from '../agent-binaries/index.js';
 import { PiKernelError } from '../agent-binaries/pi-kernel-manager.js';
 import { manageAppSettings } from '../app-settings/sections.js';
@@ -672,6 +673,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     memory: {
       withAccountDataAccess,
       getManager: deps.getMakerMemoryManager,
+      searchProviders: searchGhostRuntimeMemories,
       beginWrite: (context) => {
         const saved = botLearningTracker.capture(botLearningTracker.learnsFrom(context?.sessionId, context?.memoryScopeKey));
         return receipt => saved({ ...receipt, kind: 'memory' });

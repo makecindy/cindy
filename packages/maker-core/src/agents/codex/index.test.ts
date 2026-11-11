@@ -14,6 +14,7 @@ import { CodexForkError } from './fork-error.js';
 import { MANUAL_ABORT_RECOVERY_GRACE_MS, Session } from '../../session.js';
 import { withFastModePolicy } from '../shared/fast-mode-policy.js';
 import { AUTO_REVIEW_CONTINUATION_POLICY } from '../shared/continuation-policy.js';
+import { assembleSystemPromptSections } from '../shared/system-prompt-sections.js';
 import { Method, type TurnStartParams } from './app-server/protocol.js';
 import type { Effort } from '../../types/common.js';
 import type { AppServerHost, ThreadEventHandlers } from './app-server/host.js';
@@ -5851,6 +5852,24 @@ describe('CodexAgent.refreshLocalModels', () => {
 });
 
 describe('CodexAgent.startSession developerInstructions', () => {
+  // Unit, real thread/start projection: selected static text stays in developer
+  // instructions, after the original prefix, without creating a user message.
+  it('appends selected task fragments to the native developer instructions', async () => {
+    const instructions: string[] = [];
+    for (const selected of [false, true]) {
+      const agent = new CodexAgent(createDeps({ systemPrompt: 'HOST FIXED PREFIX' }));
+      const host = installFakeHost(agent);
+      const handle = await agent.startSession({ sessionId: `task-fragments-${selected}`,
+        model: 'gpt-5.4', workingDir: '/repo', userPrompt: assembleSystemPromptSections('Original task instructions', selected
+          ? [{ name: 'task', order: 0, text: 'STATIC FRAGMENT' }] : []),
+      });
+      const params = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)?.[1] as { developerInstructions: string };
+      instructions.push(params.developerInstructions);
+      await handle.close();
+      await agent.dispose();
+    }
+    expect(instructions[1]).toBe(instructions[0] + '\n\nSTATIC FRAGMENT');
+  });
   it.each([
     { action: 'start', resumeSessionId: undefined, expectedProvider: 'cindy_gateway' },
     {
