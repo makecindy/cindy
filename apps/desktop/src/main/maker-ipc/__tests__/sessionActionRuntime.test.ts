@@ -18,7 +18,8 @@ function harness(overrides = {}) {
   const close = vi.fn(async () => { live = undefined; });
   return { row, resume, load, close, changeOwner: () => { owner++; },
     prepare: createSessionActionRuntime({ getLive: () => live, load,
-      ownerGeneration: () => owner, resume, close }) };
+      ownerGeneration: () => owner, resume, close,
+      holdsPendingRewind: (stored) => stored.agentKind === 'cc' }) };
 }
 
 describe('history action runtime preparation', () => {
@@ -83,6 +84,20 @@ describe('history action runtime preparation', () => {
     await live.prepare('s', 'pi-history');
     await live.prepare.release('s');
     expect(live.close).not.toHaveBeenCalled();
+  });
+  it('keeps a Claude runtime after a committed rewind so its pending native rewind survives', async () => {
+    const claude = harness({ agentKind: 'cc' });
+    await claude.prepare('s', 'rewind');
+    await claude.prepare.release('s', { rewindCommitted: true });
+    expect(claude.close).not.toHaveBeenCalled();
+    const failed = harness({ agentKind: 'cc' });
+    await failed.prepare('s', 'rewind');
+    await failed.prepare.release('s', { rewindCommitted: false });
+    expect(failed.close).toHaveBeenCalledTimes(1);
+    const codex = harness({ agentKind: 'codex' });
+    await codex.prepare('s', 'rewind');
+    await codex.prepare.release('s', { rewindCommitted: true });
+    expect(codex.close).toHaveBeenCalledTimes(1);
   });
   it.each(['rewind', 'compact'] as const)('refuses %s for a task whose Agent runs on another computer', async (action) => {
     const h = harness({ agentKind: 'codex', remoteHostId: null, agentDeviceId: 'device-2' });

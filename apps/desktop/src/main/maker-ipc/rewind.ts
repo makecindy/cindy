@@ -88,15 +88,17 @@ async function commitAfterPersistBarrier(
   // reload its target and transaction boundary from the durable store.
   await drainPersistQueue();
   return withSendToSessionLock(sessionId, async () => {
+    let committed = false;
     try {
       assertRewindOwner(opts.ownerScope);
       await prepareSessionForHistoryAction(sessionId, 'rewind');
       assertRewindOwner(opts.ownerScope);
       const result = await commitRewindAtMessage(sessionId, clientId, opts);
+      committed = true;
       advanceSessionRewindGeneration(sessionId);
       return result;
     } finally {
-      await releaseSessionAfterHistoryAction(sessionId);
+      await releaseSessionAfterHistoryAction(sessionId, { rewindCommitted: committed });
     }
   });
 }

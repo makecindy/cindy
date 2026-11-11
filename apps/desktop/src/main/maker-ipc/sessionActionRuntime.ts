@@ -19,6 +19,8 @@ export function createSessionActionRuntime<Row extends StoredSession, Live>(deps
   ownerGeneration(): number;
   resume(sessionId: string, row: Row, assertCurrent: () => void): Promise<Live>;
   close(sessionId: string, live: Live): Promise<void>;
+  /** Claude keeps the native rewind pending on the live handle until the next send. */
+  holdsPendingRewind(live: Live): boolean;
 }) {
   // Runtimes started only for a history action. The renderer's start-time
   // preferences (personal prompt, memory switch) are not stored in the DB, so
@@ -65,11 +67,14 @@ export function createSessionActionRuntime<Row extends StoredSession, Live>(deps
   };
   /** Close a runtime this module restored, so the next send starts it with the
    * caller's own start options. A no-op for runtimes that were already live. */
-  const release = (sessionId: string): Promise<void> =>
+  const release = (sessionId: string, opts?: { rewindCommitted?: boolean }): Promise<void> =>
     withSendToSessionLock(sessionId, async () => {
       const session = restored.get(sessionId);
       if (session === undefined) return;
       restored.delete(sessionId);
+      // A committed Claude rewind is only applied by the handle's next send, so
+      // closing it now would resume the untrimmed native conversation.
+      if (opts?.rewindCommitted && deps.holdsPendingRewind(session)) return;
       if (deps.getLive(sessionId) === session) await deps.close(sessionId, session);
     });
   return Object.assign(prepare, { release });

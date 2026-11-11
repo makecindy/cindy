@@ -68,7 +68,8 @@ Pi 会话树、HTML 导出，以及 Pi / Codex 手动压缩共用 `sessionAction
 
 恢复边界：个性化提示词、记忆开关只在 renderer 的启动选项里，不落库，所以为回退 / 手动压缩
 临时恢复出的运行环境，在动作结束后立即以 `runtime-refresh` 关闭，下一次发送再带着正常启动
-选项冷启动；不能让它被后续发送静默复用。严格恢复标记（`_cindyRequireNativeResume`）不经
+选项冷启动；不能让它被后续发送静默复用。例外：Claude 回退提交后，原生回退（`pendingRewindTo`）只挂在该运行
+环境上、由它的下一次发送执行，所以成功提交后保留运行环境，否则下次发送会续上未裁剪的原生历史。严格恢复标记（`_cindyRequireNativeResume`）不经
 远程 Agent 线协议传到另一台电脑，所以 Agent 在另一台电脑上的任务，回退 / 手动压缩的冷恢复
 会拒绝并提示先在那台电脑恢复；要支持需另行评审线协议兼容（`protocol-compatibility.md`）。
 回退入口与其他会启动 Agent 的 IPC 一样，非 device-link 调用必须来自受信顶层页面。

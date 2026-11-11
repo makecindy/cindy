@@ -4853,8 +4853,11 @@ export async function prepareSessionForHistoryAction(sessionId: string, action: 
 }
 
 /** Close a runtime that only a history action restored (see createSessionActionRuntime). */
-export async function releaseSessionAfterHistoryAction(sessionId: string) {
-  await sessionActionRuntime?.release(sessionId);
+export async function releaseSessionAfterHistoryAction(
+  sessionId: string,
+  opts?: { rewindCommitted?: boolean },
+) {
+  await sessionActionRuntime?.release(sessionId, opts);
 }
 
 /**
@@ -25299,6 +25302,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     close: (sessionId, live) => withRehydrateCloseSuppressed(sessionId,
       () => maker.closeSessionIfCurrent(live, 'runtime-refresh').then(() => undefined)),
+    holdsPendingRewind: (live) => live.agentKind === 'claude-code',
   });
   sessionActionRuntime = getOrResumeSessionForHistory;
 

@@ -146,9 +146,15 @@ describe('maker rewind IPC stop-then-rewind', () => {
         ? mocks.previewRewindAtMessage : mocks.commitRewindAtMessage;
       operation.mockRejectedValueOnce(new Error('boom'));
       await expect(mocks.handlers.get(channel)!({}, 'session-1', 'message-1')).rejects.toThrow('boom');
-      expect(mocks.releaseSessionAfterHistoryAction).toHaveBeenCalledWith('session-1');
+      expect(mocks.releaseSessionAfterHistoryAction.mock.calls.at(-1)?.[0]).toBe('session-1');
     },
   );
+
+  it('tells the release whether the rewind actually committed', async () => {
+    mocks.commitRewindAtMessage.mockResolvedValueOnce({ id: 'session-1' });
+    await mocks.handlers.get(MAKER_INVOKE.REWIND_COMMIT)!({}, 'session-1', 'message-1');
+    expect(mocks.releaseSessionAfterHistoryAction).toHaveBeenLastCalledWith('session-1', { rewindCommitted: true });
+  });
 
   it('does not rewind after account changes during restoration', async () => {
     mocks.prepareSessionForHistoryAction.mockImplementationOnce(async () => {
