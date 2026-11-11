@@ -8,6 +8,7 @@ import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { InstalledGhost } from '../../../shared/ghost';
+import { withGhostResolvedLocale } from '../../../shared/ghost';
 import {
   createUtilityNodeWorkerProcess,
   GhostNodeRuntimeBroker,
@@ -2695,6 +2696,35 @@ describe('nodeRuntimeBroker · 宿主代启子进程(childSpawn,2026-07-23)', ()
       const reply = worker.lastOf('node-host-result')!;
       if (stale) expect(reply.result).toMatchObject({ isError: true, content: [{ text: '{"ok":false,"errorCode":"PERMISSION_DENIED"}' }] });
       else expect(reply.result).toEqual(result);
+    } finally { broker.destroyAll(); }
+  });
+
+  // Unit, #9801 / 4538031073: Host queries localize the approved manifest on
+  // every lookup, while resident workers keep running. Existing install tests
+  // changed revision, not locale. A locale change must keep the same worker's
+  // control-frame call usable both before dispatch and during its Host callback.
+  it.each(['before', 'during'] as const)('keeps autonomous Host tools usable after a locale change %s dispatch', async phase => {
+    const ghost = childSpawnGhost();
+    ghost.approval = { state: 'approved', revision: 'r1' };
+    ghost.manifest = withGhostResolvedLocale(ghost.manifest, 'en');
+    const localize = () => {
+      ghost.manifest = { ...withGhostResolvedLocale(ghost.manifest, 'zh-CN'), name: '本地化插件名称' };
+    };
+    const result = { content: [{ type: 'text', text: '{"ok":true,"tasks":[]}' }] };
+    const hostToolRequest = vi.fn(async (_id: string, _payload: unknown, current: () => boolean) => {
+      expect(current()).toBe(true);
+      if (phase === 'during') localize();
+      expect(current()).toBe(true);
+      return result;
+    });
+    const { broker, worker } = await bootWorker(ghost, undefined, true, hostToolRequest);
+    try {
+      if (phase === 'before') localize();
+      worker.emitControl({ type: 'host-tool-request', reqId: 'localized', server: 'cindy_helper', tool: 'list_sessions', args: {} });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(hostToolRequest).toHaveBeenCalledOnce();
+      expect(worker.lastOf('node-host-result')).toMatchObject({ reqId: 'localized', result });
+      expect(worker.killed).toBe(false);
     } finally { broker.destroyAll(); }
   });
 
