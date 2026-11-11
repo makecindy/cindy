@@ -1,10 +1,11 @@
+import type { ViewInstance } from 'react-native';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AccessibilityInfo, Keyboard, Platform, View, useWindowDimensions, type KeyboardEvent } from 'react-native';
+import { AccessibilityInfo, Keyboard, Platform, useWindowDimensions, type KeyboardEvent } from 'react-native';
 import { browserViewport, browserViewportScript, type BrowserFrame, type BrowserInsets } from './htmlBrowserViewport';
 
 /** iOS 26 keeps full-bleed rendering; older platforms reserve actual layout space. */
 export function useHtmlBrowserViewport(controls: BrowserInsets) {
-  const viewRef = useRef<View>(null);
+  const viewRef = useRef<ViewInstance>(null);
   const windowSize = useWindowDimensions();
   const [frame, setFrame] = useState<BrowserFrame | null>(null);
   const [keyboard, setKeyboard] = useState<BrowserFrame | null>(() => {

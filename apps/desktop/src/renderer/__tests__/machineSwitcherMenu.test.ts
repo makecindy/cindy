@@ -93,10 +93,8 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(topNavSource).toContain(
       "const pinSearch = section === 'scrollable' && search.query.trim().length > 0",
     );
-    // 搜索可排在中间,底部间距只在钉住时补上(未钉住时由后续行的 gap 承担)。
-    expect(topNavSource).toContain(
-      "pinSearch && 'sticky top-0 z-30 bg-[var(--cmd-palette-bg)] pb-2.5'",
-    );
+    // 搜索吸顶不改变导航行高度，也不在输入框外绘制额外背景。
+    expect(topNavSource).toContain("pinSearch && 'sticky top-0 z-30'");
     expect(topNavSource).toContain("if (section === 'scrollable')");
     expect(sidebarUpperSource).toContain('lastListScrollTopRef.current = el.scrollTop');
     expect(sidebarUpperSource).toContain(

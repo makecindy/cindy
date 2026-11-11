@@ -1,3 +1,5 @@
+import { applyMacWindowBackdrop } from './macosDesktopBlur';
+import { setWindowsWindowDarkMode } from './windowsWindowDarkMode';
 /**
  * secondary-windows —— 「在新窗口打开」会话多开功能的主进程侧。
  *
@@ -152,6 +154,7 @@ export function openSessionInNewWindow(
     autoHideMenuBar: true,
     show: false,
     backgroundColor: bgColor,
+    transparent: true,
     ...(process.platform === 'win32' && winBackdropConfig.backgroundMaterial
       ? {
           backgroundMaterial: winBackdropConfig.backgroundMaterial,
@@ -283,9 +286,7 @@ export function applyVibrancyToSecondaryWindows(familyId: string, isDark: boolea
   for (const win of secondaryWindows) {
     if (win.isDestroyed()) continue;
     const config = resolveWindowVibrancyConfig(win, familyId, isDark, process.platform);
-    if (process.platform === 'darwin') {
-      win.setVibrancy(config.vibrancy as 'under-window' | null);
-    }
+
     // Windows 11:副窗口与主窗口一致地应用 acrylic/mica 材质;切回非 CINDY family 时
     // config.backgroundMaterial 为 'none',显式复位,避免会话副窗口残留上一次的毛玻璃材质。
     if (process.platform === 'win32' && config.backgroundMaterial) {
@@ -300,6 +301,8 @@ export function applyVibrancyToSecondaryWindows(familyId: string, isDark: boolea
         );
       }
     }
-    win.setBackgroundColor(config.backgroundColor);
+    setWindowsWindowDarkMode(win, isDark);
+    if (process.platform === 'darwin') applyMacWindowBackdrop(win, config);
+    else win.setBackgroundColor(config.backgroundColor);
   }
 }

@@ -8,6 +8,7 @@ import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { spacing, typeScale, lineHeight, listDisclosureMotion, iconSize } from '@/theme/tokens';
 import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
 import { useFoldableExpandedState } from './expandedBlockMemory';
+import { ProcessDisclosureViewport } from './useProcessDisclosureViewport';
 
 const InspectProcess = createContext<(() => void) | null>(null);
 const ProcessRailEnd = createContext<((inset: number) => void) | null>(null);
@@ -39,9 +40,12 @@ export function TeammateProcessLink({ title, onPress }: { title: string; onPress
 }
 
 /** One turn, one guide. Public notes remain selectable; only the header owns a gesture. */
-export function TeammateProcess({ id, title, running = false, children, secondary = false, statusIcon, railFooter = false }: {
+export function TeammateProcess({ id, title, titleContent, titleAccessory, running = false, children, secondary = false, statusIcon, railFooter = false }: {
   id: string;
   title: string;
+  titleContent?: ReactNode;
+  /** A bounded metadata column; the title uses the remaining single line. */
+  titleAccessory?: ReactNode;
   running?: boolean;
   secondary?: boolean;
   statusIcon?: ReactNode;
@@ -50,6 +54,8 @@ export function TeammateProcess({ id, title, running = false, children, secondar
 }) {
   const { colors } = useTheme();
   const inspectParent = useContext(InspectProcess);
+  const inspectViewport = useContext(ProcessDisclosureViewport);
+  const visibleHeight = useRef(0);
   const reduceMotion = useReduceMotionEnabled();
   const styles = useThemedStyles(makeStyles);
   const [stored, toggleStored] = useFoldableExpandedState(id, false);
@@ -76,6 +82,7 @@ export function TeammateProcess({ id, title, running = false, children, secondar
     inspectParent?.();
   };
   const toggle = () => {
+    inspectViewport?.(expanded ? visibleHeight.current : 0);
     inspectParent?.();
     if (stored !== !expanded) toggleStored();
     if (!manual) toggleManual();
@@ -83,27 +90,44 @@ export function TeammateProcess({ id, title, running = false, children, secondar
   const [mounted, setMounted] = useState(expanded);
   const [contentHeight, setContentHeight] = useState(0);
   const height = useRef(new Animated.Value(0)).current;
-  useEffect(() => {
+  // A restored/live disclosure already starts open. Keep it in normal flow so
+  // initial measurement and later text wrapping cannot replay a height animation.
+  // Only a change of expansion state needs an explicit, animated height.
+  const [disclosure, setDisclosure] = useState({ expanded, moving: false });
+  if (disclosure.expanded !== expanded) setDisclosure({ expanded, moving: true });
+  useLayoutEffect(() => {
     if (expanded) setMounted(true);
+    if (!disclosure.moving) {
+      height.setValue(expanded ? contentHeight : 0);
+      return;
+    }
     const animation = Animated.timing(height, { toValue: expanded ? contentHeight : 0,
       duration: reduceMotion === false ? listDisclosureMotion.duration : 0, useNativeDriver: false });
-    animation.start(({ finished }) => { if (finished && !expanded) setMounted(false); });
+    animation.start(({ finished }) => {
+      if (!finished) return;
+      if (!expanded) setMounted(false);
+      setDisclosure(current => current.expanded === expanded ? { expanded, moving: false } : current);
+    });
     return () => animation.stop();
-  }, [expanded, contentHeight, height, reduceMotion]);
+  }, [expanded, contentHeight, height, reduceMotion, disclosure.moving]);
   return <View style={styles.container}>
       <Pressable accessibilityRole="button" accessibilityState={{ expanded }} accessibilityLabel={title}
         onPress={toggle} testID={secondary ? 'message.processRecords' : 'message.teammateProcess'}
-        style={styles.header} onLayout={event => footer.setRowHeight(event.nativeEvent.layout.height)}>
+        style={[styles.header, titleAccessory != null && styles.headerWithAccessory]} onLayout={event => footer.setRowHeight(event.nativeEvent.layout.height)}>
         {(statusIcon || !secondary) && <View style={styles.statusIcon}>{statusIcon ?? <>{running ? <ActivityIndicator color={colors.textSecondary} size="small" style={styles.spinner} />
           : <Layers size={iconSize.sm} color={colors.textSecondary} />}</>}</View>}
-        <Text style={[styles.title, secondary && styles.secondary]} onLayout={event => footer.setTextHeight(event.nativeEvent.layout.height)}>{title}</Text>
+        <Text style={[styles.title, secondary && styles.secondary, titleAccessory != null && styles.titleWithAccessory]}
+          numberOfLines={titleAccessory != null ? 1 : undefined} ellipsizeMode="tail"
+          onLayout={event => footer.setTextHeight(event.nativeEvent.layout.height)}>{titleContent ?? title}</Text>
+        {titleAccessory != null ? <View style={styles.accessory}>{titleAccessory}</View> : null}
         <Animated.View style={{ transform: [{ rotate: rotation.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '90deg'] }) }] }}>
           <ChevronRight size={iconSize.sm} color={colors.textTertiary} />
         </Animated.View>
       </Pressable>
-      {(expanded || mounted) && <Animated.View style={{ height, overflow: 'hidden' }}
+      {(expanded || mounted) && <Animated.View style={{ height: disclosure.moving ? height : undefined, overflow: 'hidden' }}
+        onLayout={event => { visibleHeight.current = event.nativeEvent.layout.height; }}
         accessibilityElementsHidden={!expanded} importantForAccessibility={expanded ? 'auto' : 'no-hide-descendants'}>
-        <View style={styles.measuredBody} onLayout={event => setContentHeight(event.nativeEvent.layout.height)}>
+        <View style={disclosure.moving ? styles.measuredBody : undefined} onLayout={event => setContentHeight(event.nativeEvent.layout.height)}>
           <View style={secondary ? styles.records : styles.guide}>
             {!secondary && <View pointerEvents="none" testID="message.processGuide" style={[styles.rail, { bottom: spacing.xs + railEndInset }]} />}
             <ProcessRailEnd.Provider value={secondary ? null : setRailEndInset}>
@@ -118,6 +142,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   container: { minWidth: 0 },
   measuredBody: { position: 'absolute', left: 0, right: 0, top: 0 },
   header: { alignSelf: 'flex-start', maxWidth: '100%', flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minHeight: 44 },
+  headerWithAccessory: { alignSelf: 'stretch' },
+  titleWithAccessory: { flex: 1, minWidth: 0 },
+  accessory: { flexShrink: 0 },
   statusIcon: { width: 14, height: 20, alignItems: 'center', justifyContent: 'center' },
   spinner: { transform: [{ scale: 0.7 }] },
   title: { flexShrink: 1, color: colors.textSecondary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall },

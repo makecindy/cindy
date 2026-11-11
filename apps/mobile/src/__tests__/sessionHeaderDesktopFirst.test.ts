@@ -74,12 +74,13 @@ describe('mobile session header desktop-first surface', () => {
 
     // 返回自愈:canGoBack 与真实栈不一致(reload 恢复深路由 / 重复压栈残留)时 GO_BACK
     // 会被静默吞掉,收敛到 useGuardedBack(back 后校验 pathname,没走成 replace 兜底)。
-    expect(source).toContain('const goBackToHome = useGuardedBack();');
+    expect(source).toContain('const goBackOneLevel = useGuardedBack();');
+    expect(source).toContain('const goBackToHome = companionChat && !companionEntry.threadRootSessionId ? backToTaskList : goBackOneLevel;');
     expect(source).toContain("import { useGuardedBack } from '@/utils/useGuardedBack';");
     expect(source).toContain('onBack={sessionListDrawerOverlayMounted ? closeSessionListDrawer : goBackToHome}');
     expect(source).toContain('<Icon color={color} size={iconSize.action} strokeWidth={iconStroke.regular} />');
     expect(source).toContain('testID="session.controlsToggle"');
-    expect(source).toContain('const insets = useSafeAreaInsets();');
+    expect(source).toContain('const insets = adaptiveWindow.insets;');
     expect(source).toContain('<View style={styles.safeArea} testID="session.screen">');
     expect(source).not.toContain('<SafeAreaView style={styles.safeArea} testID="session.screen">');
     expect(source).not.toContain("import { BlurView } from 'expo-blur';");
@@ -102,11 +103,9 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).toContain('testID="session.composerFrost"');
     expect(source).toContain('<View ref={topOverlayRef} onLayout={handleTopOverlayLayout} pointerEvents="box-none" style={styles.sessionChrome} testID="session.chrome">');
     expect(source).toContain('<View style={[styles.sessionChromeContent, { paddingTop: horizontalSystemHeader ? nativeHeaderHeight : insets.top + (paneLayout.persistent ? spacing.lg : 0) }, companionChat && Platform.OS !== \'ios\' && { backgroundColor: colors.surface }]}>');
-    // 临时任务列表抽屉在树内,盖不住 iOS 系统栏:抽屉存续期间收起系统栏,内容区沿用打开前的顶栏高度。
-    expect(source).toContain(']), sessionListDrawerOverlayMounted);');
-    expect(source).toContain('systemBarHidden={sessionListDrawerOverlayMounted}');
-    // Stack.Toolbar 左右栏会强制 headerShown: true,收起期间整组不渲染。
-    expect(source).toContain('if (systemBarHidden) return <Stack.Screen options={{ headerShown: false }} />;');
+    // iOS 临时任务列表抽屉放进独立窗口盖住系统栏;系统栏不随抽屉开合收起。
+    expect(source).toContain("aboveSystemBar={Platform.OS === 'ios'}");
+    expect(source).not.toContain('systemBarHidden');
     expect(chromeStyle).toContain("position: 'absolute'");
     // Let native glass press feedback extend beyond the 44pt iOS header.
     expect(chromeStyle).toContain("overflow: Platform.OS === 'ios' ? 'visible' : 'hidden'");
@@ -127,7 +126,8 @@ describe('mobile session header desktop-first surface', () => {
   });
 
   it('keeps narrow navigation back-only and the persistent Home column', () => {
-    const source = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
+    const source = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8')
+      + readTextLf(resolve(process.cwd(), 'src/session/useConversationTaskDrawer.ts'), 'utf8');
     const layout = readTextLf(resolve(process.cwd(), 'src/session/SessionTaskLayout.tsx'), 'utf8');
 
     // 窄窗口仅保留返回；主页列仅在宽窗口常驻。
@@ -137,7 +137,7 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).toContain('session.sessionListButton');
     expect(source).toContain('{sessionListButton ? <Stack.Toolbar.View hidesSharedBackground>{sessionListButton}</Stack.Toolbar.View> : null}');
     expect(source).toContain("import { buildWideSessionNavLayout } from '@/session/wideSessionNav';");
-    expect(source).toContain("import { SessionListDrawer } from '@/session/SessionListDrawer';");
+    expect(source).toContain("import { useConversationTaskDrawer } from '@/session/useConversationTaskDrawer';");
     expect(source).toContain('switchDrawerSessionInPlace,');
     expect(source).toContain("from '@/session/sessionDrawerNavigation';");
     // 同一宽度计算兼容现有调用参数。
@@ -152,30 +152,31 @@ describe('mobile session header desktop-first surface', () => {
     const drawerSelectionStart = source.indexOf('const handleDrawerSelectSession = useCallback');
     const drawerSelectionEnd = source.indexOf('// 前进导航防连点', drawerSelectionStart);
     const drawerSelectionSource = source.slice(drawerSelectionStart, drawerSelectionEnd);
-    expect(drawerSelectionSource).toContain('switchDrawerSessionInPlace(navigation, {');
+    expect(drawerSelectionSource).toContain('switchDrawerSessionInPlace(navigation, destination);');
     expect(drawerSelectionSource).not.toContain('router.replace');
     expect(drawerSelectionSource).not.toContain("pathname: '/sessions/[sessionId]'");
-    // 导航入口等 drawer overlay 完整卸载；新建可能原生换屏，
-    // 切任务虽已改为 replaceParams，也不和 Reanimated 子树退场抢同一帧。
+    // Root-owned drawers switch concurrently; route-local fallbacks retain their
+    // unmount fence. taskDrawerPresentation.test.tsx and
+    // conversationTaskDrawer.test.tsx exercise the two lifetimes.
     expect(source).toContain('const pendingDrawerNavigationRef = useRef<(() => void) | null>(null);');
     expect(source).toContain('const sessionListDrawerClosingRef = useRef(false);');
     expect(source).toContain('const [sessionListDrawerOverlayMounted, setSessionListDrawerOverlayMounted] = useState(false);');
     expect(source).toContain('const queueDrawerNavigation = useCallback((action: () => void) => {');
     // 纯关闭(遮罩/back/左滑/当前任务)的 pending 仍为空,必须由独立 closing 闸门
     // 同步锁住约 200ms 退场期;快速二次导航不能登记或改写首次关闭意图。
-    expect(source).toContain('if (sessionListDrawerClosingRef.current || pendingDrawerNavigationRef.current) return;');
-    expect(source).toContain('sessionListDrawerClosingRef.current = true;\n    pendingDrawerNavigationRef.current = action;');
+    // The first intent and close-only gate are checked through the real hook in
+    // conversationTaskDrawer.test.tsx, without requiring adjacent assignments.
     expect(source).toContain('const closeSessionListDrawer = useCallback(() => {\n    if (!sessionListDrawerOverlayMounted) return;\n    if (sessionListDrawerClosingRef.current) return;\n    sessionListDrawerClosingRef.current = true;');
     // Same-task selection versus search navigation is exercised through the actual
     // layout callback in sideChatTaskBoundary.test.tsx, rather than a source literal.
     expect(source).toContain('onClosed={handleSessionListDrawerClosed}');
-    expect(source).toContain('const action = pendingDrawerNavigationRef.current;\n    sessionListDrawerClosingRef.current = false;\n    setSessionListDrawerOverlayMounted(false);');
+    expect(source).toContain('const action = pendingDrawerNavigationRef.current;\n    sessionListDrawerClosingRef.current = false;\n    setSessionListDrawerOpen(false);\n    setSessionListDrawerPulling(false);\n    setSessionListDrawerOverlayMounted(false);');
     expect(source).toContain('pendingDrawerNavigationRef.current = null;\n    action();');
     expect(source).toContain('queueDrawerNavigation(() => {\n      // 必须早于 replaceParams');
     expect(source).toContain('queueDrawerNavigation(() => {\n      guardedPush({');
     expect(source).not.toContain('handleDrawerGoHome');
     // 旋转 / 分屏收窄回窄屏时抽屉必须自动收起(没有入口的悬空 overlay)。
-    expect(source).toContain('if (!wideSessionNav.enabled && sessionListDrawerOverlayMounted) closeSessionListDrawer();');
+    expect(source).toContain('if (!enabled && sessionListDrawerOverlayMounted) closeSessionListDrawer();');
     // Android 退场期(open=false 但 overlay 仍 mounted)必须临时吞掉系统返回;
     // onClosed 解除 mounted 后 effect cleanup 恢复 useGuardedBack 等正常返回链。
     expect(source).toContain("if (Platform.OS !== 'android' || !sessionListDrawerOverlayMounted || sessionListDrawerOpen) return;");
@@ -189,9 +190,24 @@ describe('mobile session header desktop-first surface', () => {
     // 才都能执行;宽屏 layout 失效后 drawerWidth=0,退场继续用最后有效宽度。
     expect(layout).toContain('persistent={paneLayout.persistent}');
     expect(source).toContain('{!paneLayout.persistent || sessionListDrawerOverlayMounted ? (');
-    expect(source).toContain('if (wideSessionNav.enabled) sessionListDrawerWidthRef.current = wideSessionNav.drawerWidth;');
+    expect(source).toContain('if (enabled) sessionListDrawerWidthRef.current = width;');
     expect(layout).toContain('width={paneLayout.sidebarWidth}');
     expect(source).toContain('width={sessionListDrawerWidthRef.current}');
+    // 拖到满屏即返回首页:不播返回动画;iOS 抽屉在本路由内,随页面一起弹出,中间不露出任务;
+    // Android 抽屉画在路由之上,仍须先卸载再换页。
+    expect(source).toContain("navigation.setOptions({ animation: 'none' });");
+    expect(source).toContain("if (Platform.OS !== 'ios') { queueDrawerNavigation(goHomeFromDrawer); return; }");
+    // 回首页按栈里首页的位置弹出,而不是只退一层:从伙伴聊天点进任务时下面还压着伙伴聊天页。
+    // The shared hook owns stack dismissal; taskListBack.test.tsx exercises the actual button.
+    expect(source).toContain('const backToTaskList = useTaskListBack();');
+    expect(source).toContain('const goHomeFromDrawer = backToTaskList;');
+    // 拉出手势在抽屉首次渲染 open 前就被取消(JS 线程忙时 open 与 cancel 同批提交):
+    // 抽屉从未挂载,没有 onClosed 来释放父级的遮罩/读屏/返回键占用,必须由父级直接释放。
+    expect(source).toContain('if (!sessionListDrawerOpenCommittedRef.current) {');
+    // 悬浮模式下右滑任务页拉出任务栏,不再触发系统返回;拉动期间手势保持启用,否则会被取消。
+    expect(source).toContain('gestureEnabled: !sessionListDrawerOverlayMounted && !sessionListDrawerFloating');
+    expect(source).toContain('<GestureDetector gesture={sessionListDrawerPullGesture}>');
+    expect(source).toContain('enabled: sessionListDrawerFloating && (!sessionListDrawerOverlayMounted || sessionListDrawerPulling)');
     // 选任务失败路径:校验先于关闭动画——先关再弹 Alert 会让焦点归还抢走弹窗焦点。
     expect(source).toContain("Alert.alert(t('devices.list.error.sessionDeviceNotFound'));\n      return;\n    }\n    // 不派发 NativeStack REPLACE");
   });
@@ -231,14 +247,14 @@ describe('mobile session header desktop-first surface', () => {
     const drawerSelection = source.slice(drawerSelectionStart, drawerSelectionEnd);
     const invalidateAt = drawerSelection.indexOf('discardAllPendingUploadsForScopeChange();');
     const discardAt = drawerSelection.indexOf('discardSessionComposerAttachmentStateRef.current();');
-    const switchAt = drawerSelection.indexOf('switchDrawerSessionInPlace(navigation, {');
+    const switchAt = drawerSelection.indexOf('switchDrawerSessionInPlace(navigation, destination);');
     expect(invalidateAt).toBeGreaterThan(-1);
     expect(discardAt).toBeGreaterThan(invalidateAt);
     expect(switchAt).toBeGreaterThan(discardAt);
     expect(source).toContain('discardAllPendingUploadsForScopeChange();\n    discardSessionComposerAttachmentStateRef.current();');
 
     // 复用页面实例时输入原生子树也按 sessionId 换代，旧粘贴异步事件没有新任务入口。
-    expect(source).toContain('<MobileComposerInputRow\n                    key={sessionId}');
+    expect(source).toContain('<ResizableComposerInputRow resize={composerResize}\n                    key={sessionId}');
     // key 重挂载前必须在 render 阶段把 composer state 归属切到 B；不能先拿 A 文档
     // 创建 B 的 WebView，再等被动 effect 才纠正。同步缓存缺失时 B 首帧为空态。
     const draftScopeStart = source.indexOf('const activeComposerDraftScopeKey = composerDraftScopeKey(sessionId, routeDraft);');

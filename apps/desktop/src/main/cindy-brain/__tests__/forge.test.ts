@@ -10,6 +10,7 @@ import { runInNewContext } from 'node:vm';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import JSZip from 'jszip';
+import { GHOST_README_IMAGE_MAX_BYTES } from '@cindy/plugin-protocol';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -172,6 +173,32 @@ async function makeSrcDir(files: Record<string, string | Buffer>): Promise<strin
 }
 
 describe('packGhostDir', () => {
+  // FORGE_GUIDE §2「详细介绍」:打包期拦下缺图与超限图片,作者得到明确原因;运行时读取侧只会静默跳过。
+  // Tier: unit.
+  it('checks readme files and the package images they reference', async () => {
+    const manifest = { ...GOOD_MANIFEST, readme: { en: 'README.md' } };
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(manifest),
+      'main.js': '',
+      'README.md': '# Demo\n![Search](assets/search.png) ![Remote](https://example.com/x.png)\n',
+    });
+    expect(await packGhostDir(dir)).toMatchObject({
+      ok: false,
+      errorCode: 'MANIFEST_INVALID',
+      message: expect.stringContaining('assets/search.png'),
+    });
+    await fs.promises.mkdir(path.join(dir, 'assets'));
+    await fs.promises.writeFile(path.join(dir, 'assets/search.png'), Buffer.alloc(GHOST_README_IMAGE_MAX_BYTES + 1));
+    expect(await packGhostDir(dir)).toMatchObject({ ok: false, errorCode: 'MANIFEST_INVALID' });
+    await fs.promises.writeFile(path.join(dir, 'assets/search.png'), Buffer.from('png'));
+    const packed = await packGhostDir(dir);
+    expect(packed.ok).toBe(true);
+    if (packed.ok) {
+      const zip = await JSZip.loadAsync(packed.buf);
+      expect(zip.file('README.md')).not.toBeNull();
+      expect(zip.file('assets/search.png')).not.toBeNull();
+    }
+  });
   it.each([null, 'xd'])('rejects author-declared namespace %s before v2 normalization', async (namespace) => {
     const dir = await makeSrcDir({
       'ghost.json': JSON.stringify({ ...GOOD_MANIFEST, namespace }),
@@ -1463,21 +1490,19 @@ describe('scaffoldGhostDir', () => {
       if (!result.ok) return;
       expect(result.files).toContain('ghost.json');
       expect(result.files).toContain('main.js');
-      expect(result.files).toContain('assets/icon.png');
+      expect(result.files).not.toContain('assets/icon.png');
       expect(result.files.includes('node/worker.cjs')).toBe(template.startsWith('node-'));
 
-      // 骨架默认带占位图标(#809):清单声明 + 文件真实存在且是 PNG。
+      // 回归：新骨架不再把色块当作正式图标；作者需提供图片或同意生成。Tier: unit。
       const manifestJson = JSON.parse(
         await fs.promises.readFile(path.join(dir, 'ghost.json'), 'utf8'),
       ) as Record<string, unknown>;
-      expect(manifestJson.icon).toBe('assets/icon.png');
+      expect(manifestJson).not.toHaveProperty('icon');
       expect(manifestJson.schemaVersion).toBe(3);
       expect(manifestJson.minCindyVersion).toBe(expectedMin);
       expect(manifestJson).not.toHaveProperty('slots');
-      const iconBytes = await fs.promises.readFile(path.join(dir, 'assets/icon.png'));
-      expect(iconBytes.subarray(0, 8)).toEqual(
-        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-      );
+      expect(fs.existsSync(path.join(dir, 'assets/icon.png'))).toBe(false);
+      expect(result.nextSteps.some((step) => /用户同意.*生成.*图标/u.test(step))).toBe(true);
 
       const packed = await packGhostDir(dir);
       expect(packed.ok, JSON.stringify(packed)).toBe(true);
@@ -2322,17 +2347,16 @@ describe('FORGE_GUIDE', () => {
     expect(FORGE_GUIDE).not.toContain('十九个卡槽');
   });
 
-  it('打包前仅轻提醒一次图标选择，AI 生成有固定提示词且失败不阻塞', () => {
+  it('图标缺失时告知用户提供图片或同意生成，禁止制作占位色块', () => {
     for (const marker of [
-      '没有明确替换它生成的占位图',
-      '轻提醒一次',
+      '不生成占位图',
+      '用户同意',
       '使用用户当前对话语言',
       '使用 AI 生成（推荐）',
       '上传图片',
       '同步把',
       'ghost.json',
       'icon',
-      '使用默认图标（跳过）',
       '聊天模型解耦',
       '不要因为用户正在使用 GLM',
       'Create a polished square app icon for a Cindy plugin named "{{name}}"',
@@ -2345,9 +2369,8 @@ describe('FORGE_GUIDE', () => {
       'xdt_image_urls',
       'selectedImageUrl',
       'icon_source: selectedImageUrl',
-      '两种工具都会回退默认图标',
+      '使用客户端默认符号',
       'pack 会保留原图标和原签名',
-      '跳过与使用默认是同一个选择',
       '不要用 AI 仿制商标',
       '使用官方品牌图标',
     ]) {

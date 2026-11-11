@@ -3,6 +3,7 @@ import type { TaskTagRequest, TaskTagResult } from '@cindy/maker-shared';
 import type { ChatCacheTransaction, ChatCacheResult } from '../../worker/opHandlers/chatCacheTx.js';
 
 export type DbTxName =
+  | 'usage.recordPiUsage'
   | 'chatCache.execute'
   | 'usage.recordMediaSpend'
   | 'authorization.readProjection'
@@ -49,10 +50,6 @@ export type DbTxName =
   | 'bots.replaceCanonicalSession'
   | 'bots.prepareRuntime'
   | 'bots.finishRuntime'
-  | 'bots.finishDelegation'
-  | 'bots.reparentDelegations'
-  | 'bots.createDelegation'
-  | 'bots.reopenDelegation'
   | 'bots.pauseLifecycle'
   | 'bots.resumeLifecycle'
   | 'bots.archiveLifecycle'
@@ -62,7 +59,6 @@ export type DbTxName =
   | 'bots.persistSessionPermission'
   | 'bots.createGroupLane'
   | 'bots.createChannelLane'
-  | 'bots.createRoutineLane'
   | 'bots.createThreadLane'
   | 'bots.archiveChannelLanes'
   | 'botGroups.create'
@@ -777,56 +773,6 @@ export interface BotsFinishRuntimeArgs {
   eventType: 'runtime-applied' | 'runtime-failed';
   eventPayloadJson: string;
 }
-export interface BotsFinishDelegationArgs {
-  expectedRunSequence?: number;
-  expectedExecution?: { instanceId: string; generation: number };
-  delegationId: string;
-  status: 'completed' | 'failed' | 'cancelled' | 'timed-out';
-  resultSummary: string | null;
-  outputArtifactsJson: string;
-  lastError: string | null;
-  tokensUsed?: number;
-  completedAt: number;
-}
-
-export interface BotsFinishDelegationResult {
-  id: string;
-  targetBotId: string | null;
-  runSequence: number;
-  parentSessionId: string | null;
-  childSessionId: string | null;
-  status: 'queued' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled' | 'timed-out';
-}
-
-export interface BotsReparentDelegationsArgs {
-  botId: string;
-  previousParentSessionId: string;
-  nextParentSessionId: string;
-  now: number;
-}
-
-export interface BotsReparentDelegationsResult {
-  delegationIds: string[];
-}
-
-export interface BotsCreateDelegationArgs {
-  maxActiveChildren: number;
-  delegation: {
-    id: string;
-    requestingBotId: string;
-    targetBotId: string | null;
-    parentSessionId: string;
-    childSessionId: string;
-    objective: string;
-    contextRefsJson: string;
-    permissionSnapshotJson: string;
-    lineageJson: string;
-    targetProfileVersion: number | null;
-    depth: number;
-    createdAt: number;
-  };
-  session: BotsReplaceCanonicalSessionArgs['session'];
-}
 
 export interface BotGroupsCreateLaneArgs {
   botId: string;
@@ -981,27 +927,6 @@ export interface BotGroupsAppendMessageResult {
   created: boolean;
 }
 
-export interface BotsReopenDelegationArgs {
-  worktreePath?: string | null;
-  maxActiveChildren: number;
-  delegationId: string;
-  requestingBotId: string;
-  expectedStatus: 'completed' | 'failed' | 'cancelled' | 'timed-out';
-  parentSessionId: string;
-  childSessionId: string;
-  objective: string;
-  permissionSnapshotJson: string;
-  targetBotId: string | null;
-  targetProfileVersion: number | null;
-  session: BotsReplaceCanonicalSessionArgs['session'];
-  reopenedAt: number;
-}
-
-export interface BotsReopenDelegationResult {
-  reopened: boolean;
-  previousParentSessionId: string | null;
-}
-
 export interface BotsLifecycleTransitionArgs {
   botId: string;
   canonicalSessionId: string | null;
@@ -1018,6 +943,8 @@ export interface BotsDeleteProfileArgs {
   sessionIds: string[];
   keepTaskHistory: boolean;
   at: number;
+  /** Tasks in the teammate's own project (automation runs, tasks it opened there); kept or deleted like its own. */
+  projectSessionIds?: string[];
 }
 export interface ImRotateSessionArgs {
   previousSessionId: string | null;
@@ -1386,6 +1313,7 @@ export interface MediaSpendArgs {
 
 export type DbTxArgsByName = {
   'usage.recordMediaSpend': MediaSpendArgs;
+  'usage.recordPiUsage': import('../../worker/opHandlers/piUsageTx.js').PiUsageWrite[];
   'authorization.readProjection': { sessionId: string; leadId: string };
   'rewind.commit': RewindCommitArgs;
   'session.treeRehydrate': SessionTreeRehydrateArgs;
@@ -1431,10 +1359,6 @@ export type DbTxArgsByName = {
   'bots.replaceCanonicalSession': BotsReplaceCanonicalSessionArgs;
   'bots.prepareRuntime': BotsPrepareRuntimeArgs;
   'bots.finishRuntime': BotsFinishRuntimeArgs;
-  'bots.finishDelegation': BotsFinishDelegationArgs;
-  'bots.reparentDelegations': BotsReparentDelegationsArgs;
-  'bots.createDelegation': BotsCreateDelegationArgs;
-  'bots.reopenDelegation': BotsReopenDelegationArgs;
   'bots.pauseLifecycle': BotsLifecycleTransitionArgs;
   'bots.resumeLifecycle': BotsLifecycleTransitionArgs;
   'bots.archiveLifecycle': BotsArchiveLifecycleArgs;
@@ -1444,7 +1368,6 @@ export type DbTxArgsByName = {
   'bots.persistSessionPermission': { sessionId: string; mode: string };
   'bots.createGroupLane': BotGroupsCreateLaneArgs;
   'bots.createChannelLane': BotsCreateChannelLaneArgs;
-  'bots.createRoutineLane': BotsCreateChannelLaneArgs;
   'bots.createThreadLane': BotsCreateThreadLaneArgs;
   'bots.archiveChannelLanes': BotsArchiveChannelLanesArgs;
   'botGroups.create': BotGroupsCreateArgs;
@@ -1478,6 +1401,7 @@ export type DbTxArgsByName = {
 };
 
 export type DbTxResultByName = {
+  'usage.recordPiUsage': { changed: boolean };
   'usage.recordMediaSpend': {
     legacyUsd: number;
     amount: number;
@@ -1485,7 +1409,7 @@ export type DbTxResultByName = {
     approximate: number;
   } | null;
   'authorization.readProjection': import('../../autoReviewProjection.js').StoredAutoReviewProjection;
-  'rewind.commit': undefined;
+  'rewind.commit': string[];
   'session.treeRehydrate': { messageCount: number; hiddenClientIds: string[] };
   'fork.session': { messageCount: number };
   'embedding.markDone': undefined;
@@ -1533,10 +1457,6 @@ export type DbTxResultByName = {
   'bots.replaceCanonicalSession': BotsReplaceCanonicalSessionResult;
   'bots.prepareRuntime': undefined;
   'bots.finishRuntime': boolean;
-  'bots.finishDelegation': BotsFinishDelegationResult | null;
-  'bots.reparentDelegations': BotsReparentDelegationsResult;
-  'bots.createDelegation': undefined;
-  'bots.reopenDelegation': BotsReopenDelegationResult;
   'bots.pauseLifecycle': undefined;
   'bots.resumeLifecycle': undefined;
   'bots.archiveLifecycle': { sessions: number };
@@ -1546,7 +1466,6 @@ export type DbTxResultByName = {
   'bots.persistSessionPermission': { updated: boolean };
   'bots.createGroupLane': BotGroupsCreateLaneResult;
   'bots.createChannelLane': BotGroupsCreateLaneResult;
-  'bots.createRoutineLane': BotGroupsCreateLaneResult;
   'bots.createThreadLane': BotGroupsCreateLaneResult;
   'bots.archiveChannelLanes': { archivedSessionIds: string[] };
   'botGroups.create': undefined;

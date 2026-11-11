@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CatalogModel, ProviderView } from '@cindy/model-providers';
@@ -143,7 +143,9 @@ describe('ModelPriceOverrideDialog', () => {
     );
 
     await waitFor(() => expect(getModelPriceOverride).toHaveBeenCalledOnce());
-    const controls = Array.from(document.querySelectorAll('select, input[type="number"]'));
+    // The currency field is the shared Select (a pill Button trigger).
+    const controls = [screen.getByRole('combobox', { name: 'settings.providers.models.priceOverride.currency' }),
+      ...Array.from(document.querySelectorAll('input[type="number"]'))];
     expect(controls).toHaveLength(5);
     for (const control of controls) {
       expect(control.classList.contains('rounded-full')).toBe(true);
@@ -332,4 +334,174 @@ describe('ModelPriceOverrideDialog', () => {
     ).toBe('1');
     expect(onOpenChange).not.toHaveBeenCalled();
   });
+  // Production behavior (unit): inline editing reuses the dialog's original API/payload.
+  // Existing coverage exercises only explicit Save; these cases protect the new trigger,
+  // reset precedence, invalid-input restoration, and existing late-response isolation.
+  const priceInput = (result: ReturnType<typeof render>, label = 'input') =>
+    result.getByLabelText('settings.providers.models.priceOverride.' + label) as HTMLInputElement;
+  const renderInline = async (view = priceView('model-a'), onPendingChange = vi.fn()) => {
+    getModelPriceOverride.mockResolvedValue(view);
+    const result = render(<ModelPriceOverrideDialog provider={provider} row={row(view.target.modelId)}
+      open onOpenChange={vi.fn()} presentation="inline" onPendingChange={onPendingChange} />);
+    await waitFor(() => expect(priceInput(result).disabled).toBe(false));
+    return result;
+  };
+
+  it.each(['dialog', 'inline'] as const)('uses the same target and payload in %s presentation', async (presentation) => {
+    getModelPriceOverride.mockResolvedValue(priceView('model-a'));
+    setModelPriceOverride.mockResolvedValue(priceView('model-a'));
+    const onOpenChange = vi.fn();
+    const result = render(<ModelPriceOverrideDialog provider={provider} row={row('model-a')}
+      open onOpenChange={onOpenChange} presentation={presentation} />);
+    await waitFor(() => expect(priceInput(result).value).toBe('1'));
+    fireEvent.change(priceInput(result), { target: { value: '0' } });
+    fireEvent.change(priceInput(result, 'cacheRead'), { target: { value: '0.25' } });
+    if (presentation === 'inline') fireEvent.blur(priceInput(result));
+    else fireEvent.click(result.getByRole('button', { name: 'settings.providers.models.priceOverride.save' }));
+    await waitFor(() => expect(setModelPriceOverride).toHaveBeenCalledExactlyOnceWith(
+      { providerId: 'openrouter', agent: 'codex', modelId: 'model-a' },
+      { currency: 'USD', inputPerMtok: 0, outputPerMtok: 4, cacheReadPerMtok: 0.25, cacheCreatePerMtok: null },
+    ));
+    await waitFor(() => expect(onOpenChange.mock.calls.length).toBe(presentation === 'inline' ? 0 : 1));
+  });
+
+  // PR #9457 review: the shared currency Select opens in a portal; focus moving into it must not save
+  // the amount with the old currency, and the chosen currency must be the one saved on exit.
+  it('keeps editing while the currency list is open and saves the chosen currency on exit', async () => {
+    Element.prototype.scrollIntoView ??= () => {};
+    const view = { ...priceView('model-a'), allowedCurrencies: ['USD', 'CNY'] as ModelPriceOverrideView['allowedCurrencies'] };
+    const result = await renderInline(view);
+    setModelPriceOverride.mockResolvedValue(view);
+    fireEvent.change(priceInput(result), { target: { value: '7' } });
+    const currency = result.getByRole('combobox', { name: 'settings.providers.models.priceOverride.currency' });
+    fireEvent.keyDown(currency, { key: 'ArrowDown' });
+    const option = await screen.findByRole('option', { name: 'CNY' });
+    fireEvent.blur(priceInput(result), { relatedTarget: option });
+    expect(setModelPriceOverride).not.toHaveBeenCalled();
+    fireEvent.click(option);
+    await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull());
+    fireEvent.blur(currency);
+    await waitFor(() => expect(setModelPriceOverride).toHaveBeenCalledExactlyOnceWith(view.target, {
+      currency: 'CNY', inputPerMtok: 7, outputPerMtok: 4, cacheReadPerMtok: null, cacheCreatePerMtok: null,
+    }));
+  });
+
+  it('does not write on load, unchanged blur or equivalent numeric formatting', async () => {
+    const result = await renderInline();
+    fireEvent.blur(priceInput(result));
+    fireEvent.change(priceInput(result), { target: { value: '1.00' } });
+    fireEvent.blur(priceInput(result));
+    expect(setModelPriceOverride).not.toHaveBeenCalled();
+    expect(priceInput(result).value).toBe('1');
+  });
+
+  it('reloads a refreshed catalog snapshot with the same IDs before editing its quote', async () => {
+    const initialRow = row('model-a');
+    const current = priceView('model-a');
+    getModelPriceOverride.mockResolvedValueOnce(current);
+    const props = { provider, row: initialRow, open: true, onOpenChange: vi.fn(), presentation: 'inline' as const };
+    const result = render(<ModelPriceOverrideDialog {...props} />);
+    await waitFor(() => expect(priceInput(result).value).toBe('1'));
+    fireEvent.change(priceInput(result), { target: { value: '7' } });
+    result.rerender(<ModelPriceOverrideDialog {...props} row={{ ...initialRow }} />);
+    expect(getModelPriceOverride).toHaveBeenCalledOnce();
+    expect(priceInput(result).value).toBe('7');
+    const refreshed = { ...current, effective: { ...current.effective!, outputPerMtok: 8 },
+      reference: { ...current.reference!, outputPerMtok: 8 } };
+    getModelPriceOverride.mockResolvedValueOnce(refreshed);
+    result.rerender(<ModelPriceOverrideDialog {...props} row={{ ...initialRow, byAgent: {
+      codex: { ...initialRow.byAgent.codex!, name: 'refreshed catalog model' },
+    } }} />);
+    await waitFor(() => expect(priceInput(result, 'output').value).toBe('8'));
+    expect(getModelPriceOverride).toHaveBeenCalledTimes(2);
+    expect(setModelPriceOverride).not.toHaveBeenCalled();
+    setModelPriceOverride.mockResolvedValue(refreshed);
+    fireEvent.change(priceInput(result), { target: { value: '7' } });
+    fireEvent.blur(priceInput(result));
+    await waitFor(() => expect(setModelPriceOverride).toHaveBeenCalledExactlyOnceWith(current.target, {
+      currency: 'USD', inputPerMtok: 7, outputPerMtok: 8, cacheReadPerMtok: null, cacheCreatePerMtok: null,
+    }));
+  });
+
+  it.each(['', '-1', 'Infinity'])('restores invalid inline input %j without saving', async (value) => {
+    const result = await renderInline();
+    fireEvent.change(priceInput(result), { target: { value } });
+    fireEvent.blur(priceInput(result));
+    expect(priceInput(result).value).toBe('1');
+    expect(setModelPriceOverride).not.toHaveBeenCalled();
+  });
+
+  it('keeps a complete quote draft while moving between fields and saves once on exit', async () => {
+    const empty = { ...priceView('model-a'), effective: null, reference: null };
+    const result = await renderInline(empty);
+    setModelPriceOverride.mockResolvedValue(priceView('model-a'));
+    const input = priceInput(result), output = priceInput(result, 'output');
+    fireEvent.change(input, { target: { value: '2' } });
+    fireEvent.blur(input, { relatedTarget: output });
+    expect(input.value).toBe('2');
+    expect(setModelPriceOverride).not.toHaveBeenCalled();
+    fireEvent.change(output, { target: { value: '5' } });
+    fireEvent.blur(output);
+    await waitFor(() => expect(setModelPriceOverride).toHaveBeenCalledOnce());
+    expect(setModelPriceOverride.mock.calls[0][1]).toMatchObject({ inputPerMtok: 2, outputPerMtok: 5 });
+  });
+
+  it.each([false, true])('resets a dirty quote without first saving it; stored override: %s', async (stored) => {
+    const result = await renderInline(priceView('model-a', 'codex', stored));
+    resetModelPriceOverride.mockResolvedValue(priceView('model-a'));
+    const reset = result.getByRole('button', { name: 'settings.providers.models.priceOverride.resetShort' });
+    fireEvent.change(priceInput(result), { target: { value: '7' } });
+    fireEvent.blur(priceInput(result), { relatedTarget: reset });
+    reset.focus();
+    fireEvent.click(reset);
+    await waitFor(() => expect(priceInput(result).value).toBe('1'));
+    expect(setModelPriceOverride).not.toHaveBeenCalled();
+    expect(resetModelPriceOverride.mock.calls.length).toBe(stored ? 1 : 0);
+    if (stored) expect(resetModelPriceOverride).toHaveBeenCalledWith({ providerId: 'openrouter', agent: 'codex', modelId: 'model-a' });
+    expect(document.activeElement).toBe(priceInput(result));
+  });
+
+  it('preserves a failed draft for the next ordinary blur retry', async () => {
+    const result = await renderInline();
+    setModelPriceOverride.mockRejectedValueOnce(new Error('write failed')).mockResolvedValueOnce(priceView('model-a'));
+    fireEvent.change(priceInput(result), { target: { value: '7' } });
+    fireEvent.blur(priceInput(result));
+    await waitFor(() => expect(priceInput(result).readOnly).toBe(false));
+    expect(priceInput(result).value).toBe('7');
+    fireEvent.blur(priceInput(result));
+    await waitFor(() => expect(setModelPriceOverride).toHaveBeenCalledTimes(2));
+  });
+
+  it('notifies the owner while saving and ignores duplicate save/reset activation', async () => {
+    const pending = vi.fn();
+    const result = await renderInline(priceView('model-a'), pending);
+    let finish!: (view: ModelPriceOverrideView) => void;
+    setModelPriceOverride.mockReturnValue(new Promise<ModelPriceOverrideView>(resolve => { finish = resolve; }));
+    fireEvent.change(priceInput(result), { target: { value: '7' } });
+    fireEvent.blur(priceInput(result));
+    expect(priceInput(result).readOnly).toBe(true);
+    expect(pending).toHaveBeenLastCalledWith(true);
+    fireEvent.blur(priceInput(result));
+    fireEvent.click(result.getByRole('button', { name: 'settings.providers.models.priceOverride.resetShort' }));
+    expect(setModelPriceOverride).toHaveBeenCalledOnce();
+    expect(resetModelPriceOverride).not.toHaveBeenCalled();
+    await act(async () => finish(priceView('model-a')));
+    expect(pending).toHaveBeenLastCalledWith(false);
+  });
+
+  it('saves the previous engine draft before switching to the next engine', async () => {
+    const a = priceView('model-a', 'claude-code');
+    getModelPriceOverride.mockResolvedValueOnce(a).mockResolvedValueOnce(priceView('model-a'));
+    setModelPriceOverride.mockResolvedValue(a);
+    const model = row('model-a').byAgent.codex!;
+    const result = render(<ModelPriceOverrideDialog provider={provider}
+      row={{ ...row('model-a'), avail: ['claude-code', 'codex'], byAgent: { 'claude-code': model, codex: model } }}
+      open onOpenChange={vi.fn()} presentation="inline" />);
+    await waitFor(() => expect(priceInput(result).value).toBe('1'));
+    fireEvent.change(priceInput(result), { target: { value: '7' } });
+    fireEvent.click(result.getByRole('radio', { name: 'Codex' }));
+    await waitFor(() => expect(getModelPriceOverride).toHaveBeenLastCalledWith({ providerId: 'openrouter', agent: 'codex', modelId: 'model-a' }));
+    expect(setModelPriceOverride.mock.calls[0][0].agent).toBe('claude-code');
+  });
+
 });

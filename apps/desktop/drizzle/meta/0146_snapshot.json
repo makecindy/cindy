@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "074efa84-d619-48be-b0f9-564eb0c45b5c",
+  "id": "4d02a169-8828-430e-8566-7afecbabf7f1",
   "prevId": "9a05fb14-28fe-41b3-87f9-0f40c0ba4b01",
   "tables": {
     "account_usage_snapshots": {
@@ -3866,6 +3866,61 @@
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
+    "pi_usage_receipts": {
+      "name": "pi_usage_receipts",
+      "columns": {
+        "session_id": {
+          "name": "session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "settlement_id": {
+          "name": "settlement_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "receipt_id": {
+          "name": "receipt_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "recorded_at": {
+          "name": "recorded_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "priced": {
+          "name": "priced",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "pi_usage_receipts_session_id_settlement_id_receipt_id_pk": {
+          "columns": [
+            "session_id",
+            "settlement_id",
+            "receipt_id"
+          ],
+          "name": "pi_usage_receipts_session_id_settlement_id_receipt_id_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
     "plugin_task_requests": {
       "name": "plugin_task_requests",
       "columns": {
@@ -4939,14 +4994,6 @@
         },
         "silent_when_idle": {
           "name": "silent_when_idle",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": false
-        },
-        "program_change_gate": {
-          "name": "program_change_gate",
           "type": "integer",
           "primaryKey": false,
           "notNull": true,

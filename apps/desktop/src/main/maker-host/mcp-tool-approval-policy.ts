@@ -251,6 +251,12 @@ export function getDesktopMcpToolApprovalPolicy(
     // Uploading hands a local file to a website. Files are not filtered by name (2026-10-30), so each
     // upload goes through the task's approval: Ask confirms, Auto reviews, Full Access proceeds.
     if (name === 'browser' && args?.action === 'upload') return 'prompt-each-time';
+    // The tool refuses these inside a batch. Review such a call anyway, so the actions above can never
+    // ride past approval inside one if that refusal is ever loosened.
+    if (name === 'browser' && args?.action === 'batch' && (!Array.isArray(args.steps) || args.steps.some((step) => {
+      const action = (step as { action?: unknown } | null)?.action;
+      return typeof action !== 'string' || ['recipe', 'upload', 'setBackend', 'batch'].includes(action);
+    }))) return 'prompt-each-time';
   }
   if (serverName === 'cindy' && toolName === 'ghost_market_install') return 'prompt-each-time';
   // This bridge multiplexes independent imported connections and commands with
@@ -272,7 +278,7 @@ export function getDesktopMcpToolApprovalPolicy(
     const innerName = typeof params?.name === 'string' ? params.name.trim() : '';
     const args = progressive ? readJsonObject(params?.args) : params;
     // Codex can omit tool_name when same-server calls overlap. A direct tool's
-    // input may also have a `name` field (routine_save does), so only treat an
+    // input may also have a `name` field, so only treat an
     // exact name/args envelope as a progressive call without the outer name.
     if (!toolName && (!params || !innerName || !args ||
       Object.keys(params).some((key) => key !== 'name' && key !== 'args'))) {
@@ -284,9 +290,7 @@ export function getDesktopMcpToolApprovalPolicy(
     if (action && TASK_ACTION_TOOLS.has(action)) return 'prompt-each-time';
     if (toolName === 'call_tool' && (!innerName || !args)) return 'prompt-each-time';
     // Installing or saving a host command uses the session's existing approval flow.
-    if (action === 'schedule_set_pre_run_hook' || (action === 'routine_save' && args?.preRunHook != null)) {
-      return 'prompt-each-time';
-    }
+    if (action === 'schedule_set_pre_run_hook') return 'prompt-each-time';
     // Creating a task worktree adds a branch and directory to the repository and binds them
     // to the task, like `git worktree add`; the task's permission mode decides.
     if (action === 'move_session' || action === 'publish_skill' || action === 'create_task_worktree') {
@@ -299,10 +303,6 @@ export function getDesktopMcpToolApprovalPolicy(
     if (action === 'send_to_session' && targetsAnotherComputer(sessionIdDevice(args?.target_session_id))) {
       return 'prompt-each-time';
     }
-    // 伙伴跟进另一台电脑上的任务(只有总调度伙伴可以)同样是跨电脑写入,口径与 send_to_session 一致。
-    if (action === 'continue_workbench_task' && targetsAnotherComputer(sessionIdDevice(args?.task_id))) {
-      return 'prompt-each-time';
-    }
     if ((action === 'archive_sessions' || action === 'unarchive_sessions') &&
       (!Array.isArray(args?.session_ids) || args.session_ids.some((id) =>
         typeof id !== 'string' || targetsAnotherComputer(sessionIdDevice(id))))) {
@@ -310,11 +310,19 @@ export function getDesktopMcpToolApprovalPolicy(
     }
   }
   // 改动另一台电脑上的定时任务（可改写并触发那台电脑上的命令）同样交给权限档：Full Access
-  // 免审批，Auto 走统一审阅，Ask 由用户确认。本机操作与跨电脑读取保持原样。
+  // 免审批，Auto 走统一审阅，Ask 由用户确认。本机删除同样走普通审批，不再依赖额外自主确认。
+  if (serverName === 'cindy_scheduler' && (toolName === 'schedule_delete' ||
+    toolName === 'schedule_webhook_release' || toolName === 'schedule_webhook_restore')) return 'prompt-each-time';
   if (serverName === 'cindy_scheduler' && (toolName === 'call_tool' || !toolName)) {
     const params = readJsonObject(toolParams);
     const innerName = typeof params?.name === 'string' ? params.name.trim() : '';
     const args = readJsonObject(params?.args);
+    // Without an outer name, only an exact progressive envelope identifies the action;
+    // a direct deletion's bare id must not inherit trusted-server approval.
+    if (!toolName && (!params || !innerName || !args ||
+      Object.keys(params).some((key) => key !== 'name' && key !== 'args'))) return 'prompt-each-time';
+    if (innerName === 'schedule_delete' ||
+      innerName === 'schedule_webhook_release' || innerName === 'schedule_webhook_restore') return 'prompt-each-time';
     if (SCHEDULER_CROSS_DEVICE_WRITE_TOOLS.has(innerName) && targetsAnotherComputer(args?.device)) {
       return 'prompt-each-time';
     }

@@ -130,6 +130,9 @@
   "detail": {
     "useItIn": "使用方法",
     "openPlugin": "プラグインを開く",
+    "readme": "紹介",
+    "readmeLoadFailed": "紹介を読み込めませんでした。もう一度お試しください。",
+    "readmeUnavailable": "紹介はありません。",
     "computerSettings": "コンピューターの Cindy で「プラグイン」からこのプラグインの詳細を開き、設定してください。",
     "runtimeIssue": "プラグインが予期せず停止しました。再度開くか、タスクで再試行してください。",
     "runtimeFused": "プラグインで繰り返しエラーが発生しました。一度無効にしてから再度有効にし、お試しください。",
@@ -361,5 +364,13 @@
     "merged": "マージ済み",
     "closed": "クローズ済み",
     "draft": "下書き"
+  },
+  "taskArchive": {
+    "now": "今すぐアーカイブ",
+    "pending": "このタスクを離れると自動アーカイブします",
+    "cancel": "キャンセル",
+    "cancelled": "今回は自動アーカイブしません",
+    "archived": "「{{title}}」をアーカイブしました",
+    "undo": "元に戻す"
   }
 }

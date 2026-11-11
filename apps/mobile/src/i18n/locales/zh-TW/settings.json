@@ -1,4 +1,31 @@
 {
+  "pushDiagnostics": {
+    "title": "推播診斷",
+    "read": "讀取推播狀態",
+    "busy": "讀取中…",
+    "failed": "無法讀取推播狀態，請重試。",
+    "copyFailed": "無法複製權杖。",
+    "copied": "權杖已複製。",
+    "bundle": "App ID",
+    "build": "組建編號",
+    "environment": "APNs 環境",
+    "permission": "系統權限",
+    "alerts": "橫幅提示",
+    "lockScreen": "鎖定畫面",
+    "notificationCenter": "通知中心",
+    "copy": "複製 APNs 權杖",
+    "hide": "隱藏結果",
+    "unknown": "未知",
+    "on": "已開啟",
+    "off": "已關閉",
+    "hint": "僅點選後讀取。APNs 權杖只在本頁顯示，不寫入診斷記錄，也不由此工具上傳；離開頁面或切至背景後隱藏。複製僅用於 Apple 推播控制台；已複製的內容仍保留在剪貼簿。",
+    "permissions": {
+      "granted": "已允許",
+      "denied": "已拒絕",
+      "undetermined": "尚未請求",
+      "provisional": "靜音傳送"
+    }
+  },
   "localLogs": {
     "upload": "上傳日誌",
     "uploadResult": {
@@ -135,11 +162,16 @@
     "permissionDenied": "通知權限未開啟，請在系統設定中允許 Cindy 傳送通知。",
     "unregisterQueued": "已關閉，連網後自動完成註銷。",
     "preview": "顯示訊息內容預覽",
-    "background": "在背景保持訊息連線",
+    "background": "背景通知",
     "backgroundActive": "正在背景接收訊息",
     "backgroundStop": "停止接收",
-    "backgroundHint": "背景連線不依賴 Google，會顯示常駐通知；可隨時在通知欄停止。",
-    "googleUnavailable": "Google 推播暫時無法使用。可開啟背景訊息連線接收訊息。"
+    "backgroundHint": "Google 推播可能無法使用時，Cindy 會自動保持背景連線，連線期間會顯示常駐通知。",
+    "googleUnavailable": "Google 推播暫時無法使用，將依通知設定使用背景連線。",
+    "backgroundModes": {
+      "auto": "自動",
+      "on": "始終開啟",
+      "off": "關閉"
+    }
   },
   "about": {
     "sectionTitle": "關於這臺手機",
@@ -351,5 +383,44 @@
     "title": "開發者",
     "identity": "識別資訊",
     "updateInfo": "更新資訊"
+  },
+  "handheld": {
+    "sectionTitle": "掌機",
+    "label": "掌機模式",
+    "entryHint": "在遊戲掌機上用手把操作 Cindy，長按語音鍵直接說話。",
+    "on": "已開啟",
+    "off": "未開啟",
+    "openAccessibility": "開啟掌機模式設定",
+    "title": "掌機模式",
+    "hint": "開啟後可以只用手把操作：十字鍵或左搖桿移動焦點，A 確認，B 返回。",
+    "saveFailed": "設定沒能儲存，這次開啟期間仍然有效。",
+    "reset": "恢復預設",
+    "voiceKey": {
+      "title": "語音鍵",
+      "hint": "長按這個鍵開始說話，放開停止，文字會留在輸入框裡。在首頁長按會直接新增任務。選 A、B、L1、R1 會佔用它們原本的確認、返回和翻頁。",
+      "capture": "按手把上的鍵來設定",
+      "capturing": "請按下要用的鍵…"
+    },
+    "display": {
+      "title": "螢幕",
+      "secondary": "顯示在副螢幕",
+      "hint": "開啟後 Cindy 會移到副螢幕（例如雙螢幕掌機的下螢幕）；關閉掌機模式時回到主螢幕。",
+      "none": "這台裝置只有一個螢幕，Cindy 會自動配合它的尺寸。",
+      "current": "目前螢幕",
+      "single": "主螢幕"
+    },
+    "controls": {
+      "title": "手把操作",
+      "gamepad": "手把",
+      "noGamepad": "未偵測到",
+      "moveKeys": "十字鍵 / 左搖桿",
+      "move": "移動焦點",
+      "confirm": "確認",
+      "back": "返回",
+      "voice": "長按說話",
+      "scrollKeys": "右搖桿",
+      "scroll": "捲動",
+      "page": "翻頁"
+    }
   }
 }

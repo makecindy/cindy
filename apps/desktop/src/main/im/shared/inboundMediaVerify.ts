@@ -1,4 +1,5 @@
 import { sniffMediaMime } from '../../cindy-media/sniffMediaMime';
+import { UnsupportedInboundMediaError } from '@cindy/im';
 
 /**
  * IM 入站媒体入仓前按真实字节核验类型: 渠道给的 MIME / 扩展名只是线索(平台常给
@@ -10,6 +11,6 @@ export function verifiedInboundMediaMime(buffer: Uint8Array, declared: string, k
   const matches =
     sniffed !== null &&
     (kind === 'image' ? sniffed.startsWith('image/') : sniffed.startsWith('video/') || sniffed.startsWith('audio/'));
-  if (!matches) throw new Error(`IM inbound ${kind} bytes do not match a supported media type`);
+  if (!matches) throw new UnsupportedInboundMediaError(kind);
   return sniffed;
 }

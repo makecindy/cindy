@@ -1172,6 +1172,8 @@ describe('message render todo grouping', () => {
       // 历史两端分组分叉(review P2)。判据与本文件内部的子代理归属同一份。
       expect(isSubagentParentToolUseId('toolu_01ABCDEF')).toBe(true);
       expect(isSubagentParentToolUseId('call_abc123')).toBe(true);
+      expect(isSubagentParentToolUseId('chatcmpl-tool-a1b2c3d4e5f60718')).toBe(true);
+      expect(isSubagentParentToolUseId('chatcmpl-message-a1b2c3d4e5f60718')).toBe(false);
       expect(isSubagentParentToolUseId('4f1c9a7e-3b2d-4c8a-9e5f-1a2b3c4d5e6f')).toBe(false);
       expect(isSubagentParentToolUseId('preceding-user-uuid')).toBe(false);
       // 兼容模型(kimi 系)的真实 tool-use id:`名字_序号`,以及 resume 前转录
@@ -1351,7 +1353,10 @@ describe('message render todo grouping', () => {
       });
     });
 
-    it('ignores subagent plan calls for the top-level pinned panel', () => {
+    it.each([
+      { parentToolUseId: 'agent-task-1' },
+      { agentMeta: { parentUuid: 'chatcmpl-tool-a1b2c3d4e5f60718' } },
+    ])('ignores subagent plan calls for the top-level pinned panel (%j)', (parent) => {
       const mainPlan = tool('plan-main', 'update_plan', {
         plan: [
           { step: 'Main step', status: 'in_progress' },
@@ -1365,7 +1370,7 @@ describe('message render todo grouping', () => {
             { content: 'Subagent extra', status: 'pending' },
           ],
         }),
-        parentToolUseId: 'agent-task-1',
+        ...parent,
       };
 
       // 子代理自己的清单不得顶掉主线程计划。

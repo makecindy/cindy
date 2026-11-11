@@ -1,7 +1,7 @@
 /**
  * Merging the copies of Cindy that grew on separate computers into one companion
  * (cloud-companions.md, 2026-10-16 裁决 2). Runs on the kept Cindy's home: the other copies'
- * memories, own skills, todos, routines, workbench and conversation join it; their profile does
+ * memories, own skills, routines, workbench and conversation join it; their profile does
  * not (the kept one is the user's chosen base). Nothing is overwritten silently: a memory or skill
  * that exists on both sides with different content is kept as a second, renamed entry. The merged
  * copies are retired in the cloud only once everything, the kept task's history included, is in;
@@ -15,10 +15,14 @@ import type { CompanionMediaUpload, CompanionMirrorAttachment } from './mirror.j
 import { readAllRoomMessages, readRoomPage } from './room.js';
 import { companionSkillFileFetch, parseCompanionSkillFiles } from './skillFiles.js';
 import { isTransientAttachmentFailure, type CompanionApi, type CompanionLog } from './types.js';
+import { readCompanionRows, readCompanionValue, type CompanionStore } from './store.js';
 import {
-  COMPANION_MEMORY_PREFIX, COMPANION_PROFILE_KEY, COMPANION_ROUTINE_PREFIX, COMPANION_SKILL_FILES_PREFIX, COMPANION_SKILL_PREFIX, COMPANION_TODO_PREFIX,
-  COMPANION_WORKBENCH_KEY,
+  COMPANION_AUTOMATION_PREFIX, COMPANION_MEMORY_PREFIX, COMPANION_PROFILE_KEY, COMPANION_PROJECT_RULES_KEY, COMPANION_ROUTINE_PREFIX,
+  COMPANION_SKILL_FILES_PREFIX, COMPANION_SKILL_PREFIX, COMPANION_WORKBENCH_KEY,
 } from './uploader.js';
+
+/** Each teammate has its own memory review; a merged copy's is not added a second time. */
+const OWN_MEMORY_REVIEW_ID = 'teammate-memory-review';
 
 export interface CompanionMergeActor {
   id: string; externalId: string; name: string; homeDeviceId?: string | null;
@@ -83,9 +87,9 @@ async function mergeSlot(name: string, suffix: string, content: string, read: (n
 }
 
 /**
- * Every todo and routine joining another companion gets an id of its own, stable per (kept
- * companion, source, original id): copies of Cindy can hold the same id (a todo made from the same
- * old workbench entry, a routine the source still owns here), and nothing merged may replace
+ * Every routine joining another companion gets an id of its own, stable per (kept companion,
+ * source, original id): copies of Cindy can hold the same id (a routine the source still owns
+ * here), and nothing merged may replace
  * another. A rerun derives the same ids, so it replaces only what it brought before.
  */
 function mergedEntryHash(keepBotId: string, sourceActorId: string, id: string): string {
@@ -94,13 +98,15 @@ function mergedEntryHash(keepBotId: string, sourceActorId: string, id: string): 
 export function mergedRoutineId(keepBotId: string, sourceActorId: string, routineId: string): string {
   return `m${mergedEntryHash(keepBotId, sourceActorId, routineId)}`;
 }
-export function mergedTodoId(keepBotId: string, sourceActorId: string, todoId: string): string {
-  return `todo:m-${mergedEntryHash(keepBotId, sourceActorId, todoId)}`;
+/** A V2 automation joining another teammate's project (project config ids are kebab-case). */
+export function mergedAutomationId(keepBotId: string, sourceActorId: string, configId: string): string {
+  return `merged-${mergedEntryHash(keepBotId, sourceActorId, configId)}`;
 }
 
 export async function mergeCompanionsInto(input: {
   api: CompanionApi;
-  host: Pick<CompanionMaterializeHost, 'readMemory' | 'restoreMemory' | 'readSkill' | 'saveSkill' | 'readSkillFiles' | 'applySkillFiles' | 'applyTodos' | 'applyRoutines' | 'applyWorkbench'>;
+  store?: CompanionStore;
+  host: Pick<CompanionMaterializeHost, 'readMemory' | 'restoreMemory' | 'readSkill' | 'saveSkill' | 'readSkillFiles' | 'applySkillFiles' | 'applyRoutines' | 'applyWorkbench' | 'applyAutomations' | 'mergeProjectRules'>;
   keep: CompanionMergeActor;
   from: CompanionMergeActor[];
   humanActorId: string;
@@ -121,9 +127,8 @@ export async function mergeCompanionsInto(input: {
   const seen = new Map<string, string>();
   for (const source of input.from) {
     fence.assertCurrent();
-    seen.set(source.id, await cloudMark(api, source, input.roomOf));
-    const rows = await api<PrefRow[]>('/preferences', 'GET', undefined, source.id);
-    const prefs = (Array.isArray(rows) ? rows : []).filter(row => row.value !== null);
+    seen.set(source.id, await cloudMark(api, source, input.roomOf, input.store));
+    const prefs = (await readCompanionRows(api, input.store, source.id)).filter(row => row.value !== null);
     const suffix = source.label || (source.name && source.name !== keep.name ? source.name : source.externalId.slice(-8));
 
     for (const row of prefs.filter(candidate => candidate.key.startsWith(COMPANION_MEMORY_PREFIX))) {
@@ -169,18 +174,30 @@ export async function mergeCompanionsInto(input: {
       }
     }
 
-    // Todos and routines get ids of their own in the kept companion (the store also gives a
-    // same-key todo its own key).
-    const todos = prefs.filter(row => row.key.startsWith(COMPANION_TODO_PREFIX)).map(row => row.value).flatMap(value => {
-      const todo = record(value);
-      return todo && typeof todo.id === 'string' ? [{ ...todo, id: mergedTodoId(keep.externalId, source.id, todo.id) }] : [];
-    });
-    if (todos.length && host.applyTodos) await host.applyTodos(keep.externalId, todos, [], fence);
+    // Routines (from a copy on an older computer) get ids of their own in the kept companion, so
+    // their project automations never replace another copy's.
     const routines = prefs.filter(row => row.key.startsWith(COMPANION_ROUTINE_PREFIX)).map(row => row.value).flatMap(value => {
       const routine = record(value);
       return routine && typeof routine.id === 'string' ? [{ ...routine, id: mergedRoutineId(keep.externalId, source.id, routine.id) }] : [];
     });
     if (routines.length && host.applyRoutines) await host.applyRoutines(keep.externalId, routines, [], fence);
+    // A V2 copy's project: its automations join the kept teammate's project under ids of their own
+    // (paused ones stay paused), and its rules are added to the kept rules, never replacing them.
+    // A host that cannot take them stops the merge before any copy is retired.
+    const automations = prefs.filter(row => row.key.startsWith(COMPANION_AUTOMATION_PREFIX)).flatMap(row => {
+      const value = record(row.value);
+      const config = record(value?.config);
+      const id = row.key.slice(COMPANION_AUTOMATION_PREFIX.length);
+      if (!value || !config || config.id !== id || id === OWN_MEMORY_REVIEW_ID) return [];
+      const mergedId = mergedAutomationId(keep.externalId, source.id, id);
+      return [{ id: mergedId, value: { ...value, config: { ...config, id: mergedId } } }];
+    });
+    const rules = text(record(prefs.find(row => row.key === COMPANION_PROJECT_RULES_KEY)?.value)?.content);
+    if ((automations.length && !host.applyAutomations) || (rules?.trim() && !host.mergeProjectRules)) {
+      throw new Error('COMPANION_MERGE_UNSUPPORTED');
+    }
+    if (automations.length) await host.applyAutomations!(keep.externalId, automations, fence);
+    if (rules?.trim()) await host.mergeProjectRules!(keep.externalId, suffix, rules, fence);
     const workbench = prefs.find(row => row.key === COMPANION_WORKBENCH_KEY);
     if (workbench && host.applyWorkbench) await host.applyWorkbench(keep.externalId, workbench.value, fence);
 
@@ -192,7 +209,7 @@ export async function mergeCompanionsInto(input: {
   await input.beforeRetire?.();
   for (const source of input.from) {
     fence.assertCurrent();
-    if (await cloudMark(api, source, input.roomOf) !== seen.get(source.id)) throw new Error('COMPANION_STILL_CHANGING');
+    if (await cloudMark(api, source, input.roomOf, input.store) !== seen.get(source.id)) throw new Error('COMPANION_STILL_CHANGING');
   }
   // Only now are the merged copies no longer companions: other computers hide and stop their copy.
   // Until here a failure leaves every source active, so the merge can run again.
@@ -270,16 +287,22 @@ async function mergeConversation(input: {
  * new, changed or removed one changes the list) and the newest room message (room order). Any
  * difference means it added something.
  */
-async function cloudMark(api: CompanionApi, actor: CompanionMergeActor, roomOf: (actor: CompanionMergeActor) => Promise<string>): Promise<string> {
+async function cloudMark(api: CompanionApi, actor: CompanionMergeActor, roomOf: (actor: CompanionMergeActor) => Promise<string>, store?: CompanionStore): Promise<string> {
   const rows = await api<PrefRow[]>('/preferences', 'GET', undefined, actor.id);
   const prefs = (Array.isArray(rows) ? rows : []).map(row => `${row.key}\u0000${row.revision}`).sort();
+  // Values too large for the preferences change only in the companion store.
+  if (store?.active()) {
+    try {
+      for (const [key, row] of await store.revisions(actor.id)) prefs.push(`store\u0000${key}\u0000${row.revision}`);
+    } catch (error) { if (store.active()) throw error; }
+    prefs.sort();
+  }
   const page = await readRoomPage(api, await roomOf(actor));
   const seq = page.reduce((max, message) => (BigInt(message.seq) > max ? BigInt(message.seq) : max), 0n);
   return createHash('sha256').update(JSON.stringify([prefs, String(seq)])).digest('hex');
 }
 
 /** The profile snapshot of a companion actor, for telling the copies of Cindy apart. */
-export async function readProfileSnapshot(api: CompanionApi, actorId: string): Promise<unknown> {
-  const rows = await api<PrefRow[]>('/preferences', 'GET', undefined, actorId);
-  return (Array.isArray(rows) ? rows : []).find(row => row.key === COMPANION_PROFILE_KEY)?.value ?? null;
+export async function readProfileSnapshot(api: CompanionApi, actorId: string, store?: CompanionStore): Promise<unknown> {
+  return (await readCompanionValue(api, store, actorId, COMPANION_PROFILE_KEY))?.value ?? null;
 }

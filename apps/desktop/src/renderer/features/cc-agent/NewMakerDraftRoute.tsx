@@ -52,6 +52,7 @@ import { useLocation, useNavigate, useOutletContext } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { useAuth } from '@/contexts/AuthContext';
+import { getDefaultNewTaskWorkingDir } from '@/state/defaultNewTaskWorkingDir';
 import { themeService } from '@/themes/theme-service';
 import type { Theme as ColorTheme } from '@/themes/types';
 import { ThemeBrandLockup } from '@/components/branding/ThemeBrandLockup';
@@ -169,6 +170,8 @@ import {
   type DraftModelCalibrationResult,
 } from '@/lib/draftModelCalibration';
 import { resolveNewMakerDefaultTuple } from '@/lib/newMakerDefaultTuple';
+import { RUN_LOCATION_LOCAL } from '@/lib/providerRunLocation';
+import { useProviderBorrow } from '@/hooks/useProviderBorrow';
 import { showWorktreeError } from '@/lib/worktreeToast';
 import * as sessionService from '@/lib/sessionService';
 import { sessionsStore } from '@/lib/sessionsStore';
@@ -193,6 +196,7 @@ import {
   isSameNewMakerDevice,
   readNewMakerDialogueTargetRequest,
   readNewMakerFolderPickerRequest,
+  shouldPrefillDefaultNewTaskWorkingDir,
 } from './lib/newMakerRouteState';
 import { useCrossAgentMigrationDialog } from '@/hooks/useCrossAgentConvertPrompt';
 import { getCollaborationStartErrorMessage } from './collaborationErrors';
@@ -691,7 +695,7 @@ function getCurrentRoutePath(): string {
  * 该语义已提到 store 侧共享,其它「另起一段干净对话」的入口也走同一个函数。
  */
 function resetDraftWorkspaceAfterSend(): void {
-  resetDraftWorkspaceTargets();
+  resetDraftWorkspaceTargets({ explicitNoProject: false });
 }
 
 /**
@@ -708,6 +712,8 @@ interface DraftTargetRequest {
   deviceName: string | null;
   /** 目标工作区;null = 该设备上的「对话」(不绑项目)。 */
   workingDir: string | null;
+  /** Only explicit dialogue selections suppress the saved default for this draft. */
+  explicitNoProject?: boolean;
   /**
    * 已经 inline 拉到的被控端快照。只有「添加远程项目」那条路径有 —— 它为了验证设备可达,本来就
    * 直接 invoke 过 capabilities / providers / defaults,于是能立刻 seed,不必等 effect 再跑一轮隧道往返。
@@ -736,6 +742,7 @@ export function NewMakerDraftRoute() {
     [location.state],
   );
   const handledDialogueTargetRequestRef = useRef<string | null>(null);
+  const handledGenericDefaultLocationRef = useRef<string | null>(null);
   const modePickerSelectionSeqRef = useRef(0);
   const handledFolderPickerRequestRef = useRef<string | null>(null);
   // Writable picker evidence is Main-owned and bound to the actual local task id.
@@ -2501,6 +2508,7 @@ export function NewMakerDraftRoute() {
         deviceLinkDeviceId: req.deviceId,
         deviceLinkDeviceName: req.deviceName,
         workingDir: req.workingDir,
+        explicitNoProject: req.workingDir == null && req.explicitNoProject === true,
         // device-link 与 SSH 互斥。
         remoteHostId: null,
         // 换设备 → 上一台的路径全失效;进「对话」→ 单次授权不该跨上下文延续。
@@ -2533,22 +2541,48 @@ export function NewMakerDraftRoute() {
     // 同路由的对话目标是比在途目录恢复更新的用户选择。先推进同一 sequence owner，
     // 让旧 restore completion 只能释放锁，不能把目录重新写回草稿。
     modePickerSelectionSeqRef.current += 1;
+    const currentDraft = getDraft();
+    const sameDevice = isSameNewMakerDevice(dialogueTargetRequest.deviceId, currentDraft);
+    const defaultDir =
+      (location.state as { workspacePrompt?: string } | null)?.workspacePrompt === 'generic' &&
+      dialogueTargetRequest.deviceId === null
+        ? getDefaultNewTaskWorkingDir(dataOwnerId)
+        : null;
     if (
       !dialogueTargetRequest.preserveWorkspaceIfSameDevice ||
-      !isSameNewMakerDevice(dialogueTargetRequest.deviceId, getDraft())
+      !sameDevice
     ) {
       patchCollab({ enabled: false });
       applyDraftTarget({
         deviceId: dialogueTargetRequest.deviceId,
         deviceName: dialogueTargetRequest.deviceName,
-        workingDir: null,
+        workingDir: defaultDir,
+        explicitNoProject:
+          (location.state as { workspacePrompt?: string } | null)?.workspacePrompt === 'dialogue',
       });
+    } else if (
+      defaultDir && shouldPrefillDefaultNewTaskWorkingDir(location.state, currentDraft)
+    ) {
+      applyDraftTarget({ deviceId: null, deviceName: null, workingDir: defaultDir });
     }
     navigate(`${location.pathname}${location.search}${location.hash}`, {
       replace: true,
       state: consumeNewMakerDialogueTargetRequest(location.state),
     });
-  }, [applyDraftTarget, dialogueTargetRequest, location, navigate]);
+  }, [applyDraftTarget, dataOwnerId, dialogueTargetRequest, location, navigate]);
+
+  // The sidebar's generic action has no target request when its source is not a task.
+  // Apply the local default once for that navigation; later manual "Dialogue" selections win.
+  useLayoutEffect(() => {
+    if (!dataOwnerId || dialogueTargetRequest) return;
+    const token = `${dataOwnerId}:${location.key}`;
+    if (handledGenericDefaultLocationRef.current === token) return;
+    handledGenericDefaultLocationRef.current = token;
+    const defaultDir = getDefaultNewTaskWorkingDir(dataOwnerId);
+    if (defaultDir && shouldPrefillDefaultNewTaskWorkingDir(location.state, getDraft())) {
+      applyDraftTarget({ deviceId: null, deviceName: null, workingDir: defaultDir });
+    }
+  }, [applyDraftTarget, dataOwnerId, dialogueTargetRequest, location.key, location.state]);
 
   // 弹窗确认添加后的落点:SSH 立即建会话 + navigate;device-link 把当前草稿指向被控端项目,
   // 首条消息发出时走既有 create-on-send 链路(见下方 isDeviceLinkDraft 分支)。
@@ -3009,9 +3043,9 @@ export function NewMakerDraftRoute() {
       // 这次显式选择就是目标目录里的种子:seed key 按播种 effect 的构造逐字前置,并标记控制端
       // 已触碰 —— 目标电脑的 capabilities 到达时只做合法性夹紧,不会换成那台的默认模型(与下方
       // 跨引擎选择同一条修法)。
-      const seedSwitchedCatalog = (catalogOwnerDeviceId: string) => {
+      const seedSwitchedCatalog = (targetCatalogDeviceId: string) => {
         dlRuntimeTouchedRef.current = true;
-        dlSeedKeyRef.current = `${catalogOwnerDeviceId}:${dbToMakerAgentKind(
+        dlSeedKeyRef.current = `${targetCatalogDeviceId}:${dbToMakerAgentKind(
           normalizeDbAgentKind(selection.vendor),
         )}`;
         dlSeedCapabilitiesRef.current = null;
@@ -3025,7 +3059,9 @@ export function NewMakerDraftRoute() {
         });
       };
       if (switchesAgentDevice && targetAgentDevice) {
-        seedSwitchedCatalog(targetAgentDevice.deviceId);
+        seedSwitchedCatalog(
+          modelCatalogKey(targetAgentDevice.deviceId, controlledModelRoute.catalogHostDeviceId)!,
+        );
         patchDraft({
           agentDeviceId: targetAgentDevice.deviceId,
           agentDeviceName: targetAgentDevice.name,
@@ -3173,6 +3209,7 @@ export function NewMakerDraftRoute() {
       draft.vendor,
       usesDeviceCatalog,
       catalogDeviceId,
+      controlledModelRoute.catalogHostDeviceId,
       effectiveRemoteHostId,
       patchSshDraftSelection,
       isDeviceLinkDraft,
@@ -3186,6 +3223,37 @@ export function NewMakerDraftRoute() {
       pushActiveDraftPref,
     ],
   );
+
+  // 供应商「运行于」另一台自己的电脑(provider-sharing.md §3)：本机新任务草稿选着这个供应商时，跟用户在
+  // 模型面板里点那台电脑上的同一个模型一样，把 Agent 落到那台。每个供应商 + 位置只落一次，用户之后再改选
+  // 以面板为准；那台下线时草稿由上面的落点校验退回本机。
+  const runLocationProvider = !isDeviceLinkDraft && !effectiveRemoteHostId && !sshCodexDraftHostId
+    && !effectiveAgentDeviceId && !activePluginModel && unifiedModelPanelActive && draft.vendor !== 'orca'
+    ? localProviders.find((provider) => provider.id === effectiveSourceId) ?? null
+    : null;
+  const runLocation = useProviderBorrow(runLocationProvider).location;
+  const runLocationAppliedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!runLocationProvider || !draftInitialModel) return;
+    if (runLocation === RUN_LOCATION_LOCAL) {
+      runLocationAppliedRef.current = null;
+      return;
+    }
+    const device = remoteAgentDevices?.find((candidate) => candidate.deviceId === runLocation);
+    const key = `${runLocationProvider.id}:${runLocation}`;
+    if (!device || runLocationAppliedRef.current === key) return;
+    runLocationAppliedRef.current = key;
+    handleUnifiedDraftSelect({
+      vendor: draft.vendor,
+      providerId: runLocationProvider.id,
+      modelId: draftInitialModel,
+      ...(draftInitialEffort ? { effort: draftInitialEffort } : {}),
+      fast: effectiveFastMode,
+      favoriteUid: selectedFavoriteUid,
+      agentDevice: { deviceId: device.deviceId, name: device.name },
+    });
+  }, [runLocationProvider, runLocation, remoteAgentDevices, draftInitialModel, draftInitialEffort, draft.vendor,
+    effectiveFastMode, selectedFavoriteUid, handleUnifiedDraftSelect]);
 
   // ─── 用户改 workingDir(FolderPicker)→ 写回 draft ─────────────────────
   // picker 选 "对话(不在项目中)" 时 dir=null,此时一并清掉 extraDirs,行为对齐
@@ -3205,6 +3273,7 @@ export function NewMakerDraftRoute() {
         deviceId: draft.deviceLinkDeviceId,
         deviceName: draft.deviceLinkDeviceName,
         workingDir: dir,
+        explicitNoProject: dir === null,
       });
     },
     [applyDraftTarget, draft.deviceLinkDeviceId, draft.deviceLinkDeviceName],
@@ -3296,14 +3365,16 @@ export function NewMakerDraftRoute() {
   // 分享来的供应商(`share:<id>`)不在设备列表里，也不自动回落：已收到的分享由同区域与跨区域
   // 两路分别加载，任一路还没到或暂时失败时列表并不完整，不能据此判定分享已不在。草稿保留原
   // 选择，发送时由主进程给出「已暂停 / 已不可用」的原因，用户可换模型。
+  // 任务建到被控电脑时同理：来源名单由被控电脑给出，可以包含控制端自己，本机的设备列表不是依据。
   useEffect(() => {
     if (!effectiveAgentDeviceId) return;
     if (isProviderShareAgentDeviceId(effectiveAgentDeviceId)) return;
+    if (controlledModelRoute.catalogHostDeviceId) return;
     if (!selectableDevicesLoaded) return;
     if (selectableDevices.some((d) => d.deviceId === effectiveAgentDeviceId)) return;
     log.warn('[new-maker] selected agent computer is no longer selectable, running the agent here');
     patchDraft({ agentDeviceId: null, agentDeviceName: null });
-  }, [effectiveAgentDeviceId, selectableDevices, selectableDevicesLoaded]);
+  }, [effectiveAgentDeviceId, controlledModelRoute.catalogHostDeviceId, selectableDevices, selectableDevicesLoaded]);
 
   // 创建目标正在异步提交时，发送、建目标以及设备／工作区切换必须共用同一把锁。
   // ref 负责同步 guard，state 只负责驱动 UI 禁用；所有写入都经 markSendInFlight，
@@ -3378,7 +3449,7 @@ export function NewMakerDraftRoute() {
       // 快照未就绪期间由 send / goal 的 capabilitiesLoading / deviceProvidersLoading /
       // remoteDraftState.status 三重 gate 兜住。也因此不必 prefetch:上面已把「重选同一设备」
       // 早返回掉,deviceId 必然变化 → hook effect 必然重跑 → evict 后必然 cache miss 并自行 fetch。
-      applyDraftTarget({ deviceId, deviceName, workingDir: null });
+      applyDraftTarget({ deviceId, deviceName, workingDir: null, explicitNoProject: true });
     },
     [effectiveDeviceLinkDeviceId, applyDraftTarget],
   );
@@ -6398,6 +6469,7 @@ export function NewMakerDraftRoute() {
             setCreateWorkerOpen(false);
           }}
           title={t('orca.createWorker.enableCollabTitle')}
+          description={t('orca.createWorker.enableCollabDescription')}
           submitLabel={t('orca.createWorker.enableCollabSubmit')}
           requireWorkerPermissionModeSupport
           deviceId={effectiveDeviceLinkDeviceId ?? undefined}

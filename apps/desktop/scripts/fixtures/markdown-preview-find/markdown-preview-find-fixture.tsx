@@ -11,6 +11,13 @@ import { ChatInput } from '../../../src/renderer/components/new-chat/ChatInput';
 import { useAttachments } from '../../../src/renderer/hooks/useAttachments';
 import { getDefaultVoiceInputSettings } from '../../../src/shared/voiceInputData';
 
+// The isolated HTTP fixture lacks secure-context randomUUID. These IDs only
+// identify composer drafts in memory; production keeps its native crypto API.
+if (!crypto.randomUUID) {
+  let sequence = 0;
+  crypto.randomUUID = () => `00000000-0000-4000-8000-${String(++sequence).padStart(12, '0')}`;
+}
+
 const markdown = [
   '# Markdown 查找验证',
   '正文中的苹果。',
@@ -35,7 +42,9 @@ function VoiceQuestion() {
     draft={draft} onDraftChange={setDraft} viewerState="expanded" onViewerStateChange={() => {}} />;
 }
 
-function Fixture({ editor, projectSearch, voice, video, askVoice }: { editor: boolean; projectSearch: boolean; voice: boolean; video: boolean; askVoice: boolean }) {
+const json = '{\n  "fruit": "苹果",\n  "count": 1\n}';
+
+function Fixture({ editor, projectSearch, voice, video, askVoice, jsonPreview }: { editor: boolean; projectSearch: boolean; voice: boolean; video: boolean; askVoice: boolean; jsonPreview: boolean }) {
   const [open, setOpen] = useState(false);
   useLayoutEffect(() => {
     if (!video) return;
@@ -52,7 +61,7 @@ function Fixture({ editor, projectSearch, voice, video, askVoice }: { editor: bo
     <>
       <main className="flex h-screen flex-col gap-4 p-6">
         <p>背景聊天中的苹果不应计入文档搜索。</p>
-        <button data-testid="open-preview" onClick={() => setOpen(true)}>打开 Markdown 示例</button>
+        <button data-testid="open-preview" data-ui-page-control onClick={() => setOpen(true)}>打开 Markdown 示例</button>
         {voice && <VoiceComposer />}
         {askVoice && <VoiceQuestion />}
         {projectSearch && <div className="h-64 w-64"><WorkdirBrowseSidebar
@@ -70,7 +79,7 @@ function Fixture({ editor, projectSearch, voice, video, askVoice }: { editor: bo
         />}
       </main>
       <FindInPageBar />
-      {open && <TextLightbox filePath="/fixture/preview.md" onClose={() => setOpen(false)} />}
+      {open && <TextLightbox filePath={jsonPreview ? '/fixture/preview.json' : '/fixture/preview.md'} onClose={() => setOpen(false)} />}
     </>
   );
 }
@@ -90,6 +99,7 @@ mountPage({
       cancel: async () => undefined,
     },
     readTextFilePreview: async () => {
+      if (ctx.case === 'json-preview') return { success: true, data: json, size: json.length };
       if (ctx.case === 'loading-editor') {
         await new Promise<void>(resolve => {
           window.addEventListener('fixture-preview-ready', () => resolve(), { once: true });
@@ -140,5 +150,5 @@ mountPage({
     deviceLink: { onRemotePush: subscription('remote-push') },
     ghosts: { listSync: () => ({ ghosts: [] }) },
   }),
-  render: ctx => <Fixture editor={['background-editor', 'loading-editor'].includes(ctx.case)} projectSearch={ctx.case === 'background-project-search'} voice={ctx.case === 'background-voice'} video={ctx.case === 'fullscreen-video'} askVoice={ctx.case === 'background-ask-voice'} />,
+  render: ctx => <Fixture editor={['background-editor', 'loading-editor', 'source-background-editor'].includes(ctx.case)} projectSearch={ctx.case === 'background-project-search'} voice={ctx.case === 'background-voice'} video={ctx.case === 'fullscreen-video'} askVoice={ctx.case === 'background-ask-voice'} jsonPreview={ctx.case === 'json-preview'} />,
 });

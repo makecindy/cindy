@@ -146,6 +146,30 @@ describe('useLocalHtmlAutoReload', () => {
     expect(reload).not.toHaveBeenCalled();
   });
 
+  // Unit: the real hook must still reload after old detail rows are retired.
+  // Existing cases only append messages, so their numeric boundary never shifts.
+  it.each([false, true])('reloads after older rows disappear (mounted while running=%s)', alreadyRunning => {
+    const reload = vi.fn();
+    const oldRows = ['old-call', 'old-result', 'old-answer'].map(clientId => ({
+      clientId, role: 'assistant', content: 'old history',
+    }));
+    setTurnState(alreadyRunning, [...oldRows, userMessage]);
+    renderHook(() => useLocalHtmlAutoReload({
+      sessionId: 's1', workdir: '/repo', url: 'file:///repo/preview.html', reload,
+    }));
+    if (!alreadyRunning) setTurnState(true, [...oldRows, userMessage]);
+    const edit = { clientId: 'edit', role: 'tool_use', content: '',
+      toolName: 'Write', toolInput: { file_path: '/repo/preview.html' } };
+    setTurnState(true, [...oldRows, userMessage, edit]);
+    setTurnState(true, [userMessage, edit]);
+    setTurnState(false, [userMessage, edit]);
+    expect(reload).toHaveBeenCalledTimes(1);
+    // Automatic continuation without another user row must not reuse that edit.
+    setTurnState(true, [userMessage, edit]);
+    setTurnState(false, [userMessage, edit]);
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
   it('does not reuse a previous turn edit when a later turn changes nothing', () => {
     const reload = vi.fn();
     renderHook(() =>

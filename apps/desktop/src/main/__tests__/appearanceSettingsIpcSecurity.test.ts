@@ -93,6 +93,14 @@ describe('appearance settings IPC authorization', () => {
     for (const wallpaperVisibility of ['0.5', true, NaN, Infinity, {}]) {
       expect(() => __testing.parsePatch({ wallpaperVisibility })).toThrow('INVALID_PARAMS');
     }
+    for (const desktopVisibility of [0, 0.37, 1, null]) {
+      expect(__testing.parsePatch({ desktopVisibility })).toEqual({ desktopVisibility });
+    }
+    expect(__testing.parsePatch({ desktopVisibility: 2 })).toEqual({ desktopVisibility: 1 });
+    expect(__testing.parsePatch({ desktopVisibility: -1 })).toEqual({ desktopVisibility: 0 });
+    for (const desktopVisibility of ['0.5', true, NaN, Infinity, {}]) {
+      expect(() => __testing.parsePatch({ desktopVisibility })).toThrow('INVALID_PARAMS');
+    }
   });
   it.each(['video', 'image'])(
     'authorizes the CDN %s request and keeps it valid across account switches',
