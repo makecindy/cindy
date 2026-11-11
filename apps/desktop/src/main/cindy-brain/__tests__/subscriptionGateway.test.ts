@@ -42,6 +42,7 @@ import { decodeCursor } from '@cindy/mcps/history-cursor';
 import type { Message } from '../../../renderer/lib/ccAgent.types.js';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current.js';
 import type { DbClient } from '../../localDb/client/DbClient.js';
+import { messageCreateToRow, messageToCamel } from '../../localDb/mapper.js';
 import { createRuntimePluginControl } from '../runtimeControl.js';
 import { createRuntimeContextProviders } from '../runtimeContext.js';
 import type { RuntimePluginSettings } from '../../../shared/pluginRuntime.js';
@@ -345,12 +346,13 @@ describe('indexed task content and state events', () => {
     gw.dropGhost('reader'); expect(vi.getTimerCount()).toBe(0);
   });
 
-  it('delivers saved content with a usable history cursor and attachment positions through the existing queue', async () => {
+  it.each([false, true])('delivers saved content with a usable history cursor and attachment positions (serialized=%s)', async serialized => {
     const g = subscriber() as InstalledGhost;
     const { gw, sent } = makeGateway({ findGhostForDelivery: () => g });
     const index = new GhostTaskEventIndex();
     index.replace([g], owner);
-    index.publish({ kind: 'message', sessionId: 'task', message: row }, owner, () => gw);
+    index.publish({ kind: 'message', sessionId: 'task', message: { ...row,
+      content: serialized ? JSON.stringify(row.content) : row.content } }, owner, () => gw);
     index.publish({ kind: 'state', sessionId: 'task', state: { status: 'archived' } }, owner, () => gw);
     await new Promise<void>(resolve => setImmediate(resolve));
     expect(sent.map(item => item.payload.name)).toEqual(['did-message-created', 'did-task-state-changed']);
@@ -359,6 +361,38 @@ describe('indexed task content and state events', () => {
     const data = payload.data as { content: unknown; historyCursor: string };
     expect(data.content).toEqual({ text: 'saved reply', attachments: [{ attachment_index: 0, name: 'image.png' }, { attachment_index: 1, name: 'file.txt' }] });
     expect(decodeCursor(data.historyCursor)).toEqual({ createdAt: Date.parse(row.createdAt), id: 'message', rowid: 4 });
+  });
+
+  // Unit, #9801 / 4537623634: ordinary JSON is message content, not an attachment
+  // envelope. Existing cases only used attachment objects. Exercise the real
+  // mapper and index -> gateway with both unmapped text and decoded row values.
+  it.each(['123', 'false', 'null', '"quoted"', '{ "answer": 42 }',
+    '[1, true, {"answer":42}]', '[{"type":"record","answer":42}]',
+    '{"text":"kept","answer":42}', '{"images":[],"answer":42}'])(
+    'preserves ordinary JSON message content: %s', body => {
+      const g = subscriber(), { gw, sent, running } = makeGateway({ findGhostForDelivery: () => g });
+      running.add('reader');
+      const decoded = messageToCamel(messageCreateToRow('message', 'task', {
+        clientId: 'json-message', role: 'assistant', content: body,
+      }, Date.parse(row.createdAt)) as Parameters<typeof messageToCamel>[0]);
+      const index = new GhostTaskEventIndex(); index.replace([g], owner);
+      for (const content of [body, decoded.content])
+        index.publish({ kind: 'message', sessionId: 'task', message: { ...row, content } }, owner, () => gw);
+      expect(sent.map(item => (item.payload as { data: { content: unknown } }).data.content))
+        .toEqual([body, decoded.content]);
+    },
+  );
+
+  it('keeps native message blocks free of attachment paths and reasoning', () => {
+    const g = subscriber(), { gw, sent, running } = makeGateway({ findGhostForDelivery: () => g });
+    running.add('reader');
+    const index = new GhostTaskEventIndex(); index.replace([g], owner);
+    index.publish({ kind: 'message', sessionId: 'task', message: { ...row, content: [
+      { type: 'text', text: 'saved reply' }, { type: 'image', source: { url: '/private/image.png' } },
+      { type: 'thinking', thinking: 'private reasoning' },
+    ] } }, owner, () => gw);
+    expect(sent[0]!.payload).toMatchObject({ data: { content: { text: 'saved reply' } } });
+    expect(JSON.stringify(sent)).not.toContain('private');
   });
 
   it.each(['no-subscriber', 'unapproved', 'owner-change', 'removed'] as const)('does no discovery or projection after %s', scenario => {
