@@ -2185,6 +2185,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     notices.set(code, pending);
     return pending;
   }
+  /** Turn ends of tasks whose card is being posted, noted once the card is saved. */
+  const postingTaskCards = new Map<string, Array<[BotGroupLaneTerminal, boolean]>>();
   /**
    * A task the teammate opened during this group execution shows in the group as a card, posted as
    * the teammate where the request was (main group or Thread). This computer keeps the same message
@@ -2197,6 +2199,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const view: BotGroupLiveTaskView = { taskId: task.taskId, deviceId: task.deviceId ?? selfDeviceId ?? null, title: task.title, state: 'running',
       requesterName: (() => { const m = member(run.execution.requester_id); return m ? memberName(m, s.members) : ''; })(),
       botName: bot ? memberName(bot, s.members) : actors.find(actor => actor.id === run.execution.bot_id)?.name ?? '' };
+    const ended = postingTaskCards.get(task.taskId) ?? [];
+    postingTaskCards.set(task.taskId, ended);
     try {
       const posted = await api<{ id: string; revision?: number }>(`/conversations/${run.execution.conversation_id}/messages`, 'POST', {
         operationId: `task-card:${run.execution.id}:${task.taskId}`.slice(0, 160), content: [liveTaskCard(view)], mentions: [],
@@ -2210,6 +2214,12 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       changed(run.execution.conversation_id);
     } catch (error) {
       deps.log?.warn('Group task card could not be posted', chatErrorDiagnostic(error));
+    } finally {
+      // A fast task can end its first turn before its card is saved: note those ends now, in order
+      // (an end arriving meanwhile still joins this list).
+      for (const [terminal, fromThread] of ended) await noteCardTaskTurn(terminal, fromThread, true)
+        .catch(error => deps.log?.warn('Group task card turn could not be noted', chatErrorDiagnostic(error)));
+      if (postingTaskCards.get(task.taskId) === ended) postingTaskCards.delete(task.taskId);
     }
   }
   function liveTaskCard(view: BotGroupLiveTaskView) {
@@ -2244,8 +2254,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
    * already answered there. A card posted inside a Thread cannot root its own, so its reply goes to
    * that Thread and nothing to the main group. Every turn end gives the card its line.
    */
-  async function noteCardTaskTurn(terminal: BotGroupLaneTerminal, fromThread: boolean) {
+  async function noteCardTaskTurn(terminal: BotGroupLaneTerminal, fromThread: boolean, replay = false) {
     if (!current() || !terminal.sessionId) return;
+    const waiting = replay ? undefined : postingTaskCards.get(terminal.sessionId);
+    if (waiting) { waiting.push([{ ...terminal }, fromThread]); return; }
     const mine = Object.entries(taskCards().read()).filter(([, card]) => card.taskId === terminal.sessionId
       && !(card.deviceId && selfDeviceId && card.deviceId !== selfDeviceId));
     if (!mine.length) return;
@@ -2323,7 +2335,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         const giveUp = attempts >= TASK_REPLY_ATTEMPTS || error instanceof ChatResponseError && !retryableResponse(error);
         if (giveUp) deps.log?.warn('Group task message could not be posted', chatErrorDiagnostic(error));
         updateTaskCard(messageId, fresh => giveUp ? drop(fresh) : { ...fresh, outbox: fresh.outbox?.map(o => o.op !== item.op ? o
-          : { ...o, attempts, retryAt: Date.now() + 15_000 * 2 ** (attempts - 1) }) });
+          // A rate limit's own wait wins when it is longer than the backoff.
+          : { ...o, attempts, retryAt: Math.max(Date.now() + 15_000 * 2 ** (attempts - 1), error instanceof ChatResponseError ? error.retryAt ?? 0 : 0) }) });
         if (!giveUp) return;
       }
     }
@@ -2887,8 +2900,14 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         const threadRootId = run.plan || digest ? undefined : source?.threadRootId ?? undefined;
         // A reply with real access works in the group's project folder when this computer has one.
         const folder = !run.plan && !digest && !execution.mask_owner_id && execution.access_mode !== 'chat'
-          ? (await groupProjectFolder(s.room)).dir : null;
-        const projectDir = folder && (await deps.validateProjectDir?.(folder).catch(() => null))?.ok ? folder : null;
+          ? await groupProjectFolder(s.room) : null;
+        const projectDir = folder?.dir && deps.validateProjectDir ? folder.dir : null;
+        // A folder set for the group but gone or unreadable now fails this round, never Home (§7.5);
+        // a found one is looked up again next round.
+        if (folder && projectDir && !(await deps.validateProjectDir?.(projectDir).catch(() => null))?.ok) {
+          if (folder.auto && s.room.project?.kind === 'github') repositoryFolders.delete(s.room.project.repo.toLowerCase());
+          throw new Error('WORKDIR_UNAVAILABLE');
+        }
         const lane = await deps.ensureLane({ botId: bot.id, groupId: s.room.id, title: s.room.name,
           ...(projectDir ? { projectDir } : {}),
           chatAccess: { mode: execution.access_mode, revision: execution.access_revision, maskOwnerId: execution.mask_owner_id },

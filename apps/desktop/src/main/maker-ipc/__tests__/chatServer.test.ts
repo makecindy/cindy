@@ -1369,6 +1369,28 @@ describe('Chat Server result delivery and refresh', () => {
     expect(shown.group).toMatchObject({ projectDir: '/projects/cindy', projectDirAuto: true, supportsGroupProject: true, project });
     expect(deps.findProjectDirsForRepo).toHaveBeenCalledWith('makecindy/cindy');
   });
+  // bot-group-chat.md §7.5 (#10009 review): a folder set for the group but gone now made the reply
+  // run in Home and could archive the project lane. It fails this round instead; a folder found from
+  // the repository (cached for minutes) is looked up again afterwards.
+  it.each(['chosen here', 'found from the repository'] as const)('fails the round when the project folder %s is gone', async how => {
+    deps.findProjectDirsForRepo = vi.fn(async () => ['/projects/cindy']);
+    deps.validateProjectDir = vi.fn(async () => ({ ok: false as const, message: 'gone' }));
+    if (how === 'chosen here') workspaceSettings.set(roomId, { projectDir: '/projects/cindy', plans: {} });
+    fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
+    fixture.handle.mockImplementation(route => {
+      if (route === '/me') return { body: { actor: { id: selfId }, capabilities: { groupProject: 1 } } };
+      if (route === '/executions/claim') { const next = claimed ? null : { ...execution, access_mode: 'tools' }; claimed = true; return { body: { execution: next } }; }
+      if (route.endsWith('/snapshot')) return { body: { room: { ...room(roomId), project: { kind: 'github', repo: 'makecindy/cindy' } }, members: [], messages: [], cursor: '1' } };
+      return response(route);
+    });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(deps.ensureLane).not.toHaveBeenCalled();
+    expect(deps.dispatch).not.toHaveBeenCalled();
+    const failures = fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'fail');
+    expect(failures.map(([, , body]) => body.detail)).toEqual(['cindy-runtime-error:RUNTIME_ERROR']);
+    await service.getGroup(roomId);
+    expect(deps.findProjectDirsForRepo).toHaveBeenCalledTimes(how === 'chosen here' ? 0 : 2);
+  });
 
   // #9909: a group turn can end with nothing published. Each such ending now leaves a trace,
   // so the next report can tell "the companion skipped" from "this computer never ran it".
@@ -1635,13 +1657,44 @@ describe('Chat Server result delivery and refresh', () => {
     expect(edits).toHaveLength(1);
   });
 
+  // bot-group-chat.md §10 (#10009 review): the card is saved only once its POST returns, and a fast
+  // task's first turn could end before that; the turn's Thread reply and main-group result were lost.
+  // Unit: real service; the card POST is held until after the task's turn has ended.
+  it('posts the first turn of a task that ends before its card is saved', async () => {
+    const cardId = '70000000-0000-4000-8000-000000000001';
+    const posts: Array<{ operationId: string; threadRootId?: string; content: Array<{ text?: string }> }> = [];
+    let releaseCard!: () => void;
+    deps.readGroupTaskStatus = vi.fn(async () => ({ title: 'Fix login', state: 'idle' as const }));
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route === '/executions/claim') { const next = claimed ? null : { ...execution, requester_id: selfId, access_mode: 'owner' }; claimed = true; return { body: { execution: next } }; }
+      if (route === `/conversations/${roomId}/messages` && method === 'POST') {
+        posts.push(body);
+        return body.operationId.startsWith('task-card:')
+          ? new Promise(resolve => { releaseCard = () => resolve({ body: { id: cardId, revision: 1 } }); })
+          : { body: { id: '70000000-0000-4000-8000-000000000002', revision: 1 } };
+      }
+      if (method === 'PATCH' && route.includes('/messages/')) return { body: { revision: 2 } };
+      return response(route);
+    });
+    await start();
+    reportGroupTaskCreated('lane', { taskId: 'task-1', deviceId: null, title: 'Fix login' });
+    await vi.advanceTimersByTimeAsync(0);
+    await service.settleLaneTurn({ ...terminal, sessionId: 'task-1', activeInputClientId: 'created-with', resultMessageClientId: 'reply-1', resultText: 'Done quickly' });
+    releaseCard();
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(posts.slice(1).map(post => [post.operationId.split(':')[0], post.threadRootId ?? null, post.content.at(-1)?.text]))
+      .toEqual([['task-reply', cardId, 'Done quickly'], ['task-result', null, 'Done quickly']]);
+    expect(taskCardStore.value[cardId]).toMatchObject({ summary: 'Done quickly', outbox: [] });
+  });
+
   // bot-group-chat.md §10 (2026-11-11 owner decision, Amp as reference): the task stopped and nobody
   // in the group could tell why. The card's Thread is the task's window in the group: every turn end
   // of the card's task — the turn it was created with or one its owner typed in the task — posts its
   // reply there, and the main group gets a short result quoting the card (a short reply is its own
   // result; the helper model condenses a long one; without it the card's line). Once per turn: a
-  // failed post retries the same operation, the same turn end again posts nothing, NO_REPLY posts
-  // nothing. A card inside a Thread cannot root its own: the reply goes to that Thread, nothing to the main group.
+  // failed post retries the same operation (not before a rate limit's Retry-After, #10009 review), the
+  // same turn end again posts nothing, NO_REPLY posts nothing. A card inside a Thread cannot root its
+  // own: the reply goes to that Thread, nothing to the main group.
   it.each([
     ['condensed by the helper model', null, 'The lint step failed; the log is in the thread.'],
     ['the card line without the helper model', null, null],
@@ -1657,7 +1710,7 @@ describe('Chat Server result delivery and refresh', () => {
     deps.condenseTaskReply = vi.fn(async () => condensed ?? null);
     fixture.handle.mockImplementation((route, method, body) => {
       if (route === `/conversations/${roomId}/messages` && method === 'POST') {
-        if (unavailable) { unavailable = false; return { status: 503, body: { code: 'UNAVAILABLE' } }; }
+        if (unavailable) { unavailable = false; return { status: 429, headers: { 'retry-after': '40' }, body: { error: { code: 'RATE_LIMITED' } } }; }
         posts.push(body);
         return { body: { id: '70000000-0000-4000-8000-000000000002', revision: 1 } };
       }
@@ -1668,7 +1721,10 @@ describe('Chat Server result delivery and refresh', () => {
     const reply = `## Preflight **failed**\n\n${'The lint step failed, see [the log](https://example.com/log). '.repeat(5).trim()}`;
     const ended = { ...terminal, sessionId: 'task-1', activeInputClientId: 'created-with', resultMessageClientId: 'reply-1' };
     await service.settleLaneTurn({ ...ended, resultText: reply });
-    await vi.advanceTimersByTimeAsync(60_000);
+    // The local backoff (15 s) is shorter than the server's wait (40 s).
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(posts).toEqual([]);
+    await vi.advanceTimersByTimeAsync(30_000);
     const thread = inThread ?? cardId;
     expect(posts[0]).toEqual({ operationId: expect.stringMatching(`^task-reply:${cardId}:`), threadRootId: thread, mentions: [],
       content: [{ type: 'text', text: reply }] });
