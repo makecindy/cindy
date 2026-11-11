@@ -1,4 +1,31 @@
 {
+  "pushDiagnostics": {
+    "title": "Diagnóstico de notificaciones",
+    "read": "Leer estado de notificaciones",
+    "busy": "Leyendo…",
+    "failed": "No se pudo leer el estado. Inténtalo de nuevo.",
+    "copyFailed": "No se pudo copiar el token.",
+    "copied": "Token copiado.",
+    "bundle": "ID de la app",
+    "build": "Compilación",
+    "environment": "Entorno APNs",
+    "permission": "Permiso del sistema",
+    "alerts": "Avisos",
+    "lockScreen": "Pantalla bloqueada",
+    "notificationCenter": "Centro de notificaciones",
+    "copy": "Copiar token APNs",
+    "hide": "Ocultar resultado",
+    "unknown": "Desconocido",
+    "on": "Activado",
+    "off": "Desactivado",
+    "hint": "Solo se lee al solicitarlo. El token APNs se muestra aquí, sin guardarse en diagnósticos ni enviarse desde esta herramienta. Se oculta al salir o pasar a segundo plano. Cópialo solo para la consola de notificaciones de Apple; el texto copiado permanece en el portapapeles.",
+    "permissions": {
+      "granted": "Permitido",
+      "denied": "Denegado",
+      "undetermined": "Sin solicitar",
+      "provisional": "Entrega silenciosa"
+    }
+  },
   "localLogs": {
     "upload": "Cargar registros",
     "uploadResult": {
@@ -135,11 +162,16 @@
     "permissionDenied": "Permita notificaciones Cindy en la configuración de su sistema.",
     "unregisterQueued": "Apagado. La cancelación del registro finalizará una vez que vuelva a estar en línea.",
     "preview": "Mostrar vistas previas del chat",
-    "background": "Mantener el chat conectado en segundo plano",
-    "backgroundActive": "Recibir mensajes de chat en segundo plano",
+    "background": "Notificaciones en segundo plano",
+    "backgroundActive": "Recibiendo notificaciones en segundo plano",
     "backgroundStop": "dejar de recibir",
-    "backgroundHint": "La conexión en segundo plano funciona sin Google y muestra una notificación en curso. Puedes detenerlo desde esa notificación.",
-    "googleUnavailable": "La inserción Google no está disponible. Habilite la conexión de chat en segundo plano para recibir mensajes."
+    "backgroundHint": "Cindy mantiene la conexión automáticamente si Google Push podría no estar disponible. Durante la conexión se muestra una notificación permanente.",
+    "googleUnavailable": "Google Push no está disponible. La conexión en segundo plano seguirá tus ajustes de notificaciones.",
+    "backgroundModes": {
+      "auto": "Automático",
+      "on": "Siempre activado",
+      "off": "Desactivado"
+    }
   },
   "about": {
     "sectionTitle": "Acerca de este teléfono",

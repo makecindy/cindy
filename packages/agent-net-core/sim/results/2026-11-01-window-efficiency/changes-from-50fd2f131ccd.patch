@@ -1,0 +1,701 @@
+--- a/src/congestion.rs	2026-11-01 15:18:02
++++ b/src/congestion.rs	2026-11-01 20:27:56
+@@ -25,6 +25,14 @@
+ const FULL_BW_ROUNDS: u8 = 3;
+ /// 还没有测量值时的默认发送速率，约 32 Mbit/s。第一批确认到达后就换成实测值。
+ const INITIAL_RATE: u64 = 4_000_000;
++/// 第一批包的发送速率，约 128 Mbit/s。这批包的量由初始窗口管着，发得快只是让窗口早点转起来；
++/// 带宽估计仍以 `INITIAL_RATE` 为上限，令牌桶放行的突发不会把估计抬高。
++const FIRST_FLIGHT_RATE: u64 = 16_000_000;
++/// 初始窗口发完、第一个确认还没回来时，窗口余下的部分按这个速率慢慢发，约 2 Mbit/s。
++/// 这时什么也测不到：长往返路径上干等一个往返，窗口要空出半轮；慢慢发的话，窄带线路也来得及排空，挤不爆队列。
++const FIRST_FLIGHT_TRICKLE_RATE: u64 = 250_000;
++/// 初始窗口发完后等这么久才开始慢慢发。往返更短的路径上第一个确认已经回来了，用不着猜。
++const FIRST_FLIGHT_TRICKLE_DELAY_US: u64 = 150_000;
+ /// 第一批确认测到的速率贴着自身发送上限，且测得的 BDP 远大于初始窗口时，才加速探测。
+ const TRAIN_PACING_HEADROOM: u64 = 4;
+ const TRAIN_BDP_RATIO: u64 = 8;
+@@ -70,9 +78,13 @@
+ /// 每档只放开 1/8，撞上时丢的量很小。连续放开这么多次都没撞上就取消。
+ const CAP_CONFIRMED_HOLD_US: u64 = 2_000_000;
+ const CAP_MAX_RAISES: u32 = 4;
++/// 宽松的上限设下以后，至少过这么多轮才看最近的丢包：丢失要晚一个往返才判出来。
++const CAP_RELEASE_ROUNDS: u64 = 3;
+ /// 被窗口限住时的发送节奏增益。这时测到的只是窗口的速率，路径能力还在上面，
+ /// 节奏不能再压一层，否则窗口一打开也补不回来。
+ const WINDOW_LIMITED_GAIN: u64 = 2000;
++/// 确认路径有余量以后的发送节奏增益。一窗口的包发得越紧凑，丢的包等到校验包的时间越短，窗口每轮卡得越少。
++const WINDOW_ROOM_GAIN: u64 = 8000;
+ const WINDOW_LIMITED_CALM_GAIN: u64 = 900;
+ /// 补偿的上限：随机丢包再高，发送速率也只放大到送达速率的两倍。
+ const MAX_RANDOM_LOSS_PPM: u32 = 500_000;
+@@ -84,6 +96,10 @@
+ const CALM_SAMPLE_FLOOR: u32 = 64;
+ /// 看最近这么多轮的平均送达速率。要盖过排空阶段：排空时发得慢，送达速率本来就低。
+ const DELIVERY_ROUNDS: usize = 4;
++/// 窗口不大时，刚进巡航的那个降速阶段不当低速样本：节奏还按启动时测到的带宽打折，配额或令牌桶刚放行完突发时，
++/// 这个“降速”仍远超上限。要等巡航过了这么多轮，送达速率的平均值才能把降速阶段压下来。
++/// 窗口大的连接要靠这个阶段尽早测出随机丢包率，不等。
++const FIRST_CALM_ROUND: u32 = 2;
+ /// 最近几轮平均送达速率至少是窗口能送速率的这么多百分比，才算真的被窗口限住。
+ const WINDOW_DELIVERY_PERCENT: u64 = 85;
+ /// 加速探测发的包丢得比随机丢包率的两倍还多这么多：队列很浅，加速 25% 每次都把它挤爆，
+@@ -173,6 +189,8 @@
+     rate_cap_until: u64,
+     rate_cap_confirmed: bool,
+     rate_cap_raises: u32,
++    /// 宽松的上限是第几轮设下的。
++    rate_cap_round: u64,
+     period_started: u64,
+     period_delivered: u64,
+     period_lost: u64,
+@@ -193,6 +211,8 @@
+     last_period_rate: u64,
+     /// 第一批包的第一个确认到达时的时间和送达量。
+     train_start: Option<(u64, u64)>,
++    /// 第一个确认回来之前发了多少字节。
++    first_flight_sent: u64,
+     /// 往返时间的平滑平均。
+     rtt_avg_us: u64,
+     /// 相邻两个 RTT 样本之差的平滑平均，衡量抖动。
+@@ -249,6 +269,7 @@
+             rate_cap_until: 0,
+             rate_cap_confirmed: false,
+             rate_cap_raises: 0,
++            rate_cap_round: 0,
+             period_started: 0,
+             period_delivered: 0,
+             period_lost: 0,
+@@ -263,6 +284,7 @@
+             period_calm_lost: 0,
+             last_period_rate: 0,
+             train_start: None,
++            first_flight_sent: 0,
+             rtt_avg_us: 0,
+             rtt_jitter_us: 0,
+             last_rtt_us: 0,
+@@ -282,6 +304,11 @@
+     }
+ 
+     /// 路径一个往返能装下半个窗口以上：这时丢一个包，窗口多半会在重传到达前被占满。
++    /// 还在启动阶段。
++    pub(crate) fn is_starting(&self) -> bool {
++        self.mode == Mode::Startup
++    }
++
+     pub(crate) fn window_bound_path(&self) -> bool {
+         self.btl_bw > 0 && self.bdp().saturating_mul(2) >= self.max_cwnd
+     }
+@@ -441,6 +468,7 @@
+         self.rate_cap_confirmed = confirmed;
+         if !confirmed {
+             self.rate_cap = (rate + rate / 2).max(self.btl_bw / 2);
++            self.rate_cap_round = self.round_count;
+             // 只守到下一段结束：还在丢就会重新设上，判错了也只影响这一段。
+             self.rate_cap_until = now_us + elapsed + elapsed / 4;
+             return;
+@@ -461,8 +489,17 @@
+     /// 宽松的上限设下以后丢包率回到了正常水平，说明刚才是突发丢包而不是限速：限速器只要超速就一定丢包。
+     /// 不用等这一段结束，否则每次突发丢包都要按半速多跑一秒。不能要求一个包都不丢：随机丢包的路径上永远等不到。
+     fn release_unconfirmed_cap(&mut self, now_us: u64, delivered: u64) {
++        if self.rate_cap == 0 || self.rate_cap_confirmed {
++            return;
++        }
++        // 最近两轮都不丢了，送达速率还顶到了这个上限：路径上的上限比它高，刚才只是一阵突发，不用等这一段结束。
++        let reached = self.round_rates[..2].iter().all(|&rate| rate.saturating_mul(10) >= self.rate_cap.saturating_mul(9));
++        if reached && self.round_count >= self.rate_cap_round + CAP_RELEASE_ROUNDS && self.round_loss_ppm.iter().all(|&loss| loss < self.excess_loss_threshold()) {
++            self.rate_cap = 0;
++            return;
++        }
+         let quiet = now_us.saturating_sub(self.period_started) >= SEVERE_PERIOD_MIN_US.max(SEVERE_PERIOD_MIN_RTTS * self.min_rtt_us);
+-        if self.rate_cap == 0 || self.rate_cap_confirmed || !quiet {
++        if !quiet {
+             return;
+         }
+         let total = delivered.saturating_sub(self.period_delivered) + self.period_lost;
+@@ -512,7 +549,7 @@
+ 
+     /// 这时发的包可以当低速样本，用来估计随机丢包率。
+     pub(crate) fn sends_below_capacity(&self) -> bool {
+-        self.is_below_capacity() || self.window_bound_with_room()
++        (self.is_below_capacity() && (self.probe_bw_rounds >= FIRST_CALM_ROUND || !self.small_window())) || self.window_bound_with_room()
+     }
+ 
+     /// 被窗口限住、随机丢包率的样本已经攒够、也没有撞上过容量的降速阶段。
+@@ -576,7 +613,7 @@
+             };
+         }
+         if self.btl_bw == 0 {
+-            return self.initial_cwnd;
++            return if self.probe_sender_limited { self.max_cwnd } else { self.initial_cwnd };
+         }
+         if self.mode == Mode::ProbeRtt {
+             return (self.bdp() / 2).max(self.min_cwnd / 4);
+@@ -593,7 +630,7 @@
+ 
+     fn pacing_rate(&self) -> u64 {
+         if self.btl_bw == 0 {
+-            return self.initial_rate;
++            return if self.first_flight_sent < self.initial_cwnd || !self.probe_sender_limited { self.initial_rate.max(FIRST_FLIGHT_RATE) } else { FIRST_FLIGHT_TRICKLE_RATE };
+         }
+         let gain = match self.mode {
+             Mode::Startup => return self.startup_rate(),
+@@ -612,7 +649,8 @@
+         // 降速阶段不能被抬上去：这段时间的丢包要用来判断是不是随机丢包。
+         // 排空阶段也不能：抬上去在途量就降不到一个 BDP，连接一直出不了排空，随机丢包率永远测不到。
+         let boost = self.window_limited && self.mode != Mode::Drain && (!self.is_below_capacity() || self.window_bound_with_room());
+-        let gain = if boost { gain.max(WINDOW_LIMITED_GAIN) } else { gain };
++        let room_gain = if self.window_bound_with_room() { WINDOW_ROOM_GAIN } else { WINDOW_LIMITED_GAIN };
++        let gain = if boost { gain.max(room_gain) } else { gain };
+         let rate = (self.path_rate().saturating_mul(gain) / 1000).max(1);
+         // 已经确认限速时，任何增益都不能把节奏抬过上限：多出来的包只会被限速器丢掉。
+         // 只量到一次的宽松上限可能是突发丢包造成的，不在这里强压。
+@@ -621,13 +659,18 @@
+         // 降速阶段要真的低于路径送得出去的速率，这段的丢包才能当随机丢包。令牌桶放行突发时测到的带宽能高出上限好几倍，
+         // 按它打折的“降速”仍远超上限，限速丢包混进随机丢包率；估计值一高，补偿后发得更快，越滚越高，再也认不出上限。
+         // 最近几轮的平均送达速率既远低于带宽估计、又远低于窗口能送的速率，说明卡住送达的是路径上的上限，
+-        // 这时降速阶段不超过带宽估计的一半。取平均：攒够令牌时能放行短突发，单看最快的一轮会偏高。
++        // 这时降速阶段按实际送达速率打折，才真的低于上限。取平均：攒够令牌时能放行短突发，单看最快的一轮会偏高。
++        // 稀疏消息测到的只是应用发送速度，按它打折的话断网积压要等很久，这时只压到带宽估计的一半。
+         // 窗口受限的长往返路径上，启动测到的速率常比窗口能送的高好几倍，那不是限速，不压；
+         // 随机丢包率已经测稳的窗口受限阶段也不压，那时降速只比窗口速率低一点，再压就白白慢了。
+         let recent = self.round_rates.iter().sum::<u64>() / DELIVERY_ROUNDS as u64;
+         let window_rate = self.max_cwnd.saturating_mul(1_000_000) / self.min_rtt_us.max(1);
+         let limited_elsewhere = recent < self.btl_bw / 2 && recent < window_rate / 2;
+-        let delivering = if limited_elsewhere { self.btl_bw / 2 } else { u64::MAX };
++        let delivering = match (limited_elsewhere, self.app_idle_estimate) {
++            (false, _) => u64::MAX,
++            (true, true) => self.btl_bw / 2,
++            (true, false) => recent * 3 / 4,
++        };
+         let rate = if self.is_below_capacity() && recent > 0 && !self.settled_window_limited() { rate.min(delivering) } else { rate };
+         // 稀疏消息测到的是应用发送速度，不能把它当作恢复积压时的路径上限。
+         // 仍受拥塞窗口限制；主动降速、排空、排队或已知限速时都不抬高，避免污染低速丢包样本。
+@@ -648,6 +691,11 @@
+         self.random_loss_ppm
+     }
+ 
++    /// 相邻两个 RTT 样本之差的平滑平均。均匀抖动下约是抖动幅度的三分之一。
++    pub(crate) fn rtt_jitter_us(&self) -> u64 {
++        self.rtt_jitter_us
++    }
++
+     pub(crate) fn min_rtt_us(&self) -> u64 {
+         self.min_rtt_us
+     }
+@@ -675,12 +723,24 @@
+     }
+ 
+     pub(crate) fn on_sent(&mut self, now_us: u64, bytes: u64) {
++        let trickle_starts = self.btl_bw == 0 && self.first_flight_sent < self.initial_cwnd && self.first_flight_sent + bytes >= self.initial_cwnd;
++        if self.btl_bw == 0 {
++            self.first_flight_sent += bytes;
++        }
++        if trickle_starts {
++            self.next_send_at = now_us + FIRST_FLIGHT_TRICKLE_DELAY_US;
++            return;
++        }
+         let interval = bytes.saturating_mul(1_000_000) / self.pacing_rate();
+         self.next_send_at = self.next_send_at.max(now_us) + interval;
+     }
+ 
+     pub(crate) fn on_ack(&mut self, now_us: u64, sample: &RateSample, delivered: u64, bytes_in_flight: u64) {
+         self.recovering = false;
++        // 第一个确认到了，慢慢发的节奏作废，不用等那个包的间隔。
++        if self.btl_bw == 0 {
++            self.next_send_at = self.next_send_at.min(now_us);
++        }
+         if sample.delivery_rate >= self.btl_bw {
+             self.app_idle_estimate = sample.app_idle;
+         }
+@@ -848,7 +908,7 @@
+         if bytes < self.min_cwnd {
+             return 0;
+         }
+-        bytes.saturating_mul(1_000_000) / now_us.saturating_sub(at).max(sample.send_span_us).max(1)
++        (bytes.saturating_mul(1_000_000) / now_us.saturating_sub(at).max(sample.send_span_us).max(1)).min(self.initial_rate)
+     }
+ 
+     fn queue_is_building(&self) -> bool {
+@@ -875,6 +935,11 @@
+         full_length
+     }
+ 
++    /// 窗口不超过两个初始窗口。
++    fn small_window(&self) -> bool {
++        self.max_cwnd <= self.initial_cwnd.saturating_mul(2)
++    }
++
+     fn enter_probe_bw(&mut self, now_us: u64) {
+         self.mode = Mode::ProbeBw;
+         // 通常从降速阶段开始，尽早测出随机丢包率。
+@@ -882,8 +947,7 @@
+         // 这时如果最近两轮丢得不多（没冲过限速或配额），跳过第一个降速阶段，随机丢包率留给后面的降速阶段测。
+         // 窗口大的连接照旧：窗口和路径容量可能只差一点，不降速直接巡航会挤爆队列。
+         let calm_rounds = self.round_loss_ppm.iter().all(|&loss| loss < SKIP_CALM_MAX_LOSS_PPM);
+-        let small_window = self.max_cwnd <= self.initial_cwnd.saturating_mul(2);
+-        self.cycle_index = if small_window && self.window_limited && calm_rounds { 2 } else { 1 };
++        self.cycle_index = if self.small_window() && self.window_limited && calm_rounds { 2 } else { 1 };
+         self.cycle_started = now_us;
+     }
+ 
+--- a/src/connection.rs	2026-11-01 15:18:02
++++ b/src/connection.rs	2026-11-01 20:27:56
+@@ -26,13 +26,16 @@
+ const LOSS_SMOOTHING: u32 = 256;
+ /// 最近丢包率超过这个值才捎带，单位百万分之一。干净网络上不多花一个字节。
+ const BUNDLE_LOSS_PPM: u32 = 2_000;
+-/// 丢过一个包后，这么久之内都捎带。丢包率估计在两次丢包之间会掉到门槛以下，
+-/// 这时再丢一个，小消息要等一个往返，后面的消息全被堵住。
++/// 丢过一个包后，这么多个往返之内都捎带，最长这么久。丢包率估计在两次丢包之间会掉到门槛以下，
++/// 这时再丢一个，小消息要等一个往返，后面的消息全被堵住。往返越短，这个代价越小，用不着一直带着副本。
++const BUNDLE_HOLD_RTTS: u64 = 150;
+ const BUNDLE_HOLD_US: u64 = 30_000_000;
+ /// 这么久完全没有收到对端的包才算长断网：放慢重试、只发少量探测。更短的中断要尽快重连。
+ const LONG_OUTAGE_US: u64 = 2_000_000;
+ /// 连接开头还没测过丢包率，这么多个包之内也捎带。第一个丢包要一个往返才发现，
+ /// 长 RTT 路径上这一个包能堵住十几条消息。满载的包没有空位，只有小消息花这点流量。
++/// 自动策略只带够发现第一个丢包所需的量，干净路径上这也是白花的流量；速度优先策略带得多一些。
++const AUTO_BUNDLE_WARMUP_PACKETS: u32 = 40;
+ const BUNDLE_WARMUP_PACKETS: u32 = 128;
+ /// 丢包率达到这些值时捎带这么多份，让连续丢光的概率压到千分之一左右。
+ /// 小消息丢了要等一个往返，后面的消息全被堵住，长 RTT 路径上要乘十几倍。
+@@ -52,6 +55,8 @@
+ /// 丢包率在这个范围内才发校验包。太低不值得；太高时校验比数据还多，不如重传。
+ const PARITY_MIN_LOSS_PPM: u32 = 1_000;
+ const PARITY_MAX_LOSS_PPM: u32 = 400_000;
++/// 开头见过丢包后，校验至少按这个丢包率给：样本还少，估计值可能偏低。
++const EARLY_PARITY_LOSS_PPM: u32 = 20_000;
+ /// 确认丢过包后，这么久之内校验至少按最低比例保持开启。丢包率估计在两次丢包之间会降到门槛以下，
+ /// 这时关掉的话，下一个丢包只能等重传，窗口整整卡一个往返。
+ const PARITY_FLOOR_HOLD_US: u64 = 5_000_000;
+@@ -82,6 +87,10 @@
+ const MAX_SPARE_BUFFERS: usize = 256;
+ /// 为抖动多发校验时每轮最多加这么多。
+ const JITTER_PARITY_STEP_PPM: u32 = 50_000;
++/// 逐轮多发的校验比例最多到丢包率的这么多倍、不超过这个上限。丢的包等校验包的时间约占往返的“丢包率 × 校验间隔 ÷ 2”，
++/// 校验间隔减半，窗口每轮卡的时间也减半。
++const LOSS_PARITY_FACTOR: u32 = 40;
++const LOSS_PARITY_MAX_PPM: u32 = 250_000;
+ /// 往返短于这个值时不为抖动多发校验：局域网一类的路径上，晚到的包只让窗口多等零点几毫秒，校验包反倒占掉不多的余量。
+ const JITTER_PARITY_MIN_RTT_US: u64 = 10_000;
+ /// 顶起过队列以后，上限每轮放开这么多。
+@@ -303,6 +312,8 @@
+     reorder_decay_at: u64,
+     next_packet: u64,
+     largest_acked: Option<u64>,
++    /// 已确认的包里最晚发出的那个的发送时间。
++    largest_acked_sent_at: u64,
+     in_flight: u32,
+     bytes_in_flight: u64,
+     delivered: u64,
+@@ -375,7 +386,7 @@
+         assert!(config.max_packet_size > wire::PACKET_HEADER_LEN + wire::PARITY_HEADER_LEN, "max_packet_size too small");
+         assert!(config.max_packet_size <= u16::MAX as usize, "max_packet_size too large");
+         assert!(config.send_window > 0 && config.recv_window > 0, "windows must be positive");
+-        assert!(config.recv_window <= u16::MAX as u32, "recv_window exceeds the wire format");
++        assert!(config.recv_window < 1 << (wire::PARITY_FIRST_BITS - 1), "recv_window exceeds the wire format");
+         assert!(config.reorder_threshold > 0, "reorder_threshold must be positive");
+         // 按校验帧的头算，这样满长度分片的校验内容也能放进一个包。
+         let max_segment = config.max_packet_size - wire::PACKET_HEADER_LEN - wire::PARITY_HEADER_LEN;
+@@ -420,6 +431,7 @@
+             reorder_decay_at: now_us,
+             next_packet: packet,
+             largest_acked: None,
++            largest_acked_sent_at: 0,
+             in_flight: 0,
+             bytes_in_flight: 0,
+             delivered: 0,
+@@ -789,7 +801,7 @@
+     }
+ 
+     fn process_packet(&mut self, now_us: u64, packet: &[u8]) -> Result<(), PacketError> {
+-        let truncated = wire::parse_header(packet).ok_or(PacketError::Malformed)?;
++        let (truncated, eager_ack) = wire::parse_header(packet).ok_or(PacketError::Malformed)?;
+ 
+         // 先完整校验一遍再改状态，半个坏包不能留下任何影响。
+         let mut pos = wire::PACKET_HEADER_LEN;
+@@ -807,7 +819,7 @@
+         }
+ 
+         let expected = self.largest_received.map_or(self.config.initial_packet_number, |value| value + 1);
+-        let number = wire::expand(truncated, expected);
++        let number = wire::expand(truncated, expected, wire::PACKET_NUMBER_BITS);
+         self.stats.packets_received += 1;
+         self.stats.wire_bytes_received += packet.len() as u64;
+         self.last_heard = now_us;
+@@ -828,7 +840,7 @@
+             match wire::parse_frame(packet, &mut pos).ok_or(PacketError::Malformed)? {
+                 Frame::Data { sn, payload } => {
+                     ack_eliciting = true;
+-                    accepted &= self.accept_segment(wire::expand(sn, self.rcv_next), payload);
++                    accepted &= self.accept_segment(wire::expand(sn, self.rcv_next, wire::SEQUENCE_BITS), payload);
+                 }
+                 Frame::Ack(ack) => self.apply_ack(now_us, &ack),
+                 Frame::Ping => {
+@@ -837,7 +849,7 @@
+                 }
+                 Frame::Parity { first, count, index, length, payload } => {
+                     ack_eliciting = true;
+-                    self.on_parity(now_us, wire::expand(first, self.rcv_next), count, index, length, payload);
++                    self.on_parity(now_us, wire::expand(first, self.rcv_next, wire::PARITY_FIRST_BITS), count, index, length, payload);
+                 }
+             }
+         }
+@@ -883,7 +895,7 @@
+             // 抖动把包的先后打乱好几毫秒时也逐包确认：窗口头上那个晚到的包一到，发送方就要马上知道。
+             // 只看比后发的包晚了多久，不看晚了几个包：丢包多时到达间隔被拉长，按包数换算会把丢包当成抖动。
+             let jittery = self.late_arrival_ppm >= JITTERY_LATE_PPM && self.late_arrival_us >= JITTERY_LATE_US;
+-            let every = if self.arrival_gap_us < FAST_ARRIVAL_GAP_US || jittery { 1 } else { self.config.ack_every };
++            let every = if self.arrival_gap_us < FAST_ARRIVAL_GAP_US || jittery || eager_ack { 1 } else { self.config.ack_every };
+             if urgent || self.unacked_packets >= every {
+                 self.request_ack(now_us);
+             } else if !in_order {
+@@ -897,12 +909,12 @@
+ 
+     fn validate_ack(&self, ack: &wire::AckFrame<'_>) -> Result<(), PacketError> {
+         let expected = self.next_packet.saturating_sub(1);
+-        let largest = wire::expand(ack.largest, expected);
++        let largest = wire::expand(ack.largest, expected, wire::ACK_NUMBER_BITS);
+         // 确认没发过的包，要么是伪造，要么是状态错乱，都不能接受。
+         if largest >= self.next_packet {
+             return Err(PacketError::InvalidAck);
+         }
+-        if wire::expand(ack.una, self.snd_una) > self.snd_sent {
++        if wire::expand(ack.una, self.snd_una, wire::ACK_NUMBER_BITS) > self.snd_sent {
+             return Err(PacketError::InvalidAck);
+         }
+         if ack.first_run as u64 > largest + 1 {
+@@ -920,7 +932,7 @@
+     }
+ 
+     fn apply_ack(&mut self, now_us: u64, ack: &wire::AckFrame<'_>) {
+-        let largest = wire::expand(ack.largest, self.next_packet.saturating_sub(1));
++        let largest = wire::expand(ack.largest, self.next_packet.saturating_sub(1), wire::ACK_NUMBER_BITS);
+         let mut newest = None;
+         let mut high = largest;
+         let mut low = high + 1 - ack.first_run as u64;
+@@ -934,6 +946,7 @@
+         }
+ 
+         if let Some(packet) = newest {
++            self.largest_acked_sent_at = self.largest_acked_sent_at.max(packet.sent_at);
+             self.consecutive_timeouts = 0;
+             let elapsed = now_us.saturating_sub(packet.sent_at);
+             let rtt_us = elapsed.saturating_sub(ack.delay_us.min(elapsed / 2));
+@@ -960,7 +973,7 @@
+             self.largest_acked = Some(largest);
+         }
+ 
+-        let una = wire::expand(ack.una, self.snd_una);
++        let una = wire::expand(ack.una, self.snd_una, wire::ACK_NUMBER_BITS);
+         self.advance_una(una);
+         self.peer_una = self.peer_una.max(una);
+         self.peer_window = ack.window;
+@@ -1102,9 +1115,14 @@
+     }
+ 
+     fn loss_delay_us(&self) -> u64 {
+-        self.rtt.loss_delay_us() + self.reorder_delay_us
++        self.rtt.loss_delay_us() + self.reorder_delay_us.max(self.jitter_reorder_us())
+     }
+ 
++    /// 按实测抖动估计的乱序幅度。
++    fn jitter_reorder_us(&self) -> u64 {
++        self.congestion.rtt_jitter_us() * 3
++    }
++
+     fn segment_mut(&mut self, sn: u64) -> Option<&mut Segment> {
+         let index = sn.checked_sub(self.snd_una)?;
+         self.segments.get_mut(index as usize)
+@@ -1152,12 +1170,14 @@
+             self.parity_floor_until = now_us + PARITY_FLOOR_HOLD_US;
+         }
+         let delay = self.loss_delay_us();
++        // 抖动会把前后发出的包的到达顺序打乱：比它晚发出不到一个抖动幅度的包先到了，不能说明它丢了。
++        let window = self.jitter_reorder_us();
+         while let Some(&packet) = self.sent.front() {
+             if self.parity_hold_until(&packet).is_some_and(|at| at > now_us) {
+                 break;
+             }
+             let lost = packet.number < largest
+-                && (packet.number + self.packet_threshold <= largest || packet.sent_at + delay <= now_us);
++                && ((packet.number + self.packet_threshold <= largest && packet.sent_at + window <= self.largest_acked_sent_at) || packet.sent_at + delay <= now_us);
+             if !lost {
+                 break;
+             }
+@@ -1168,7 +1188,8 @@
+     }
+ 
+     fn declare_lost(&mut self, now_us: u64, packet: &SentPacket) {
+-        self.bundle_until = now_us + BUNDLE_HOLD_US;
++        let srtt = self.rtt.srtt_us();
++        self.bundle_until = now_us + if srtt == 0 { BUNDLE_HOLD_US } else { (srtt * BUNDLE_HOLD_RTTS).min(BUNDLE_HOLD_US) };
+         let run = if packet.number == self.last_lost_packet + 1 { 1_000_000 } else { 0 };
+         self.lost_run_ppm = self.lost_run_ppm - self.lost_run_ppm / LOST_RUN_SMOOTHING + run / LOST_RUN_SMOOTHING;
+         self.last_lost_packet = packet.number;
+@@ -1397,6 +1418,7 @@
+         if self.parity_pending >= self.parity_target {
+             return Some(0);
+         }
++        // 所有数据都发完了：后面不会再有新分片，校验包不用等。
+         (self.snd_sent >= self.new_data_limit()).then_some(self.parity_flush_at)
+     }
+ 
+@@ -1412,9 +1434,18 @@
+         }
+         // 晚到的包和丢掉的包一样堵窗口，校验包都能修。
+         let fast = self.config.recovery_policy == RecoveryPolicy::Fast;
+-        let warmup = fast && self.loss_samples < BUNDLE_WARMUP_PACKETS;
++        // 开头见过丢包、窗口又装不满路径时，校验按速度优先的余量给：这时还不知道路径有没有余量，但等测出来，
++        // 第二轮里丢的包要等一个往返的重传，窗口白白卡住。没见过丢包时不发，干净路径不多花字节。
++        let coverable = self.config.send_window as u64 <= parity::MAX_COVERED * HEAVY_PARITY_COVERAGE_FACTOR;
++        let early = !fast
++            && coverable
++            && self.congestion.is_starting()
++            && self.loss_ppm > 0
++            && self.congestion.window_bound_path()
++            && !self.limiter_suspected();
++        let warmup = (fast && self.loss_samples < BUNDLE_WARMUP_PACKETS) || early;
+         let floor = if self.last_heard < self.parity_floor_until { PARITY_MIN_LOSS_PPM } else { 0 };
+-        let holes = if warmup { 50_000 } else { (self.loss_ppm + self.late_ppm).max(floor) };
++        let holes = if early { (self.loss_ppm + self.late_ppm).max(EARLY_PARITY_LOSS_PPM) } else if warmup { 50_000 } else { (self.loss_ppm + self.late_ppm).max(floor) };
+         let useful = (PARITY_MIN_LOSS_PPM..=PARITY_MAX_LOSS_PPM).contains(&holes);
+         // 量到了上限（还没确认也算）、丢得又远多于随机丢包：丢的是限速器挡下的包，校验包只会占掉限速的额度。
+         let limiter_losses = self.congestion.rate_cap() > 0
+@@ -1429,8 +1460,7 @@
+         let spare = warmup || self.congestion.window_is_the_limit();
+         // 窗口受限、路径还有余量时，自动策略按速度优先的余量发校验：这时校验不挤占数据，只多花流量。
+         // 一个校验包只覆盖最近 64 个分片，窗口比覆盖范围大很多时，大部分空洞修不到，多发也帮不上。
+-        let coverable = self.config.send_window as u64 <= parity::MAX_COVERED * HEAVY_PARITY_COVERAGE_FACTOR;
+-        let heavy = fast || (spare && coverable && self.congestion.window_has_room());
++        let heavy = fast || early || (spare && coverable && self.congestion.window_has_room());
+         let interval = if heavy { parity::fast_repair_interval(holes, spare) } else { parity::repair_interval(holes, spare) };
+         // 为抖动多发的校验按比例直接给，不再乘余量：比例由 `jitter_parity_ppm` 逐轮试出来。
+         let share = self.jitter_parity_ppm.min(500_000) as u64;
+@@ -1460,7 +1490,9 @@
+             && self.congestion.min_rtt_us() >= JITTER_PARITY_MIN_RTT_US
+         {
+             self.jitter_parity_ceiling = (self.jitter_parity_ceiling + JITTER_CEILING_RELAX_PPM).min(1_000_000);
+-            self.jitter_parity_ppm = (self.jitter_parity_ppm + JITTER_PARITY_STEP_PPM).min(self.jitter_late_ppm).min(self.jitter_parity_ceiling);
++            // 上限除了晚到的比例，还跟丢包率走：路径有余量时，修复等得越短，窗口每轮卡得越少。
++            let wanted = self.jitter_late_ppm.max((self.loss_ppm + self.late_ppm).saturating_mul(LOSS_PARITY_FACTOR).min(LOSS_PARITY_MAX_PPM));
++            self.jitter_parity_ppm = (self.jitter_parity_ppm + JITTER_PARITY_STEP_PPM).min(wanted).min(self.jitter_parity_ceiling);
+         }
+     }
+ 
+@@ -1493,14 +1525,33 @@
+         self.finish_parity_group(now_us);
+         self.stats.parity_packets += 1;
+         used
++    }
++
++    /// 成片地丢、或者量到了上限：丢的多半是瓶颈或限速器挡下的包，不是随机丢包，也不是乱序。
++    fn limiter_suspected(&self) -> bool {
++        self.lost_run_ppm >= PARITY_LOST_RUN_PPM || self.congestion.rate_cap() > 0
+     }
+ 
++    /// 路径一个往返能装下半个窗口以上、又见过丢包：这时窗口往前走的每一刻都值钱，请对端逐包确认。
++    /// 干净路径照旧每两个包确认一次，窄带线路也不受影响，那里确认本身就占不少流量。
++    fn wants_eager_acks(&self) -> bool {
++        let floor = if self.last_heard < self.parity_floor_until { PARITY_MIN_LOSS_PPM } else { 0 };
++        self.config.recovery_policy != RecoveryPolicy::Lean
++            && self.congestion.window_bound_path()
++            && !self.limiter_suspected()
++            && (self.loss_ppm + self.late_ppm).max(floor) >= PARITY_MIN_LOSS_PPM
++    }
++
+     fn should_duplicate(&self) -> bool {
+         if self.config.recovery_policy == RecoveryPolicy::Lean {
+             return false;
+         }
+         let threshold = if self.parity_interval().is_some() { DUPLICATE_WITH_PARITY_LOSS_PPM } else { DUPLICATE_LOSS_PPM };
+-        self.congestion.random_loss_ppm() >= threshold
++        // 窗口卡住时，启动阶段还量不到随机丢包率，先按总丢包率算：这时重传再丢一次，整个窗口又要多等一个往返。
++        // 成片地丢、或者量到了上限，丢的多半是限速器挡下的包，再发一份只会丢得更多。
++        let unmeasured = self.congestion.is_starting() && self.congestion.window_bound_path() && !self.limiter_suspected();
++        let loss = if unmeasured { self.loss_ppm } else { self.congestion.random_loss_ppm() };
++        loss >= threshold
+             && !self.congestion.is_rate_limited()
+             && self.duplicates.len() < MAX_DUPLICATES_QUEUED
+             && self.snd_sent >= self.new_data_limit()
+@@ -1566,7 +1617,7 @@
+         }
+ 
+         let number = self.next_packet;
+-        let header = wire::write_header(out, number);
++        let header = wire::write_header(out, number, self.wants_eager_acks());
+         let mut used = header;
+         // 有数据要发时顺带确认，省一个纯确认包。
+         if self.ack_pending {
+@@ -1653,7 +1704,9 @@
+             segments[count] = sn;
+             count += 1;
+         }
+-        let bundling = self.loss_ppm >= BUNDLE_LOSS_PPM || now_us < self.bundle_until || self.loss_samples < BUNDLE_WARMUP_PACKETS;
++        let warmup_packets = if self.config.recovery_policy == RecoveryPolicy::Fast { BUNDLE_WARMUP_PACKETS } else { AUTO_BUNDLE_WARMUP_PACKETS };
++        let warmup = self.loss_samples < warmup_packets;
++        let bundling = self.loss_ppm >= BUNDLE_LOSS_PPM || now_us < self.bundle_until || warmup;
+         // 副本和原件同一时刻发出，成片丢包时会一起丢；这时再在后面的包里捎带一份，把时间错开。
+         let burst_losses = self.lost_run_ppm >= PARITY_LOST_RUN_PPM;
+         if self.config.recovery_policy != RecoveryPolicy::Lean && count > 0 && bundling && (!small_copied || burst_losses) {
+--- a/src/wire.rs	2026-11-01 15:18:02
++++ b/src/wire.rs	2026-11-01 20:27:56
+@@ -1,20 +1,29 @@
+ //! 线上格式。第 4 步之前可以随时调整，不做兼容承诺。
+ //!
+-//! 包：`[版本 1][包号低 32 位 4]` 后跟若干帧。
++//! 包：`[版本 3 位][逐包确认 1 位][包号低 20 位]`，共 3 字节，后跟若干帧。
+ //! DATA：`[1][分片序号 4][长度 2][内容]`
+-//! ACK： `[2][最大包号 4][确认延迟 2][una 4][窗口 2][首段长度 2][段数 1]` 后跟 `[间隔 2][长度 2]`
++//! ACK： `[2][最大包号低 24 位 3][确认延迟 2][una 低 24 位 3][窗口 2][首段长度 2][段数 1]` 后跟 `[间隔 2][长度 2]`
+ //! PING：`[3]`
+-//! PARITY：`[4][首分片序号 4][覆盖分片数 1][校验包序号 1][长度校验 2][校验内容]`，内容一直到包尾，所以只能是最后一帧。
++//! PARITY：`[4][首分片序号低 16 位 2][覆盖分片数 1][校验包序号 1][长度校验 2][校验内容]`，内容一直到包尾，所以只能是最后一帧。
+ //!
+ //! 每次发送都用新包号，重传也不例外：这样 RTT 没有歧义，第 4 步也能用包号做加密 nonce。
+ 
+ use crate::parity::{MAX_COVERED, SYMBOLS};
+ 
+-pub(crate) const VERSION_BYTE: u8 = 0xA0;
+-pub(crate) const PACKET_HEADER_LEN: usize = 5;
++const VERSION_BITS: u8 = 0xA0;
++const VERSION_MASK: u8 = 0xE0;
++/// 首字节的这一位：发送方请对端逐包确认。
++const EAGER_ACK_FLAG: u8 = 0x10;
++pub(crate) const PACKET_HEADER_LEN: usize = 3;
+ pub(crate) const DATA_HEADER_LEN: usize = 7;
+-pub(crate) const PARITY_HEADER_LEN: usize = 9;
+-const ACK_FIXED_LEN: usize = 16;
++pub(crate) const PARITY_HEADER_LEN: usize = 7;
++const ACK_FIXED_LEN: usize = 14;
++/// 线上序号的位数。接收方取离期望值最近的那个，所以差距不能超过一半：
++/// 包号的差距受发送窗口限制，确认和校验覆盖的序号都落在窗口内。
++pub(crate) const PACKET_NUMBER_BITS: u32 = 20;
++pub(crate) const ACK_NUMBER_BITS: u32 = 24;
++pub(crate) const PARITY_FIRST_BITS: u32 = 16;
++pub(crate) const SEQUENCE_BITS: u32 = 32;
+ const ACK_RANGE_LEN: usize = 4;
+ /// 解析时接受的区间数上限。
+ pub(crate) const MAX_ACK_RANGES: usize = 32;
+@@ -71,15 +80,19 @@
+     take(packet, pos, 2).map(|bytes| u16::from_be_bytes([bytes[0], bytes[1]]))
+ }
+ 
++fn take_u24(packet: &[u8], pos: &mut usize) -> Option<u32> {
++    take(packet, pos, 3).map(|bytes| u32::from_be_bytes([0, bytes[0], bytes[1], bytes[2]]))
++}
++
+ fn take_u32(packet: &[u8], pos: &mut usize) -> Option<u32> {
+     take(packet, pos, 4).map(|bytes| u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+ }
+ 
+-pub(crate) fn parse_header(packet: &[u8]) -> Option<u32> {
+-    if packet.len() < PACKET_HEADER_LEN || packet[0] != VERSION_BYTE {
++pub(crate) fn parse_header(packet: &[u8]) -> Option<(u32, bool)> {
++    if packet.len() < PACKET_HEADER_LEN || packet[0] & VERSION_MASK != VERSION_BITS {
+         return None;
+     }
+-    Some(u32::from_be_bytes([packet[1], packet[2], packet[3], packet[4]]))
++    Some((u32::from_be_bytes([0, packet[0] & 0x0F, packet[1], packet[2]]), packet[0] & EAGER_ACK_FLAG != 0))
+ }
+ 
+ pub(crate) fn parse_frame<'a>(packet: &'a [u8], pos: &mut usize) -> Option<Frame<'a>> {
+@@ -93,9 +106,9 @@
+             Some(Frame::Data { sn, payload: take(packet, pos, len)? })
+         }
+         FRAME_ACK => {
+-            let largest = take_u32(packet, pos)?;
++            let largest = take_u24(packet, pos)?;
+             let delay_us = take_u16(packet, pos)? as u64 * ACK_DELAY_UNIT_US;
+-            let una = take_u32(packet, pos)?;
++            let una = take_u24(packet, pos)?;
+             let window = take_u16(packet, pos)? as u32;
+             let first_run = take_u16(packet, pos)? as u32;
+             let count = *take(packet, pos, 1)?.first()? as usize;
+@@ -107,7 +120,7 @@
+         }
+         FRAME_PING => Some(Frame::Ping),
+         FRAME_PARITY => {
+-            let first = take_u32(packet, pos)?;
++            let first = take_u16(packet, pos)? as u32;
+             let count = *take(packet, pos, 1)?.first()?;
+             let index = *take(packet, pos, 1)?.first()?;
+             let length = take_u16(packet, pos)?;
+@@ -121,9 +134,11 @@
+     }
+ }
+ 
+-pub(crate) fn write_header(out: &mut [u8], packet_number: u64) -> usize {
+-    out[0] = VERSION_BYTE;
+-    out[1..PACKET_HEADER_LEN].copy_from_slice(&(packet_number as u32).to_be_bytes());
++pub(crate) fn write_header(out: &mut [u8], packet_number: u64, eager_ack: bool) -> usize {
++    let [_, high, middle, low] = (packet_number as u32).to_be_bytes();
++    out[0] = VERSION_BITS | if eager_ack { EAGER_ACK_FLAG } else { 0 } | (high & 0x0F);
++    out[1] = middle;
++    out[2] = low;
+     PACKET_HEADER_LEN
+ }
+ 
+@@ -139,10 +154,10 @@
+ pub(crate) fn write_parity(out: &mut [u8], used: usize, first: u64, count: u8, index: u8, length: u16, payload: &[u8]) -> usize {
+     let end = used + PARITY_HEADER_LEN;
+     out[used] = FRAME_PARITY;
+-    out[used + 1..used + 5].copy_from_slice(&(first as u32).to_be_bytes());
+-    out[used + 5] = count;
+-    out[used + 6] = index;
+-    out[used + 7..end].copy_from_slice(&length.to_be_bytes());
++    out[used + 1..used + 3].copy_from_slice(&(first as u16).to_be_bytes());
++    out[used + 3] = count;
++    out[used + 4] = index;
++    out[used + 5..end].copy_from_slice(&length.to_be_bytes());
+     out[end..end + payload.len()].copy_from_slice(payload);
+     end + payload.len()
+ }
+@@ -172,11 +187,11 @@
+     let first_run = (first_high - first_low + 1).min(u16::MAX as u64);
+     let header = used;
+     out[header] = FRAME_ACK;
+-    out[header + 1..header + 5].copy_from_slice(&(first_high as u32).to_be_bytes());
+-    out[header + 5..header + 7].copy_from_slice(&((delay_us / ACK_DELAY_UNIT_US).min(u16::MAX as u64) as u16).to_be_bytes());
+-    out[header + 7..header + 11].copy_from_slice(&(una as u32).to_be_bytes());
+-    out[header + 11..header + 13].copy_from_slice(&(window.min(u16::MAX as u32) as u16).to_be_bytes());
+-    out[header + 13..header + 15].copy_from_slice(&(first_run as u16).to_be_bytes());
++    out[header + 1..header + 4].copy_from_slice(&(first_high as u32).to_be_bytes()[1..]);
++    out[header + 4..header + 6].copy_from_slice(&((delay_us / ACK_DELAY_UNIT_US).min(u16::MAX as u64) as u16).to_be_bytes());
++    out[header + 6..header + 9].copy_from_slice(&(una as u32).to_be_bytes()[1..]);
++    out[header + 9..header + 11].copy_from_slice(&(window.min(u16::MAX as u32) as u16).to_be_bytes());
++    out[header + 11..header + 13].copy_from_slice(&(first_run as u16).to_be_bytes());
+ 
+     let mut cursor = header + ACK_FIXED_LEN;
+     let mut count = 0usize;
+@@ -201,19 +216,19 @@
+         count += 1;
+         previous_low = low;
+     }
+-    out[header + 15] = count as u8;
++    out[header + 13] = count as u8;
+     cursor
+ }
+ 
+-/// 把线上的低 32 位还原成完整序号，取离期望值最近的那个。
+-pub(crate) fn expand(truncated: u32, expected: u64) -> u64 {
+-    const WINDOW: u64 = 1 << 32;
+-    const HALF: u64 = WINDOW / 2;
+-    let candidate = (expected & !(WINDOW - 1)) | truncated as u64;
+-    if candidate + HALF <= expected {
+-        candidate + WINDOW
+-    } else if candidate > expected + HALF && candidate >= WINDOW {
+-        candidate - WINDOW
++/// 把线上的低 `bits` 位还原成完整序号，取离期望值最近的那个。
++pub(crate) fn expand(truncated: u32, expected: u64, bits: u32) -> u64 {
++    let window = 1u64 << bits;
++    let half = window / 2;
++    let candidate = (expected & !(window - 1)) | truncated as u64;
++    if candidate + half <= expected {
++        candidate + window
++    } else if candidate > expected + half && candidate >= window {
++        candidate - window
+     } else {
+         candidate
+     }

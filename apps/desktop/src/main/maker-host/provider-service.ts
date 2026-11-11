@@ -79,6 +79,8 @@ export interface ProviderServiceDeps {
   /** Read once per view; exact agent/provider/model keys, never written into the catalog. */
   getModelContextLimits?: () => Readonly<Record<string, number>>;
   projectProvider?: (provider: ProviderView) => ProviderView;
+  /** Organization branding only; local name/removal preferences must not leak into managed providers. */
+  getOrganizationProviderLogoKind?: (provider: ProviderView) => ProviderView['logoKind'];
   getProviderPresentation?: (providerId: string) => { name?: string; removed?: boolean; logoKind?: ProviderView['logoKind'] };
   /** Exact-route user budget/price overrides keep independent rows. */
   hasModelAliasOverride?: (providerId: string, agent: AgentKind, modelId: string) => boolean;
@@ -241,6 +243,7 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
     }).map((provider) => ({
       ...(subscriptionInfo.get(provider.id) ? { subscriptionAccount: subscriptionInfo.get(provider.id) } : {}),
       ...provider, ...(provider.source === 'builtin' ? deps.getProviderPresentation?.(provider.id) ?? {} : {}), ...(accountInfo.get(provider.id) ? { openAiAccount: accountInfo.get(provider.id) } : {}),
+      ...(provider.source === 'organization' ? { logoKind: deps.getOrganizationProviderLogoKind?.(provider) } : {}),
       // Deletion disconnects first. A live binding wins over a stale removed flag if
       // restoring display preferences failed after authentication was committed.
       ...(provider.connected ? { removed: false } : {}),

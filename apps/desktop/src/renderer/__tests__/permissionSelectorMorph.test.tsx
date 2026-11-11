@@ -311,11 +311,15 @@ describe('PermissionSelector triggerVariant', () => {
     expect(screen.getByRole('button', { name: '权限模式 · chat:默认权限' })).toBeTruthy();
   });
 
-  it('field 形态选中危险档时只染文字,不改底色', () => {
-    renderSelector({ triggerVariant: 'field', permissionMode: 'bypassPermissions' });
-    const cls = getTrigger().className;
-    expect(cls).toContain('text-[var(--perm-bypass-selected-text)]');
-    // 底仍是输入面,不因危险档换底色
-    expect(cls).toContain('bg-[var(--settings-input-bg)]');
+  // 用户要求切换前直接看到差别，不再依赖悬停提示；复用真实选择器验证。
+  it('shows every mode description before selection', async () => {
+    renderSelector({ triggerVariant: 'field' });
+    fireEvent.click(getTrigger());
+    await screen.findByRole('listbox');
+    for (const mode of PERMISSION_MODES) {
+      const option = screen.getByRole('option', { name: mode.displayName });
+      expect(option.textContent).toContain(mode.description);
+      expect(option.getAttribute('aria-description')).toBe(mode.description);
+    }
   });
 });

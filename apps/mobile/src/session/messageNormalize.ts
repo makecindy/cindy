@@ -27,6 +27,9 @@ import {
 } from '@cindy/maker-shared/agent-task';
 import { isSyntheticTriggerText, parseInputHandoffEndRecord } from '@cindy/maker-shared/synthetic-trigger';
 import {
+  asyncQuestionReplyDisplayText, isAnsweredAsyncQuestionClientId, isAsyncQuestionReplyClientId,
+} from '@cindy/maker-shared/interaction';
+import {
   isHookSchedulerOrigin,
   readMessageSourceDevice,
   readMessageSourceGroup,
@@ -52,7 +55,7 @@ import {
   parseOrcaPersistedMessage,
   type OrcaCollabCard,
 } from '@/session/orcaCollab';
-import { isMobileImPlatform, type MobileImPlatform } from '@/session/messageSourceLabels';
+import { isMobileImPlatform, orcaAutoBridgeBatchCount, type MobileImPlatform } from '@/session/messageSourceLabels';
 import {
   parseMobilePersistedSessionReferenceMetadata,
   type MobilePersistedSessionReferenceMetadata,
@@ -523,6 +526,7 @@ export function normalizeRemoteMessages(
       const reportCard = parseOrcaPersistedMessage(
         message.content,
         orcaOrigin?.kind === 'orca' ? readString(orcaOrigin.senderLabel) ?? undefined : undefined,
+        orcaAutoBridgeBatchCount(orcaOrigin),
       );
       if (reportCard) {
         result.push({
@@ -537,7 +541,7 @@ export function normalizeRemoteMessages(
           orcaCard: reportCard,
           align: 'agent',
           createdAt: message.createdAt,
-          ...readSessionOrigin(message),
+          ...(orcaAutoBridgeBatchCount(orcaOrigin) ? {} : readSessionOrigin(message)),
         });
         continue;
       }
@@ -604,7 +608,26 @@ export function normalizeRemoteMessages(
       });
       continue;
     }
-    const rawBody = userContent ? userContent.text : contentToPreview(message.content);
+    // The question card already shows this answer: the row keeps its place in the
+    // timeline (like the hidden instruction rows above) without a second copy as a bubble.
+    if (userContent && isAnsweredAsyncQuestionClientId(message.clientId)) {
+      result.push({
+        key: messageNormalizeKey(message),
+        source: message,
+        kind: 'user',
+        role: message.role,
+        label: 'user',
+        body: '',
+        isSyntheticTrigger: true,
+        align: 'user',
+        createdAt: message.createdAt,
+      });
+      continue;
+    }
+    // Replies saved before the readable copy existed hold the text sent to the model.
+    const rawBody = userContent
+      ? (isAsyncQuestionReplyClientId(message.clientId) ? asyncQuestionReplyDisplayText(userContent.text) : userContent.text)
+      : contentToPreview(message.content);
     const hookSource = message.role === 'user' ? readHookSource(message, rawBody) : undefined;
     // /goal 裁决块只给 Desktop 驱动续跑,与 Desktop 一致只在显示层剥掉(原文仍在 source)。
     // 本机 IM 落库的就是用户原文:正文保持完整落库内容,分叉 / 回退据此恢复草稿。

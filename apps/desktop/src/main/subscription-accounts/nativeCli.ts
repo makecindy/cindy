@@ -36,6 +36,27 @@ export async function loginLegacyCodexAccount(signal: AbortSignal): Promise<void
   }
 }
 
+/** Imported connections keep their original revocation checks and native login lifecycle. */
+export async function readLegacyCodexProviderAccount(providerId: string, directory: string) {
+  const { codexAccountState } = await import('../maker-host/codex-account-auth.desktop.js');
+  const state = codexAccountState(providerId);
+  return state.authenticated ? readNativeAccount('openai', directory) : state;
+}
+
+export async function loginLegacyCodexProviderAccount(providerId: string, signal: AbortSignal): Promise<void> {
+  const { loginCodexAccount, cancelCodexAccountLogin } = await import('../maker-host/codex-account-auth.desktop.js');
+  if (signal.aborted) throw new Error('login_cancelled');
+  const cancel = () => cancelCodexAccountLogin(providerId);
+  signal.addEventListener('abort', cancel, { once: true });
+  try {
+    const result = await loginCodexAccount(providerId, () => !signal.aborted);
+    if (signal.aborted) throw new Error('login_cancelled');
+    if (!result.ok) throw new Error(result.reason ?? 'login_failed');
+  } finally {
+    signal.removeEventListener('abort', cancel);
+  }
+}
+
 function codexProfileEnv(directory: string): Record<string, string> {
   const env = { ...cleanProcessEnv() };
   const replaced = new Set([

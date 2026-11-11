@@ -1,3 +1,4 @@
+import './personalBuildMonitor.js';
 import { configureWindowsAtomicRename } from './windowsAtomicRename.js';
 import './personalLaunchCwd.js';
 // Entry: Electron startup → bootstrap-electron.ts (dynamic import).
@@ -95,6 +96,7 @@ ensureSystemBinPathForMachineId();
 // 这里同步 import 不走动态 import,确保 strip 在任何 module top-level 代码读
 // process.env 之前执行。
 import { stripSensitiveAnthropicEnv } from '@cindy/maker-core';
+import { stripAnthropicEnvPreservingImportDirectory } from './provider-import/local/sourceEnvironment.js';
 
 // device-link 远程控制:必须在任何 ipcMain.handle 调用之前 monkey-patch,
 // 才能捕获到全量 channel → handler 映射(供被控端 dispatch 远程 invoke)。
@@ -102,7 +104,8 @@ import { stripSensitiveAnthropicEnv } from '@cindy/maker-core';
 // 所有 handler)之前完成。
 import { installInvokeCapture } from './device-link/invoke-registry.js';
 
-const stripped = stripSensitiveAnthropicEnv();
+// Retain only the read-only importer's source directory, never engine credentials.
+const stripped = stripAnthropicEnvPreservingImportDirectory(stripSensitiveAnthropicEnv);
 if (stripped.length > 0) {
   stderr.write(`[cindy] stripped user-level Anthropic env: ${stripped.join(', ')}\n`);
 }

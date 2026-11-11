@@ -16,6 +16,7 @@ import {
   describeMessageSourceSender,
   formatSourceRef,
   messageSourceSenderFromMeta,
+  orcaAutoBridgeBatchCount,
   readMessageSourceGroup,
   readMessageSourceDevice,
   promptSafeSourceName,
@@ -105,13 +106,6 @@ export interface BuildHandoffOptions {
    * 找不到时可以不带 session_ids 再搜一次,但命中只能当未经核实的历史、先向用户确认。
    */
   companionSessionIdsTruncated?: boolean;
-  /**
-   * 伙伴工作记忆账本的渲染段(botWorkingMemory.renderWorkingMemory):承诺、纠正、
-   * 等待、线索。它是代码摘录之外唯一的语义交接载体,排在提要 / 近期对话之后、检索指引之前,
-   * 与检索指引同属硬截断时必须整段保住的尾部;
-   * 非伙伴主对话或没有账本时不传。
-   */
-  workingMemory?: string | null;
 }
 
 /** 最近多少个用户轮次进入逐字区(其余进单行提要区)。 */
@@ -263,11 +257,17 @@ export function describeHandoffUserSource(message: Pick<HandoffSourceMessage, 'c
   } else if (origin?.kind === 'scheduler') {
     parts.push(`由定时任务${formatSourceRef(origin.scheduleName, 'schedule_id', origin.scheduleId)} 触发`);
   } else if (origin?.kind === 'orca') {
-    const from = orcaSourceOf(message.content) === 'lead' ? 'Lead' : 'Worker';
-    const label = typeof origin.senderLabel === 'string' ? origin.senderLabel : undefined;
-    // 'Lead' / 'Worker' 是查不到 role 时的占位, 不当名字写。
-    const name = label && label !== 'Lead' && label !== 'Worker' && from === 'Worker' ? label : undefined;
-    parts.push(`来自 Orca ${from}${formatSourceRef(name, 'session_id', origin.senderSessionId)}`);
+    const batchCount = orcaAutoBridgeBatchCount(origin);
+    if (batchCount !== undefined) {
+      // 批次没有单一发送方：不拼首个 Worker 的 session_id，避免把整批归到它。
+      parts.push(`来自 Orca 系统的 ${batchCount} 条 Worker 报告`);
+    } else {
+      const from = orcaSourceOf(message.content) === 'lead' ? 'Lead' : 'Worker';
+      const label = typeof origin.senderLabel === 'string' ? origin.senderLabel : undefined;
+      // 'Lead' / 'Worker' 是查不到 role 时的占位, 不当名字写。
+      const name = label && label !== 'Lead' && label !== 'Worker' && from === 'Worker' ? label : undefined;
+      parts.push(`来自 Orca ${from}${formatSourceRef(name, 'session_id', origin.senderSessionId)}`);
+    }
   } else {
     // 与 `[消息来源]` 说明共用同一句描述（措辞与 ID 一致，伙伴也带来源任务 session_id）。
     const sender = messageSourceSenderFromMeta(meta);
@@ -696,18 +696,11 @@ const RECALL_SECTION_HEADING = '== Recalling earlier history';
  */
 export const COMPANION_SESSION_IDS_LIMIT = 50;
 
-/**
- * 伙伴工作记忆账本段的标题前缀(botWorkingMemory.WORKING_MEMORY_HEADING;这里不引那个模块,
- * 交接构造保持纯函数)。账本段排在检索指引之前,硬截断时从它起整段保住:账本本身有 6K 预算,
- * 加上检索指引与结束标记仍远小于硬上限,正文总有余量。
- */
-const WORKING_MEMORY_SECTION_HEADING = '== Working memory (host-maintained summary';
-
 function splitMandatoryHandoffTail(text: string, opts: BuildHandoffOptions): {
   body: string;
   tail: string;
 } {
-  const starts = [WORKING_MEMORY_SECTION_HEADING, RETRIEVAL_SECTION_HEADING, RECALL_SECTION_HEADING]
+  const starts = [RETRIEVAL_SECTION_HEADING, RECALL_SECTION_HEADING]
     .map((heading) => text.lastIndexOf(heading))
     .filter((at) => at >= 0);
   if (starts.length > 0) {
@@ -730,8 +723,8 @@ function capPreservingTerminator(text: string, opts: BuildHandoffOptions): strin
   const separator = '\n\n';
   const room = HANDOFF_HARD_CAP - tail.length - separator.length;
   if (room <= 0) return tail.slice(0, HANDOFF_HARD_CAP);
-  // The latest request and outcome outrank the old ledger/index. Previously slicing the
-  // prefix could discard the entire recent conversation when the working-memory tail grew.
+  // The latest request and outcome outrank the old index. Previously slicing the
+  // prefix could discard the entire recent conversation when the mandatory tail grew.
   const recentAt = Math.max(body.lastIndexOf('== Recent conversation =='), body.lastIndexOf('== Conversation while you were away =='));
   if (recentAt >= 0 && room > 1000) {
     const prefix = excerpt(body.slice(0, recentAt).trimEnd(), Math.min(3000, Math.floor(room / 3)));
@@ -886,11 +879,6 @@ function assembleHandoffText(
     // 切走后一条消息都没发就切回:显式说明,避免引擎误以为漏了记录。
     sections.push('== No new messages while you were away ==');
   }
-
-  // 工作记忆账本:宿主维护的语义状态,逐字段已自带标题与"不是授权"说明。放在提要 / 近期
-  // 对话之后、检索指引之前:它和检索指引、结束标记一样属于硬截断时必须整段保住的尾部
-  // (splitMandatoryHandoffTail 从它的标题起算),正文再长也只会裁掉前面的摘录。
-  if (opts.workingMemory) sections.push(opts.workingMemory);
 
   if (opts.sessionId && opts.companion) {
     // 伙伴主对话的"按需回忆"口径。history 工具不传 session_ids 时搜的是本机账号下的全部

@@ -107,7 +107,9 @@ export function createCodexPickerHarness(input: {
   const beforeSend = vm.runInContext(closure('pendingAgentSwitchApplyHolder'), context) as (id: string) => Promise<{ release(): void }>;
   const transactionDeps: MakerSendTransactionDeps = {
     statDirectory: async () => ({ isDirectory: () => true }),
-    getSession: id => maker.getSession(id), closeSession: id => maker.closeSession(id), getSessionMeta: id => maker.getSessionMeta(id),
+    getSession: id => maker.getSession(id), closeSession: id => maker.closeSession(id),
+    closeSessionIfCurrent: async id => { const s = maker.getSession(id); if (s) await maker.closeSessionIfCurrent(s, 'runtime-refresh'); },
+    getSessionMeta: id => maker.getSessionMeta(id),
     preflightBotRuntimeResources: asyncNoop, ensureRemoteReadyForSessionStart: asyncNoop,
     checkWorkDirExists: async () => true, readSessionWorkingDirFromDb: async () => workingDir,
     readWorkingDirectoryRecoveryCreateOpts: async id => {

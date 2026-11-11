@@ -590,6 +590,7 @@ interface Harness {
 function makeHarness(opts?: {
   runnerImpl?: (s: Schedule, ctx: FireContext) => Promise<FireResult>;
   isManagedWorkspaceDir?: (dir: string) => boolean;
+  validateModelSelection?: (schedule: Schedule, previous?: Schedule) => Promise<void>;
   validateTargetSession?: (
     targetSessionId: string,
     operation: 'create' | 'update' | 'fire',
@@ -628,6 +629,7 @@ function makeHarness(opts?: {
     tickIntervalMs: 60_000_000, // effectively disabled; tests call tick() manually
     isManagedWorkspaceDir: opts?.isManagedWorkspaceDir,
     validateTargetSession: opts?.validateTargetSession,
+    validateModelSelection: opts?.validateModelSelection,
     passive: opts?.passive,
     maxConcurrentRuns: opts?.maxConcurrentRuns,
     runStallMs: opts?.runStallMs,
@@ -822,6 +824,27 @@ describe('Scheduler', () => {
     // 空白串 workingDir 等同未传 → dialogue
     const blankDir = await h.scheduler.create({ ...baseInput, workingDir: '  ' });
     expect(blankDir.workspaceKind).toBe('dialogue');
+  });
+
+  // Unit: model admission must fail before persistence, not at the first timer fire.
+  // Previous target validation covered Harness changes, not model/location tuples.
+  it('keeps storage unchanged when model admission rejects create or update', async () => {
+    const validateModelSelection = vi.fn(async (candidate: Schedule, previous?: Schedule) => {
+      if (candidate.model === 'unavailable') throw new Error('invalid model location');
+      if (previous) expect(previous.model).toBe('available');
+    });
+    const h = makeHarness({ validateModelSelection });
+    await expect(h.scheduler.create({ ...baseInput, model: 'unavailable' }))
+      .rejects.toThrow('invalid model location');
+    expect(h.storage.schedules.size).toBe(0);
+    const saved = await h.scheduler.create({ ...baseInput, model: 'available' });
+    await expect(h.scheduler.update(saved.id, { model: 'unavailable' }))
+      .rejects.toThrow('invalid model location');
+    expect(await h.storage.get(saved.id)).toEqual(saved);
+    await h.scheduler.update(saved.id, { name: 'renamed' });
+    expect(validateModelSelection).toHaveBeenLastCalledWith(
+      expect.objectContaining({ name: 'renamed', model: 'available' }), saved);
+    expect(h.fireCalls).toHaveLength(0);
   });
 
   it('passes the complete candidate Harness to host validation before saving and firing', async () => {

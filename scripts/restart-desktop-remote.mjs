@@ -29,7 +29,8 @@ const rootDir = path.resolve(__dirname, '..');
 const gracefulTimeoutMs = 3000;
 const forceTimeoutMs = 5000;
 const pollIntervalMs = 150;
-const startupReadyTimeoutMs = 120_000;
+// Includes the cold Forge/Vite build as well as window/auth/database startup.
+const startupReadyTimeoutMs = 180_000;
 export const ISOLATED_AUTH_LAUNCH_PROOF_FILE = '.isolated-auth-launch-proof.json';
 const isolatedAuthLaunchProofTtlMs = 10 * 60_000;
 const forceKillLabel = process.platform === 'win32' ? 'taskkill /F /T' : 'kill -9';
@@ -246,6 +247,12 @@ export function partitionDesktopDevProcesses(processes, ownRootDir, checkoutPath
     (commandBelongsToCheckout(proc.command, ownRootDir, checkoutPaths) ? targets : preserved).push(proc);
   }
   return { targets, preserved };
+}
+// Personal smoke callers must refuse an occupied checkout, irrespective of userData.
+export const PERSONAL_SAFE_ISOLATED_START = 1;
+export function assertNoRestartTargets(processes, ownRootDir, checkoutPaths = []) {
+  const { targets } = partitionDesktopDevProcesses(processes, ownRootDir, checkoutPaths);
+  if (targets.length) throw new Error(`Isolated startup refuses occupied checkout (${targets.length} process(es)); no process stopped or cache cleared`);
 }
 
 function run(command, args, options = {}) {
@@ -1144,7 +1151,12 @@ function devEnvEntries(env) {
     ['XDT_SIMULATE_ARM64_TRANSLATION', env.XDT_SIMULATE_ARM64_TRANSLATION],
     // A long-lived Terminal can retain a previous smoke run's environment.
     // Override its value even when this invocation did not request the smoke.
-    ['CINDY_CUA_SMOKE', ['1', 'cursor-goal'].includes(env.CINDY_CUA_SMOKE) ? env.CINDY_CUA_SMOKE : '0'],
+    ['CINDY_CUA_SMOKE', [
+      '1',
+      'cursor-goal',
+      'desktop-pointer',
+      'folder-picker',
+    ].includes(env.CINDY_CUA_SMOKE) ? env.CINDY_CUA_SMOKE : '0'],
     // 一次性 Grok wire 归因探针(dev-only;正常环境不设置,不产生额外日志)。
     ['XDT_WIRE_DIAGNOSTICS', env.XDT_WIRE_DIAGNOSTICS],
     // 一次性 Grok strict tool spike(dev-only;必须与 wire probe 一起显式开启)。
@@ -1671,6 +1683,7 @@ async function main() {
   }
 
   const allTargets = listDesktopDevProcesses();
+  if (argv.includes('--refuse-running')) assertNoRestartTargets(allTargets, rootDir, checkoutPaths);
   // kill 作用域 = 当前 checkout。其他 worktree / 命名沙箱的实例一律保留。
   const ownScope = partitionDesktopDevProcesses(allTargets, rootDir, checkoutPaths);
   const targets = replaceRunningRoot

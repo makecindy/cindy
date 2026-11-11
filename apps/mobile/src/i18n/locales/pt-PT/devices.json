@@ -624,8 +624,6 @@
       "minutes": "{{n}} min",
       "hoursMinutes": "{{h}} h {{m}} min"
     },
-    "retrying": "Ainda não começou — a tentar novamente…",
-    "stopTask": "Parar tarefa",
     "actionFailed": "Não foi possível carregar ou concluir esta ação",
     "messages": "Mensagens",
     "readOnly": "Só de leitura",
@@ -767,8 +765,6 @@
     "artifactsEmpty": "Ainda não há artefactos. Peça ao seu colega para criar algo.",
     "openSourceTask": "Abrir sessão de origem",
     "modelFollowsDefault": "Seguir a cadeia de modelos predefinida",
-    "taskModel": "Modelo da tarefa",
-    "taskInheritsPrimary": "Herdar modelo principal",
     "modelOverride": "A utilizar a cadeia de modelos deste colega",
     "modelsUnavailable": "Não há modelos utilizáveis. Verifique as definições de modelos deste colega no computador e atualize.",
     "artifactsRecovery": "Abra ficheiros a partir dos cartões de mensagens ou explore-os em {{deviceName}}.",
@@ -874,7 +870,6 @@
   },
   "glance": {
     "open": "{{name}} em resumo",
-    "dueUnseen": "Um afazer está a vencer",
     "computers": "Computadores",
     "runningHere": "Em execução aqui",
     "online": "Online",
@@ -882,37 +877,16 @@
     "current": "Atual",
     "offlineCount_one": "{{count}} offline",
     "offlineCount_other": "{{count}} offline",
-    "todos": "Afazeres",
     "showMore": "Mostrar mais",
     "showLess": "Mostrar menos",
     "doneCount_one": "{{count}} concluídos",
     "doneCount_other": "{{count}} concluídos",
-    "delete": "Eliminar",
-    "deleted": "Eliminado. Não voltará a ser adicionado.",
-    "undo": "Desfazer",
-    "undoFailed": "Não foi possível anular. Tente novamente.",
-    "deleteFailed": "Não foi possível eliminar. Tente novamente.",
-    "check": "Verificar por mim",
     "checkMeta": "Procurar novos afazeres no correio e nas conversas ligados",
-    "checkPrompt": "Verifique as minhas fontes ligadas, como correio e mensagens, para encontrar novidades de que preciso de tratar e adicione-as aos meus afazeres.",
-    "dailyCheck": "Verificar todos os dias",
-    "dailyCheckMeta": "Dias úteis às 9:00, sem notificações quando não há novidades",
     "recentTasks": "Tarefas recentes",
     "unread": "Resultado não lido",
-    "stopDailyCheck": "Parar a verificação diária",
     "openFailed": "Não foi possível abrir esta ligação",
-    "dailyCheckFailed": "Não foi possível guardar. Tente novamente.",
-    "loadFailed": "Não foi possível carregar os afazeres",
     "outputs": "Resultados",
     "outputMeta": "{{time}} · {{task}}",
-    "source": {
-      "conversation": "Pedido por si",
-      "mail": "Do e-mail",
-      "feishu": "Do Feishu",
-      "github": "Do GitHub",
-      "community": "Da comunidade",
-      "task": "De uma tarefa"
-    },
     "offlineCount_many": "{{count}} offline",
     "doneCount_many": "{{count}} concluídos"
   },
@@ -937,6 +911,8 @@
     "moveTo": "Mover para «{{device}}»",
     "moveTitle": "Executar {{name}} em «{{device}}»?",
     "moveDescription": "A partir de agora, {{name}} é executado em «{{device}}», juntamente com o histórico da conversa. As pastas de trabalho, as ligações e os ficheiros locais permanecem no computador onde estão.",
+    "olderTarget": "Cindy antigo",
+    "olderTargetNote": "«{{device}}» tem uma versão antiga do Cindy, por isso {{name}} funcionará aí como antes: o histórico da conversa continua sincronizado, mas as regras e automatizações do projeto não se aplicam aí.",
     "moveAction": "Mover para «{{device}}»",
     "moving": "A mover {{name}} para «{{device}}»…",
     "busyTitle": "{{name}} ainda está a responder",
@@ -1016,5 +992,8 @@
     "sumFailed_many": "{{count}} falharam",
     "found_many": "Encontradas {{count}} sessões em {{device}}",
     "confirmBody_many": "Vai importar {{count}} sessões e utilizar até {{size}} de espaço em disco. A importação decorre em segundo plano no computador; pode pará-la a qualquer momento. Toque novamente para começar."
+  },
+  "liveActivity": {
+    "waitingForUpdate": "A aguardar atualização"
   }
 }
