@@ -944,6 +944,8 @@ export interface FeishuBotAppInfo {
   appType: 'self_built' | 'store';
   botName: string | null;
   organization: string | null;
+  /** Feishu company display name for this application's tenant; omitted by older peers. */
+  tenantName?: string | null;
 }
 
 export interface FeishuApplicationState {

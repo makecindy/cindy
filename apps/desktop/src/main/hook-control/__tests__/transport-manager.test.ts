@@ -4897,9 +4897,12 @@ describe('store Feishu multi-account manager', () => {
     const { manager, transports, sent } = feishuLaneHarness({ onHookReadyForPrefsMirror: mirror }, { feishuEnabled: true });
     manager.sync(); const opts = transports[0]!;
     opts.onWelcome?.({ serverName: 'store', features }); opts.onStatus('connected', null);
-    const first = { ...FEISHU_CONFIRMED, workingDevice: { name: 'Office PC', isCurrent: false } };
+    const first = { ...FEISHU_CONFIRMED, workingDevice: { name: 'Office PC', isCurrent: false },
+      appInfo: { appId: FEISHU_CONFIRMED.scopeId!, brand: 'feishu' as const, appType: 'store' as const,
+        botName: 'Cindy', organization: null, tenantName: 'Feishu Acme' } };
     opts.onMessage(makeProviderBindState({ ...first, bindings: [first, second] }), () => true);
     expect(manager.snapshot().feishu.bindings?.[0]?.workingDevice).toEqual(first.workingDevice);
+    expect(manager.snapshot().feishu.bindings?.[0]?.tenantName).toBe('Feishu Acme');
     manager.providerBindStart('feishu');
     const start = sent.findLast((frame) => frame.type === 'provider.bind.start')!;
     if (start.type !== 'provider.bind.start') throw new Error('start missing');

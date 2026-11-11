@@ -133,6 +133,7 @@ export interface ProviderBindingView {
   principalId: string | null;
   principalName: string | null;
   tenantKey?: string | null;
+  tenantName?: string | null;
   scopeId: string | null;
   scopeName: string | null;
   connectUrl: string | null;
@@ -153,7 +154,10 @@ export interface FeishuAppView {
   brand: 'feishu' | 'lark';
   appType: 'self_built' | 'store';
   botName: string | null;
+  /** Internal Cindy organization slug; not user-facing. */
   organization: string | null;
+  /** Feishu company name; distinct from the Cindy organization. */
+  tenantName?: string | null;
 }
 
 export interface ProviderHookView {

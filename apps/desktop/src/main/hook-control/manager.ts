@@ -1587,6 +1587,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       principalId: payload.principalId,
       principalName: payload.principalName,
       ...(payload.tenantKey === undefined ? {} : { tenantKey: payload.tenantKey }),
+      ...(payload.appInfo?.tenantName === undefined ? {} : { tenantName: payload.appInfo.tenantName }),
       scopeId: payload.scopeId,
       scopeName: payload.scopeName,
       connectUrl: payload.connectUrl,

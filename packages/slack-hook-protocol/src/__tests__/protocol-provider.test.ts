@@ -565,7 +565,7 @@ describe('Feishu application coexistence contract', () => {
     const first: ProviderBindStatusPayload = { ...CONFIRMED, provider: 'feishu' };
     const org: ProviderBindStatusPayload = { ...first, scopeId: 'cli_org', bindingId: 'org-binding', principalId: 'org-user' };
     const app = { appId: first.scopeId!, brand: 'feishu' as const, appType: 'store' as const, botName: 'Cindy', organization: null };
-    const other = { ...app, appId: 'cli_org', appType: 'self_built' as const, botName: 'Acme Cindy' };
+    const other = { ...app, appId: 'cli_org', appType: 'self_built' as const, botName: 'Acme Cindy', tenantName: 'Feishu Acme' };
     const applications = [{ app, bindings: [first] }, { app: other, bindings: [org] }];
     roundTrip(makeProviderBindState({ ...first, applications }));
     // Presentation labels may reflect the saved owner; app identity stays stable.

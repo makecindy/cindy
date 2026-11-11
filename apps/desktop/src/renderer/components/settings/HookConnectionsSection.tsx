@@ -1514,11 +1514,11 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
     {account.workingDevice?.isCurrent ? <span className="ml-1.5 text-[var(--text-tertiary)]">· {t('settings.remoteControl.hook.feishu.workingDeviceThisComputer')}</span> : null}
   </span>;
 
-  const renderFeishuAccount = (account: ProviderBindingView, view: ProviderHookView) => <SettingsRow key={account.bindingId} wrap
+  const renderFeishuAccount = (account: ProviderBindingView, view: ProviderHookView, showTenantName = true) => <SettingsRow key={account.bindingId} wrap
     data-setting-id={imBotSettings.cindyFeishuWorkingDevice.id}
     title={account.principalName ?? account.principalId}
     hint={<>
-      {account.tenantKey ? <span className="block break-all">{t('settings.remoteControl.hook.feishu.connectionTenant', { tenant: account.tenantKey })}</span> : null}
+      {showTenantName && account.tenantName ? <span className="block break-words">{t('settings.remoteControl.hook.feishu.connectionTenant', { tenant: account.tenantName })}</span> : null}
       {workingDeviceHint(account)}
     </>}
     trailing={<div className="flex flex-wrap items-center gap-2">
@@ -1539,6 +1539,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
       {view.applications!.length > 0 && view.enabled && view.available && view.status === 'connected' && !busy && (view.bindings?.length ?? 0) === 0
         ? <p className="text-11 leading-relaxed text-[var(--text-secondary)]">{t('settings.remoteControl.hook.feishu.chooseBot')}</p> : null}
       {view.applications!.map((app: FeishuAppView) => {
+        const tenantName = app.appType === 'self_built' ? app.tenantName?.trim() : null;
         const accounts = (view.bindings ?? []).filter((row) => row.scopeId === app.appId);
         const own = view.binding?.scopeId === app.appId ? view.binding : accounts[0] ?? null;
         const state = providerCardState('feishu', { ...view, binding: own, bindings: accounts, multiBindAvailable: app.appType === 'store' && view.multiBindAvailable === true });
@@ -1554,7 +1555,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
           <SettingsRow wrap title={app.botName ?? t('settings.remoteControl.hook.feishu.botFallback')}
             trailing={<ChannelStatusBadge tone={badge.tone} label={badge.label} />}
             hint={<>
-              <span>{t(`settings.remoteControl.hook.feishu.appType.${app.appType}`)}{app.organization ? ` · ${app.organization}` : ''}</span>
+              <span>{t(`settings.remoteControl.hook.feishu.appType.${app.appType}`)}{tenantName ? ` · ${tenantName}` : ''}</span>
             </>} />
           {active && own?.bindCode ? <SettingsRow wrap
             title={<span className="font-mono tracking-wider">{own.bindCode}</span>}
@@ -1583,7 +1584,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
             </>}
 
           </div>
-          {accounts.map((account) => renderFeishuAccount(account, view))}
+          {accounts.map((account) => renderFeishuAccount(account, view, app.appType === 'store'))}
         </SettingsCard>;
       })}
       {view.applications!.length > 0 ? <p className="text-11 leading-relaxed text-[var(--text-tertiary)]">{t('settings.remoteControl.hook.feishu.sharedSettings')}</p> : null}

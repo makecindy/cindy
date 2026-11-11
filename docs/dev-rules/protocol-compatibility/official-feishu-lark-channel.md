@@ -4,6 +4,8 @@
 
 两仓 `slack-hook-protocol` 同步追加，全部是可选新增：
 
+- `FeishuBotAppInfo.tenantName` 可选追加飞书企业名称（非空字符串或 null），`organization` 保留历史 Cindy 组织标识语义。自建应用卡片显示应用所属企业；商店应用的每条绑定使用各自 `appInfo.tenantName`，不把某个企业名称放在商店应用级标题。旧服务省略字段时隐藏企业名称，旧端忽略新字段，不影响关联或消息派发；不增加客户端请求或轮询。
+
 - `HOOK_PROVIDERS` 追加 `'feishu'`（飞书与 Lark 共用），能力位 `provider:feishu`。与 Telegram／X
   相同，由服务端 welcome 宣告、桌面 hello 声明，双方都有才启用。
 - `provider.bind.update`／`state` 新增可选 `bindCode`：一次性短关联码（4–32 位大写字母或数字，

@@ -904,7 +904,7 @@ function sameProviderBindingProjection(a: Record<string, unknown>, b: Record<str
   const left = isPlainObject(a.appInfo) ? a.appInfo : null;
   const right = isPlainObject(b.appInfo) ? b.appInfo : null;
   if (left === null || right === null) return left === right;
-  return ['appId', 'brand', 'appType', 'botName', 'organization'].every((key) => left[key] === right[key]);
+  return ['appId', 'brand', 'appType', 'botName', 'organization', 'tenantName'].every((key) => left[key] === right[key]);
 }
 
 /** provider.bind.update/state share one strict, replacement-safe snapshot shape. */
@@ -957,7 +957,8 @@ function validateProviderBindStatus(
     && isNonEmptyString(app.appId) && ['feishu', 'lark'].includes(app.brand as string)
     && ['self_built', 'store'].includes(app.appType as string)
     && (app.botName === null || typeof app.botName === 'string')
-    && (app.organization === null || typeof app.organization === 'string');
+    && (app.organization === null || typeof app.organization === 'string')
+    && (app.tenantName === undefined || app.tenantName === null || isNonEmptyString(app.tenantName));
   if (p.appInfo !== undefined && (p.provider !== 'feishu' || !validApp(p.appInfo) || p.appInfo.appId !== p.scopeId)) return `${label}.appInfo is invalid`;
   if (p.applications !== undefined) {
     if (label !== 'provider.bind.state' || p.provider !== 'feishu' || !Array.isArray(p.applications)

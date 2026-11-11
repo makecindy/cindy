@@ -6682,7 +6682,7 @@
             "hint": "Ou envie este código ao bot Cindy por mensagem direta no Feishu / Lark"
           },
           "linkedAccounts": "Contas associadas: {{count}}",
-          "connectionTenant": "Empresa ligada: {{tenant}}",
+          "connectionTenant": "Empresa: {{tenant}}",
           "setWorkingDevice": "Definir como computador de trabalho",
           "workingDeviceSet": "Computador de trabalho definido",
           "appType": {

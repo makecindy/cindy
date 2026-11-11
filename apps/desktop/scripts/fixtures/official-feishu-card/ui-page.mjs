@@ -54,6 +54,10 @@ export default {
   },
   async check(page, ui) {
     const card = page.locator('#cindy-im-feishu-panel');
+    assert.equal(await card.getByText(/org-example|tenant-acme|tenant-xd/).count(), 0);
+    if (await card.getByRole('group', { name: '团队 Cindy', exact: true }).count()) {
+      assert.ok(await card.getByText(`${await ui.t('settings.remoteControl.hook.feishu.appType.self_built')} · 飞书示例企业`, { exact: true }).isVisible());
+    }
     if (ui.data.kind === 'empty-apps') {
       assert.equal(await card.getByText('Alice', { exact: true }).count(), 0);
       assert.equal(await card.getByRole('button', { name: await ui.t('settings.remoteControl.hook.feishu.openBot'), exact: true }).count(), 0);

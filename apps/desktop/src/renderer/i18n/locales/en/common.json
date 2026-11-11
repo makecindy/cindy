@@ -6615,7 +6615,7 @@
             "hint": "Or send this code to the Cindy bot in a direct message in Feishu / Lark"
           },
           "linkedAccounts": "Linked Accounts: {{count}}",
-          "connectionTenant": "Connected Tenant: {{tenant}}",
+          "connectionTenant": "Company: {{tenant}}",
           "setWorkingDevice": "Set as working computer",
           "workingDeviceSet": "Working computer set",
           "appType": {

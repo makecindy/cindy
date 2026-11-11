@@ -30,7 +30,7 @@ const dialog = vi.hoisted(() => ({ confirm: vi.fn() }));
 const workspacePrefsEditor = vi.hoisted(() => ({ render: vi.fn() }));
 const toast = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn() }));
 const authUser = vi.hoisted(() => ({
-  current: null as { membershipKind: 'personal' | 'org' } | null,
+  current: null as { membershipKind: 'personal' | 'org'; orgSlug?: string | null; orgName?: string | null } | null,
 }));
 vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => authUser.current }));
 
@@ -599,10 +599,10 @@ describe('HookConnectionsSection binding actions (Telegram / X / Feishu)', () =>
   it('links through the existing action and targets each store account independently', async () => {
     const first: NonNullable<SlackHookView['feishu']['binding']> = {
       provider: 'feishu', state: 'confirmed', attemptId: null, bindingId: 'alice-binding',
-      principalId: 'ou_alice', principalName: 'Alice', tenantKey: 'tenant-a', scopeId: 'cli_store', scopeName: 'Cindy',
+      principalId: 'ou_alice', principalName: 'Alice', tenantKey: 'tenant-a', tenantName: 'Feishu Acme', scopeId: 'cli_store', scopeName: 'Cindy',
       connectUrl: null, bindCode: null, expiresAt: null, reason: null, remediationUrl: null, actions: ['revoke', 'select_device'],
     };
-    const second = { ...first, bindingId: 'bob-binding', principalId: 'ou_bob', principalName: 'Bob', tenantKey: 'tenant-b' };
+    const second = { ...first, bindingId: 'bob-binding', principalId: 'ou_bob', principalName: 'Bob', tenantKey: 'tenant-b', tenantName: 'Feishu Beta' };
     const hook: SlackHookView = { ...BASE_HOOK, feishu: { ...BASE_HOOK.feishu,
       enabled: true, available: true, status: 'connected', url: 'wss://feishu.example.test',
       multiBindAvailable: true, binding: first, bindings: [first, second],
@@ -617,6 +617,9 @@ describe('HookConnectionsSection binding actions (Telegram / X / Feishu)', () =>
       <HookConnectionsSection />
     </SettingsSearchNavigationContext.Provider>);
     await screen.findByText('Alice'); expect(screen.getByText('Bob')).toBeTruthy();
+    expect(tCalls).toContainEqual({ key: 'settings.remoteControl.hook.feishu.connectionTenant', vars: { tenant: 'Feishu Acme' } });
+    expect(tCalls).toContainEqual({ key: 'settings.remoteControl.hook.feishu.connectionTenant', vars: { tenant: 'Feishu Beta' } });
+    expect(screen.queryByText(/tenant-[ab]/)).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'settings.remoteControl.hook.feishu.connect' }));
     await waitFor(() => expect(ipc.providerBindStart).toHaveBeenCalledWith('feishu'));
     fireEvent.click(screen.getAllByRole('button', { name: 'settings.remoteControl.hook.feishu.setWorkingDevice' })[1]!);
@@ -675,6 +678,7 @@ describe('HookConnectionsSection binding actions (Telegram / X / Feishu)', () =>
 
   // Two configured bots need distinct authorization/open targets, with one shared editor.
   it('shows both bot names and sends link/open actions to the chosen application', async () => {
+    authUser.current = { membershipKind: 'org', orgSlug: 'org-acme', orgName: 'Cindy organization' };
     const account: NonNullable<SlackHookView['feishu']['binding']> = {
       provider: 'feishu', state: 'confirmed', attemptId: null, bindingId: 'org-binding',
       principalId: 'org-user', principalName: 'Alice', scopeId: 'cli_org', scopeName: 'Acme bot',
@@ -683,8 +687,8 @@ describe('HookConnectionsSection binding actions (Telegram / X / Feishu)', () =>
     const hook: SlackHookView = { ...BASE_HOOK, feishu: { ...BASE_HOOK.feishu,
       enabled: true, available: true, status: 'connected', multiBindAvailable: true, binding: account, bindings: [account],
       applications: [
-        { appId: 'cli_store', brand: 'feishu', appType: 'store', botName: 'Cindy Official', organization: 'Acme' },
-        { appId: 'cli_org', brand: 'feishu', appType: 'self_built', botName: 'Acme bot', organization: 'Acme' },
+        { appId: 'cli_store', brand: 'feishu', appType: 'store', botName: 'Cindy Official', organization: 'org-acme' },
+        { appId: 'cli_org', brand: 'feishu', appType: 'self_built', botName: 'Acme bot', organization: 'org-acme', tenantName: 'Feishu Acme' },
       ],
     } };
     ipc.get.mockResolvedValue({ hook }); ipc.providerBindStart.mockResolvedValue({ hook });
@@ -692,6 +696,11 @@ describe('HookConnectionsSection binding actions (Telegram / X / Feishu)', () =>
     const entry = resolveSettingsSearchEntry('im-bot', 'imBot.cindy.feishu.workingDevice');
     render(<SettingsSearchNavigationContext.Provider value={{ entry, activation: 1 }}><HookConnectionsSection /></SettingsSearchNavigationContext.Provider>);
     await screen.findByText('Cindy Official'); expect(screen.getByText('Acme bot')).toBeTruthy();
+    // Regression / unit: render the real card with the server's organization slug.
+    // Existing fixtures used display names here and missed the internal ID leak.
+    expect(screen.getByText('settings.remoteControl.hook.feishu.appType.self_built · Feishu Acme')).toBeTruthy();
+    expect(screen.queryByText(/org-acme/)).toBeNull();
+    expect(screen.queryByText(/Cindy organization/)).toBeNull();
     expect(screen.queryByText('cli_store')).toBeNull();
     expect(within(screen.getByRole('group', { name: 'Cindy Official' })).getByRole('status').textContent).toBe('settings.remoteControl.hook.feishu.status.none');
     expect(tCalls).toContainEqual({ key: 'settings.remoteControl.hook.feishu.linkedBotsSummary', vars: { bots: 1, accounts: 1 } });
@@ -721,6 +730,10 @@ describe('HookConnectionsSection binding actions (Telegram / X / Feishu)', () =>
     expect(screen.queryByRole('button', { name: 'settings.remoteControl.hook.feishu.linkAnotherAccount' })).toBeNull();
     await act(async () => listener({ ...hook, feishu: { ...hook.feishu, status: 'error', lastError: 'TLS connection failed' } }));
     expect(screen.getByText('TLS connection failed')).toBeTruthy();
+    await act(async () => listener({ ...hook, feishu: { ...hook.feishu, applications: hook.feishu.applications!.map((app) => ({ ...app, tenantName: null })) } }));
+    expect(screen.getByText('settings.remoteControl.hook.feishu.appType.self_built')).toBeTruthy();
+    expect(screen.queryByText(/org-acme/)).toBeNull();
+    expect(screen.queryByText(/Cindy organization/)).toBeNull();
   });
 
   // Production UI / unit: the server allowlist is the only bot chooser source.

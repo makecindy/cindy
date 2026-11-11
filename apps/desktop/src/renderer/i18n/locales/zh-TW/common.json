@@ -6572,7 +6572,7 @@
             "hint": "或者在飛書裡把關聯碼私訊傳給 Cindy 機器人"
           },
           "linkedAccounts": "已關聯帳號：{{count}}",
-          "connectionTenant": "連線企業識別碼：{{tenant}}",
+          "connectionTenant": "所屬企業：{{tenant}}",
           "setWorkingDevice": "設為工作電腦",
           "workingDeviceSet": "已設為工作電腦",
           "appType": {

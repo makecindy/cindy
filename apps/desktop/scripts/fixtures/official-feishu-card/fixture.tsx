@@ -46,17 +46,17 @@ function view(kind: string): SlackHookView {
     const org = { ...base.feishu.bindings![0]!, bindingId: 'org-binding', scopeId: 'cli_org', principalName: '张三', tenantKey: null, workingDevice: { name: 'Team Workstation', isCurrent: false } };
     base.feishu.bindings = [...base.feishu.bindings!, org];
     base.feishu.applications = [
-      { appId: 'cli_app', brand: 'feishu', appType: 'store', botName: 'Cindy', organization: '示例组织' },
-      { appId: 'cli_org', brand: 'feishu', appType: 'self_built', botName: '团队 Cindy', organization: '示例组织' },
+      { appId: 'cli_app', brand: 'feishu', appType: 'store', botName: 'Cindy', organization: 'org-example' },
+      { appId: 'cli_org', brand: 'feishu', appType: 'self_built', botName: '团队 Cindy', organization: 'org-example', tenantName: '飞书示例企业' },
     ];
     if (kind === 'coexist-error') base.feishu = { ...base.feishu, status: 'error', lastError: 'TLS connection failed' };
     return base;
   }
   if (kind === 'store' || kind === 'store-pending' || kind === 'store-failed') {
     const base = view(kind === 'store' ? 'confirmed' : 'pending');
-    const first = { ...view('confirmed').feishu.binding!, principalName: 'Alice', tenantKey: 'tenant-acme' };
+    const first = { ...view('confirmed').feishu.binding!, principalName: 'Alice', tenantKey: 'tenant-acme', tenantName: 'Acme' };
     base.feishu = { ...base.feishu, multiBindAvailable: true,
-      bindings: [first, { ...first, bindingId: 'b2', principalId: 'ou_2', principalName: 'Bob', tenantKey: 'tenant-xd', workingDevice: { name: 'Office Windows PC', isCurrent: false } }] };
+      bindings: [first, { ...first, bindingId: 'b2', principalId: 'ou_2', principalName: 'Bob', tenantKey: 'tenant-xd', tenantName: '示例工作室', workingDevice: { name: 'Office Windows PC', isCurrent: false } }] };
     if (kind === 'store-failed') base.feishu.binding = { ...base.feishu.binding!, state: 'failed',
       reason: 'access-denied', connectUrl: null, bindCode: null, expiresAt: null, actions: ['retry'] };
     return base;
