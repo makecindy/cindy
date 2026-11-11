@@ -140,10 +140,18 @@ describe('provider-group quota routing', () => {
     for (let i = 0; i < 30; i++) await Promise.resolve();
     expect(read).toHaveBeenCalledTimes(1);
     h.router.markCooling('anthropic', 'local', NOW + 300_000, OPUS);
+    // A later waiter must not associate the old flight with the new cooldown.
+    const afterFailure = h.pick(OPUS);
+    for (let i = 0; i < 30; i++) await Promise.resolve();
+    expect(read).toHaveBeenCalledTimes(1);
     finish(true);
     expect((await first).kind).toBe('unavailable');
     expect((await second).kind).toBe('unavailable');
+    expect((await afterFailure).kind).toBe('unavailable');
     expect(h.router.coolingUntil('anthropic', 'local', OPUS)).toBe(NOW + 300_000);
+    expect(h.writeCooling).toHaveBeenLastCalledWith({ anthropic: { local: {
+      'claude:opus': NOW + 300_000, 'claude:sonnet': NOW + 200_000,
+    } } });
     read.mockImplementation(async () => true);
     h.router.markCooling('anthropic', 'local', NOW + 120_000); // auth/overload scope
     expect((await h.pick(OPUS)).kind).toBe('unavailable');

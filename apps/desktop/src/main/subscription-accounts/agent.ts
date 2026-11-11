@@ -36,6 +36,7 @@ function wrapHandle(
   handle: AgentSessionHandle,
   lease: SubscriptionAccountLease,
   unregister: () => void,
+  model: string | undefined,
 ): AgentSessionHandle {
   let cleanupPending = false;
   return new Proxy(handle, {
@@ -48,9 +49,16 @@ function wrapHandle(
           try {
             return await target.send(...args);
           } catch (error) {
+            lease.observeFailure(error, model, 'run');
             if (!cleanupPending) lease.running(false);
             throw error;
           }
+        };
+      if (property === 'setModel' && target.setModel)
+        return async (...args: Parameters<NonNullable<AgentSessionHandle['setModel']>>) => {
+          const result = await target.setModel!(...args);
+          model = args[0];
+          return result;
         };
       if (property === 'close' || property === 'detach') {
         const method = target[property];
@@ -72,6 +80,8 @@ function wrapHandle(
           for await (const event of target.events()) {
             if (event.type === 'account_usage')
               observeSubscriptionAccountUsage(lease.account, event.data);
+            if (event.type === 'error' && isTerminalTurnEvent(event))
+              lease.observeFailure(event.data, model, 'run');
             if (event.type === 'session_id') await lease.bind([`native:${target.id}`]);
             if (isTerminalTurnEvent(event) && !cleanupPending) lease.running(false);
             if (event.type === 'status' && (event.data as { isRunning?: boolean })?.isRunning)
@@ -201,8 +211,9 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T): T {
             });
             await lease.bind([...keys, `native:${handle.id}`]);
             lease.running(false);
-            return guardAccountSwitch(wrapHandle(handle, lease, unregister), target, options);
+            return guardAccountSwitch(wrapHandle(handle, lease, unregister, options.model), target, options);
           } catch (error) {
+            lease.observeFailure(error, options.model, 'start');
             const release = () => {
               unregister();
               lease.release();

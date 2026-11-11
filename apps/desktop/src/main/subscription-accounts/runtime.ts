@@ -11,6 +11,10 @@ import {
 } from '../maker-host/nativeProviderAuthBinding.js';
 import { pickProviderGroupMember } from '../provider-group/scheduler.js';
 import { providerGroupMemberUsageState } from '../provider-group/usage.js';
+import { coolingScope, currentCooling, PROVIDER_GROUP_COOLING_SCOPE_CAP } from '../provider-group/cooling.js';
+import { PROVIDER_GROUP_DEFAULT_COOLDOWN_MS } from '../provider-group/router.js';
+import { decideProviderGroupFailure, providerGroupFailureSignals } from '../provider-group/failurePolicy.js';
+import { readTurnUsageResetAt } from '../goal-host/usageLimit.js';
 import { providerGroupCodexUsageFromReads } from '../provider-group/usage.js';
 import { providerGroupCodexUsageSnapshot } from '../provider-group/usage.js';
 import { codexLimitBucketKey } from '@cindy/maker-shared/codex-usage-buckets';
@@ -66,6 +70,8 @@ interface OwnerRuntime {
   lastPicked: Map<SubscriptionProvider, string>;
   logins: Map<string, { abort: AbortController; accountId: string }>;
   invalidated: Map<string, { token: string; reason: string }>;
+  /** Actual account failures outrank optimistic cached quota for new assignments. */
+  quotaCooling: Map<string, Record<string, number>>;
 }
 let runtime: OwnerRuntime | undefined;
 const listeners = new Set<(providerId: SubscriptionProvider) => void>();
@@ -98,11 +104,20 @@ function currentRuntime(): OwnerRuntime {
       lastPicked: new Map(),
       logins: new Map(),
       invalidated: new Map(),
+      quotaCooling: new Map(),
     };
   }
   return runtime;
 }
 const keyOf = (provider: SubscriptionProvider, id: string) => `${provider}:${id}`;
+function accountCooling(state: OwnerRuntime, provider: SubscriptionProvider, id: string, model?: string): boolean {
+  const key = keyOf(provider, id);
+  const scopes = currentCooling(state.quotaCooling.get(key), Date.now());
+  if (Object.keys(scopes).length) state.quotaCooling.set(key, scopes);
+  else state.quotaCooling.delete(key);
+  const scope = coolingScope(provider === 'openai' ? model?.replace(/^chatgpt\//, '') : model);
+  return Boolean(scopes[''] || scopes[scope]);
+}
 function legacyCodexDefault(provider: SubscriptionProvider): boolean {
   if (provider !== 'openai') return false;
   const pool = readPool(provider);
@@ -336,6 +351,7 @@ export async function readSubscriptionPoolModelAvailability(
   return latest.accounts.some((account) => {
     const info = infos[pool.accounts.findIndex((a) => a.id === account.id)];
     if (account.paused || !info?.auth.authenticated || info.unavailable
+      || accountCooling(state, provider, account.id, model)
       || [...state.logins].some(([key, login]) => key.startsWith(provider + ':') && login.accountId === account.id)
       || (account.id === 'default' && !defaultAccountBound(provider))) return false;
     const usage = providerGroupMemberUsageState(info.usage ?? {},
@@ -521,6 +537,7 @@ export async function readSubscriptionPool(
 
 export interface SubscriptionAccountLease {
   account: NativeSubscriptionAccount;
+  observeFailure(error: unknown, model: string | undefined, phase: 'start' | 'run'): void;
   bind(keys: string[]): Promise<void>;
   running(active: boolean): void;
   release(): void;
@@ -558,7 +575,8 @@ export async function acquireSubscriptionAccount(
       ...a,
       paused: control ? false : a.paused,
       key: a.id,
-      usable: !loggingIn && info?.auth.authenticated === true && (control || !usage.limited),
+      usable: !loggingIn && info?.auth.authenticated === true && (control || (!usage.limited
+        && (Boolean(binding) || latest.accounts.length < 2 || !accountCooling(state, provider, a.id, model)))),
       running: state.running.get(keyOf(provider, a.id))?.size ?? 0,
       urgency: usage.urgency,
       fiveHourTight: usage.fiveHourTight,
@@ -597,6 +615,22 @@ export async function acquireSubscriptionAccount(
       throw new Error('Subscription account was disconnected');
   };
   return {
+    observeFailure(error, failedModel, phase) {
+      try { assertCurrent(); } catch { return; } // Ignore late failures after owner/account removal.
+      const signals = providerGroupFailureSignals(error);
+      const decision = decideProviderGroupFailure(signals, phase);
+      if (decision.action !== 'switch' || decision.cause !== 'usage-limit') return;
+      const now = Date.now();
+      const resetAt = readTurnUsageResetAt(signals, now);
+      const scope = coolingScope(provider === 'openai' ? failedModel?.replace(/^chatgpt\//, '') : failedModel);
+      const scopes = currentCooling(state.quotaCooling.get(key), now);
+      const until = resetAt !== null && resetAt > now ? resetAt : now + PROVIDER_GROUP_DEFAULT_COOLDOWN_MS;
+      // Refresh the scope's insertion order and bound remembered model failures.
+      const previous = scopes[scope] ?? 0;
+      delete scopes[scope];
+      scopes[scope] = Math.max(previous, until);
+      state.quotaCooling.set(key, Object.fromEntries(Object.entries(scopes).slice(-PROVIDER_GROUP_COOLING_SCOPE_CAP)));
+    },
     account: {
       id: `${accountOwnerPrefix()}:${provider}:${selected}`,
       configDir: directoryFor(provider, selected),
@@ -706,6 +740,7 @@ export async function runSubscriptionAccountCommand(
       accounts: pool.accounts.filter((a) => a.id !== command.accountId),
     }));
     state.cache.delete(keyOf(provider, command.accountId));
+    state.quotaCooling.delete(keyOf(provider, command.accountId));
   } else {
     const initial = readPool(provider);
     const adding = command.action === 'add' || command.action === 'connect';
@@ -800,6 +835,7 @@ export async function runSubscriptionAccountCommand(
       assertOwner(state);
       state.cache.delete(keyOf(provider, accountId));
       state.invalidated.delete(keyOf(provider, accountId));
+      state.quotaCooling.delete(keyOf(provider, accountId));
       await snapshot(state, provider, accountId, true);
     } finally {
       state.logins.delete(key);

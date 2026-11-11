@@ -166,7 +166,7 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
   const tried = new Map<string, { at: number; keys: Set<string> }>();
   /** 本机任务刚选中、还没开始运行一轮的临时占用：任务 id → 那台。 */
   const provisional = new Map<string, { providerId: string; memberKey: string; until: number }>();
-  const poolReads = new Map<string, Promise<boolean | null>>();
+  const poolReads = new Map<string, { cooling: Record<string, number>; result: Promise<boolean | null> }>();
 
   async function recoverPoolCooling(providerId: string, member: ProviderGroupMember, model: string): Promise<void> {
     if (!deps.readPoolModelAvailability || member.kind === 'share') return;
@@ -177,13 +177,15 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
     const readKey = `${key}\u0000${model}`;
     let read = poolReads.get(readKey);
     if (!read) {
-      read = deps.readPoolModelAvailability(member, model).catch(() => null);
+      read = { cooling: remembered, result: deps.readPoolModelAvailability(member, model).catch(() => null) };
       poolReads.set(readKey, read);
-      void read.finally(() => { if (poolReads.get(readKey) === read) poolReads.delete(readKey); });
+      void read.result.finally(() => { if (poolReads.get(readKey) === read) poolReads.delete(readKey); });
     }
+    // Keep one request in flight, but never reuse its evidence for a later failure.
+    if (read.cooling !== remembered) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const available = await Promise.race([read, new Promise<null>((resolve) => {
+      const available = await Promise.race([read.result, new Promise<null>((resolve) => {
         timer = setTimeout(() => resolve(null), PROVIDER_GROUP_USAGE_READ_TIMEOUT_MS);
       })]);
       // A newer failure wins over a slow read. Clear only this model's quota
