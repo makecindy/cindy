@@ -3,7 +3,7 @@ import { gzipSync, gunzipSync } from 'node:zlib';
 import type { ClientRequest, IncomingMessage } from 'node:http';
 import { StopSoundActivity, type AsrEvent, type AsrProvider, type AsrSegment, type AudioTrace } from '@cindy/voice-input-core';
 import { createLogger } from '../logger.js';
-import { createOutboundHttpAgent } from '../maker-host/outbound-fetch.js';
+import { createOutboundHttpAgent } from '../maker-host/outbound-fetch.desktop.js';
 import { resamplePcm16 } from './RealtimeAsrWebSocketProvider.js';
 import { volcengineSaucLanguageCode } from './language.js';
 import { mergeRecoveredTranscript } from './transcriptMerge.js';

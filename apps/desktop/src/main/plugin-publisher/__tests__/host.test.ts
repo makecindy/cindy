@@ -7,12 +7,12 @@ const mocks = vi.hoisted(() => ({
   owner: vi.fn(() => ({ dataOwnerId: 'member-1', ownerGeneration: 1 })),
   create: vi.fn(), start: vi.fn(() => ({ transferId: 'transfer-1', uploadId: null })),
   abort: vi.fn(), getToken: vi.fn(async () => 'connection-token'), invalidate: vi.fn(),
-  inspect: vi.fn(), listAll: vi.fn(),
+  inspect: vi.fn(), catalog: vi.fn(),
 }));
 
 vi.mock('electron', () => ({ app: { getVersion: () => '1.0.0' } }));
 vi.mock('../../plugin-market/api.js', () => ({
-  PluginMarketApi: class { listAll = mocks.listAll; },
+  PluginMarketApi: class { catalog = mocks.catalog; },
 }));
 vi.mock('../../appSessionState.js', () => ({ getActiveDataOwnerPushStamp: mocks.owner }));
 vi.mock('../../authManager.js', () => ({
@@ -50,7 +50,7 @@ beforeEach(() => {
   mocks.auth.mockReturnValue(member());
   mocks.owner.mockReturnValue({ dataOwnerId: 'member-1', ownerGeneration: 1 });
   mocks.refresh.mockResolvedValue(false);
-  mocks.listAll.mockResolvedValue({ plugins: [], removals: [], currentOrganization: null });
+  mocks.catalog.mockResolvedValue({ plugins: [], removals: [], currentOrganization: null });
   mocks.create.mockReturnValue({ start: mocks.start, abortAll: mocks.abort });
 });
 
@@ -64,7 +64,7 @@ function dependencies(): PluginPublisherOrchestratorDeps {
 
 describe('publisher old-token organization compatibility', () => {
   it('uses the validated S1 market namespace for the exact Auth organization when refresh keeps the claim absent', async () => {
-    mocks.listAll.mockResolvedValue({
+    mocks.catalog.mockResolvedValue({
       plugins: [], removals: [],
       currentOrganization: { organizationId: 'org-1', orgSlug: 'actual-org', pluginPrefix: 'legacy' },
     });
@@ -79,7 +79,7 @@ describe('publisher old-token organization compatibility', () => {
     expect(mocks.getToken).toHaveBeenCalledWith({
       membershipId: 'member-1', audience: 'actual-org:cindy-publisher',
     });
-    expect(mocks.listAll).toHaveBeenCalledTimes(1);
+    expect(mocks.catalog).toHaveBeenCalledExactlyOnceWith({ scope: 'public', limit: 1, counts: false });
     expect(mocks.refresh).toHaveBeenCalledTimes(1);
   });
 
@@ -90,7 +90,7 @@ describe('publisher old-token organization compatibility', () => {
   });
 
   it('rejects a valid market namespace for a foreign organization even with the same legal prefix', async () => {
-    mocks.listAll.mockResolvedValue({
+    mocks.catalog.mockResolvedValue({
       plugins: [], removals: [],
       currentOrganization: { organizationId: 'org-foreign', orgSlug: 'foreign', pluginPrefix: 'legacy' },
     });
@@ -118,7 +118,7 @@ describe('publisher old-token organization compatibility', () => {
       if (phase === 'refresh') changeContext();
       return true;
     });
-    mocks.listAll.mockImplementation(async () => {
+    mocks.catalog.mockImplementation(async () => {
       changeContext();
       return {
         plugins: [], removals: [],
@@ -129,11 +129,11 @@ describe('publisher old-token organization compatibility', () => {
     expect(await dependencies().identity()).toBeNull();
     expect(mocks.getToken).not.toHaveBeenCalled();
     expect(mocks.abort).toHaveBeenCalledTimes(1);
-    expect(mocks.listAll).toHaveBeenCalledTimes(phase === 'market' ? 1 : 0);
+    expect(mocks.catalog).toHaveBeenCalledTimes(phase === 'market' ? 1 : 0);
   });
 
   it('does not use a prefix as a namespace when the market row has no orgSlug', async () => {
-    mocks.listAll.mockResolvedValue({
+    mocks.catalog.mockResolvedValue({
       plugins: [], removals: [], currentOrganization: { organizationId: 'org-1', pluginPrefix: 'xd' },
     });
     const publisher = await host();
@@ -143,7 +143,7 @@ describe('publisher old-token organization compatibility', () => {
   });
 
   it('does not reuse the market identity cache after Auth organization changes without changing membership', async () => {
-    mocks.listAll.mockResolvedValue({
+    mocks.catalog.mockResolvedValue({
       plugins: [], removals: [],
       currentOrganization: { organizationId: 'org-1', orgSlug: 'actual-org', pluginPrefix: null },
     });
@@ -155,11 +155,11 @@ describe('publisher old-token organization compatibility', () => {
     mocks.auth.mockReturnValue(next);
     expect(publisher.currentPublisherIdentity()).toMatchObject({ orgSlug: null });
     expect(await dependencies().identity()).toMatchObject({ orgSlug: null });
-    expect(mocks.listAll).toHaveBeenCalledTimes(2);
+    expect(mocks.catalog).toHaveBeenCalledTimes(2);
   });
 
   it('reports unavailable namespace rather than adopting identity on a failed market lookup', async () => {
-    mocks.listAll.mockRejectedValue(new Error('invalid market response'));
+    mocks.catalog.mockRejectedValue(new Error('invalid market response'));
     const publisher = await host();
     publisher.startPluginPublish('/tmp/legacy-helper.cindy');
     expect(await dependencies().identity()).toMatchObject({ orgSlug: null });

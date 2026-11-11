@@ -56,6 +56,43 @@ export async function issueWritableDirectoryPickerGrant(input: {
 }
 
 /**
+ * Record a directory chosen from the recent project list. Its reach matches choosing
+ * the same directory as a task working directory, so only a path persisted in that
+ * list qualifies; arbitrary renderer paths still require the system picker.
+ */
+export async function issueWritableDirectoryRecentGrant(input: {
+  scopeId: string;
+  senderId: number;
+  directory: string;
+  isRecentProject: (directory: string) => Promise<boolean>;
+  now?: number;
+}): Promise<void> {
+  if (!(await input.isRecentProject(input.directory))) {
+    throw new WritableDirectoryPickerGrantError(
+      'WRITABLE_DIRECTORY_AUTHORIZATION_REQUIRED',
+      'Writable directory is not a recent project',
+    );
+  }
+  // 系统选择器只能选目录；这条来源的路径由 Renderer 传入，目录已被换成文件时同样按不可用处理。
+  const isDirectory = await fs
+    .stat(input.directory)
+    .then((stat) => stat.isDirectory())
+    .catch(() => false);
+  if (!isDirectory) {
+    throw new WritableDirectoryPickerGrantError(
+      'WRITABLE_DIRECTORY_UNAVAILABLE', 'Writable directory is unavailable',
+    );
+  }
+  try {
+    await issueWritableDirectoryPickerGrant(input);
+  } catch {
+    throw new WritableDirectoryPickerGrantError(
+      'WRITABLE_DIRECTORY_UNAVAILABLE', 'Writable directory is unavailable',
+    );
+  }
+}
+
+/**
  * Consume Main picker evidence for every newly added local writable root.
  * Retained/revoked roots need no new picker action. Validation is all-or-nothing,
  * and the real target is checked again so a swapped symlink/junction fails closed.

@@ -51,6 +51,13 @@ const SEMANTIC_TEXT_COLORS = [
 ];
 // 规范逐项登记的精确用法(文件 + 样式名 + token),不属于存量。新增例外先改规范,再加到这里。
 const REGISTERED_TEXT_COLOR_USES = new Set([
+  // DESIGN.md quota colors: model-picker reset durations share the existing pace/time rule.
+  'src/session/UnifiedModelPickerView.tsx quotaResetWarn quotaBarWarn',
+  'src/session/UnifiedModelPickerView.tsx quotaResetCrit quotaBarCrit',
+  'src/session/UnifiedModelPickerView.ios.tsx foregroundStyle quotaBarWarn',
+  'src/session/UnifiedModelPickerView.ios.tsx foregroundStyle quotaBarCrit',
+  // DESIGN.md §14.5: user aligned sent group mentions with PC on 2026-11-04.
+  'src/session/BotGroupMessageText.tsx mention groupMentionText',
   // mobile-design-guide.md §3 登记例外 / DESIGN.md Mobile thread new-reply divider:话题内「New」分界标签与横线同色。
   'src/session/BotGroupChatScreen.tsx newReplyDivider threadUnreadDivider',
 ]);
@@ -163,7 +170,8 @@ function scanTextColors(source: string): Array<{ where: string; token: string }>
   const found: Array<{ where: string; token: string }> = [];
   const resolve = makeColorResolver(source);
   const onText = namedStylesUsedOnText(source);
-  for (const block of source.matchAll(/(?:const\s+)?(\w+)(?::|\s*=)\s*\{([^{}]*)\}/g)) {
+  // Start at an identifier boundary: retrying every suffix of embedded asset data is quadratic.
+  for (const block of source.matchAll(/\b(?:const\s+)?(\w+)(?::|\s*=)\s*\{([^{}]*)\}/g)) {
     const [, key, body] = block;
     // 带排版属性、样式名像文字、或实际被 <Text> 引用的样式块,都算文字样式。
     if (!TEXT_STYLE_PROPS.test(body) && !/Text$|Label$|Title$|^text|^label|^title/i.test(key) && !onText.has(key)) continue;
@@ -230,6 +238,14 @@ function reconcile(found: Map<string, number>, debt: Map<string, number>, fix: s
 }
 
 describe('text color discipline', () => {
+  // Guard regression: encoded document assets contain long word runs. Restarting
+  // the named-style matcher at every character exhausted CI's normal 5s budget.
+  // Keep scanning the whole input and still report the text token after the asset.
+  it('scans text colors after a long encoded asset within the normal guard deadline', () => {
+    const source = `const asset = "${'A'.repeat(160_000)}";\nconst ink = colors.border;\n<Text style={{ color: ink }} />`;
+    expect(scanTextColors(source)).toEqual([{ where: 'inline', token: 'border' }]);
+  });
+
   it('scans style arrays, conditional branches, bare theme paths and named styles used on <Text>', () => {
     const tokens = (src: string) => scanTextColors(src).map((f) => f.token);
     expect(tokens('<Text style={[styles.label, { color: colors.border }]} />')).toEqual(['border']);
@@ -298,7 +314,8 @@ describe('text color discipline', () => {
     const { violations, stale } = reconcile(found, KNOWN_TEXT_COLOR_DEBT, `use one of ${NEUTRAL_TEXT_COLORS.join(' / ')} or a registered semantic text token`);
     expect(violations).toEqual([]);
     expect(stale, '已修复的存量请从 KNOWN_TEXT_COLOR_DEBT 删除或调低次数').toEqual([]);
-  });
+    // 全量扫描 src/ + app/ 已接近默认 5s 预算，CI 并发时会超时；放宽时限而不是减少扫描范围。
+  }, 30_000);
 
   it('uses textPlaceholder for input placeholders (DESIGN.md §4 Inputs)', () => {
     const found = new Map<string, number>();

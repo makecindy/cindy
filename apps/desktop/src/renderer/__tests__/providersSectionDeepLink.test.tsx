@@ -206,6 +206,12 @@ beforeEach(() => {
     }),
   ];
   (window as unknown as { electronAPI: unknown }).electronAPI = {
+    subscriptionAccounts: {
+      command: vi.fn(async ({ providerId }: { providerId: string }) => ({
+        providerId, configured: false, strategy: 'least', accounts: [],
+      })),
+      onChanged: vi.fn(() => () => undefined),
+    },
     maker: {
       listProviders: vi.fn(async () => ({ providers: providersState.providers, dataOwnerId: 'owner', ownerGeneration: 1 })),
       setProviderPresentation: vi.fn(async () => ({ ok: true })),
@@ -230,6 +236,31 @@ afterEach(() => {
 });
 
 describe('ProvidersSection — 深链定位', () => {
+  // #9517 review, unit: exercise the real provider header's default-account
+  // reconnect. Wizard/account-list tests do not cover this independent catch.
+  it.each([
+    ['SUBSCRIPTION_CODEX_PROVIDER_AUTH', 'subscriptionAccounts.providerManagedAuth'],
+    ['SUBSCRIPTION_LOGIN_CANCELLED', null],
+    ['SUBSCRIPTION_ACCOUNT_FAILED', 'subscriptionAccounts.failed'],
+  ] as const)('preserves pooled header reconnect feedback for %s', async (code, expectedMessage) => {
+    providersState.providers = [makeProvider('openai', { name: 'OpenAI', connected: true, agents: ['codex'] })];
+    const command = vi.mocked(window.electronAPI.subscriptionAccounts.command);
+    command.mockImplementation(async (input) => {
+      if (input.action === 'login') throw new Error(`[${code}] synthetic sign-in result`);
+      return { providerId: 'openai', configured: true, strategy: 'least', accounts: [] };
+    });
+    renderAt('?tab=providers&connect=openai');
+    const loginButton = await screen.findByRole('button', { name: 'subscriptionAccounts.login' });
+    fireEvent.click(loginButton);
+    await waitFor(() => expect(command).toHaveBeenCalledWith({
+      action: 'login', providerId: 'openai', accountId: 'default', loginKey: expect.any(String),
+    }));
+    await waitFor(() => expect(loginButton.textContent).toBe('subscriptionAccounts.login'));
+    expect((loginButton as HTMLButtonElement).disabled).toBe(false);
+    if (expectedMessage) expect(toastError).toHaveBeenCalledExactlyOnceWith(expectedMessage);
+    else expect(toastError).not.toHaveBeenCalled();
+  });
+
   it('does not rediscover a deleted local Codex provider into the settings list', async () => {
     providersState.providers.push(makeProvider('openai', {
       name: 'Deleted local account', removed: true, imageModels: [{ id: 'image', name: 'Image' }],
@@ -670,8 +701,17 @@ describe('ProvidersSection — 深链定位', () => {
     expect(window.electronAPI.builtinApiKeyRemove).not.toHaveBeenCalled();
   });
 
-  it('invalidated OpenAI auth blocks model selection even before the catalog reports disconnection', async () => {
+  it.each([
+    { configured: false, usable: false },
+    { configured: true, usable: false },
+    { configured: true, usable: true },
+  ])('invalidated default OpenAI auth only allows models when another pooled account is usable ($configured/$usable)', async ({ configured, usable }) => {
     codexAuthState.state = { kind: 'reconnect-required', reason: 'token_revoked' };
+    vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({
+      providerId: 'openai', configured, strategy: 'least',
+      accounts: usable ? [{ id: 'second', paused: false, limit: 4, weight: 1,
+        directory: '/fixture/.codex-second', status: 'ready', running: 0 }] : [],
+    });
     providersState.providers = [
       makeProvider('openai', {
         name: 'OpenAI',
@@ -691,11 +731,16 @@ describe('ProvidersSection — 深链定位', () => {
       }),
     ];
     renderAt('?tab=providers&connect=openai');
-    const toggle = (await screen.findByRole('switch', { name: 'GPT-6' })) as HTMLButtonElement;
-    expect(toggle.disabled).toBe(true);
+    await waitFor(() => expect((screen.getByRole('switch', { name: 'GPT-6' }) as HTMLButtonElement).disabled).toBe(!usable));
+    const toggle = screen.getByRole('switch', { name: 'GPT-6' });
     fireEvent.click(toggle);
-    expect(setModelVisibilitiesSpy).not.toHaveBeenCalled();
-    expect(screen.getByText('settings.providers.models.manage.connectionRequired')).toBeTruthy();
+    if (usable) {
+      expect(setModelVisibilitiesSpy).toHaveBeenCalledOnce();
+      expect(screen.queryByText('settings.providers.models.manage.connectionRequired')).toBeNull();
+    } else {
+      expect(setModelVisibilitiesSpy).not.toHaveBeenCalled();
+      expect(screen.getByText('settings.providers.models.manage.connectionRequired')).toBeTruthy();
+    }
   });
 
   it('ChatGPT 系统共享登录失效时显示来源说明并打开 ChatGPT App', async () => {

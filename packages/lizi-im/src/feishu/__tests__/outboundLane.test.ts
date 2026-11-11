@@ -448,6 +448,7 @@ describe('feishu outbound lane routing', () => {
 
     await expect(outbound.resolveReplyMessage('om_parent', 'oc_group1')).resolves.toEqual({
       replyContext: {
+        messageId: 'om_parent',
         author: '张乾',
         text: 'Omarchy @Quattro 发布了',
       },
@@ -476,11 +477,11 @@ describe('feishu outbound lane routing', () => {
     });
 
     await expect(outbound.resolveReplyMessage('om_parent_nameless', 'oc_group1')).resolves.toEqual({
-      replyContext: { author: 'Alice', text: 'hi @user @user' },
+      replyContext: { messageId: 'om_parent_nameless', author: 'Alice', text: 'hi @user @user' },
     });
   });
 
-  it('retains quoted media references for screened host downloads', async () => {
+  it('retains quoted media references for bounded host downloads', async () => {
     larkMocks.getMessage.mockResolvedValueOnce({
       code: 0,
       data: {
@@ -498,6 +499,7 @@ describe('feishu outbound lane routing', () => {
 
     await expect(outbound.resolveReplyMessage('om_parent_image', 'oc_group1')).resolves.toEqual({
       replyContext: {
+        messageId: 'om_parent_image',
         author: 'Alice', text: '[图片]',
       },
       attachments: [{ kind: 'image', imageKey: 'img_parent', messageId: 'om_parent_image' }],
@@ -621,6 +623,7 @@ describe('feishu outbound lane routing', () => {
 
     await expect(outbound.resolveReplyMessage('om_parent_card', 'oc_group1')).resolves.toEqual({
       replyContext: {
+        messageId: 'om_parent_card',
         author: 'Cindy',
         text: '这是上一条完整答案',
         isBot: true,
@@ -1041,9 +1044,113 @@ describe('private notification topic output', () => {
     expect(larkMocks.create).not.toHaveBeenCalled();
   });
 
+  // 测试价值(#9245): 生产入口是 sendText → createMessage。合并转发根/不能开话题的
+  // 单聊对 reply_in_thread 回 230072, 修复前这次失败把「不支持」提示一起吞掉。
+  // 成功的私聊话题回复仍带 reply_in_thread(上一条用例)。最小失败输入: threadTs
+  // 指向的回复先被 230072 拒绝。tier: unit。
+  it.each(['thrown', 'body'] as const)(
+    'retries without reply_in_thread when Feishu rejects the topic reply (230072 %s, #9245)',
+    async (shape) => {
+      if (shape === 'thrown') {
+        const err = new Error('reply in thread not supported') as Error & {
+          response?: { data?: { code: number } };
+        };
+        err.response = { data: { code: 230072 } };
+        larkMocks.reply.mockRejectedValueOnce(err);
+      } else {
+        larkMocks.reply.mockResolvedValueOnce({
+          code: 230072,
+          msg: 'reply in thread not supported',
+          data: { message_id: '' },
+        } as unknown as { data: { message_id: string } });
+      }
+      larkMocks.reply.mockResolvedValueOnce({ data: { message_id: 'om_plain_reply' } });
+      const { messageId } = await outbound.sendText('ou_owner', '合并转发内容读取失败', {
+        threadTs: 'om_merge_root',
+      });
+      expect(messageId).toBe('om_plain_reply');
+      expect(larkMocks.reply).toHaveBeenCalledTimes(2);
+      expect(larkMocks.reply.mock.calls[0]?.[0].data).toEqual(expect.objectContaining({ reply_in_thread: true }));
+      expect(larkMocks.reply.mock.calls[1]?.[0].data).not.toHaveProperty('reply_in_thread');
+      expect(larkMocks.reply.mock.calls[1]?.[0].path).toEqual({ message_id: 'om_merge_root' });
+      expect(larkMocks.create).not.toHaveBeenCalled();
+    },
+  );
+
   it('rejects thread ids used as message ids without falling back to the main chat', async () => {
     await expect(outbound.sendText('ou_owner', 'hello', { threadTs: 'omt_thread' })).rejects.toThrow();
     expect(larkMocks.create).not.toHaveBeenCalled();
     expect(larkMocks.reply).not.toHaveBeenCalled();
+  });
+
+  // 测试价值(#9313 review): 合并转发根对 reply_in_thread 的拒绝是确定性的。
+  // 修复前每次出站都先写一次注定失败的 reply_in_thread 再降级, 一条多段答案
+  // 每条消息都多一次 API 往返。最小失败输入: 同一个根先被 230072 拒绝, 再发一次。
+  it('remembers a rejected topic root and replies directly next time (#9313)', async () => {
+    larkMocks.reply.mockResolvedValueOnce({
+      code: 230072,
+      msg: 'reply in thread not supported',
+      data: { message_id: '' },
+    } as unknown as { data: { message_id: string } });
+    larkMocks.reply.mockResolvedValue({ data: { message_id: 'om_plain_reply' } });
+
+    await outbound.sendText('ou_owner', '第一条', { threadTs: 'om_merge_root' });
+    await outbound.sendText('ou_owner', '第二条', { threadTs: 'om_merge_root' });
+
+    // 第一次:被拒后降级成普通回复; 第二次:直接普通回复, 不再重复那次失败的写。
+    expect(larkMocks.reply).toHaveBeenCalledTimes(3);
+    expect(larkMocks.reply.mock.calls[0]?.[0].data).toEqual(expect.objectContaining({ reply_in_thread: true }));
+    expect(larkMocks.reply.mock.calls[1]?.[0].data).not.toHaveProperty('reply_in_thread');
+    expect(larkMocks.reply.mock.calls[2]?.[0].data).not.toHaveProperty('reply_in_thread');
+    expect(larkMocks.reply.mock.calls[2]?.[0].path).toEqual({ message_id: 'om_merge_root' });
+    expect(larkMocks.create).not.toHaveBeenCalled();
+  });
+
+  it('does not retry onto a replaced account after 230072 (#9313)', async () => {
+    larkMocks.reply.mockImplementationOnce(async (payload) => {
+      const data = payload.data as { reply_in_thread?: boolean };
+      if (data.reply_in_thread) {
+        // 第一次在途时账号被替换 — 重试必须被 pin epoch 拦下。
+        outbound.unbindClient();
+        outbound.bindClient(otherCreds);
+        return { code: 230072, msg: 'reply in thread not supported', data: { message_id: '' } };
+      }
+      return { data: { message_id: 'om_should_not_send' } };
+    });
+
+    await expect(
+      outbound.sendText('ou_owner', '合并转发内容读取失败', { threadTs: 'om_merge_root' }),
+    ).rejects.toThrow(/account was replaced/);
+    expect(larkMocks.reply).toHaveBeenCalledTimes(1);
+    expect(larkMocks.create).not.toHaveBeenCalled();
+  });
+
+  // 测试价值(#9313 review): 账号在途被替换时,旧账号的 230072 不能写进新账号的
+  // 「这个根不支持话题回复」缓存 —— 否则新账号对同一条消息会莫名丢掉
+  // reply_in_thread, 话题回复落进群主流。最小失败输入: 旧账号的回复被拒时
+  // 账号被换掉, 随后新账号对同一个根出站。
+  it('does not let a replaced account poison the new account root cache (#9313)', async () => {
+    larkMocks.reply.mockImplementationOnce(async (payload) => {
+      const data = payload.data as { reply_in_thread?: boolean };
+      if (data.reply_in_thread) {
+        outbound.unbindClient();
+        outbound.bindClient(otherCreds);
+        return { code: 230072, msg: 'reply in thread not supported', data: { message_id: '' } };
+      }
+      return { data: { message_id: 'om_should_not_send' } };
+    });
+    larkMocks.reply.mockResolvedValue({ data: { message_id: 'om_new_account_reply' } });
+
+    await expect(
+      outbound.sendText('ou_owner', '旧账号的消息', { threadTs: 'om_merge_root' }),
+    ).rejects.toThrow(/account was replaced/);
+
+    larkMocks.reply.mockClear();
+    await outbound.sendText('ou_owner', '新账号的消息', { threadTs: 'om_merge_root' });
+
+    // 新账号仍按 reply_in_thread 回这个根:旧账号的拒绝结论没进新账号的缓存。
+    expect(larkMocks.reply).toHaveBeenCalledTimes(1);
+    expect(larkMocks.reply.mock.calls[0]?.[0].data).toEqual(expect.objectContaining({ reply_in_thread: true }));
+    expect(larkMocks.create).not.toHaveBeenCalled();
   });
 });

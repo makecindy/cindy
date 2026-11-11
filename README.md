@@ -107,7 +107,7 @@ billing still apply; the free client does not mean unlimited model usage.
 Linux users: see the [Ubuntu, Arch Linux and Omarchy installation guide](docs/linux.md)
 for installation, updates, keyring setup and migration from a manual install.
 
-<h3 align="center">Okay, maybe a little popular.</h3>
+<h3 align="center">A few people noticed.</h3>
 
 <p align="center">
   <a href="https://github.com/makecindy/cindy/stargazers">

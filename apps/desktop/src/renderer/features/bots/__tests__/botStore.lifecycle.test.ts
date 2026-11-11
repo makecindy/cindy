@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import * as store from '../botStore';
+import * as owner from '@/contexts/dataOwnerGeneration';
 
 vi.mock('@/state/newMakerDraft', () => {
   const snapshot = () => ({
@@ -44,10 +46,14 @@ const bot = {
   createdAt: 1,
 };
 
+let fixtureGeneration = 0;
+beforeEach(() => {
+  window.localStorage.clear();
+  owner.setDataOwnerGeneration(`bot-lifecycle-${++fixtureGeneration}`);
+});
+
 describe('Bot lifecycle deletion during database hydration', () => {
   beforeEach(() => {
-    vi.resetModules();
-    window.localStorage.clear();
     window.localStorage.setItem('cindy.bots.v1', JSON.stringify([bot]));
   });
 
@@ -90,7 +96,7 @@ describe('Bot lifecycle deletion during database hydration', () => {
       },
     });
 
-    const store = await import('../botStore');
+    const hydrating = store.ensureBotProfilesLoaded();
     await vi.waitFor(() => expect(list).toHaveBeenCalledOnce());
     expect(store.getBotProfiles()).toEqual([]);
 
@@ -103,7 +109,7 @@ describe('Bot lifecycle deletion during database hydration', () => {
     expect(runBotLifecycleAction).not.toHaveBeenCalled();
 
     releaseHydration();
-    await deletion;
+    await Promise.all([hydrating, deletion]);
 
     expect(runBotLifecycleAction).toHaveBeenCalledOnce();
     expect(store.getBotProfiles()).toEqual([]);
@@ -114,11 +120,6 @@ describe('Bot lifecycle deletion during database hydration', () => {
 
 
 describe('Bot profile snapshot ownership', () => {
-  beforeEach(() => {
-    vi.resetModules();
-    window.localStorage.clear();
-  });
-
   it('ignores an older list response after a newer refresh has completed', async () => {
     let release!: (rows: typeof bot[]) => void;
     const list = vi.fn()
@@ -128,16 +129,15 @@ describe('Bot profile snapshot ownership', () => {
       configurable: true,
       value: { localDb: { bots: { list } } },
     });
-    const store = await import('../botStore');
+    const hydrating = store.ensureBotProfilesLoaded();
     store.refreshBotProfiles();
     await vi.waitFor(() => expect(store.getBotProfiles()[0]?.name).toBe('Newer profile'));
     release([bot]);
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await hydrating;
     expect(store.getBotProfiles()[0]?.name).toBe('Newer profile');
   });
 
   it('clears prior-owner data immediately and ignores its late list response', async () => {
-    const owner = await import('@/contexts/dataOwnerGeneration');
     owner.setDataOwnerGeneration('owner-a');
     let release!: (rows: typeof bot[]) => void;
     const list = vi.fn()
@@ -148,20 +148,19 @@ describe('Bot profile snapshot ownership', () => {
       configurable: true,
       value: { localDb: { bots: { list } } },
     });
-    const store = await import('../botStore');
-    await vi.waitFor(() => expect(store.getBotProfiles()).toHaveLength(1));
-    store.refreshBotProfiles();
+    await store.ensureBotProfilesLoaded();
+    expect(store.getBotProfiles()).toHaveLength(1);
+    const previousHydration = store.ensureBotProfilesLoaded(true);
     owner.setDataOwnerGeneration('owner-b');
     expect(store.getBotProfiles()).toEqual([]);
     store.refreshBotProfiles();
     await vi.waitFor(() => expect(store.getBotProfiles()[0]?.name).toBe('Owner B'));
     release([bot]);
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await previousHydration;
     expect(store.getBotProfiles().map((row) => row.id)).toEqual(['bot-b']);
   });
 
   it('loads the signed-in owner projection on demand after the startup hydration missed it', async () => {
-    const owner = await import('@/contexts/dataOwnerGeneration');
     owner.setDataOwnerGeneration(null);
     const list = vi.fn()
       .mockRejectedValueOnce(new Error('database not ready'))
@@ -170,8 +169,8 @@ describe('Bot profile snapshot ownership', () => {
       configurable: true,
       value: { localDb: { bots: { list } } },
     });
-    const store = await import('../botStore');
-    await vi.waitFor(() => expect(list).toHaveBeenCalledOnce());
+    await store.ensureBotProfilesLoaded();
+    expect(list).toHaveBeenCalledOnce();
     owner.setDataOwnerGeneration('owner-a');
     // Sign-in clears the projection without reloading it; nothing is listening outside Bots views.
     expect(store.getBotProfiles()).toEqual([]);
@@ -185,7 +184,6 @@ describe('Bot profile snapshot ownership', () => {
   });
 
   it('rejects a prior-owner update without changing the new owner projection', async () => {
-    const owner = await import('@/contexts/dataOwnerGeneration');
     owner.setDataOwnerGeneration('owner-a');
     let release!: (row: typeof bot) => void;
     const list = vi.fn().mockResolvedValue([bot]);
@@ -194,8 +192,8 @@ describe('Bot profile snapshot ownership', () => {
       configurable: true,
       value: { localDb: { bots: { list, update } } },
     });
-    const store = await import('../botStore');
-    await vi.waitFor(() => expect(store.getBotProfiles()).toHaveLength(1));
+    await store.ensureBotProfilesLoaded();
+    expect(store.getBotProfiles()).toHaveLength(1);
     const pending = store.updateBotProfile(bot.id, { name: 'Old owner edit' });
     const rejected = expect(pending).rejects.toThrow('Bot data owner changed');
     owner.setDataOwnerGeneration('owner-b');

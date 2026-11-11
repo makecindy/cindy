@@ -30,8 +30,7 @@ const refused = (code: string, message: string) => ({ result: { ok: false, code,
 /** The request a page produced, as the host receives it. */
 const sent = (call = 0) => host.invoke.mock.calls[call][2][0] as { input: { op: BotSettingsOp; args?: Record<string, unknown> }; resourceRef?: { id: string } };
 const ALL_OPS = ['caps', 'profile.get', 'profile.update', 'profile.chooseAvatar', 'profile.retryInvitation', 'lifecycle.run', 'models.default',
-  'memory.list', 'memory.read', 'memory.update', 'memory.delete', 'capabilities.catalog', 'autonomy.get', 'autonomy.set', 'autonomy.reset', 'history.search',
-  'routines.list', 'routines.sources', 'routines.history', 'routines.save', 'routines.runNow', 'routines.remove',
+  'memory.list', 'memory.read', 'memory.update', 'memory.delete', 'capabilities.catalog', 'history.search',
   'voice.models', 'voice.voices', 'voice.preference', 'voice.setPreference',
   'channels.im.list', 'channels.im.remove', 'channels.wechat.get', 'channels.x.get'] as BotSettingsOp[];
 
@@ -54,6 +53,85 @@ it('applies the host profile after an autosave and sends only what changed', asy
   expect(sent(1)).toMatchObject({ resourceRef: { id: 'bot-1' }, input: { op: 'profile.update', args: { patch: { description: 'Designer', capabilities: { memory: false } } } } });
   expect(next.description).toBe('Designer');
   expect(profiles.get()?.description).toBe('Designer');
+});
+
+it('accepts a same-model choice once through a host that declares the operation', async () => {
+  const { target, profiles } = create([...ALL_OPS, 'profile.acceptModelSelection']);
+  host.invoke.mockResolvedValueOnce(ok({ profile: profile() }));
+  await profiles.load();
+  host.invoke.mockResolvedValueOnce(ok({ profile: profile({ currentVersion: 2 }) }));
+  await target.profile.update('bot-1', { acceptModelSelection: true });
+  expect(sent(1).input).toEqual({ v: 1, op: 'profile.acceptModelSelection', args: { patch: {}, expectedVersion: 1 } });
+  expect(profiles.get()).not.toHaveProperty('acceptModelSelection');
+});
+
+it('rereads a version conflict even when a concurrent refresh was discarded during the first save', async () => {
+  const { target, profiles } = create([...ALL_OPS, 'profile.acceptModelSelection']);
+  host.invoke.mockResolvedValueOnce(ok({ profile: profile() }));
+  await profiles.load();
+  let finish!: (result: unknown) => void;
+  host.invoke.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+  const saving = target.profile.update('bot-1', { acceptModelSelection: true });
+  host.invoke.mockResolvedValueOnce(ok({ profile: profile({ currentVersion: 2 }) }));
+  await profiles.refresh();
+  expect(profiles.get()?.currentVersion).toBe(1);
+  host.invoke.mockResolvedValueOnce(ok({ profile: profile({ currentVersion: 2 }) }));
+  finish(refused('PRECONDITION_FAILED', 'Profile changed'));
+  await expect(saving).rejects.toSatisfy(error => extractIpcError(error)?.code === 'PRECONDITION_FAILED');
+  expect(profiles.get()?.currentVersion).toBe(2);
+  host.invoke.mockResolvedValueOnce(ok({ profile: profile({ currentVersion: 3 }) }));
+  await target.profile.update('bot-1', { acceptModelSelection: true });
+  expect(sent(4).input).toMatchObject({ op: 'profile.acceptModelSelection', args: { expectedVersion: 2 } });
+});
+
+it('keeps actual model changes usable on older hosts but refuses unsupported same-model acceptance', async () => {
+  const { target, profiles } = create();
+  host.invoke.mockResolvedValueOnce(ok({ profile: profile() }));
+  await profiles.load();
+  await expect(target.profile.update('bot-1', { acceptModelSelection: true }))
+    .rejects.toSatisfy(error => extractIpcError(error)?.code === 'UNSUPPORTED_CAPABILITY');
+  expect(host.invoke).toHaveBeenCalledTimes(1);
+  const chain = [{ harness: 'pi' as const, model: 'changed', providerId: null, effort: '', fastMode: false }];
+  host.invoke.mockResolvedValueOnce(ok({ profile: profile({ currentVersion: 2 }) }));
+  await target.profile.update('bot-1', { acceptModelSelection: true, capabilities: { modelChain: chain, modelChainOverride: chain } });
+  expect(sent(1).input.op).toBe('profile.update');
+  expect(sent(1).input.args?.patch).not.toHaveProperty('acceptModelSelection');
+});
+
+// Unit regression: hosts can declare model selection without accepting its newer
+// top-level location mirror. Exercise the production transport against that old
+// field boundary, keeping the chain's execution locations in the saved readback.
+it.each([false, true])('saves model locations and restores defaults on old hosts (accept selection: %s)', async (acceptsSelection) => {
+  const { target, profiles } = create(acceptsSelection ? [...ALL_OPS, 'profile.acceptModelSelection'] : ALL_OPS);
+  const local = { harness: 'pi' as const, model: 'm', providerId: null, effort: '', fastMode: false };
+  const remote = { ...local, agentDeviceId: 'share:one' };
+  let saved = profile({ capabilities: { ...local, modelChain: [remote], modelChainOverride: [remote] } });
+  host.invoke.mockImplementation(async (_device, _channel, requests) => {
+    const { op, args } = requests[0].input;
+    if (op === 'profile.get') return ok({ profile: saved });
+    const capabilities = args.patch.capabilities;
+    if ('agentDeviceId' in capabilities) return refused('INVALID_PARAMS', 'capabilities has an unsupported field');
+    saved = profile({ currentVersion: saved.currentVersion + 1, capabilities });
+    return ok({ profile: saved });
+  });
+  await profiles.load();
+  for (const [chain, override, location] of [
+    [[local], null, null],
+    [[remote], [remote], 'share:one'],
+    [[local, remote], [local, remote], null],
+  ] as const) {
+    await target.profile.update('bot-1', { acceptModelSelection: true, capabilities: {
+      ...local, agentDeviceId: location, modelChain: [...chain],
+      modelChainOverride: override === null ? null : [...override], modelOverride: null,
+    } });
+    const request = sent(host.invoke.mock.calls.length - 1).input;
+    expect(request.op).toBe(acceptsSelection ? 'profile.acceptModelSelection' : 'profile.update');
+    expect(request.args?.patch).toMatchObject({ capabilities: { modelChain: chain, modelChainOverride: override } });
+    expect((request.args?.patch as { capabilities: object }).capabilities).not.toHaveProperty('agentDeviceId');
+    await profiles.refresh();
+    expect(profiles.get()?.capabilities.modelChain).toEqual(chain);
+    expect(profiles.get()?.capabilities.modelChainOverride).toEqual(override);
+  }
 });
 
 it('rolls an optimistic write back and rejects with the host error when the host refuses it', async () => {
@@ -127,36 +205,6 @@ it('does not re-read a deleted teammate after the lifecycle action', async () =>
   expect(host.invoke).toHaveBeenCalledTimes(1);
 });
 
-it('offers routine session modes only to hosts that keep them', async () => {
-  // A host that predates session modes accepts saveWithModel but drops sessionMode.
-  const older = create([...ALL_OPS, 'routines.saveWithModel']);
-  expect(older.target.routineSessionModes).toBe(false);
-  host.invoke.mockResolvedValue(ok([]));
-  await older.target.routines.save('bot-1', { name: 'Digest' } as never, 'r1');
-  expect(sent()).toMatchObject({ input: { op: 'routines.saveWithModel' } });
-  const current = create([...ALL_OPS, 'routines.saveWithModel', 'routines.saveWithSessionMode']);
-  expect(current.target.routineSessionModes).toBe(true);
-  await current.target.routines.save('bot-1', { name: 'Digest', sessionMode: 'fresh' } as never, 'r1');
-  expect(sent(1)).toMatchObject({ input: { op: 'routines.saveWithSessionMode', args: { input: { sessionMode: 'fresh' } } } });
-});
-
-it('runs routines on the teammate computer and tells the page when they change there', async () => {
-  const { target, changed } = create();
-  host.invoke.mockResolvedValue(ok([]));
-  await target.routines.save('bot-1', { name: 'Digest' } as never, 'r1');
-  expect(sent()).toMatchObject({ resourceRef: { id: 'bot-1' }, input: { op: 'routines.save', args: { id: 'r1', input: { name: 'Digest' } } } });
-  await target.routines.sources();
-  expect(sent(1)).toMatchObject({ input: { op: 'routines.sources' } });
-  expect(sent(1).resourceRef).toBeUndefined();
-  const listener = vi.fn();
-  const off = target.routines.onChanged(listener);
-  changed('routines');
-  expect(listener).toHaveBeenCalledTimes(1);
-  off();
-  changed('routines');
-  expect(listener).toHaveBeenCalledTimes(1);
-});
-
 it('never takes credentials and leaves browser sign-in and folder choosing to the teammate computer', async () => {
   const { target } = create();
   const im = target.channels.im!;
@@ -171,7 +219,7 @@ it('never takes credentials and leaves browser sign-in and folder choosing to th
 });
 
 it('offers only the pages whose operations the host implements', () => {
-  expect([...remoteBotSettingsPages(new Set(ALL_OPS))].sort()).toEqual(['capabilities', 'channels', 'history', 'memory', 'model', 'personality', 'profile', 'routines', 'voice']);
+  expect([...remoteBotSettingsPages(new Set(ALL_OPS))].sort()).toEqual(['capabilities', 'channels', 'history', 'memory', 'model', 'personality', 'profile', 'voice']);
   expect([...remoteBotSettingsPages(new Set<BotSettingsOp>(['caps', 'profile.get', 'profile.update']))].sort()).toEqual(['personality', 'profile']);
   // The Home folder is a path on the teammate's computer: no remote host ever offers it.
   expect(remoteBotSettingsPages(new Set(ALL_OPS)).has('advanced')).toBe(false);
@@ -194,15 +242,3 @@ it('starts again from the host profile, not from the old one, when a later part 
   expect(profiles.get()).toMatchObject({ avatarColor: 'blue', identitySource: long, userContextSource: '' });
 });
 
-it('negotiates final delivery and discovers recipients on the teammate computer', async () => {
-  const older = create();
-  expect(older.target.routineDelivery).toBe(false);
-  expect(await older.target.routines.deliveryTargets?.('bot-1')).toEqual([]);
-  const current = create([...ALL_OPS, 'routines.saveWithDelivery', 'routines.deliveryTargets']);
-  host.invoke.mockResolvedValue(ok([]));
-  const delivery = { kind: 'im', targetId: 'host-destination' };
-  await current.target.routines.save('bot-1', { name: 'Digest', delivery } as never, 'r1');
-  expect(sent()).toMatchObject({ resourceRef: { id: 'bot-1' }, input: { op: 'routines.saveWithDelivery', args: { input: { delivery } } } });
-  await current.target.routines.deliveryTargets?.('bot-1');
-  expect(sent(1)).toMatchObject({ resourceRef: { id: 'bot-1' }, input: { op: 'routines.deliveryTargets' } });
-});

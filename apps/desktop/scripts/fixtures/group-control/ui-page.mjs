@@ -23,16 +23,23 @@ const LONG_DEVICE = 'Mac Studio · A very long device name for layout verificati
 /** Migrated from check-group-control-layout.mjs (remote-control notice above the composer). */
 export default {
   name: 'group-chat',
-  // The single-page builder does not implement Vite's ?url imports. Voice is outside this fixture.
+  // Voice capture is outside this fixture.
   stubs: {
+    // Rich component bodies read account context, but sign-in is not under test.
+    'src/renderer/contexts/AuthContext': { partial: `export const useAuth = () => ({ mode: 'local', dataOwnerId: 'fixture-account', user: null });` },
     'src/renderer/voice-input/workletUrl': 'export const getVoiceInputWorkletUrl = () => { throw new Error("Voice input is not covered by this fixture"); };',
+    // The file preview pulls in pdf.js' and draw.io's workers through Vite's ?url, which the single-page builder does not implement; no group case opens a file.
+    'src/renderer/features/cc-agent/workdir-browse/FileBodyView': 'export const FileBodyView = () => null;',
   },
   entry: './group-control-fixture.tsx',
   viewport: { width: 1280, height: 800 },
   real: 'BotGroupChatView (timeline, composer, send button, header registration), ControlledBanner, ContentHeader shell, Markdown, theme, fonts and translations',
   notCovered:
-    'Real IPC/network sending (send-status/share-pending control host receipts), round control, real device-link control and revocation, answering pending owner interactions, plans and attachment IO; the bubbles case shows a task snapshot, not a live task; the sidebar renders the real group row for work-state cases and is otherwise an empty frame',
+    'Account sign-in, real IPC/network sending (send-status/share-pending control host receipts), round control, real device-link control and revocation, answering pending owner interactions, server plan scheduling and attachment IO; plan-read cases control the full-read receipt; the bubbles case shows a task snapshot, not a live task; the sidebar renders the real group row for work-state cases and is otherwise an empty frame',
   cases: {
+    'plan-read-talk': { about: '#9398: delayed plan details never flash an organizer or missing bubble; talk is independent', data: { ...base, sidebar: false, messages: 1, planRead: 'talk' } },
+    'plan-read-work': { about: '#9398: delayed work details preserve the selected organizer', data: { ...base, sidebar: false, messages: 1, planRead: 'work' } },
+    'plan-read-missing': { about: '#9398: a confirmed missing plan has a neutral visible fallback', data: { ...base, sidebar: false, messages: 1, planRead: 'missing' } },
     'share-pending': {
       about: 'Pending topic copy appears in the main chat while the host receipt is unresolved',
       data: { ...base, bubbles: true, threadPanel: true, sharePending: true },
@@ -49,6 +56,8 @@ export default {
     'work-queued-step-mixed': { about: '#8064 review: queued plan step does not override a running reply', data: { ...base, messages: 2, workState: 'queued', workParallel: true, workQueuedStep: true } },
     'work-queued': { about: '#8047: queued execution is busy without speaking or elapsed work', data: { ...base, messages: 2, workState: 'queued' } },
     'process-history': { about: 'Owned teammate historical process, final reply outside', data: { ...base, sidebar: false, processRecord: true, workRemote: true } },
+    'process-empty': { about: 'Final-only reply explains the empty process', data: { ...base, sidebar: false, processRecord: true, processEmpty: true, workRemote: true } },
+    'process-unavailable': { about: 'Unavailable process shows a retry action', data: { ...base, sidebar: false, processRecord: true, processUnavailable: true, workRemote: true } },
     'process-other-owner': { about: 'Other members never receive a private process entry', data: { ...base, sidebar: false, processRecord: true, processOtherOwner: true, workRemote: true } },
     'work-thinking': { about: 'Actual group work status, scenario data: thinking', data: { ...base, messages: 2, workState: 'thinking' } },
     'work-tools': { about: 'Actual group work status, scenario data: command execution', data: { ...base, messages: 2, workState: 'testing' } },
@@ -129,6 +138,37 @@ export default {
       about: 'The Thread panel\'s 关注 switch, off by default; switched on it reads 已关注',
       data: { ...base, bubbles: true, threadUnread: true, threadPanel: true },
     },
+    'read-receipts': {
+      about: 'Bot group 消息已读: my messages end in one check (sent) or two (read) inside the bubble; clicking it lists who has read (names only, never who has not), and a very large group shows only 已读 N/总人数',
+      viewport: { width: 900, height: 700 },
+      data: { ...base, sidebar: false, readReceipts: true,
+        members: [{ botId: 'g', actorId: 'g', name: 'Ada' }, { botId: 'h', actorId: 'h', name: 'Kai' }, { botId: 'c', actorId: 'c', name: 'Leo' },
+          { botId: 'd', actorId: 'd', name: 'Mira' }, { botId: 'e', actorId: 'e', name: 'Orin' }, { botId: 'f', actorId: 'f', name: 'Quill' }] },
+    },
+    'read-receipts-mask': {
+      about: 'Bot group 消息已读 on 面具模式 messages (a teammate replied in my name): still my messages, one or two checks and the read list; the mask avatar beside the bubble never meets the check',
+      viewport: { width: 900, height: 760 },
+      data: { ...base, sidebar: false, readReceipts: true, readReceiptsMask: true,
+        members: [['a', 'Aster'], ['g', 'Ada'], ['h', 'Kai'], ['c', 'Leo'], ['d', 'Mira'], ['e', 'Orin'], ['f', 'Quill']].map(([id, name]) => ({ botId: id, actorId: id, name })) },
+    },
+    'read-receipts-teammates': {
+      about: 'Bot group 消息已读 in a group of only teammates: a teammate reads a message when its computer takes the execution up, so the check turns double and the list names the teammates (no times)',
+      viewport: { width: 900, height: 520 },
+      data: { ...base, sidebar: false, readReceipts: true, readReceiptsTeammates: true,
+        members: [['a', 'Aster', 'bot'], ['b', 'Nova', 'bot'], ['g', 'Ada', 'human']].map(([id, name, actorKind]) => ({ botId: id, actorId: id, actorKind, name })) },
+    },
+    'read-receipts-fill': {
+      about: 'Bot group 消息已读: messages of growing length, so one has a last line just full: the check moves onto a row of its own instead of covering text',
+      viewport: { width: 700, height: 1200 },
+      data: { ...base, sidebar: false, readReceipts: true, readReceiptsFill: true,
+        members: [{ botId: 'g', actorId: 'g', name: 'Ada' }] },
+    },
+    'read-receipts-thread': {
+      about: 'Bot group 消息已读 in the Thread panel: my replies end in a check inside the bubble, level with the last line',
+      viewport: { width: 1100, height: 760 },
+      data: { ...base, sidebar: false, readReceipts: true, threadPanel: true,
+        members: [{ botId: 'g', actorId: 'g', name: 'Ada' }, { botId: 'h', actorId: 'h', name: 'Kai' }] },
+    },
     'bubbles-wrapped': {
       about: 'PR #6549: wrapped reactions keep both toolbars level with their bubbles; server messages with empty mention ids still open unique member cards',
       viewport: { width: 800, height: 800 },
@@ -140,6 +180,38 @@ export default {
   },
   async check(page, ui) {
     const definition = this.cases[ui.case];
+    if (definition.data.planRead) {
+      const missing = page.getByText(await ui.t('bots.groupChat.plan.missing'), { exact: true });
+      const organizer = page.getByText(await ui.t('bots.groupChat.organizer'), { exact: true });
+      await page.evaluate(() => window.dispatchEvent(new Event('fixture-plan-hold')));
+      await ui.emit('botGroupChanged', { groupId: 'fixture-group', change: 'messages', historyRevision: 'fixture-live', messages: [
+        { id: 'p1-card', sequence: 2, kind: 'plan', planId: 'p1', authorKind: 'user', authorBotId: null,
+          authorName: 'You', content: '', mentions: { all: false, botIds: [] }, noticeCode: null, files: [], attachments: [], createdAt: 1700000000000 },
+        { id: 'ordinary-delta', sequence: 10, kind: 'message', planId: null, authorKind: 'bot', authorBotId: 'a',
+          authorName: 'Aster', content: '普通消息无需等待安排详情。', mentions: { all: false, botIds: [] }, noticeCode: null, files: [], attachments: [], createdAt: 1700000000000 },
+      ] });
+      await page.getByText('普通消息无需等待安排详情。', { exact: true }).waitFor();
+      await ui.capture('details-pending');
+      assert.equal(await missing.count(), 0);
+      assert.equal(await organizer.count(), 0);
+      await page.evaluate(() => window.dispatchEvent(new Event('fixture-plan-ready')));
+      if (definition.data.planRead === 'missing') {
+        await missing.waitFor();
+        assert.equal(await organizer.count(), 0);
+        assert.equal(await missing.locator('xpath=ancestor::article').count(), 0);
+      } else if (definition.data.planRead === 'talk') {
+        const card = page.getByTestId('bot-group-arrangement');
+        await card.waitFor();
+        assert.equal(await organizer.count(), 0);
+        assert.equal(await card.locator('xpath=ancestor::article').count(), 0);
+      } else {
+        await organizer.waitFor();
+        assert.match(await organizer.locator('..').innerText(), /Nova/);
+      }
+      if (definition.data.planRead !== 'missing') assert.equal(await missing.count(), 0);
+      await ui.capture('details-settled');
+      return;
+    }
     if (definition.data.processRecord) {
       const journal = page.locator('[data-teammate-process]');
       await page.getByText('任务与 PR 的进展已整理，以下是需要跟进的事项。').waitFor();
@@ -148,6 +220,15 @@ export default {
       const heading = journal.locator(':scope > button');
       assert.equal(await heading.getAttribute('aria-expanded'), 'false');
       await heading.click();
+      if (definition.data.processEmpty || definition.data.processUnavailable) {
+        await journal.getByText(await ui.t(definition.data.processEmpty ? 'chat.teammateProcess.empty' : 'chat.teammateProcess.unavailable')).waitFor();
+        assert.equal(await journal.getByRole('button', { name: await ui.t('chat.errorBanner.retry'), exact: true }).count(), definition.data.processUnavailable ? 1 : 0);
+        await ui.capture('process-expanded');
+        await heading.click();
+        assert.equal(await heading.getAttribute('aria-expanded'), 'false');
+        await ui.capture('process-collapsed');
+        return;
+      }
       await journal.getByText('我先核对任务的最近进展，再看未完成 PR 的阻塞点。').waitFor();
       await ui.capture('history-expanded');
       const endError = await journal.evaluate(root => {
@@ -274,14 +355,184 @@ export default {
       assert.ok(!(await timeline.innerText()).includes('"op":"create"'));
       const text = await timeline.innerText();
       assert.ok(text.includes('图片说明保留') && text.includes('图片标题保留'));
-      assert.ok(text.includes('🖼'), 'an undescribed image has a neutral placeholder');
-      assert.ok(!text.includes('cindy-media://') && !text.includes('/private/tmp/fixture-image.png'));
-      for (const kind of ['image', 'video', 'audio']) {
-        const url = `https://example.test/public-${kind}`;
-        const link = timeline.getByRole('link', { name: url, exact: true });
-        assert.equal(await link.count(), 1, 'public media keep an actionable web link');
-        assert.equal(await link.getAttribute('href'), url);
+      assert.equal(await timeline.getByText(await ui.t('richAnswer.invalidImageReference'), { exact: true }).count(), 1, 'invalid managed image references have an explicit recovery state');
+      assert.equal(await timeline.locator('a[href^="cindy-media:"], a[href^="/private/"], img[src^="/private/"]').count(), 0, 'unavailable references must not become privileged links or file requests');
+      // Group replies now render rich media instead of the former text-only projection.
+      // Serve checked-in assets from the fixture origin; never relax its network CSP.
+      const picture = timeline.locator('img[alt="public-image"]');
+      await picture.waitFor();
+      assert.equal(await picture.evaluate(img => img.complete && img.naturalWidth > 0), true);
+      for (const kind of ['video', 'audio']) {
+        const media = timeline.locator(kind);
+        assert.equal(await media.count(), 1, `${kind} keeps a native media control`);
+        assert.ok((await media.getAttribute('src'))?.startsWith('http://cindy-ui.test/assets/'));
       }
+      return;
+    }
+    if (ui.case === 'read-receipts') {
+      const marks = page.getByTestId('read-receipt');
+      assert.equal(await marks.count(), 11, 'every sent message of mine has a check, no one else\'s');
+      assert.deepEqual(await marks.evaluateAll(nodes => nodes.map(node => node.getAttribute('data-read'))),
+        ['true', 'false', 'true', 'true', 'false', 'true', 'true', 'false', 'true', 'false', 'true']);
+      // The check is a 24px button inside the bubble's bottom right corner and never covers its text.
+      const geometry = await page.evaluate(() => [...document.querySelectorAll('[data-bot-group-message-id]')].flatMap(row => {
+        const mark = row.querySelector('[data-testid=read-receipt]');
+        const bubble = row.querySelector('[data-testid=bot-group-self-bubble]');
+        if (!mark || !bubble) return [];
+        const m = mark.getBoundingClientRect(), b = bubble.getBoundingClientRect();
+        const walker = document.createTreeWalker(bubble, NodeFilter.SHOW_TEXT);
+        let last = null;
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          if (node.textContent.trim() && !node.parentElement.closest('[data-read-tail], button, time')) last = node;
+        }
+        let covers = false;
+        if (last) {
+          const range = document.createRange(); range.selectNodeContents(last);
+          covers = [...range.getClientRects()].some(r => r.right > m.left + 1 && r.left < m.right - 1 && r.bottom > m.top + 1 && r.top < m.bottom - 1);
+        }
+        return [{ id: row.getAttribute('data-bot-group-message-id'), button: mark.tagName === 'BUTTON', size: Math.round(m.width), inside: m.right <= b.right && m.bottom <= b.bottom + 1 && m.left >= b.left, covers, height: Math.round(b.height) }];
+      }));
+      assert.ok(geometry.length >= 9 && geometry.every(item => item.button && item.size >= 24 && item.inside && !item.covers), `checks sit in the bubble corner: ${JSON.stringify(geometry)}`);
+      // A short message does not grow a row for its check.
+      // The text keeps one line (the check shares it) and the bubble is that line plus its own padding and border.
+      const oneLine = await page.evaluate(() => {
+        const bubble = document.querySelector('[data-bot-group-message-id="rr-short-read"] [data-testid=bot-group-self-bubble]');
+        const text = bubble.querySelector('p');
+        const style = getComputedStyle(bubble), line = parseFloat(getComputedStyle(text).lineHeight);
+        const chrome = ['paddingTop', 'paddingBottom', 'borderTopWidth', 'borderBottomWidth'].reduce((sum, key) => sum + parseFloat(style[key]), 0);
+        return { text: Math.round(text.getBoundingClientRect().height), line: Math.round(line), bubble: Math.round(bubble.getBoundingClientRect().height), chrome: Math.round(chrome) };
+      });
+      assert.ok(oneLine.text <= oneLine.line + 1 && oneLine.bubble <= oneLine.text + oneLine.chrome + 1, `a one-line bubble stays one line: ${JSON.stringify(oneLine)}`);
+      await ui.capture('checks');
+      // A one-line bubble is where the hover toolbar (level with the top) comes closest to the check's click area.
+      const short = page.locator('[data-bot-group-message-id="rr-short-read"]');
+      await short.hover();
+      await short.locator('[data-bot-group-message-actions]').waitFor({ state: 'visible' });
+      const apart = await short.evaluate(row => {
+        const bar = row.querySelector('[data-bot-group-message-actions]').getBoundingClientRect();
+        const mark = row.querySelector('[data-testid=read-receipt]').getBoundingClientRect();
+        return bar.right <= mark.left || bar.bottom <= mark.top || bar.left >= mark.right || bar.top >= mark.bottom;
+      });
+      assert.ok(apart, 'the toolbar and the check\'s click area do not overlap');
+      await ui.capture('hover-short');
+      // Keyboard focus lands on the check and shows a ring.
+      await page.mouse.move(0, 0);
+      await short.getByTestId('read-receipt').focus();
+      await ui.capture('focus');
+      // Two checks: who has read it (never who has not).
+      const many = page.locator('[data-bot-group-message-id="rr-many"]');
+      await many.getByTestId('read-receipt').click();
+      const popover = page.getByRole('dialog');
+      await popover.getByText('Ada', { exact: true }).waitFor();
+      assert.equal(await popover.getByRole('listitem').count(), 4, 'the four who have read, and no one who has not');
+      await ui.capture('read-list');
+      await page.keyboard.press('Escape');
+      await popover.waitFor({ state: 'detached' });
+      assert.ok(await many.getByTestId('read-receipt').evaluate(node => node === document.activeElement), 'focus returns to the check');
+      // A very large group: the counts only, no names.
+      await page.mouse.move(0, 0);
+      await page.locator('[data-bot-group-message-id="rr-list"]').getByTestId('read-receipt').click();
+      const big = page.getByRole('dialog');
+      await big.getByText('37/180').waitFor();
+      assert.equal(await big.getByRole('listitem').count(), 0, 'no names in a group the server does not list');
+      await ui.capture('read-count-only');
+      await page.keyboard.press('Escape');
+      await big.waitFor({ state: 'detached' });
+      // One check: nobody has read it yet.
+      await page.mouse.move(0, 0);
+      await page.locator('[data-bot-group-message-id="rr-short-sent"]').getByTestId('read-receipt').click();
+      await page.getByRole('dialog').getByText(await ui.t('bots.groupChat.server.readersNone'), { exact: true }).waitFor();
+      await ui.capture('no-readers');
+      await page.keyboard.press('Escape');
+      await page.mouse.move(0, 0);
+      // Share mode: the checks are only marks, still outside the image.
+      await many.hover();
+      await many.getByRole('button', { name: await ui.t('chat.messageActionBar.moreActions'), exact: true }).click();
+      await page.getByRole('menuitem', { name: await ui.t('chat.shareImage.entry'), exact: true }).click();
+      await page.mouse.move(0, 0);
+      await ui.capture('share-mode');
+      const shared = await page.evaluate(() => [...document.querySelectorAll('[data-testid=read-receipt]')].map(node => [node.tagName, node.hasAttribute('data-share-exclude')]));
+      assert.ok(shared.length === 11 && shared.every(([tag, excluded]) => tag === 'SPAN' && excluded), `checks are not clickable while sharing: ${JSON.stringify(shared)}`);
+      return;
+    }
+    if (ui.case === 'read-receipts-mask') {
+      const marks = page.getByTestId('read-receipt');
+      assert.equal(await marks.count(), 4, 'mask messages are mine: every one has a check, like my own message');
+      assert.deepEqual(await marks.evaluateAll(nodes => nodes.map(node => node.getAttribute('data-read'))), ['true', 'false', 'true', 'false']);
+      const geometry = await page.evaluate(() => [...document.querySelectorAll('[data-bot-group-message-id]')].flatMap(row => {
+        const mark = row.querySelector('[data-testid=read-receipt]');
+        const bubble = row.querySelector('[data-testid=bot-group-self-bubble]');
+        if (!mark || !bubble) return [];
+        const avatar = row.querySelector('button[aria-label] [class*=rounded-full]')?.closest('button');
+        const m = mark.getBoundingClientRect(), b = bubble.getBoundingClientRect(), a = avatar?.getBoundingClientRect();
+        return [{ id: row.getAttribute('data-bot-group-message-id'), button: mark.tagName === 'BUTTON', size: Math.round(m.width), inside: m.right <= b.right && m.bottom <= b.bottom + 1 && m.left >= b.left,
+          mask: Boolean(a), apart: !a || a.left >= b.right - 1 || a.right <= b.left + 1 }];
+      }));
+      assert.ok(geometry.length === 4 && geometry.every(item => item.button && item.size >= 24 && item.inside && item.apart), `checks sit in the bubble, apart from the mask avatar: ${JSON.stringify(geometry)}`);
+      assert.equal(geometry.filter(item => item.mask).length, 3, 'three of them carry the mask avatar, the last one is plain');
+      await ui.capture('checks');
+      await page.locator('[data-bot-group-message-id="mk-long"]').getByTestId('read-receipt').click();
+      const popover = page.getByRole('dialog');
+      await popover.getByText('Ada', { exact: true }).waitFor();
+      assert.equal(await popover.getByRole('listitem').count(), 4, 'the four who have read, and no one who has not');
+      assert.equal(await popover.locator('time').count(), 0, 'the list shows names, not times');
+      await ui.capture('read-list');
+      await page.keyboard.press('Escape');
+      await popover.waitFor({ state: 'detached' });
+      await page.mouse.move(0, 0);
+      await page.locator('[data-bot-group-message-id="mk-short-sent"]').getByTestId('read-receipt').click();
+      await page.getByRole('dialog').getByText(await ui.t('bots.groupChat.server.readersNone'), { exact: true }).waitFor();
+      await ui.capture('no-readers');
+      await page.keyboard.press('Escape');
+      return;
+    }
+    if (ui.case === 'read-receipts-teammates') {
+      const marks = page.getByTestId('read-receipt');
+      assert.deepEqual(await marks.evaluateAll(nodes => nodes.map(node => node.getAttribute('data-read'))), ['true', 'false', 'true']);
+      await ui.capture('checks');
+      await marks.first().click();
+      const popover = page.getByRole('dialog');
+      await popover.getByText('Aster', { exact: true }).waitFor();
+      assert.deepEqual(await popover.getByRole('listitem').allInnerTexts().then(items => items.map(item => item.replace(/\s+/g, ' ').trim().replace(/^[A-Z] /, ''))), ['Aster', 'Nova'], 'both teammates are listed, in the server\'s order');
+      assert.equal(await popover.locator('time').count(), 0, 'a teammate\'s read has no time');
+      await ui.capture('read-list');
+      await page.keyboard.press('Escape');
+      await popover.waitFor({ state: 'detached' });
+      // A person and a teammate in one list.
+      await page.mouse.move(0, 0);
+      await marks.nth(2).click();
+      await popover.getByText('Ada', { exact: true }).waitFor();
+      assert.deepEqual(await popover.getByRole('listitem').allInnerTexts().then(items => items.map(item => item.replace(/\s+/g, ' ').trim().replace(/^[A-Z] /, ''))), ['Ada', 'Aster'], 'a person and a teammate are listed together');
+      await ui.capture('read-list-mixed');
+      await page.keyboard.press('Escape');
+      await popover.waitFor({ state: 'detached' });
+      return;
+    }
+    if (ui.case === 'read-receipts-fill') {
+      const rows = await page.evaluate(() => [...document.querySelectorAll('[data-bot-group-message-id]')].flatMap(row => {
+        const mark = row.querySelector('[data-testid=read-receipt]'), bubble = row.querySelector('[data-testid=bot-group-self-bubble]');
+        if (!mark || !bubble) return [];
+        const m = mark.getBoundingClientRect(), b = bubble.getBoundingClientRect();
+        const walker = document.createTreeWalker(row.querySelector('p'), NodeFilter.SHOW_TEXT);
+        let last = null;
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) if (node.textContent.trim()) last = node;
+        const range = document.createRange(); range.selectNodeContents(last);
+        const covers = [...range.getClientRects()].some(r => r.right > m.left + 1 && r.left < m.right - 1 && r.bottom > m.top + 1 && r.top < m.bottom - 1);
+        const tail = row.querySelector('[data-read-tail]')?.getBoundingClientRect();
+        const rects = [...range.getClientRects()].map(r => [Math.round(r.left), Math.round(r.top), Math.round(r.right), Math.round(r.bottom)]);
+        return [{ id: row.getAttribute('data-bot-group-message-id'), height: Math.round(b.height), covers, ...(covers ? { mark: [m.left, m.top, m.right, m.bottom].map(Math.round), tail: tail && [tail.left, tail.top, tail.right, tail.bottom].map(Math.round), rects } : {}) }];
+      }));
+      assert.ok(rows.length === 30 && rows.every(row => !row.covers), `no check covers text: ${JSON.stringify(rows)}`);
+      console.log('heights', rows.map(row => row.height).join(','));
+      await ui.capture('fill');
+      return;
+    }
+    if (ui.case === 'read-receipts-thread') {
+      await page.locator('[data-thread-preview="rr-thread"]').click();
+      const panel = page.getByTestId('bot-group-thread-panel').or(page.locator('[data-bot-group-thread-panel]')).first();
+      await page.getByTestId('read-receipt').nth(11).waitFor();
+      await page.mouse.move(0, 0);
+      await ui.capture('thread');
       return;
     }
     const input = page.locator('textarea');
@@ -418,9 +669,12 @@ export default {
         const bar = document.querySelector(`${row} [data-bot-group-message-actions]`).getBoundingClientRect();
         const bubble = document.querySelector(`${row} [data-testid="bot-group-bubble"]`).getBoundingClientRect();
         const timeline = document.querySelector('[data-testid="bot-group-timeline"]').getBoundingClientRect();
-        return { gap: bar.left - bubble.right, inside: bar.right <= timeline.right };
+        const narrow = document.querySelector(`${row} .chat-bubble-layout`).getBoundingClientRect().width <= 480;
+        return { gap: bar.left - bubble.right, inside: bar.right <= timeline.right, narrow,
+          below: bar.top > bubble.top && bar.left >= bubble.left && bar.right <= bubble.right };
       }, row);
-      assert.ok(geometry.gap >= 0 && geometry.gap <= 32, `toolbar sits beside the bubble (gap ${geometry.gap}px)`);
+      assert.ok(geometry.narrow ? geometry.below : geometry.gap >= 0 && geometry.gap <= 32,
+        `toolbar stays below narrow content or beside wide content: ${JSON.stringify(geometry)}`);
       assert.ok(geometry.inside, 'toolbar stays inside the timeline');
       assert.ok(await toolbar.isVisible());
       // Reactions wider than a short message's text stay over its own bubble and inside the timeline.
@@ -432,12 +686,14 @@ export default {
         const bar = document.querySelector(`${row} [data-bot-group-message-actions]`).getBoundingClientRect();
         const timeline = document.querySelector('[data-testid="bot-group-timeline"]').getBoundingClientRect();
         return { id, left: corner.left - bubble.left, right: corner.right - bubble.right, inside: corner.left >= timeline.left && corner.right <= timeline.right,
+          narrow: document.querySelector(`${row} .chat-bubble-layout`).getBoundingClientRect().width <= 480,
           toolbarTop: bar.top - bubble.top, wrapped: corner.height > reactions.firstElementChild.getBoundingClientRect().height };
       }));
       for (const c of corners) {
         assert.ok(c.inside, `${c.id} reactions stay inside the timeline`);
         assert.ok(c.left >= -12 && c.right <= 12, `${c.id} reactions stay over the bubble (${c.left}, ${c.right})`);
-        assert.ok(Math.abs(c.toolbarTop) <= 1, `${c.id} toolbar aligns with bubble top (${c.toolbarTop}px)`);
+        assert.ok(c.narrow ? c.toolbarTop > 0 : Math.abs(c.toolbarTop) <= 1,
+          `${c.id} toolbar follows the available content width (${c.toolbarTop}px)`);
         if (ui.case === 'bubbles-wrapped') assert.ok(c.wrapped, `${c.id} exercises multiple reaction rows`);
       }
       // r4324819612: the opposite of the long-root case — the entry is wider

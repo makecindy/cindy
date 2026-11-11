@@ -58,7 +58,7 @@ describe('主 BrowserWindow 后台节流', () => {
     expect(source).toContain('const nextAllowed = !mainWindowHasRunningTurn && !mainWindowHasVoiceCall;');
     expect(source).toMatch(/setBackgroundThrottling\(\s*mainWindowBackgroundThrottlingAllowed,?\s*\)/);
     expect(source).not.toContain('isRemoteDesktopVideoActive');
-    expect(source).toContain('registerRemoteDesktopIpc(isGlobalVoiceInputOverlaySender, {');
+    expect(source).toMatch(/registerRemoteDesktopIpc\(\s*isGlobalVoiceInputOverlaySender,\s*\{/);
     expect(source).toContain('onAnySessionTurnKeepaliveChange: (isRunning) => {');
     expect(source).toContain('setMainWindowBackgroundThrottlingForActiveTurn(isRunning);');
     expect(source).toContain('notifyUpdateAutoRelaunchBusyStateChanged();');

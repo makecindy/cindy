@@ -28,13 +28,30 @@ import {
 } from './windowsHost';
 
 const exec = promisify(execFile);
-const binaryName =
+const inputBinaryName = () =>
   process.platform === 'darwin' ? 'cindy-macos-desktop-input' : 'cindy-windows-desktop-input.exe';
 let build: Promise<string> | null = null;
 async function resolveBinary(): Promise<string> {
   if (process.platform === 'linux') return resolveLinuxInputBinary();
   if (app.isPackaged)
-    return path.join(process.resourcesPath, 'tools', 'remote-desktop', binaryName);
+    return path.join(process.resourcesPath, 'tools', 'remote-desktop', inputBinaryName());
+  if (process.platform === 'darwin') {
+    // Personal source releases run writable JS, but their input helper is sealed
+    // inside the stable signed shell. Never silently replace it with a cache build.
+    let personal: { capabilities?: { desktopInput?: boolean } } | undefined;
+    try {
+      personal = JSON.parse(
+        await fs.readFile(path.join(app.getAppPath(), 'resources/personal-native.json'), 'utf8'),
+      );
+    } catch {
+      /* Ordinary source checkout, or legacy personal runtime. */
+    }
+    if (personal?.capabilities?.desktopInput === true) {
+      const shipped = path.join(process.resourcesPath, 'tools', 'remote-desktop', inputBinaryName());
+      await fs.access(shipped);
+      return shipped;
+    }
+  }
   if (build) return build;
   const resolve = async () => {
     const sourceRoot = path.join(app.getAppPath(), 'native', 'remote-desktop');
@@ -59,6 +76,7 @@ async function resolveBinary(): Promise<string> {
     digest.update(callerSource);
     if (process.platform === 'darwin') digest.update(process.execPath).update('dev-caller-v1');
     if (process.platform === 'win32') {
+      digest.update(await fs.readFile(path.join(sourceRoot, '.cargo', 'config.toml')));
       digest.update(await fs.readFile(path.join(sourceRoot, 'windows-input', 'src', 'desktop.rs')));
       digest.update(await fs.readFile(path.join(sourceRoot, 'windows-input', 'src', 'privacy.rs')));
       digest.update(
@@ -69,7 +87,7 @@ async function resolveBinary(): Promise<string> {
     }
     const hash = digest.digest('hex');
     const directory = path.join(app.getPath('userData'), 'remote-desktop', 'native', hash);
-    const binary = path.join(directory, binaryName);
+    const binary = path.join(directory, inputBinaryName());
     try {
       await fs.access(binary);
       return binary;
@@ -103,6 +121,8 @@ async function resolveBinary(): Promise<string> {
           'build',
           '--release',
           '--locked',
+          '--config',
+          path.join(sourceRoot, '.cargo', 'config.toml'),
           '--manifest-path',
           manifest,
           '--target-dir',
@@ -110,7 +130,7 @@ async function resolveBinary(): Promise<string> {
         ],
         { timeout: 180_000 },
       );
-      await fs.copyFile(path.join(directory, 'build', 'release', binaryName), temporary);
+      await fs.copyFile(path.join(directory, 'build', 'release', inputBinaryName()), temporary);
     }
     await fs.rename(temporary, binary);
     return binary;

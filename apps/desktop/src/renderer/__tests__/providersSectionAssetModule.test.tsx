@@ -269,6 +269,42 @@ it.each(['ready', 'unavailable'])('uses the queried dashboard in the settings ca
   expect(window.electronAPI.openExternal).toHaveBeenCalledExactlyOnceWith(dashboardUrl);
 });
 
+it('keeps the manual refresh action after the first OpenCode Go quota snapshot', async () => {
+  Object.assign(window.electronAPI.maker, {
+    fetchProviderAccountUsage: vi.fn(async () => ({
+      status: 'ready',
+      stale: false,
+      snapshot: {
+        kind: 'opencode-go-quota',
+        fetchedAt: Date.now(),
+        windows: [
+          { id: 'rolling', usedPercent: 10, limited: false, resetsAt: null },
+          { id: 'weekly', usedPercent: 45, limited: false, resetsAt: null },
+          { id: 'monthly', usedPercent: 65, limited: false, resetsAt: null },
+        ],
+      },
+    })),
+  });
+  render(
+    <ProviderAccountUsageModule
+      provider={{
+        id: 'opencode-go',
+        connected: true,
+        auth: { method: 'apiKey' },
+        routing: {
+          codex: {
+            upstream: 'https://opencode.ai/zen/go/v1',
+            authStrategy: 'api-key-header',
+          },
+        },
+      } as ProviderView}
+    />,
+  );
+
+  await screen.findByText('OpenCode Go');
+  expect(screen.getByRole('button', { name: 'providerAccountUsage.kimi.refresh' })).toBeTruthy();
+});
+
 describe('ProvidersSection — Cindy AI 账户资产模块', () => {
   it.each(['Cindy AI · 个人', 'Cindy AI · 心动', 'Cindy AI · Example Studio'])(
     'shows the source name %s in the provider list and detail header', async (name) => {

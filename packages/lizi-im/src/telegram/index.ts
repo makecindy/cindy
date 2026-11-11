@@ -318,11 +318,6 @@ export interface TelegramIMOptions {
    * 同进程第二份实例必须关掉, 由宿主自己的 IPC 按实例分发。
    */
   ipc?: boolean;
-  /**
-   * 非主人私聊是否进业务层(缺省 false = 只回一句礼貌提示)。伙伴自有连接对外
-   * 开放时打开: 陌生人私聊带 `speaker.isOwner=false` 进业务层, 命令仍只认主人。
-   */
-  guestDm?: boolean;
 }
 
 /** 宿主 Agent 工具可直接发出的媒体种类 → Bot API 方法与字段名。 */
@@ -1637,25 +1632,32 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     messageIds: readonly string[],
     /** 本轮触发消息(event.raw): 它的相册成员与被引消息已随本轮附件送达, 不重复补。 */
     trigger?: Pick<TgMessage, 'media_group_id' | 'reply_to_message'>,
+    options?: { attachmentMessageIds?: readonly string[]; provided?: readonly IMAttachment[] },
   ): Promise<{ attachments: Array<IMAttachment & { author: string }>; unavailable: string[] }> {
     const api = this.api;
-    if (!api || messageIds.length === 0) return { attachments: [], unavailable: [] };
+    if (messageIds.length === 0) return { attachments: [], unavailable: [] };
+    if (!api) return { attachments: [], unavailable: (options?.attachmentMessageIds ?? []).map((id) => `历史消息 ${id}：连接不可用，未提供附件原件`) };
     const cutoff = Date.now() - GROUP_MEDIA_POOL_TTL_MS;
     const repliedId = trigger?.reply_to_message?.message_id;
-    const messages = messageIds
+    const cached = messageIds
       .map((id) => this.groupMediaPool.get(this.groupMediaKey(chatId, id)))
-      .filter((m): m is TgMessage => m !== undefined && m.date * 1_000 >= cutoff)
-      .filter(
+      .filter((m): m is TgMessage => m !== undefined && m.date * 1_000 >= cutoff);
+    const messages = cached.filter(
         (m) =>
           m.message_id !== repliedId &&
           (trigger?.media_group_id === undefined || m.media_group_id !== trigger.media_group_id),
       )
       .sort((a, b) => a.message_id - b.message_id);
-    if (messages.length === 0) return { attachments: [], unavailable: [] };
+    // Cached quote/album members were already supplied by the current message.
+    const availableIds = new Set(cached.map((m) => String(m.message_id)));
+    const missing = (options?.attachmentMessageIds ?? []).filter((id) => id !== String(repliedId) && !availableIds.has(id))
+      .map((id) => `历史消息 ${id}：附件原件不在可用缓存中，仅提供历史记录`);
+    if (messages.length === 0) return { attachments: [], unavailable: missing };
     const generation = this.configVersion;
     const stagedDiscards: Array<() => Promise<void>> = [];
     const collected = await collectGroupHistoryMedia(messages, {
       api,
+      provided: options?.provided,
       stagedDiscards,
       ...(this.host.media ? { media: this.host.media } : {}),
       ...(this.host.files ? { files: this.host.files } : {}),
@@ -1664,7 +1666,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       await this.discardStagedMedia(stagedDiscards);
       return { attachments: [], unavailable: [] };
     }
-    return collected;
+    return { ...collected, unavailable: [...collected.unavailable, ...missing] };
   }
 
   /** 下载期间配置换代: 回滚本次暂存进媒体总仓的音视频(尽力而为, 失败只记日志)。 */
@@ -1720,18 +1722,11 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         this.logStaleSkip(staleFor, 'private', m.message_id);
         return;
       }
-      const isOwnerDm = String(m.from.id) === this.ownerUserId;
-      if (!isOwnerDm) {
-        if (!this.opts.guestDm) {
-          // 非 owner 私聊: 礼貌回应一句(官方 bot unbound 提示的个人版语义),
-          // per-user 冷却防刷屏; 不进任何业务链路。
-          this.maybeSendStrangerNotice(String(m.from.id), String(m.chat.id), m.message_id);
-          return;
-        }
-        // 对外开放的私聊: 命令永远 owner 专属, 陌生人的命令静默丢(与群成员同口径,
-        // 不可被探测); 普通消息带非主人标记进业务层。
-        const probe = (m.text ?? '').trimStart();
-        if (probe.startsWith('/') || probe.startsWith('!')) return;
+      if (String(m.from.id) !== this.ownerUserId) {
+        // 个人与伙伴 bot 的私聊都只认已绑定主人。必须在附件下载、typing、
+        // emitMessage 之前返回；独立访客任务和模型身份提示不是隐私边界。
+        this.maybeSendStrangerNotice(String(m.from.id), String(m.chat.id), m.message_id);
+        return;
       }
       // 附件下载可达数秒 — 快照受理时的配置, 完成后配置已换代就丢弃
       // (与 Discord 的 acceptedContext 模式同口径)。
@@ -1755,21 +1750,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       // DM 也要 typing: 首条真实消息落地前, 聊天列表/标题栏的「正在输入…」
       // 是唯一反馈, 靠 sendChatAction(Chris 2026-07-30 实测点名缺失)。
       this.startTypingLoop(String(m.chat.id));
-      this.emitMessage(
-        isOwnerDm
-          ? event
-          : {
-              ...event,
-              speaker: {
-                id: String(m.from.id),
-                name:
-                  [m.from.first_name, m.from.last_name].filter(Boolean).join(' ') ||
-                  String(m.from.id),
-                ...(m.from.username ? { username: m.from.username } : {}),
-                isOwner: false,
-              },
-            },
-      );
+      this.emitMessage(event);
       return;
     }
 

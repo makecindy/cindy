@@ -13,6 +13,7 @@ export interface ModelPickerPreferenceStore {
   };
   favorites: { items: readonly ModelFavoriteItem[]; store: FavoriteStore };
   memory: ModelMemoryAccessors;
+  memoryForLocation?: (agentDeviceId: string | null) => ModelMemoryAccessors;
 }
 
 /** A picker request may read favorites, but every edit stays in its own draft. */
@@ -33,6 +34,26 @@ export function useTransientModelPickerPreferences(deviceId?: string): ModelPick
     draft.favorites = items;
     refresh();
   };
+  const memoryForLocation = (agentDeviceId: string | null): ModelMemoryAccessors => ({
+    getEffort: (agent, providerId, modelId) => draft.efforts.get(key(agentDeviceId ?? '', agent, providerId, modelId)),
+    setEffort: (agent, providerId, modelId, effort) => {
+      draft.efforts.set(key(agentDeviceId ?? '', agent, providerId, modelId), effort);
+      refresh();
+    },
+    clearEffort: (agent, providerId, modelId) => {
+      draft.efforts.delete(key(agentDeviceId ?? '', agent, providerId, modelId));
+      refresh();
+    },
+    getFast: (agent, providerId, modelId) => draft.fast.get(key(agentDeviceId ?? '', agent, providerId, modelId)),
+    setFast: (agent, providerId, modelId, fast) => {
+      draft.fast.set(key(agentDeviceId ?? '', agent, providerId, modelId), fast);
+      refresh();
+    },
+    clearFast: (agent, providerId, modelId) => {
+      draft.fast.delete(key(agentDeviceId ?? '', agent, providerId, modelId));
+      refresh();
+    },
+  });
   return {
     engines: {
       get: (providerId, modelId) => {
@@ -50,26 +71,8 @@ export function useTransientModelPickerPreferences(deviceId?: string): ModelPick
         refresh();
       },
     },
-    memory: {
-      getEffort: (agent, providerId, modelId) => draft.efforts.get(key(agent, providerId, modelId)),
-      setEffort: (agent, providerId, modelId, effort) => {
-        draft.efforts.set(key(agent, providerId, modelId), effort);
-        refresh();
-      },
-      clearEffort: (agent, providerId, modelId) => {
-        draft.efforts.delete(key(agent, providerId, modelId));
-        refresh();
-      },
-      getFast: (agent, providerId, modelId) => draft.fast.get(key(agent, providerId, modelId)),
-      setFast: (agent, providerId, modelId, fast) => {
-        draft.fast.set(key(agent, providerId, modelId), fast);
-        refresh();
-      },
-      clearFast: (agent, providerId, modelId) => {
-        draft.fast.delete(key(agent, providerId, modelId));
-        refresh();
-      },
-    },
+    memory: memoryForLocation(null),
+    memoryForLocation,
     favorites: {
       items: favorites(),
       store: {

@@ -58,6 +58,7 @@ export type AgentIslandInteractionRequest =
 export const AGENT_ISLAND_COMPLETION_DWELL_MS = 5_000;
 export const AGENT_ISLAND_ERROR_DWELL_MS = 12_000;
 export const AGENT_ISLAND_REVEAL_DWELL_MS = 5_000;
+const AGENT_ISLAND_SUBTLE_REMINDER_MS = 3_000;
 // 12s → 8s:完成卡片的 dwell 现在能真正走完(临时会话调度 run 收尾时的 closeSession
 // 不再抹掉条目,见 closeAgentIslandSessionPreservingUnread),不需要再用更长的上限去弥补
 // 「随时可能被整条删掉」。
@@ -173,6 +174,8 @@ interface AgentIslandSessionState {
   deferredReveal: boolean;
   deferredRevealReason: 'visible-session' | 'app-focus' | 'queued' | 'manual-dismiss' | null;
   queuedRevealDwellMs: number | null;
+  /** Reminder request order, including remote/group entries; preserved when requeued. */
+  revealSequence: number;
   unread: boolean;
   activityLines: AgentIslandActivityLine[];
   activitySeq: number;
@@ -228,6 +231,8 @@ export interface AgentIslandUserPromptRollbackToken {
  * receives a display-ready snapshot and does no product-state arbitration.
  */
 export interface AgentIslandState {
+  /** A local display preference; does not alter unread or interaction state. */
+  subtleReminders: boolean;
   sessions: Map<string, AgentIslandSessionState>;
   isMouseInMenuBarZone: boolean;
   isMouseInExpandedPanel: boolean;
@@ -286,6 +291,7 @@ export interface AgentIslandRemoteUnreadTerminal {
 // 卡片身份的无碰撞活动代数:全局单调递增、不复用。不要退回毫秒时间戳 —— 重试在同一
 // 毫秒内再落新终态时时间戳会撞上(review P1),旧点击会误处置新提醒。
 let agentIslandActivityGeneration = 0;
+let agentIslandRevealSequence = 0;
 
 function nextActivityGeneration(): number {
   return ++agentIslandActivityGeneration;
@@ -304,6 +310,7 @@ function replaceAgentIslandCard(session: AgentIslandSessionState, now: number): 
 
 export function createAgentIslandState(): AgentIslandState {
   return {
+    subtleReminders: false,
     sessions: new Map(),
     isMouseInMenuBarZone: false,
     isMouseInExpandedPanel: false,
@@ -1590,6 +1597,15 @@ export function buildAgentIslandDisplayState(
   const pointerInside = isPointerInsideIsland(state);
   const shadowVisible = shouldShowShadow(current, manualExpanded, pointerInside);
   const pillSnapshot = buildPillSnapshot(surfaceOrderedSessions, current);
+  // List priority must not consume a newer hint's dwell behind an older waiting
+  // task. Compare reveal starts (card durations can predate enabling subtle mode),
+  // then card generations for events arriving in the same clock tick.
+  const reminder = state.subtleReminders && mode === 'compact'
+    ? orderedSessions.filter((session) => session.revealUntil !== null && session.revealUntil > now
+      && !shouldSmartSuppressSession(state, session)
+      && !(isBlockingSession(session) && isBlockingRevealSuppressed(state, session)))
+      .sort((a, b) => revealStartedAt(b) - revealStartedAt(a) || b.revealSequence - a.revealSequence)[0]
+    : undefined;
 
   return {
     visible: true,
@@ -1599,7 +1615,9 @@ export function buildAgentIslandDisplayState(
     displaySurface,
     layoutMode,
     appFocused: state.appFocused,
-    smartSuppressed: decision.smartSuppressed,
+    // A visible reminder can belong to a different task than the compact current.
+    // Its sound must not inherit that task's dismissed/suppressed presentation.
+    smartSuppressed: decision.smartSuppressed && !reminder,
     shadowVisible,
     currentSessionId: current?.sessionId ?? null,
     expandedDisplayId: displayPolicy === 'manualExpanded' ? state.hoverDisplayId : null,
@@ -1607,9 +1625,14 @@ export function buildAgentIslandDisplayState(
     sessions: displaySessions.map((session) => toSnapshot(session)),
     totalCount: displaySessions.length,
     measuredContentHeight: state.measuredContentHeight,
+    ...(reminder?.revealUntil ? { compactReminder: { phase: reminder.phase, until: reminder.revealUntil } } : {}),
     ...createDefaultAgentIslandDisplayConfig(),
     updatedAt: now,
   };
+}
+
+function revealStartedAt(session: AgentIslandSessionState): number {
+  return (session.revealUntil ?? 0) - (session.queuedRevealDwellMs ?? AGENT_ISLAND_REVEAL_DWELL_MS);
 }
 
 export interface AgentIslandCompanionChatProjection {
@@ -1749,6 +1772,18 @@ export function buildAllSessionActivitySnapshots(
   return snapshots;
 }
 
+/**
+ * 其它设备任务在岛上的镜像，按与本机任务相同的快照口径读出。只供本进程内的消费方
+ * (如键盘状态灯)使用，绝不能并入 {@link buildAllSessionActivitySnapshots} 的 relay 载荷。
+ */
+export function buildDeviceSessionActivitySnapshots(
+  state: AgentIslandState,
+): AgentIslandSessionSnapshot[] {
+  return Array.from(state.sessions.values())
+    .filter((session) => session.sourceDeviceId !== null && !session.groupChat)
+    .map((session) => toSnapshot(session));
+}
+
 export function getNextAgentIslandTimerAt(state: AgentIslandState, now: number): number | null {
   let next: number | null = null;
   for (const value of [
@@ -1807,7 +1842,8 @@ function updateHoverLifecycle(state: AgentIslandState, now: number): void {
 }
 
 function isHoverExpansionSuppressedByReminder(state: AgentIslandState, now: number): boolean {
-  if (state.hoverExpanded) return false;
+  // Subtle reminders have no expanded card whose hover would replace its content.
+  if (state.hoverExpanded || state.subtleReminders) return false;
   if (hasBlockingSession(state, now)) return true;
   const activeTransient = getActiveTransientSession(state, now);
   return Boolean(activeTransient && !shouldSmartSuppressSession(state, activeTransient));
@@ -1981,9 +2017,11 @@ function requestAttentionReveal(
   dwellMs: number,
   options: { forceUnread?: boolean } = {},
 ): void {
+  if (state.subtleReminders) dwellMs = AGENT_ISLAND_SUBTLE_REMINDER_MS;
   session.unread = options.forceUnread === true || !shouldSmartSuppressSession(state, session);
   session.queuedRevealDwellMs = dwellMs;
   if (session.phase === 'needs-interaction') {
+    session.revealSequence = ++agentIslandRevealSequence;
     session.revealUntil = now + dwellMs;
     session.deferredReveal = false;
     session.deferredRevealReason = null;
@@ -2002,6 +2040,8 @@ function enqueueTransientReveal(
   now: number,
   dwellMs: number,
 ): void {
+  if (state.subtleReminders) dwellMs = AGENT_ISLAND_SUBTLE_REMINDER_MS;
+  session.queuedRevealDwellMs = dwellMs;
   // 静音任务的完成 / 错误卡不揭示：它不该在岛面上出现，也不该带提示音。
   // 活动快照与未读账本另路，静音不影响。
   if (state.displaySuppressedSessionIds.has(session.sessionId)) {
@@ -2012,6 +2052,7 @@ function enqueueTransientReveal(
     return;
   }
   removeQueuedTransientReveal(state, session.sessionId);
+  session.revealSequence = ++agentIslandRevealSequence;
   if (state.activeTransientSessionId === session.sessionId) {
     session.revealUntil = now + dwellMs;
     session.deferredReveal = false;
@@ -2054,7 +2095,8 @@ function promoteNextTransientReveal(
     state.activeTransientSessionId = null;
   }
 
-  if (manualExpanded || hasBlockingSession(state, now) || hasDisplayableDismissedBlockingSession(state, now)) return;
+  if (manualExpanded || (!state.subtleReminders
+    && (hasBlockingSession(state, now) || hasDisplayableDismissedBlockingSession(state, now)))) return;
 
   while (state.transientRevealQueue.length > 0) {
     const nextSessionId = state.transientRevealQueue.shift();
@@ -2067,7 +2109,11 @@ function promoteNextTransientReveal(
       continue;
     }
     state.activeTransientSessionId = next.sessionId;
-    next.revealUntil = now + (next.queuedRevealDwellMs ?? AGENT_ISLAND_REVEAL_DWELL_MS);
+    const dwellMs = state.subtleReminders
+      ? AGENT_ISLAND_SUBTLE_REMINDER_MS
+      : (next.queuedRevealDwellMs ?? AGENT_ISLAND_REVEAL_DWELL_MS);
+    next.queuedRevealDwellMs = dwellMs;
+    next.revealUntil = now + dwellMs;
     next.deferredReveal = false;
     next.deferredRevealReason = null;
     return;
@@ -2089,6 +2135,9 @@ function deferActiveTransientReveal(
   state: AgentIslandState,
   reason: AgentIslandSessionState['deferredRevealReason'],
 ): void {
+  // Compact hints coexist with waiting tasks. Restarting the old hint on the
+  // next render would give it a newer start time than the incoming interaction.
+  if (state.subtleReminders) return;
   const activeSessionId = state.activeTransientSessionId;
   if (!activeSessionId) return;
   const active = state.sessions.get(activeSessionId);
@@ -2363,7 +2412,7 @@ function buildDisplayDecision(
 
   const blocking = orderedSessions.find(isBlockingSession) ?? null;
   const blockingSmartSuppressed = blocking ? isBlockingRevealSuppressed(state, blocking) : false;
-  if (blocking && !blockingSmartSuppressed) {
+  if (!state.subtleReminders && blocking && !blockingSmartSuppressed) {
     return {
       intent: { kind: 'blocking', sessionId: blocking.sessionId },
       surface: { kind: 'blocking', current: blocking },
@@ -2377,7 +2426,7 @@ function buildDisplayDecision(
 
   const activeId = getActiveTransientSession(state, now)?.sessionId;
   const activeTransient = orderedSessions.find(session => session.sessionId === activeId);
-  if (activeTransient && !shouldSmartSuppressSession(state, activeTransient)) {
+  if (!state.subtleReminders && activeTransient && !shouldSmartSuppressSession(state, activeTransient)) {
     return {
       intent: { kind: 'transient', sessionId: activeTransient.sessionId },
       surface: { kind: 'transient', current: activeTransient },
@@ -2746,6 +2795,7 @@ function createSession(meta: AgentIslandSessionMeta, now: number): AgentIslandSe
     deferredReveal: false,
     deferredRevealReason: null,
     queuedRevealDwellMs: null,
+    revealSequence: 0,
     unread: false,
     activityLines: [],
     activitySeq: 0,

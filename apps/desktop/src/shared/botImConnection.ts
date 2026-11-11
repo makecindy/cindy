@@ -8,8 +8,13 @@
  * 正本与语义见 main/im/shared/botImConnectionStore.ts 与 botImConnectionRuntime.ts。
  */
 
-export const BOT_IM_CHANNELS = ['telegram', 'feishu', 'wecom', 'dingtalk', 'discord'] as const;
+export const BOT_IM_CHANNELS = ['telegram', 'feishu', 'wecom', 'dingtalk', 'discord', 'imessage'] as const;
 export type BotImChannel = (typeof BOT_IM_CHANNELS)[number];
+
+/** Group participation identifiers shared by local IPC, remote settings and persistence. */
+export function isBotImGroupChatId(value: unknown): value is string {
+  return typeof value === 'string' && /^(?:-?\d{1,32}|(?:iMessage|any);\+;[^\r\n]{1,480})$/.test(value);
+}
 
 export type BotImFeishuService = 'feishu' | 'lark';
 
@@ -40,6 +45,7 @@ export const BOT_IM_CHANNEL_CHAT_VENDOR_KEY: Record<BotImChannel, string> = {
   wecom: 'wecomConversationId',
   dingtalk: 'dingtalkChatId',
   discord: 'discordChatId',
+  imessage: 'imessageChatId',
 };
 
 /** 这个会话的轮次能用某个渠道的原生 API 工具: 专线带该渠道 chat, 或主任务标记绑了该渠道。 */
@@ -82,6 +88,12 @@ export interface BotImConnectionRecord {
    * 个人 bot 的同名配置互不相干 —— 每条连接自己一份。
    */
   groupActivation?: Record<string, 'always'>;
+  /**
+   * 服务器频道白名单（Discord 连接）：缺省 / 空 = 不开放任何频道。每条连接独立一份，随连接记录
+   * 删除而消失；`allowMembers` 缺省 = 只有主人能在该频道召唤，显式开启后成员沿用该伙伴既有的权限与
+   * 共享记忆。与 设置 → IM 机器人 里那份个人 bot 的白名单互不相干。
+   */
+  discordChannelAccess?: BotImDiscordChannelAccess;
   /** List-only archive cutoffs. Never changes the referenced session or its routing. */
   archivedTaskRows?: Record<string, number>;
   /** Optional anchors for the same archived rows; older clients retain numeric cutoffs. */
@@ -97,12 +109,63 @@ export interface BotImConnectionGroup {
   activation: BotImGroupActivationMode;
 }
 
+export interface BotImDiscordChannelEntry {
+  guildId: string;
+  channelId: string;
+  allowMembers?: boolean;
+}
+/** 一个服务器的准入：见 packages/lizi-im 的 DiscordGuildAccessEntry（同一形状，渲染端不依赖传输包）。 */
+export interface BotImDiscordGuildAccess {
+  guildId: string;
+  enabled: boolean;
+  mode: 'all' | 'selected';
+  allowMembers?: boolean;
+  savedChannels?: Array<{ channelId: string; allowMembers?: boolean }>;
+}
+export interface BotImDiscordChannelAccess {
+  /** 当前生效的显式频道选择（旧版本只认这一项）。 */
+  channels: BotImDiscordChannelEntry[];
+  /** 服务器级设置；没有这一项的服务器按 `channels` 里是否有它的频道判定（存量含义）。 */
+  guilds?: BotImDiscordGuildAccess[];
+}
+
+/** 白名单形状版本：2 = 含服务器级设置。读到别的版本的电脑（更旧）一律拒绝编辑，避免写丢 / 误放大。 */
+export const BOT_IM_DISCORD_ACCESS_VERSION = 2;
+
+/** 伙伴页「服务器频道」小节：机器人当前连接里的服务器 / 频道（含机器人权限）+ 这条连接的白名单。 */
+export interface BotImDiscordChannelsPayload {
+  connectionId: string;
+  /** 白名单形状版本（见 BOT_IM_DISCORD_ACCESS_VERSION）；缺失 = 更旧的电脑。 */
+  accessVersion?: number;
+  /** 机器人当前是否连着（没连着时 guilds 为空，白名单照常返回）。 */
+  online: boolean;
+  guilds: Array<{
+    id: string;
+    name: string;
+    channels: Array<{
+      id: string;
+      name: string;
+      permissions: {
+        view: boolean;
+        send: boolean;
+        readHistory: boolean;
+        embed: boolean;
+        attachFiles: boolean;
+        sendInThreads: boolean;
+      };
+    }>;
+  }>;
+  access: BotImDiscordChannelAccess;
+}
+
 export interface BotImConnectionGroupsPayload {
   connectionId: string;
   groups: BotImConnectionGroup[];
 }
 
 export interface BotImConnectionView extends BotImConnectionRecord {
+  /** Optional local bridge health; older clients ignore it. Never contains credentials or message text. */
+  health?: { lastCatchUpAt: number | null; lastWebhookAt: number | null; uncertainInputs: number; uncertainSends: number };
   status: BotImConnectionStatus;
   identity: {
     /** Telegram bot 用户名 / Discord bot 标签(连上后才有); 其它渠道为 null。 */
@@ -117,6 +180,7 @@ export interface BotImConnectionListPayload {
 }
 
 export type BotImConnectionAddInput =
+  | { botId: string; channel: 'imessage'; groupAliases?: string[]; serverUrl: string; password: string; ownerAddress: string; chatGuids: string[]; listenHost: string; listenPort: number }
   | { botId: string; channel: 'telegram'; token: string; ownerUserId: string }
   | {
       botId: string;

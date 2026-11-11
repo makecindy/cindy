@@ -4,7 +4,7 @@
  * surface with original questions and stand-in answers. With no pending mentions, the original
  * single-Thread shortcut and followed-Thread list remain. Dismissal never acknowledges reads.
  */
-import { useId, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { AtSign, ArrowUpRight, ChevronRight, MessagesSquare, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover';
@@ -96,7 +96,7 @@ function MentionRow({ entry, onLocate }: { entry: GroupMaskMention; onLocate: ()
   );
 }
 
-export function BotGroupThreadHint({ threads, members, openRootId, onOpen, mentions = [], onLocateMention, onReadMentions, saving = false }: {
+export function BotGroupThreadHint({ threads, members, openRootId, onOpen, mentions = [], onLocateMention, onReadMentions, saving = false, suppressed = false }: {
   threads: readonly BotGroupThreadSummary[];
   members: readonly BotGroupMemberView[];
   /** The Thread open beside the chat: already being read, so it never asks for attention. */
@@ -106,9 +106,11 @@ export function BotGroupThreadHint({ threads, members, openRootId, onOpen, menti
   onLocateMention?: (mention: GroupMaskMention) => void;
   onReadMentions?: () => void;
   saving?: boolean;
+  suppressed?: boolean;
 }) {
   const { t } = useTranslation();
   const [listOpen, setListOpen] = useState(false);
+  useEffect(() => { if (suppressed) setListOpen(false); }, [suppressed]);
   const [dismissed, setDismissed] = useState<ReadonlyMap<string, number>>(new Map());
   const [dismissedMentions, setDismissedMentions] = useState<ReadonlySet<string>>(new Set());
   const hinted = botGroupHintThreads(threads, openRootId);
@@ -123,7 +125,7 @@ export function BotGroupThreadHint({ threads, members, openRootId, onOpen, menti
   const showList = mentions.length > 0 || hinted.length !== 1;
   const open = (rootId: string) => { setListOpen(false); onOpen(rootId); };
   return (
-    <Popover open={listOpen} onOpenChange={setListOpen}>
+    <Popover open={listOpen && !suppressed} onOpenChange={setListOpen}>
       <PopoverAnchor asChild>
         <div data-thread-hint="" className="pointer-events-auto absolute bottom-2 right-2 z-10 flex max-w-[calc(100%-16px)] items-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] text-13 text-[var(--text-primary)]">
           <button type="button" data-testid="group-attention-hint" data-count={mentions.length}

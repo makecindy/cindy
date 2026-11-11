@@ -1,3 +1,4 @@
+import { imBotSettings } from './ImBotSection.settings-search';
 import { Button } from '@/components/ui/button';
 import { Check, FolderOpen, Loader2, RotateCw, Trash2, Unplug } from 'lucide-react';
 import { useCallback } from 'react';
@@ -130,7 +131,7 @@ export function WechatBotSection({
   return (
     <ImChannelSettingsCard
       id={companion ? 'companion-im-wechat' : 'personal-im-wechat'}
-      title={t('settings.wechatBot.title')}
+      title={t(imBotSettings.wechat.titleKey)}
       description={t('settings.wechatBot.description')}
       routeSummary={
         companion ? (assigned === companion.id ? companion.name : null)
@@ -173,12 +174,12 @@ export function WechatBotSection({
             {t('settings.wechatBot.companion.permissionNote')}
           </p>
           {!otherCompanion && assigned ? (
-            <Button variant="secondary" size="sm" loading={isUpdatingCompanion}
+            <Button data-setting-id={imBotSettings.wechat.id} variant="secondary" size="sm" loading={isUpdatingCompanion}
               onClick={() => void setCompanion(null)}>
               {t('settings.wechatBot.companion.remove')}
             </Button>
           ) : !otherCompanion && state.bound && companion ? (
-            <Button variant="secondary" size="sm" loading={isUpdatingCompanion}
+            <Button data-setting-id={imBotSettings.wechat.id} variant="secondary" size="sm" loading={isUpdatingCompanion}
               disabled={!channelSettings} onClick={() => void setCompanion(companion.id)}>
               {t('settings.wechatBot.companion.useExisting', { name: companion.name })}
             </Button>
@@ -212,7 +213,7 @@ export function WechatBotSection({
               {t('settings.wechatBot.waiting.note')}
             </p>
           </div>
-          <Button
+          <Button data-setting-id={imBotSettings.wechat.id}
             variant="secondary"
             size="lg"
             type="button"
@@ -242,7 +243,7 @@ export function WechatBotSection({
           </div>
           <div className="flex flex-wrap gap-2">
             {host ? null : (
-              <Button
+              <Button data-setting-id={imBotSettings.wechat.id}
                 variant="secondary"
                 size="lg"
                 loading={isAuthorizing}
@@ -255,7 +256,7 @@ export function WechatBotSection({
                 {t('settings.wechatBot.actions.rebind')}
               </Button>
             )}
-            <Button
+            <Button data-setting-id={imBotSettings.wechat.id}
               variant="secondary"
               size="lg"
               loading={isUnbinding}
@@ -287,7 +288,7 @@ export function WechatBotSection({
               {t('bots.remoteSettings.finishOnHost', { device: host.name })}
             </p>
           ) : (
-            <Button
+            <Button data-setting-id={imBotSettings.wechat.id}
               variant="cta"
               size="lg"
               loading={isAuthorizing}
@@ -330,7 +331,7 @@ function WechatWorkingDirectory({
         </p>
       </div>
       <div className="flex min-w-0 items-center gap-2">
-        <Button
+        <Button data-setting-id={imBotSettings.wechat.id}
           variant="secondary"
           size="lg"
           type="button"
@@ -344,7 +345,7 @@ function WechatWorkingDirectory({
           </span>
         </Button>
         {configured && (
-          <Button
+          <Button data-setting-id={imBotSettings.wechat.id}
             variant="secondary"
             size="lg"
             type="button"

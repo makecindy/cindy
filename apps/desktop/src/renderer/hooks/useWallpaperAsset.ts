@@ -93,8 +93,7 @@ export function useWallpaperAsset(id: WallpaperId, kind: 'image' | 'video', enab
 
   return {
     url,
-    // Report pending on the selection's first render, before the effect starts,
-    // so the canvas cannot flash its thumbnail for a frame.
+    // Report progress on the selection's first render, before the effect starts.
     loading: active && !url && !failed && canEnsure,
     failed,
     loaded: active ? (url ? total : state?.key === key ? state.loaded : 0) : 0,

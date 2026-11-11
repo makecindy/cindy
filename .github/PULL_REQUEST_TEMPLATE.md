@@ -32,9 +32,10 @@ type：feat / fix / refactor / perf / chore / docs / test / revert / build / ci
 
 <!-- 涉及 UI 时附截图或录屏，并注明平台；不涉及则写“不涉及”。
 普通 Desktop 界面改动用单页验证截图即可：`pnpm ui:check --changed --theme all`（修旧问题加
-`--compare` 出改前／改后对照），再运行 `pnpm ui:check:publish`，它把截图发到作者 fork 的
-`pr-assets/<分支>`，输出带图片链接的本段内容，原样贴到这里。涉及登录、发送、跨设备等单页验证
-覆盖不到的变化，仍附完整 Cindy 截图；设计系统 PR 的证据要求见
+`--compare` 出改前／改后对照，改动集中在一个元素时加 `--focus`），再运行 `pnpm ui:check:publish`，
+它把截图发到作者 fork 的 `pr-assets/<分支>`，输出本段内容，原样贴到这里：正文只放与改动
+相关的并排截图，全量总览只给链接；不要把总览图直接嵌进正文。涉及登录、发送、跨设备等
+单页验证覆盖不到的变化，仍附完整 Cindy 截图，只放能说明改动的画面；设计系统 PR 的证据要求见
 docs/design-rules/design-governance.md §6。
 公开截图遵循 docs/dev-rules/desktop-development.md 里 PR 截图那一段的隐私原则。 -->
 
@@ -95,13 +96,12 @@ branch/worktree、Metro 归属与 __DEV__ build label 证据。 -->
 必须写清影响和回滚/降级方式；不涉及风险时明确写“无”。
 
 命中「存量插件兼容」时，必须写明「存量插件影响：无」或「有 + 迁移与提示方案」，并说明
-基于旧布局的升级用例跑在哪。会让用户已装插件失效或需要重装／重新确认的改动与冷更同级，
+基于旧布局的升级用例跑在哪。会让用户已装插件失效或需要重装／重新确认的改动，
 需把关人对该影响明确确认；规则见 docs/dev-rules/plugin-security-and-authoring.md 第 5 节。
 
 改动会改变 mobile runtime fingerprint（即触发冷更）时，还要写明为什么冷更不可避免、
-存量装机的影响范围与发版节奏建议；这类 PR 与技术框架变动同级，需仓库指定的把关人针对
-冷更明确确认后才能合并（提交者身份不构成例外）。冷更 PR 可保持 Ready 并正常审查，
-不因冷更要求新建讨论 issue 或转为 draft；确认可直接留在 PR 中。规则见
+存量装机的影响范围与发版节奏建议。冷更 PR 按普通流程审查与合并，可保持 Ready，
+不因冷更要求新建讨论 issue 或转为 draft。规则见
 docs/dev-rules/mobile-development.md 的「冷更边界」。 -->
 
 ### 提交前检查

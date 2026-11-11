@@ -103,6 +103,8 @@ export interface ProviderView extends Provider {
   remoteModelIds?: string[];
   /** Definition remains available for adding a removed local connection again. */
   removed?: boolean;
+  /** Upgrade-only connection kept for saved routes; account management lives under OpenAI. */
+  subscriptionPoolAlias?: true;
   subscriptionAccount?: { source: 'local' | 'oauth' | 'unknown'; identity?: string; reconnectRequired?: boolean };
   /** Public account identity and credential origin, never credential material. */
   openAiAccount?: { source: 'local' | 'oauth' | 'unknown'; identity?: string; reconnectRequired?: boolean };

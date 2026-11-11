@@ -13,7 +13,7 @@ export {
 import { ImageLightbox } from './ImageLightbox';
 import { VideoLightbox } from './VideoLightbox';
 import { createPortal } from 'react-dom';
-import { PreviewHeader } from './PreviewChrome';
+import { PREVIEW_PANEL_CLASS, PREVIEW_PANEL_STYLE, PreviewHeader, PreviewScrim } from './PreviewChrome';
 import { Spinner } from '@/components/ui/spinner';
 const TextLightbox = lazy(() =>
   import('./TextLightbox').then((module) => ({ default: module.TextLightbox })),
@@ -92,10 +92,16 @@ export function AttachmentCollectionPreview({
             <Suspense
               key={item.id}
               fallback={createPortal(
-                <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-[var(--surface)]">
-                  <PreviewHeader name={item.name} onClose={close} />
-                  <Spinner />
-                </div>,
+                <>
+                  <PreviewScrim onClose={close} />
+                  <div
+                    className={`z-[9999] flex items-center justify-center ${PREVIEW_PANEL_CLASS}`}
+                    style={PREVIEW_PANEL_STYLE}
+                  >
+                    <PreviewHeader name={item.name} onClose={close} />
+                    <Spinner />
+                  </div>
+                </>,
                 document.body,
               )}
             >

@@ -1,6 +1,10 @@
 {
   "progress": {
-    "stop": "停止"
+    "stop": "停止",
+    "stopMine": "自分の依頼を停止",
+    "stopAll": "すべて停止",
+    "stopAllHint": "他の人の依頼も含みます",
+    "step": "ステップ {{step}}/{{total}}"
   },
   "title": "グループチャット",
   "memberSeparator": "、",
@@ -79,7 +83,8 @@
     "planDone_one": "{{count}} ステップすべて完了しました",
     "planDone_other": "{{count}} ステップすべて完了しました",
     "planDoneGeneric": "役割分担が完了しました",
-    "olderOnComputer": "それより前のメッセージはパソコンで確認できます"
+    "olderOnComputer": "それより前のメッセージはパソコンで確認できます",
+    "endTalk": "終了"
   },
   "quote": {
     "label": "{{name}} を引用：{{summary}}",
@@ -98,6 +103,13 @@
     "stepFailed": "{{name}} はエラーのため、このステップを完了できませんでした",
     "stepTimeout": "{{name}} の作業に時間がかかりすぎたため、このステップを止めました",
     "stepUnavailable": "{{name}} は現在利用できないため、このステップを進められません",
+    "runtimeFailureReason": {
+      "unclaimed_timeout": {
+        "summary": "{{name}}は待機期限内に処理を開始できませんでした。今回のリクエストは終了しました。",
+        "advice": "パートナーのオーナーに、所属するパソコンで Cindy が正常に動作し、ネットワークに接続されているか確認してもらってください。",
+        "details": "Cindy とネットワークが正常に戻ったら、メッセージを再送してください。"
+      }
+    },
     "runtimeFailure": {
       "REMOTE_DEVICE_LIMIT": {
         "summary": "{{name}}は返信できません：この仲間のデバイスのリモートセッション数が上限に達しました。",
@@ -155,7 +167,12 @@
         "details": "メッセージを再送してください。再度失敗する場合は、ログを確認して問題を報告してください。"
       }
     },
-    "runtimeFailureSetupHint": "モデルや設定を変更する場合は、この仲間が動作するパソコンで行ってください。"
+    "runtimeFailureSetupHint": "モデルや設定を変更する場合は、この仲間が動作するパソコンで行ってください。",
+    "capability": {
+      "GROUP_AUTHORIZATION_REQUIRED": "{{name}} のツールは実行されませんでした。グループの許可が失効しているか、この操作が許可されていません。仲間の所有者がこのグループで改めて依頼してください。",
+      "GROUP_AUTHORIZATION_UNAVAILABLE": "{{name}} のグループでの許可を確認できず、ツールは実行されませんでした。接続が回復してから再試行してください。",
+      "ATTACHMENTS_UNAVAILABLE": "ダウンロードの失敗または添付数の上限により、一部の添付ファイルを {{name}} に渡せませんでした。今回必要なファイルを再送してください。"
+    }
   },
   "plan": {
     "intro_one": "この件は {{count}} ステップに分けて、次のように分担します:",
@@ -164,6 +181,8 @@
     "start": "開始する",
     "dismiss": "今回はやめる",
     "editHint": "担当や手順を変えたいときは、そのまま話しかけてください",
+    "autoContinue": "終わったら自動で次のステップへ",
+    "autoContinueSaveFailed": "ステップの引き継ぎを保存できませんでした。もう一度お試しください。",
     "autoNote": "ステップが終わると自動で次へ進みます。",
     "pauseNote": "1 ステップ終わるごとに止まり、「次へ進む」を押すまで待ちます。",
     "superseded": "更新済み",
@@ -186,9 +205,24 @@
     "awaitingStart": "開始待ち",
     "progressRunning": "作業中 {{current}} / {{total}}",
     "progressDone": "完了 {{done}} / {{total}}",
-    "allDone": "すべて完了"
+    "allDone": "すべて完了",
+    "stepQueued": "開始待ち",
+    "stepExecuting": "実行中",
+    "stepSkipped": "スキップ済み",
+    "skippingTurn": "スキップ中…",
+    "queueWaiting": "続行待ち",
+    "skipTurnLabel": "スキップ {{name}}",
+    "stepSpoken": "発言済み",
+    "allTurns_one": "全 {{count}} 人",
+    "allTurns_other": "全 {{count}} 人",
+    "foldTurns": "折りたたむ",
+    "talkTitle": "順番に意見を聞く",
+    "talkPending": "未開始",
+    "skipTurn": "スキップ",
+    "queueEnded": "このラウンドは終了"
   },
   "speaking": {
+    "queued": "待機中",
     "stopping": "停止中…",
     "planning": "役割分担を考えています…",
     "step": "作業中…"
@@ -297,7 +331,10 @@
     "lifecycleUnavailable": "現在のサーバーまたはコンピューターは、この操作にまだ対応していません。",
     "groupDissolved": "このグループは解散しました。閲覧権限のある履歴は引き続き確認できます。",
     "lastOwner": "退出する前にオーナーを譲渡するか、グループを解散してください。",
-    "allBotsMentionDisabled": "グループ所有者がすべての仲間への @ を有効にしていません。"
+    "allBotsMentionDisabled": "グループ所有者がすべての仲間への @ を有効にしていません。",
+    "turnAlreadyStarted": "この仲間はすでに実行を開始しているため、スキップできません",
+    "stopOwnershipUnknown": "一部の作業を停止できませんでした。依頼者を確認できません。",
+    "nothingToStop": "停止できる進行中の作業はありません。"
   },
   "followUp": {
     "next": "分担 · 次のステップ",
@@ -493,6 +530,7 @@
     "searchMembers": "メンバーを検索",
     "membersNoMatch": "「{{query}}」に一致するメンバーはいません",
     "you": "あなた",
+    "companionOf": "{{name}} のパートナー",
     "teammateTag": "仲間",
     "paused": "一時停止中",
     "accessNone": "オーナーのみ",
@@ -595,5 +633,6 @@
       "uncertain": "参加結果を確認できていません"
     },
     "externalFormatError": "元のメッセージから完全なリンクを開き直してください。"
-  }
+  },
+  "waitingForOwner": "所有者の確認待ち"
 }

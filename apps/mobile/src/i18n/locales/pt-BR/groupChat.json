@@ -1,6 +1,10 @@
 {
   "progress": {
-    "stop": "Parar"
+    "stop": "Parar",
+    "stopMine": "Parar minhas solicitações",
+    "stopAll": "Parar tudo",
+    "stopAllHint": "Inclui solicitações de outras pessoas",
+    "step": "Etapa {{step}}/{{total}}"
   },
   "title": "Conversas em grupo",
   "memberSeparator": ", ",
@@ -82,7 +86,8 @@
     "planDoneGeneric": "Divisão de trabalho concluída",
     "olderOnComputer": "As mensagens anteriores estão no seu computador",
     "newMessages_many": "{{count}} novas mensagens",
-    "planDone_many": "Todas as {{count}} etapas concluídas"
+    "planDone_many": "Todas as {{count}} etapas concluídas",
+    "endTalk": "Encerrar"
   },
   "quote": {
     "label": "Citando {{name}}: {{summary}}",
@@ -101,6 +106,13 @@
     "stepFailed": "{{name}} encontrou um problema e não concluiu esta etapa",
     "stepTimeout": "{{name}} demorou demais, então esta etapa foi interrompida",
     "stepUnavailable": "{{name}} está indisponível e não pode executar esta etapa",
+    "runtimeFailureReason": {
+      "unclaimed_timeout": {
+        "summary": "{{name}} não começou a processar dentro do prazo de espera. Esta solicitação foi encerrada.",
+        "advice": "Peça ao proprietário do parceiro para verificar se a Cindy está funcionando e se o computador está conectado à rede.",
+        "details": "Quando a Cindy e a rede voltarem a funcionar, envie a mensagem novamente."
+      }
+    },
     "runtimeFailure": {
       "REMOTE_DEVICE_LIMIT": {
         "summary": "{{name}} não pode responder: o dispositivo do colega atingiu o limite de sessões remotas.",
@@ -158,7 +170,12 @@
         "details": "Envie sua mensagem novamente. Se a falha persistir, verifique os logs e relate o problema."
       }
     },
-    "runtimeFailureSetupHint": "Para mudar o modelo ou as configurações, use o computador em que este colega é executado."
+    "runtimeFailureSetupHint": "Para mudar o modelo ou as configurações, use o computador em que este colega é executado.",
+    "capability": {
+      "GROUP_AUTHORIZATION_REQUIRED": "{{name}} não pôde executar a ferramenta: a autorização do grupo expirou ou não permite esta ação. O proprietário do colega pode repetir o pedido neste grupo.",
+      "GROUP_AUTHORIZATION_UNAVAILABLE": "Não foi possível verificar a autorização de grupo de {{name}}, por isso a ferramenta não foi executada. Tente novamente quando a conexão for restabelecida.",
+      "ATTACHMENTS_UNAVAILABLE": "Alguns anexos não foram entregues a {{name}} devido a uma falha no download ou ao limite de anexos. Reenvie os anexos necessários para este pedido."
+    }
   },
   "plan": {
     "intro_one": "Isso leva {{count}} etapa. Veja quem vai executá-la:",
@@ -167,6 +184,8 @@
     "start": "Iniciar plano",
     "dismiss": "Pular plano",
     "editHint": "Para mudar quem faz o quê, é só pedir",
+    "autoContinue": "Iniciar a próxima etapa automaticamente",
+    "autoContinueSaveFailed": "Não foi possível salvar as transições entre etapas. Tente novamente.",
     "autoNote": "Cada etapa concluída inicia a próxima automaticamente.",
     "pauseNote": "O trabalho pausa após cada etapa até você clicar em “Iniciar próxima etapa”.",
     "superseded": "Atualizado",
@@ -191,9 +210,25 @@
     "progressDone": "Concluídas {{done}} / {{total}}",
     "allDone": "Tudo concluído",
     "intro_many": "Isso leva {{count}} etapas. Veja quem faz o quê:",
-    "eyebrow_many": "Plano · {{count}} etapas"
+    "eyebrow_many": "Plano · {{count}} etapas",
+    "stepQueued": "Aguardando início",
+    "stepExecuting": "Em execução",
+    "stepSkipped": "Ignorado",
+    "skippingTurn": "Pulando…",
+    "queueWaiting": "Aguardando você continuar",
+    "skipTurnLabel": "Pular {{name}}",
+    "stepSpoken": "Concluído",
+    "allTurns_one": "Todos os {{count}} colega",
+    "allTurns_other": "Todos os {{count}} colegas",
+    "foldTurns": "Mostrar menos",
+    "allTurns_many": "Todos os {{count}} colegas",
+    "talkTitle": "Ouvir todos em sequência",
+    "talkPending": "Não iniciado",
+    "skipTurn": "Pular",
+    "queueEnded": "Rodada encerrada"
   },
   "speaking": {
+    "queued": "Na fila",
     "stopping": "Parando…",
     "planning": "Dividindo o trabalho…",
     "step": "Trabalhando nisso…"
@@ -302,7 +337,10 @@
     "lifecycleUnavailable": "O servidor ou computador atual ainda não oferece suporte a esta ação.",
     "groupDissolved": "Este grupo foi dissolvido. Você ainda pode ler o histórico disponível.",
     "lastOwner": "Transfira a propriedade ou dissolva este grupo antes de sair.",
-    "allBotsMentionDisabled": "O proprietário do grupo ainda não ativou @Todos os colegas."
+    "allBotsMentionDisabled": "O proprietário do grupo ainda não ativou @Todos os colegas.",
+    "turnAlreadyStarted": "Este colega já começou e não pode ser pulado",
+    "stopOwnershipUnknown": "Não foi possível parar parte do trabalho porque não foi possível verificar quem o solicitou.",
+    "nothingToStop": "Não há trabalho em andamento para parar."
   },
   "followUp": {
     "next": "Plano · Próxima etapa",
@@ -500,6 +538,7 @@
     "searchMembers": "Buscar membros",
     "membersNoMatch": "Nenhum membro corresponde a “{{query}}”",
     "you": "Você",
+    "companionOf": "Companheiro de {{name}}",
     "teammateTag": "Colega",
     "paused": "Pausado",
     "accessNone": "Somente o proprietário",
@@ -603,5 +642,6 @@
     },
     "externalFormatError": "Abra novamente o link completo da mensagem original."
   },
-  "memberCount_many": "{{count}} membros"
+  "memberCount_many": "{{count}} membros",
+  "waitingForOwner": "Aguardando confirmação"
 }

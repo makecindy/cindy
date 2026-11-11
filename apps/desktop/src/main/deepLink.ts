@@ -10,6 +10,8 @@
  *   cindy://settings/providers[?connect=<providerId>] —— 打开设置「模型供应商」页,
  *   cindy://settings/builtin-tools —— 打开设置「内置工具」页(Computer Use 开关与系统权限引导;
  *     agent 发现 Computer Use 未开启时把这条链接给用户),
+ *   cindy://settings/im-bot[?group=cindy|personal] —— 打开设置「IM 机器人」页并定位分区
+ *     (官方飞书机器人给未关联用户的引导卡经 https 中转页唤起这条链接),
  *     可选 connect 直达指定内置渠道或预设的接入流程(白名单校验,见 parseDeepLink)
  *
  * 命令行参数形态 (右键菜单 / 命令行):
@@ -47,6 +49,7 @@ import { isLocalPluginSnapshotId, isValidPluginResourceId } from '@cindy/plugin-
 import { app, BrowserWindow, type IpcMainInvokeEvent } from 'electron';
 import path from 'node:path';
 import { parseProviderShareInvitationIntent, parseSharedTaskInvitationIntent } from '@cindy/device-link';
+import { buildAgentNetSharingInvitation, parseAgentNetSharingInvitation } from '@cindy/agent-net/portable';
 import { createLogger } from './logger';
 import { cancelPendingWindowHide } from './mainWindowCloseBehavior';
 import { isValidGhostId } from '../shared/ghost';
@@ -76,7 +79,7 @@ export type DeepLinkPayload =
   | { type: 'chat-invite'; token: string }
   /** 点开的群邀请链接口令残缺或被改动：不带任何链接内容，只让 Renderer 明确告知。 */
   | { type: 'chat-invite-malformed' }
-  | { type: 'shared-task-join'; invitation: string; server: string }
+  | { type: 'shared-task-join'; invitation: string; server: string; link?: string }
   /** 供应商分享链接：原样交给 Renderer 的申请弹窗，由主进程命令再解析与核对区域。 */
   | { type: 'provider-share-join'; link: string }
   | { type: 'plugin'; pluginId: string }
@@ -104,7 +107,14 @@ export type DeepLinkPayload =
    *      供应商接入流程)。URL 域只开放 tab=providers;connect 是可选的内置
    *      provider / preset id,经白名单校验后透传给 renderer 已有的消费逻辑。
    */
-  | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools'; connect?: string; intent?: 'topup' }
+  | {
+      type: 'settings';
+      tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot';
+      connect?: string;
+      intent?: 'topup';
+      /** 仅 im-bot:定位到「官方」(cindy) 或「个人」(personal) 分区。 */
+      imGroup?: 'cindy' | 'personal';
+    }
   /**
    * cindy://plugins[/<ghostId>] —— 打开已安装插件列表,带 id 时直达该插件详情页
    * (随包浏览器扩展等外部表面把用户带回对应插件的启用 / 连接设置)。id 须过
@@ -129,6 +139,10 @@ export type DeepLinkPayload =
  */
 export function parseDeepLink(url: string): DeepLinkPayload | null {
   if (typeof url !== 'string') return null;
+  const v2 = parseAgentNetSharingInvitation(url, 'shared-task');
+  if (v2) return { type: 'shared-task-join', invitation: v2.receipt.invitation, server: v2.server,
+    link: buildAgentNetSharingInvitation(v2.receipt, v2.server) };
+  if (parseAgentNetSharingInvitation(url, 'provider-share')) return { type: 'provider-share-join', link: url };
   const invitation = parseSharedTaskInvitationIntent(url);
   if (invitation) return { type: 'shared-task-join', ...invitation };
   if (parseProviderShareInvitationIntent(url)) return { type: 'provider-share-join', link: url };
@@ -201,6 +215,13 @@ export function parseDeepLink(url: string): DeepLinkPayload | null {
     if (rawSettingsPath === 'builtin-tools' && decoded === 'builtin-tools') {
       return { type: 'settings', tab: 'builtin-tools' };
     }
+    // im-bot:官方 IM 机器人(如飞书)给未关联用户的引导卡直接打开这一页;group 只接受
+    // cindy / personal,其它值整条拒绝。
+    if (rawSettingsPath === 'im-bot' && decoded === 'im-bot') {
+      const group = parseSessionQueryParam(rawValue, 'group');
+      if (group === null) return { type: 'settings', tab: 'im-bot' };
+      return group === 'cindy' || group === 'personal' ? { type: 'settings', tab: 'im-bot', imGroup: group } : null;
+    }
     if (rawSettingsPath !== 'providers' || decoded !== 'providers') return null;
     // connect 是可选 provider / preset id;深链是不可信输入,值必须过共享白名单,
     // 不合法就整条拒绝,避免 main/preload 规则漂移。
@@ -242,7 +263,7 @@ function parseSettingsConnectParam(rawValue: string): string | null | typeof INV
  * 从 session 深链的原始 value 里抽消息锚点或设备归属。
  * 值为空 / 解码失败 → null(锚点非法不拖累 sessionId 本身的解析)。
  */
-function parseSessionQueryParam(rawValue: string, key: 'message' | 'device'): string | null {
+function parseSessionQueryParam(rawValue: string, key: 'message' | 'device' | 'group'): string | null {
   const hashIdx = rawValue.indexOf('#');
   const noHash = hashIdx >= 0 ? rawValue.slice(0, hashIdx) : rawValue;
   const queryIdx = noHash.indexOf('?');
@@ -701,7 +722,9 @@ function isWindowsSlashSwitch(value: string): boolean {
  * 由 bootstrap-electron 启动时调用。open-url listener 另行尽早挂载，以接住冷启动事件。
  */
 export function registerDeepLinkProtocol(): void {
-  if (!app.isPackaged) return;
+  // Packaged smoke runs use a disposable profile, but OS protocol ownership is
+  // outside that profile and must remain with the installed desktop client.
+  if (!app.isPackaged || process.argv.includes('--smoke-test')) return;
 
   for (const scheme of DEEP_LINK_SCHEMES) {
     const registered = app.setAsDefaultProtocolClient(scheme);

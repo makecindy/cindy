@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { afterEach, expect, it, vi } from 'vitest';
+import { webcrypto } from 'node:crypto';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { sharedTaskHostPeer } from '@cindy/device-link';
 const state = vi.hoisted(() => ({
   deviceId: undefined as string | undefined,
@@ -61,7 +62,58 @@ vi.mock('@cindy/maker-shared/mcp-app-controller', async importOriginal => ({
   },
 }));
 import { McpAppCard } from '../McpAppCard';
-afterEach(() => {
+const digest = webcrypto.subtle.digest.bind(webcrypto.subtle);
+const pendingDigests: Promise<ArrayBuffer>[] = [];
+// The real presenter owns demand: no visible View means no state subscription;
+// updates coalesce before IPC and leaving releases the source (unit).
+it('subscribes only for a live View and coalesces context without reopening it', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  vi.stubGlobal('IntersectionObserver', class {
+    constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {}
+    observe(element: Element) { state.intersections.set(element, this.callback); }
+    disconnect() {}
+  });
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  let changed = () => {};
+  let revision = 1;
+  const unsubscribe = vi.fn();
+  const contextSource = { read: vi.fn(() => ({ draft: { revision } })),
+    subscribe: vi.fn((callback: () => void) => { changed = callback; return unsubscribe; }) };
+  const container = document.createElement('div'); document.body.appendChild(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<McpAppCard sessionId="task" clientId="workspace" title="App" contextSource={contextSource} />));
+    expect(contextSource.subscribe).not.toHaveBeenCalled();
+    expect(contextSource.read).not.toHaveBeenCalled();
+    await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
+    expect(contextSource.subscribe).toHaveBeenCalledOnce();
+    const controller = state.controllers[0]; controller.context.mockClear(); contextSource.read.mockClear();
+    await act(async () => { for (let i = 0; i < 100; i++) { revision++; changed(); } });
+    expect(controller.context).toHaveBeenCalledOnce();
+    expect(controller.context).toHaveBeenLastCalledWith(expect.objectContaining({ cindy: { draft: { revision: 101 } } }));
+    expect(contextSource.read).toHaveBeenCalledOnce();
+    expect(state.controllers).toHaveLength(1);
+    await act(async () => root.unmount());
+    expect(unsubscribe).toHaveBeenCalledOnce();
+    changed(); await Promise.resolve();
+    expect(controller.context).toHaveBeenCalledOnce();
+  } finally { if (container.hasChildNodes()) await act(async () => root.unmount()); container.remove(); }
+});
+beforeEach(() => {
+  vi.stubGlobal('crypto', webcrypto);
+  vi.spyOn(webcrypto.subtle, 'digest').mockImplementation((...args) => {
+    const pending = digest(...args);
+    pendingDigests.push(pending);
+    return pending;
+  });
+});
+afterEach(async () => {
+  // CI 41649027355: a prior card's asynchronous failure log can otherwise reach
+  // the next test's electronAPI spy. Drain real hashing before replacing globals.
+  await Promise.all(pendingDigests);
+  pendingDigests.length = 0;
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   state.controllers = [];
@@ -437,8 +489,6 @@ it.each([
   ['timeout', 'MCP_APP_INITIALIZATION_TIMEOUT'],
   ['open', 'UNKNOWN'],
 ] as const)('logs a content-free %s failure (%s) through the renderer logger', async (stage, code) => {
-  const { webcrypto } = await import('node:crypto');
-  vi.stubGlobal('crypto', webcrypto);
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
   vi.stubGlobal('matchMedia', () => ({ matches: false }));

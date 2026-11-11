@@ -9,7 +9,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const downloadToBuffer = vi.hoisted(() => vi.fn());
 const removeRemote = vi.hoisted(() => vi.fn());
-vi.mock('../mediaTransfer.js', () => ({
+vi.mock('../mediaTransfer.desktop.js', () => ({
   downloadToBuffer,
   removeRemote,
 }));

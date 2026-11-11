@@ -558,6 +558,8 @@ describe("mobile maker transport", () => {
       "maker:worker:acknowledge-done",
       "maker:worker:archive",
       "maker:collaboration-settings:get",
+      "maker:worker-roles:get",
+      "maker:worker-roles:apply",
       "local-db:orca-workflows:list-workers-by-lead",
       "local-db:orca-workflows:get-by-worker-session",
       "maker:schedule:list",
@@ -651,6 +653,8 @@ describe("mobile maker transport", () => {
     await maker.orca.acknowledgeDone("lead-1", "w-1");
     await maker.orca.archiveWorker("lead-1", "w-1");
     await maker.orca.getCollaborationSettings();
+    await maker.orca.getWorkerRoles();
+    await maker.orca.applyWorkerRoles({ kind: "forget", role: "tester" });
     await maker.orca.disable("lead-1");
 
     expect(calls.map(({ channel, args }) => ({ channel, args }))).toEqual([
@@ -664,6 +668,8 @@ describe("mobile maker transport", () => {
       { channel: "maker:worker:acknowledge-done", args: [{ leadSessionId: "lead-1", workerId: "w-1" }] },
       { channel: "maker:worker:archive", args: [{ leadSessionId: "lead-1", workerId: "w-1" }] },
       { channel: "maker:collaboration-settings:get", args: [] },
+      { channel: "maker:worker-roles:get", args: [] },
+      { channel: "maker:worker-roles:apply", args: [{ kind: "forget", role: "tester" }] },
       { channel: "maker:session:disable-orca", args: ["lead-1"] },
     ]);
   });

@@ -146,6 +146,7 @@ export function ContentHeader({
 
   return (
     <header
+      data-plugin-ui-element="header"
       className={cn(
         // 46px 行高 (与 CONTENT_HEADER_HEIGHT_PX 同步):红绿灯钉 y=16(实测灯心 ≈23 = 46/2,macOS 渲染比理论低约 1pt),标题/图标与
         // 红绿灯同轴(对齐 Codex 的紧凑 titlebar)。与 ChromeActions / Sidebar
@@ -156,7 +157,7 @@ export function ContentHeader({
         // Sidebar 侧保持无横线的连续表面；设置页隐形 chrome 不画
         // （用户决策 2026-06-11）。
         !isInvisibleChrome && 'border-b border-titlebar-border',
-        'transition-[padding] duration-[250ms] ease-[cubic-bezier(0.4,0,0.2,1)]',
+        'transition-[padding] duration-[var(--motion-base)] ease-[var(--motion-ease-move)]',
         needsTrafficLightInset ? 'pl-[78px]' : 'pl-2',
       )}
       // 窗口拖拽区(B3 口径修订,Lizi 实测拍板):46px 顶带整条归窗口拖动 ——
@@ -188,7 +189,7 @@ export function ContentHeader({
           否则浮层按钮点击会被窗口拖拽吞掉。 */}
       <div
         aria-hidden
-        className="h-full shrink-0 overflow-hidden transition-[max-width] duration-[250ms] ease-[cubic-bezier(0.4,0,0.2,1)]"
+        className="h-full shrink-0 overflow-hidden transition-[max-width] duration-[var(--motion-base)] ease-[var(--motion-ease-move)]"
         style={
           {
             WebkitAppRegion: 'no-drag',
@@ -206,7 +207,7 @@ export function ContentHeader({
 
       {/* 右端占位 —— 平台分流（两端都只留占位，不再放交互按钮）：
           - mac：全屏聊天视图在场时（rightSidebarAvailable）留出固定唤起按钮等宽占位。
-            按钮本身已 hoist 到 MainLayout 顶层浮层（钉窗口右上角）；这里仅占位防注入
+            按钮本身在 MainLayout 的聊天区浮层；这里仅占位防注入
             内容被压到浮层按钮下。不在场则右端留空。
           - Windows：留出 WIN_CONTROLS_WIDTH 等宽占位（窗口控制按钮已 hoist 到
             MainLayout 顶层浮层）；固定侧栏入口位于下一行内容区。 */}

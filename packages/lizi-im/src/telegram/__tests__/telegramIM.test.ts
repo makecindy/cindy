@@ -388,6 +388,41 @@ describe('TelegramIM', () => {
     });
   });
 
+  // 测试价值：真实 TelegramIM 入站入口；复现伙伴 guestDm=true 导致陌生私信进 Agent。
+  // 原有测试只有个人 bot 默认配置，未覆盖旧伙伴选项。最小输入为陌生人普通私信；
+  // unit tier，假 Bot API，不联网；同时保留主人私聊和群成员 @ 的可观察行为。
+  it('伙伴连接的旧 guestDm 选项不能放行陌生私信，主人和群成员仍可发言', async () => {
+    await im.dispose();
+    const legacyCompanionOptions = {
+      apiFactory: () => api,
+      secretKeyPrefix: 'bot-im:test:',
+      ipc: false,
+      guestDm: true,
+    };
+    im = new TelegramIM(ctx.host, legacyCompanionOptions);
+    const events: IMMessageEvent[] = [];
+    im.onMessage((event) => events.push(event));
+    await im.setConfig({ token: '999:secret-token-abcdefghijk', ownerUserId: OWNER_ID });
+
+    api.pushUpdates([
+      privateMessage('最近更新的有哪些项目', 222, 1),
+      privateMessage('还有吗', 222, 2),
+      privateMessage('/help', 222, 3),
+      privateMessage('主人私聊', 111, 4),
+      groupMessage({ text: '群成员提问', fromId: 222, messageId: 5, mentionBot: true }),
+    ]);
+    // 等正向消息被处理，避免以“暂时没收到事件”误判拒绝成功；不同 lane 不约定顺序。
+    await vi.waitFor(() => {
+      expect(events.some((event) => event.senderId === OWNER_ID)).toBe(true);
+      expect(events.some((event) => event.senderId === 'g/-100200')).toBe(true);
+    });
+    expect(events.map((event) => event.senderId).sort()).toEqual([OWNER_ID, 'g/-100200'].sort());
+    expect(events.find((event) => event.senderId === 'g/-100200')?.speaker?.isOwner).toBe(false);
+    const strangerReplies = api.calls.filter((call) => call.method === 'sendMessage' && call.params.chat_id === '222');
+    expect(strangerReplies).toHaveLength(1);
+    expect(strangerReplies[0].params.text).toContain('只响应主人本人的指令');
+  });
+
   it('群里 owner 裸斜杠命令视为召唤(不带 @ 也进 slash); 成员裸命令仍静默', async () => {
     const events: IMMessageEvent[] = [];
     im.onMessage((e) => events.push(e));
@@ -1346,6 +1381,7 @@ describe('TelegramIM', () => {
     await vi.waitFor(() => expect(events).toHaveLength(1));
     expect(events[0].replyContext).toEqual({
       messageId: '40',
+      sentAt: expect.any(Number),
       author: 'Cindy',
       text: '方案 A: 先改 transport',
       isBot: true,
@@ -3063,11 +3099,16 @@ describe('TelegramIM 音视频与群历史媒体', () => {
       kind: 'file',
       originalName: 'IMG_80.MP4',
       mimeType: 'video/mp4',
-      author: 'Tom',
+      author: 'Tom · 消息 80',
     });
     // 不在上下文 id 里的消息不下载; 其它群同 id 不串。
     expect((await im.collectGroupHistoryMedia('-100200', ['81'])).attachments).toEqual([]);
     expect((await im.collectGroupHistoryMedia('-100300', ['80'])).attachments).toEqual([]);
+    const missing = await im.collectGroupHistoryMedia('-100200', ['999'], undefined, { attachmentMessageIds: ['999'] });
+    expect(missing).toEqual({ attachments: [], unavailable: ['历史消息 999：附件原件不在可用缓存中，仅提供历史记录'] });
+    const full = await im.collectGroupHistoryMedia('-100200', ['80'], undefined, { provided: Array.from({ length: 4 }, () => ({kind: 'file' as const, absPath: '/current.pdf', originalName: 'current.pdf', mimeType: 'application/pdf'})) });
+    expect(full.attachments).toEqual([]);
+    expect(full.unavailable.join(' ')).toContain('上限');
   });
 
   it('本轮已随附件送达的被引消息/相册成员不重复补; 媒体不随轮次出池; 受保护群不入池', async () => {

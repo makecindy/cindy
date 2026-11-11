@@ -341,3 +341,12 @@ describe('atomic context edits', () => {
     expect(readModelContextLimit('pi', 'other', 'gpt-6')).toBe(200_000);
   });
 });
+
+// Preserve the existing test owner/path contract after storage ports were extracted.
+vi.mock('../../ownerContext.js', () => ({
+  activeDataOwnerId: () => ownerId,
+  ownerGeneration: () => 1,
+  isOwnerBoundaryPending: () => false,
+  hasCommittedOwner: () => Boolean(ownerId),
+  ownerScopedPath: (...parts: string[]) => path.join(tempRoot, ownerId, ...parts),
+}));

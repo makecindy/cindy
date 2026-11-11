@@ -21,6 +21,20 @@ Codex 原生未必自行发送 MCP 取消；服务仍须限制长操作，并区
 
 ## 插件的交互页面
 
+具名页面与 Cindy 原生位置的增量见随包作者手册
+[插件界面扩展](../apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-host-ui.md)。
+`mcpApps.host` 引用同一个 MCP Apps 资源，复用原 Host/SDK/隔离/工具审批；
+支持真实全局/任务来源、原生入口、可选正文展示和按批准开放的宿主操作。
+这一增量尚未发布，不能套用下文历史 SDK 版本下限。新入口目前仅 Desktop 本机；原远程和手机卡片不变。
+
+原生控件沿既有插件管子和窗口 IPC 更新；窗口合并实际消费需求，先有消费者才构造、推送状态。
+`message.menu` 将已批准动作加入消息「更多」菜单；菜单关闭时不订阅这些菜单项，打开后才接状态，关闭释放。
+页面状态沿标准 host context，普通历史消息只查本地候选，不增加逐消息 SQL、IPC 或插件渲染调用。
+入口旁页面使用 `presentation:"popover"`，沿同一个 MCP App presenter，关闭或不可见即释放。
+草稿选区替换使用原编辑器与 revision；区域显隐使用原布局和面板停放机制，释放插件后恢复。
+外观资源与可写字段逐项批准，经原设置所有者应用；字体按资源缓存。
+实现回归见 `nativeState.test.ts`、`ghostNativeUi.test.ts`、`PluginUiContributions.test.tsx`、`MessageActionBar.test.tsx` 与 `hostUi.test.ts`。
+
 首个支持版本为 `0.1.122-beta`（`PLUGIN_UI_MIN_CINDY_VERSION`）。声明交互页面的包须填写
 不低于它的 `minCindyVersion`；`0.1.122-beta.1`、`0.1.122` 满足，`0.1.121`、`0.1.121-beta` 不满足。
 该下限用于打包校验和市场兼容版本投影，不新增客户端安装闸门。
@@ -156,7 +170,7 @@ App 的完整 CSP，proxy 的资源地址由宿主固定，不能被普通桥消
 同一个 WebView；卡片离屏或实际页面卸载后，先将内容移回屏幕外 host，保留消息回调，
 收到 teardown 响应或满 1 秒后移除 WebView、停止两项资源服务并清理专属缓存。退后台
 关闭旧 View，原生资源最多保留本次后台代次 1 秒；回前台打开新 View，不重放工具调用。
-这改变两端 runtime fingerprint，必须有针对冷更的明确确认并发布原生新包；不能仅 OTA 交付。
+这改变两端 runtime fingerprint，必须按冷更边界在 PR 中写明原因、存量装机影响与发版节奏，并发布原生新包；不能仅 OTA 交付。
 旧安装包缺少 App 承载能力时保留已保存文本并提示更新手机，不回退到同源或 opaque-origin
 `srcdoc`。下次进程首次打开时清理中断遗留的本功能随机目录。iOS 使用非持久 WebView
 数据存储；Android 不使用会清空其他 View cookie 的 incognito 开关，只删除本 View 的
@@ -178,6 +192,17 @@ iOS 另保留显式顶层请求拦截；可信 proxy 同时检查实际 `event.o
 凭证留在 Main 的现有密钥存储中，不进入 iframe。Claude Code、Codex、Pi 都通过同一
 Host facade 调用自定义 MCP；支持 Apps 的工具执行时生成独立卡片，历史卡片可重新连接。
 不支持 UI 扩展的普通 MCP 保持文本工具使用方式。
+
+App 发起的 `tools/call` 在 Host 到 MCP server 这一段有 30 分钟总时限；服务端进度不会
+延长这个总时限。Host 按单次请求映射进度 token，再将原始进度值、总量与消息转发给
+发起的 View。不同 View 可以使用相同的本地 token，不会互相接收进度。
+检查归属期间积压的进度只保留最新一条，避免高频上报造成无界队列。
+`@modelcontextprotocol/ext-apps@1.7.5` 的 `app.callServerTool(params, options)` 默认注册
+进度回调并启用 `resetTimeoutOnProgress`，因此服务端持续报告进度时，App 的默认
+60 秒等待时限会续期。服务端不报告进度时，App 应通过 `options.timeout` 显式设置
+所需等待时间（单位为毫秒）；App 自己的超时或取消仍会传递给对应的上游请求。
+Host 不生成虚构的服务端进度，也不自动重放超时的工具调用。
+
 模型侧 facade 继承下游 harness 实际声明的 client capabilities（含其他 extensions），
 再追加 Apps extension；roots、sampling、elicitation 与普通服务器回调只返回产生该
 连接的 harness，客户端通知（如 roots/list_changed）沿同一连接转发。回调返回前

@@ -85,6 +85,8 @@ export interface NonSecretErrorSignals {
 }
 
 const DETERMINISTIC_USAGE_EXHAUSTION_PATTERNS = [
+  // #8705: LiteLLM may retain only the structured error type in the message.
+  /\binsufficient_balance_error\b/i,
   /\binsufficient[-_ ]?quota\b/i,
   /\binsufficient.{0,12}\b(?:balance|credit|funds)\b/i,
   /\bquota\b.{0,24}\b(?:exhausted|exceeded)\b/i,
@@ -259,8 +261,13 @@ export function canOfferCodexHistoryRecovery(input: {
 }
 
 const AGENT_CHAT_ERROR_CODES: ReadonlySet<string> = new Set([
+  'SUBSCRIPTION_ACCOUNT_LIMITED',
+  'SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED',
+  'SUBSCRIPTION_ACCOUNT_SIGNING_IN',
+  'SUBSCRIPTION_ACCOUNT_UNAVAILABLE',
   'SSH_HARNESS_SWITCH_UNSUPPORTED',
   'MODEL_SELECTION_UNAVAILABLE',
+  'SUBSCRIPTION_ACCOUNTS_FULL',
   'HARNESS_SWITCH_NOT_READY',
   'DEVICE_LINK_BUSY',
   'DEVICE_LINK_CONTROL_DISABLED',
@@ -278,7 +285,11 @@ const AGENT_CHAT_ERROR_CODES: ReadonlySet<string> = new Set([
  * promote their upstream fallback text into localized user-facing guidance.
  */
 export function parseAgentErrorCode(message: string): { code: string; fallback: string } | null {
-  const match = /(?:^|: Error: )(?:\[IPC_ERROR\]\s*)?\[([A-Z0-9_]+)\]\s*([\s\S]*)$/.exec(message);
+  // Host send failures wrap the original startup error in a stable
+  // `LAZY_CREATE_FAILED:` envelope. Keep accepting that wrapper here so the
+  // renderer can still select the actionable remote-provider guidance instead
+  // of collapsing the whole failure to the generic "reply failed" card.
+  const match = /(?:^|: Error: )(?:\[IPC_ERROR\]\s*)?(?:LAZY_CREATE_FAILED:\s*)?\[([A-Z0-9_]+)\]\s*([\s\S]*)$/.exec(message);
   if (!match || (!/^REMOTE_[A-Z_]+$/.test(match[1]) && !AGENT_CHAT_ERROR_CODES.has(match[1]))) {
     return null;
   }
@@ -292,4 +303,36 @@ export function requiresAgentErrorConfigurationChange(message: string): boolean 
     || code === 'REMOTE_COMPAT_MODE_UNSUPPORTED'
     || code === 'REMOTE_LOCAL_ONLY_PROVIDER'
     || code === 'DEVICE_LINK_CONTROL_DISABLED';
+}
+
+/** Presentation only: startup failures must not be mistaken for a new retry policy.
+ * Account identities are intentionally absent from the wire error. Old hosts have
+ * only an ambiguous message; never infer a login or limit cause from that text.
+ */
+export function localizeSubscriptionAccountError(
+  message: string,
+  translate: (key: string, options?: { resetAt: string }) => string,
+  locale?: string,
+): string | null {
+  const parsed = parseAgentErrorCode(message);
+  switch (parsed?.code) {
+    case 'SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED': return translate('chat.subscriptionAccountError.loginRequired');
+    case 'SUBSCRIPTION_ACCOUNT_SIGNING_IN': return translate('chat.subscriptionAccountError.signingIn');
+    case 'SUBSCRIPTION_ACCOUNT_UNAVAILABLE': return translate('chat.subscriptionAccountError.unavailable');
+    case 'SUBSCRIPTION_ACCOUNT_LIMITED': {
+      const reset = Number(/(?:^|\n)resetAtMs=(\d{1,16})(?:\n|$)/.exec(parsed.fallback)?.[1]);
+      if (Number.isSafeInteger(reset) && reset > Date.now() && reset <= 8.64e15) {
+        // Classical editions use the corresponding script for Intl formatting.
+        const language = locale?.replace(/-x-lzh$/, '');
+        const resetAt = new Intl.DateTimeFormat(language, {
+          dateStyle: 'medium', timeStyle: 'short',
+        }).format(new Date(reset));
+        return translate('chat.subscriptionAccountError.limitedUntil', { resetAt });
+      }
+      return translate('chat.subscriptionAccountError.limited');
+    }
+  }
+  if (/(?:^|: Error: )(?:\[IPC_ERROR\]\s*)?(?:LAZY_CREATE_FAILED:\s*)?The task subscription account requires login or quota reset$/.test(message))
+    return translate('chat.subscriptionAccountError.legacy');
+  return null;
 }

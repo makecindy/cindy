@@ -1,4 +1,6 @@
+import { stat } from 'node:fs/promises';
 import path from 'node:path';
+import { app } from 'electron';
 import { eq } from 'drizzle-orm';
 import { collapseWorktreeDirForGrouping } from '@cindy/maker-shared/worktree-paths';
 import { getActiveDataOwnerPushStamp, isAppSessionBoundaryPending } from '../appSessionState.js';
@@ -8,6 +10,10 @@ import { listProjectAliases, upsertProjectAlias } from '../localDb/ipc/projectAl
 import { recentWorkdirs, sessions } from '../localDb/schema.js';
 import { loadSidebarSettingsSnapshot, setLocalProjectHidden } from '../sidebarSettingsStore.js';
 import { projectKeyComparisonKey } from '../../shared/projectKeys.js';
+import { workingDirEquals } from '../../shared/workingDir.js';
+import type { ProjectsRootState } from '../../shared/projectsRoot.js';
+import { readProjectsRootDirectory } from '../projects-root-settings.js';
+import type { DbClient } from '../localDb/client/DbClient.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import {
   validateLocalProjectDirectory,
@@ -61,19 +67,69 @@ async function requireRegisteredProject(
   return match.path;
 }
 
+/**
+ * A projectless source has no membership to hand down, so a task that will run inside a
+ * visible registered project joins the nearest one. Only catalog entries match: nothing is
+ * registered or restored, and removed or unavailable projects are skipped.
+ */
+async function nearestVisibleProject(
+  context: LocalProjectContext,
+  workingDir: string,
+): Promise<string | null> {
+  // Same path shape an explicit project_path accepts; anything else simply has no project.
+  if (!path.isAbsolute(workingDir) || workingDir.includes('\0')) return null;
+  if (process.platform !== 'win32' && workingDir.includes('\\')) return null;
+  const rows = await context.client.drizzle
+    .select({ path: recentWorkdirs.path })
+    .from(recentWorkdirs);
+  context.assertCurrent();
+  const hidden = new Set(
+    loadSidebarSettingsSnapshot().hiddenProjectKeys.map((key) =>
+      projectKeyComparisonKey(key, process.platform),
+    ),
+  );
+  // Walk up the real ancestors and compare exact paths. The grouping identity used elsewhere
+  // folds sibling worktrees into their repository, which would place the task in a project
+  // that does not contain the directory.
+  for (let directory = path.normalize(workingDir); ; ) {
+    const match = rows.find((row) => workingDirEquals(row.path, directory));
+    if (match && !hidden.has(identity(match.path))) {
+      // Same availability rules as an explicit project_path; a failing candidate is skipped.
+      const checked = await validateExistingLocalProjectDirectory(match.path).catch(() => null);
+      context.assertCurrent();
+      if (checked?.ok) return match.path;
+    }
+    const parent = path.dirname(directory);
+    if (parent === directory) return null;
+    directory = parent;
+  }
+}
+
 /** Selecting a task's project is read-only: never register or restore a directory. */
 export async function resolveSessionProject(params: {
-  callerSessionId: string;
+  callerSessionId?: string;
   /** undefined inherits the persisted source; null explicitly creates a dialogue. */
   projectDir?: string | null;
+  /**
+   * Requested execution directory. Only consulted when membership is omitted and the
+   * source is projectless; it never overrides an inherited or explicit choice.
+   */
+  workingDir?: string;
 }) {
   return withLocalProjectContext(params.callerSessionId, async (context) => {
     let selected = params.projectDir;
     if (selected === undefined) {
-      const source = await readCurrentSessionProject(params.callerSessionId);
+      const source = params.callerSessionId ? await readCurrentSessionProject(params.callerSessionId)
+        : { workspaceKind: "dialogue", projectDir: null };
       context.assertCurrent();
-      if (source.workspaceKind === 'dialogue') selected = null;
-      else if (source.workspaceKind === 'project' && source.projectDir) selected = source.projectDir;
+      if (source.workspaceKind === 'dialogue') {
+        const containing = params.workingDir
+          ? await nearestVisibleProject(context, params.workingDir)
+          : null;
+        if (containing)
+          return { ok: true as const, projectDir: containing, projectFromWorkingDir: true as const };
+        selected = null;
+      } else if (source.workspaceKind === 'project' && source.projectDir) selected = source.projectDir;
       else return { ok: false as const, errorCode: 'INVALID_ARGS',
         message: '无法确定来源任务的项目。请指定已有项目的 project_path，或传 null 创建不绑项目的任务。' };
     }
@@ -93,8 +149,56 @@ export async function resolveSessionProject(params: {
   });
 }
 
+/** Most recently used parent shared by at least two projects; ties keep the newer one. */
+export function inferProjectsRoot(directories: readonly string[], platform = process.platform): string | null {
+  const counts = new Map<string, { parent: string; count: number }>();
+  for (const directory of directories) {
+    const parent = path.dirname(directory);
+    if (parent === directory) continue;
+    const key = platform === 'win32' ? parent.toLowerCase() : parent;
+    const entry = counts.get(key) ?? { parent, count: 0 };
+    entry.count++;
+    counts.set(key, entry);
+  }
+  let best: { parent: string; count: number } | null = null;
+  for (const entry of counts.values()) {
+    if (entry.count >= 2 && (!best || entry.count > best.count)) best = entry;
+  }
+  return best?.parent ?? null;
+}
+
+/**
+ * Explicit choice first, then visible existing projects, then ~/Projects. Never writes.
+ * Callers that already listed the catalog pass it to avoid a second scan.
+ */
+export async function resolveProjectsRoot(
+  client: DbClient,
+  catalog?: ReadonlyArray<{ path: string; exists: boolean }>,
+): Promise<ProjectsRootState> {
+  const setting = readProjectsRootDirectory();
+  let root: Omit<ProjectsRootState, 'exists'>;
+  if (setting) {
+    root = { path: setting, source: 'setting' };
+  } else {
+    const hidden = new Set(
+      loadSidebarSettingsSnapshot().hiddenProjectKeys.map((key) =>
+        projectKeyComparisonKey(key, process.platform),
+      ),
+    );
+    const visible = (catalog ?? (await listRecentWorkdirs(client)))
+      .filter((row) => row.exists && !hidden.has(identity(row.path)))
+      .map((row) => row.path);
+    const inferred = inferProjectsRoot(visible);
+    root = inferred
+      ? { path: inferred, source: 'inferred' }
+      : { path: path.join(app.getPath('home'), 'Projects'), source: 'default' };
+  }
+  const exists = await stat(root.path).then((info) => info.isDirectory(), () => false);
+  return { ...root, exists };
+}
+
 export async function listProjects(params: {
-  callerSessionId: string;
+  callerSessionId?: string;
   includeHidden: boolean;
   offset: number;
   limit: number;
@@ -131,11 +235,14 @@ export async function listProjects(params: {
       })
       .filter((row) => params.includeHidden || !row.hidden);
     const end = params.offset + params.limit;
+    const projectsRoot = await resolveProjectsRoot(context.client, directories);
+    context.assertCurrent();
     return {
       ok: true as const,
       projects: projects.slice(params.offset, end),
       total: projects.length,
       nextOffset: end < projects.length ? end : null,
+      projectsRoot,
     };
   });
 }

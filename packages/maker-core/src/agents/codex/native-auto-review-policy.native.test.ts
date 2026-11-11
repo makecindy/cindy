@@ -45,7 +45,9 @@ it.skipIf(!binaryPath)(
       for await (const chunk of request) text += chunk;
       const body = JSON.parse(text);
       let output: unknown[];
-      if (body.model === "codex-auto-review") {
+      // Native review may use the configured provider's model instead of the
+      // dedicated codex-auto-review model. Identify its verdict schema as well.
+      if (body.model === "codex-auto-review" || body.text?.format?.schema?.properties?.outcome) {
         policies.push(body.instructions ?? body.input
           .filter((item: { role?: string }) => item.role === "developer")
           .flatMap((item: { content?: Array<{ text?: string }> }) => item.content ?? [])

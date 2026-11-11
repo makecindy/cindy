@@ -4,7 +4,8 @@
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-const h = vi.hoisted(() => ({ owner: 'one', preview: vi.fn(), accept: vi.fn(), close: vi.fn(), joined: vi.fn(), view: vi.fn(), uuid: 0 }));
+const h = vi.hoisted(() => ({ fetch: vi.fn(), owner: 'one', preview: vi.fn(), accept: vi.fn(), close: vi.fn(), joined: vi.fn(), view: vi.fn(), uuid: 0 }));
+vi.mock('@/config/env', () => ({ getActiveMobileSessionRealm: () => 'global', getMobileEndpointForRealm: (realm: string, key: string) => realm === 'global' && key === 'shareBaseUrl' ? 'https://own-share.example.test' : '' }));
 vi.mock('expo-crypto', () => ({ randomUUID: () => `operation-${++h.uuid}` }));
 vi.mock('@/chat/useChatServer', () => ({ useChatClient: () => {
   const owner = h.owner;
@@ -23,10 +24,11 @@ const render = () => act(async () => root.render(createElement(App)));
 const deferred = <T,>() => { let resolve!: (v: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; };
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true }); vi.useFakeTimers(); vi.clearAllMocks(); h.owner = 'one';
+  vi.stubGlobal('fetch', h.fetch); h.fetch.mockReset().mockImplementation(async () => Response.json({ token }));
   h.preview.mockResolvedValue(preview); h.accept.mockResolvedValue({ groupId: 'group' });
   root = createRoot(document.createElement('div')); props = { visible: true, link: token, onClose: h.close, onJoined: h.joined };
 });
-afterEach(async () => { await act(async () => root.unmount()); vi.useRealTimers(); });
+afterEach(async () => { await act(async () => root.unmount()); vi.useRealTimers(); vi.unstubAllGlobals(); });
 it('reads without accepting, blocks duplicate join and delivers only after sheet dismissal', async () => {
   await render(); expect(model.phase).toBe('preview'); expect(h.accept).not.toHaveBeenCalled();
   const pending = deferred<{ groupId: string }>(); h.accept.mockReturnValue(pending.promise);
@@ -190,4 +192,49 @@ it('retains a manual target through authentication hiding, but re-reads it for t
   expect(model.preview?.name).toBe('New owner preview');
   expect(h.accept).not.toHaveBeenCalled();
   expect(h.joined).not.toHaveBeenCalled();
+});
+
+// D5/D11: shared IDs must resolve within the original 15s read window, and the
+// actual invitation hook must fence cancellation/account changes before preview.
+it('resolves a shared link at its own endpoint and reuses the normalized token during acceptance retry', async () => {
+  const link = `https://untrusted.example.test/chat-invite/${'s'.repeat(32)}`;
+  props.link = undefined; props.onTargetChange = vi.fn(); await render();
+  await act(async () => model.setInput(link)); await act(async () => model.read());
+  expect(model.phase).toBe('preview');
+  expect(h.fetch).toHaveBeenCalledExactlyOnceWith(`https://own-share.example.test/api/chat-invites/${'s'.repeat(32)}/token`, expect.objectContaining({ method: 'POST', redirect: 'error', signal: expect.any(AbortSignal) }));
+  expect(h.preview).toHaveBeenCalledExactlyOnceWith(token, h.fetch.mock.calls[0][1].signal);
+  expect(props.onTargetChange).toHaveBeenLastCalledWith(`cindy://chat-invite/${token}`);
+  h.accept.mockRejectedValueOnce(new Error('offline')); await act(async () => model.accept());
+  await act(async () => model.retry());
+  expect(h.accept.mock.calls[0][1]).toBe(h.accept.mock.calls[1][1]); expect(h.fetch).toHaveBeenCalledOnce();
+});
+it('cancels shared-token lookup before a late response can preview or navigate', async () => {
+  const pending = deferred<Response>(); h.fetch.mockReturnValueOnce(pending.promise);
+  props.link = `https://other.example.test/chat-invite/${'s'.repeat(32)}`; await render();
+  await act(async () => model.close()); expect(h.fetch.mock.calls[0][1].signal.aborted).toBe(true);
+  await act(async () => pending.resolve(Response.json({ token })));
+  expect(h.preview).not.toHaveBeenCalled(); expect(h.accept).not.toHaveBeenCalled(); expect(h.joined).not.toHaveBeenCalled();
+});
+it('shares a single timeout budget between token lookup and preview', async () => {
+  const pending = deferred<Response>(); h.fetch.mockReturnValueOnce(pending.promise);
+  h.preview.mockReturnValueOnce(new Promise(() => {}));
+  props.link = `https://other.example.test/chat-invite/${'s'.repeat(32)}`; await render();
+  await act(async () => vi.advanceTimersByTimeAsync(10000));
+  await act(async () => pending.resolve(Response.json({ token })));
+  expect(model.phase).toBe('reading');
+  await act(async () => vi.advanceTimersByTimeAsync(5001));
+  expect(model.error).toBe('network'); expect(h.fetch.mock.calls[0][1].signal.aborted).toBe(true);
+  expect(h.preview.mock.calls[0][1]).toBe(h.fetch.mock.calls[0][1].signal);
+});
+it('ignores an old account token response after the same share is re-read by the new account', async () => {
+  const pending = deferred<Response>(); h.fetch.mockReturnValueOnce(pending.promise);
+  props.link = `https://other.example.test/chat-invite/${'s'.repeat(32)}`; await render();
+  h.owner = 'two'; await render(); expect(model.phase).toBe('preview');
+  await act(async () => pending.resolve(Response.json({ token: 'B'.repeat(43) })));
+  expect(h.preview).toHaveBeenCalledExactlyOnceWith(token, expect.any(AbortSignal)); expect(h.joined).not.toHaveBeenCalled();
+});
+it.each([[404, 'invalid'], [503, 'network'], [200, 'network']])('handles share lookup failure %s without previewing', async (status, expected) => {
+  h.fetch.mockResolvedValueOnce(Response.json({ token: 'invalid' }, { status: Number(status) }));
+  props.link = `https://other.example.test/chat-invite/${'s'.repeat(32)}`; await render();
+  expect(model.error).toBe(expected); expect(h.preview).not.toHaveBeenCalled(); expect(h.accept).not.toHaveBeenCalled();
 });

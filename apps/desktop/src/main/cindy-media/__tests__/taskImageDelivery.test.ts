@@ -23,12 +23,13 @@ import {
   restoreTaskImageRows,
   taskImageRoots,
 } from '../taskImageDelivery';
-import { resolveSafe } from '../blobStore';
+import { resolveSafe } from '../blobStore.desktop';
 import * as ledger from '../ledger';
 import { commitMessageMediaRefs } from '../chatAttachments';
 import { createHash } from 'node:crypto';
+import { dataOwnerStorageKey } from '../../dataOwnerPath';
 import { ingestMedia } from '../ingest';
-import { reconcileMediaRefCompensationsForOwner } from '../refCompensationJournal';
+import { reconcileMediaRefCompensationsForOwner } from '../refCompensationJournal.desktop';
 import { materializeLocalMarkdownImages } from '../../im/shared/localMarkdownImages';
 import { collectOutboundAttachments } from '../../hook-control/outbound';
 import {
@@ -45,7 +46,7 @@ const state = vi.hoisted(() => ({
 vi.mock('electron', () => ({ app: { getPath: () => state.root } }));
 vi.mock('../../appSessionState', () => ({
   activeOwnerScopeKey: () => (state.valid ? 'cloud:test-owner:1' : 'cloud:other-owner:2'),
-  dataOwnerStorageKey: (id: string) => (id === 'test-owner' ? 'a' : 'b').repeat(20),
+  dataOwnerStorageKey: (id: string) => dataOwnerStorageKey(id),
   getActiveAppSession: () => ({ dataOwnerId: state.valid ? 'test-owner' : 'other-owner' }),
   isAppSessionBoundaryPending: () => false,
 }));
@@ -446,7 +447,7 @@ describe('task image delivery', () => {
       const journalDir = path.join(
         state.root,
         'owners',
-        'a'.repeat(20),
+        dataOwnerStorageKey('test-owner'),
         'cindy-media',
         'ref-compensation-v1',
       );
@@ -459,7 +460,7 @@ describe('task image delivery', () => {
       expect(record.refIds).not.toContain((priorRefs[0] as { id: string }).id);
       expect(raw.prepare('SELECT count(*) AS n FROM media_refs').get()).toEqual({ n: 2 });
       for (const call of remove.mock.calls) expect(call[1]).toBe(client.drizzle);
-      await expect(fs.stat(path.join(state.root, 'owners', 'b'.repeat(20)))).rejects.toMatchObject({
+      await expect(fs.stat(path.join(state.root, 'owners', dataOwnerStorageKey('other-owner')))).rejects.toMatchObject({
         code: 'ENOENT',
       });
       remove.mockRestore();
@@ -512,6 +513,27 @@ describe('task image delivery', () => {
     expect(hook.attachments).toHaveLength(1);
     expect(await fs.readFile(personal.absPaths[0])).toEqual(PNG);
     expect(raw.prepare('SELECT count(*) AS n FROM media_refs').get()).toEqual({ n: 1 });
+  });
+
+  it('delivers a local image whose path has bare spaces through both channel collectors', async () => {
+    // 2026-11-03 Telegram: `![…](…/Application Support/…png)` is not a CommonMark image,
+    // so the reply carried the raw path with no attachment and no incomplete notice.
+    const folder = path.join(state.root, 'Application Support', 'generated images');
+    await fs.mkdir(folder, { recursive: true });
+    const source = path.join(folder, 'design.png');
+    await fs.writeFile(source, PNG);
+    const example = `\`![example](${source})\``;
+    const text = `Design:\n\n![Credits mockup](${source})\n\n${example}`;
+    const personal = await materializeLocalMarkdownImages({ text, workingDir: work, sessionId: 's' });
+    expect(personal.absPaths).toHaveLength(1);
+    expect(personal.text).toBe(`Design:\n\nCredits mockup\n\n${example}`);
+    const hook = await collectOutboundAttachments(await materializeTaskImageText('s', text), [], {
+      resolveImageUrl: resolveSafe,
+      log: { warn: vi.fn() },
+    });
+    expect(hook.skipped).toBe(0);
+    expect(hook.attachments).toHaveLength(1);
+    expect(hook.text).toContain(example);
   });
 
   it('channel delivery accepts images outside the task directory; chat restore stays task-scoped', async () => {
@@ -742,6 +764,40 @@ describe('Markdown image contract', () => {
     const shared = `[download][p]\n${source}`;
     expect(rewriteTaskImageReferences(shared, replacements)).toContain('[p]: <cindy-media://blobs/test.png>');
     expect(rewriteTaskImageReferences(shared, replacements)).not.toContain('/tmp/a.png');
+  });
+
+  it('recovers bare-space local destinations only from plain text, with original offsets', () => {
+    const local = '/Users/me/Library/Application Support/shot (1).png';
+    const text = `**Before** ![a](${local} "cap") and ![b](C:\\Users\\me\\My Pictures\\b.JPG)`;
+    const refs = taskImageReferences(text);
+    expect(refs.map(ref => [ref.url, ref.title ?? null, text.slice(ref.start, ref.end) === ref.raw])).toEqual([
+      [local, 'cap', true],
+      ['C:\\Users\\me\\My Pictures\\b.JPG', null, true],
+    ]);
+    expect(rewriteTaskImageReferences(text, new Map([[local, 'cindy-media://blobs/test.png']]))).toBe(
+      `**Before** ![a](cindy-media://blobs/test.png "cap") and ![b](C:\\Users\\me\\My Pictures\\b.JPG)`,
+    );
+  });
+
+  it('keys bare-space recovery to the source: entities elsewhere do not hide it, escapes keep it literal', () => {
+    const local = '/tmp/my shot.png';
+    const withEntity = `Design &amp; preview: ![pic](${local})`;
+    const [entityRef] = taskImageReferences(withEntity);
+    expect(entityRef.url).toBe(local);
+    expect(withEntity.slice(entityRef.start, entityRef.end)).toBe(`![pic](${local})`);
+    expect(taskImageReferences(`\\![example](${local})`)).toEqual([]);
+    // An escaped backslash does not escape the image.
+    expect(taskImageReferences(`\\\\![pic](${local})`).map(ref => ref.url)).toEqual([local]);
+  });
+
+  it.each([
+    ['relative path', '![a](docs/my shot.png)'],
+    ['non-image file', '![a](/tmp/my report.pdf)'],
+    ['remote URL', '![a](https://example.com/my shot.png)'],
+    ['inline code', '`![a](/tmp/my shot.png)`'],
+    ['code block', '```\n![a](/tmp/my shot.png)\n```'],
+  ])('leaves a bare-space %s alone', (_case, text) => {
+    expect(taskImageReferences(text)).toEqual([]);
   });
 
   it('supports spaces, parentheses and duplicate destinations without changing surrounding text', () => {
