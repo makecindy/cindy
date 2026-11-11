@@ -1,30 +1,32 @@
 # Host 通道覆盖清单（脚本生成）
 
 > 由 `node scripts/host-channel-coverage.mjs` 生成，不要手工修改；行号只在 `--json` 输出里。
-> 生成时的源码提交：`542a420b18`。归属规则见下方「归属规则」，正本在脚本的 `OWNERSHIP_RULES`。
+> 生成时的源码提交：`1041669c7a`。归属规则见下方「归属规则」，正本在脚本的 `OWNERSHIP_RULES`。
 
 统计对象是桌面主进程（`apps/desktop/src/main`，不含测试）里所有 `ipcMain.handle/on`
-及其包装函数注册的通道；同名通道按 invoke / event 各计一次。
+及其包装函数注册的通道；注册、调用次数和排行均按 `(kind, channel)` 区分。
+
+计数报告 v2 分别保存同名 invoke / event。旧报告按记录的 `kind` 归类；若旧采样已混算，无法事后拆分，需重新采样。
 
 ## 总口径
 
-**真正要 Host 做的 = A + C-后台 + C-两段式 = 918 + 32 + 40 = 990**；巡检实际调用到 **133** 个（722 次，其中 A 131）。
+**真正要 Host 做的 = A + C-后台 + C-两段式 = 917 + 32 + 41 = 990**；巡检实际调用到 **133** 个（722 次，其中 A 131）。
 同步通道（S）与回执通道（R）已单列，不在 A 里；C-窗口本地与 C-专项设计不计入。
 
 | 分类 | 含义 | 通道数 |
 |---|---|---:|
 | contract | 已在 Host 通道合同里，窗口做客户端时转发给 Host | 61（巡检调用 30） |
 | client | 客户端模式自己的通道（连接状态、重连） | 2（巡检调用 1） |
-| **A** | 必须由后台处理：读写后台持有的数据或运行状态 | 918（巡检调用 131） |
+| **A** | 必须由后台处理：读写后台持有的数据或运行状态 | 917（巡检调用 131） |
 | **B** | 永久留在窗口：只能在 Electron／图形界面里做 | 361（巡检调用 73） |
 | **W** | 窗口本地设置：窗口直接读写同一份 profile，不经 Host | 6（巡检调用 1） |
 | **S** | 同步通道（给 `event.returnValue` 赋值）：不能转发给 Host | 14（巡检调用 11） |
 | 　S·本地 | 同步·本地（窗口读 profile：界面设置与首帧提示） | 8（巡检调用 8） |
 | 　S·镜像 | 同步·数据归 Host（需窗口缓存镜像） | 6（巡检调用 3） |
 | **R** | 回执通道：主进程向界面要数据，界面回执；先不排期 | 6（巡检调用 2） |
-| **C** | 跨两边，按处理方式分四种 | 87（巡检调用 4） |
+| **C** | 跨两边，按处理方式分四种 | 88（巡检调用 4） |
 | 　C-后台 | | 32（巡检调用 2） |
-| 　C-两段式（窗口做界面动作，数据调 Host） | | 40（巡检调用 0） |
+| 　C-两段式（窗口做界面动作，数据调 Host） | | 41（巡检调用 0） |
 | 　C-窗口本地 | | 11（巡检调用 2） |
 | 　C-专项设计（安全边界） | | 4（巡检调用 0） |
 | 合计 | | 1455 |
@@ -32,7 +34,7 @@
 **窗口类**（B + W + S·本地 + C-窗口本地）在客户端模式下：
 已注册 **372**、未注册 **12**（今天被拒或无人监听，见下文）、快照无法判断 2。
 
-判定依据：A:default 109、A:rule 809、B:rule 361、C:dependency 17、C:rule 70、R:rule 6、S:dependency 14、W:rule 6（rule = 规则表，dependency = 窗口 API 或同步返回值判定，default = 未登记前缀且没用窗口 API）。
+判定依据：A:default 109、A:rule 808、B:rule 361、C:dependency 18、C:rule 70、R:rule 6、S:dependency 14、W:rule 6（rule = 规则表，dependency = 窗口 API 或同步返回值判定，default = 未登记前缀且没用窗口 API）。
 
 转发适配器 2 处（把通道原样转给另一个注册表，通道已在调用处计入）：
 `maker-ipc/electronIpcRegistry.ts`、`maker-ipc/register.ts`
@@ -47,7 +49,7 @@
 1. B 规则直接定类。
 2. 处理函数给 `event.returnValue` 赋值的同步通道判 S：命中 W 规则、领域为设置与偏好、账号与凭据或未登记前缀的为 S·本地，其余为 S·镜像。
 3. W、R、C 规则直接定类（C 规则带细分）。
-4. A 规则只标领域；处理函数及其调用的两层桌面源码函数（不含被调函数里的嵌套回调）若用到下面的窗口 API，改判 C-两段式。
+4. A 规则只标领域；处理函数及其调用的两层桌面源码函数（含参数默认值，不含被调函数里的嵌套回调）若用到下面的窗口 API，改判 C-两段式。
 5. 没有命中任何规则：用到窗口 API 判 C-两段式，否则判 A（默认）。
 
 | 归属 | 原因 | 通道名 | 注册模块 |
@@ -87,141 +89,141 @@
 
 来源：`docs/host/evidence/channel-usage-mock-tour.json`（UI fixture tour (pnpm restart:desktop:remote -- --mock --isolated=host-usage + apps/desktop/scripts/host-client-usage-tour.mjs)；embedded 模式，2026-11-11）。范围是 A + C-后台 + C-两段式；这次共调用 253 个通道（1862 次）。
 
-| # | 通道 | 调用次数 | 归属 | 领域／原因 | 模块 |
-|---:|---|---:|---|---|---|
-| 1 | `maker:bot-group:outbox-command` | 51 | A | 伙伴与 IM | maker-ipc |
-| 2 | `maker:list-desktop-commands` | 47 | A | 任务、消息与输入队列 | maker-ipc |
-| 3 | `device-link:list-devices` | 33 | A | 设备互联与远程执行 | device-link |
-| 4 | `ghosts:session-focused` | 32 | A | 插件、技能与 MCP | cindy-brain |
-| 5 | `maker:session-background-tasks:list` | 28 | A | 任务、消息与输入队列 | maker-ipc |
-| 6 | `maker:plugins:get-state` | 21 | A | 插件、技能与 MCP | maker-ipc |
-| 7 | `device-link:get-state` | 20 | A | 设备互联与远程执行 | device-link |
-| 8 | `maker:model-context-limit:get` | 20 | A | 供应商与模型 | maker-ipc |
-| 9 | `ghosts:ui-prompts` | 19 | A | 插件、技能与 MCP | cindy-brain |
-| 10 | `git-context:get-for-session` | 19 | A | git 与工作树 | git-context |
-| 11 | `learn:list-runs` | 18 | A | 记忆、学习与钩子 | learn-host |
-| 12 | `git-context:find-linked-worktree` | 17 | A | git 与工作树 | git-context |
-| 13 | `maker:get-context-window-bounds` | 16 | A | 任务、消息与输入队列 | maker-ipc |
-| 14 | `maker:get-session-agent-switch-intent` | 16 | A | 任务、消息与输入队列 | maker-ipc |
-| 15 | `maker:side-chat:list:v1` | 16 | A | 任务、消息与输入队列 | maker-ipc |
-| 16 | `provider-group:command` | 16 | A | 供应商与模型 | provider-group |
-| 17 | `binding:resolve-session` | 15 | A | 伙伴与 IM | im |
-| 18 | `maker:goal:get-status` | 15 | A | 任务、消息与输入队列 | maker-ipc |
-| 19 | `maker:session-background-activity` | 15 | A | 任务、消息与输入队列 | maker-ipc |
-| 20 | `worktree:restore-status` | 15 | A | git 与工作树 | worktree |
-| 21 | `git-context:pr-refs:list` | 14 | A | git 与工作树 | git-context |
-| 22 | `local-db:right-sidebar-tabs:list` | 13 | A | 任务、消息与输入队列 | localDb |
-| 23 | `maker:bot-group:list` | 13 | A | 伙伴与 IM | maker-ipc |
-| 24 | `maker:subscription-accounts` | 8 | A | 账号与凭据 | subscription-accounts |
-| 25 | `maker:claude-session-route:get` | 7 | A | 供应商与模型 | bootstrap-electron |
-| 26 | `maker:model-visibility:sync` | 7 | A | 供应商与模型 | maker-ipc |
-| 27 | `maker:remote-ssh:list` | 7 | A | 设备互联与远程执行 | remote-ssh |
-| 28 | `maker:usage:account` | 7 | A | 供应商与模型 | maker-ipc |
-| 29 | `local-db:bots:model-chain-settings-get` | 6 | A | 伙伴与 IM | localDb |
-| 30 | `local-db:bots:read-state:update` | 6 | A | 伙伴与 IM | maker-ipc |
-| 31 | `maker:claude-oauth:status` | 6 | A | 账号与凭据 | bootstrap-electron |
-| 32 | `maker:im-default-settings:get` | 6 | A | 伙伴与 IM | bootstrap-electron |
-| 33 | `maker:usage:claude-subscription` | 6 | A | 供应商与模型 | maker-ipc |
-| 34 | `maker:usage:codex-rate-limits` | 6 | A | 供应商与模型 | maker-ipc |
-| 35 | `local-db:bots:list` | 5 | A | 伙伴与 IM | localDb |
-| 36 | `maker:sync-worker-creation-prefs` | 5 | A | Orca | maker-ipc |
-| 37 | `binding:list-attached` | 4 | A | 伙伴与 IM | im |
-| 38 | `desktop:cc-prefs-changed` | 4 | A | 伙伴与 IM | im |
-| 39 | `ghosts:models:list` | 4 | A | 插件、技能与 MCP | cindy-brain |
-| 40 | `maker:bot-read-state` | 4 | A | 伙伴与 IM | maker-ipc |
-| 41 | `maker:silent-encrypted-retry:get` | 4 | A | 未登记前缀，处理函数没有用到窗口 API | bootstrap-electron |
-| 42 | `maker:sync-new-maker-draft` | 4 | A | 未登记前缀，处理函数没有用到窗口 API | maker-ipc |
-| 43 | `plugin-market:snapshot` | 4 | A | 插件、技能与 MCP | plugin-market |
-| 44 | `provider-share:command` | 4 | A | 供应商与模型 | device-link |
-| 45 | `database-size-warning:get-settings` | 3 | A | 设置与偏好 | bootstrap-electron |
-| 46 | `git-context:pr-refs:list-all` | 3 | A | git 与工作树 | git-context |
-| 47 | `maker:agent:binary-version` | 3 | A | 未登记前缀，处理函数没有用到窗口 API | maker-ipc |
-| 48 | `maker:git-safety:get` | 3 | A | git 与工作树 | bootstrap-electron |
-| 49 | `maker:memory:get` | 3 | A | 记忆、学习与钩子 | maker-ipc |
-| 50 | `self-hosted-relay:command` | 3 | A | 设备互联与远程执行 | device-link |
-| 51 | `analytics:settings-get` | 2 | A | 设置与偏好 | analyticsSettingsService |
-| 52 | `auth:initialize` | 2 | A | 账号与凭据 | bootstrap-electron |
-| 53 | `database-size-warning:get-status` | 2 | A | 设置与偏好 | bootstrap-electron |
-| 54 | `feishuBot:get-state` | 2 | A | 伙伴与 IM | im |
-| 55 | `local-db:maintenance:last-result` | 2 | A | 任务、消息与输入队列 | bootstrap-electron |
-| 56 | `maker:agent-resource-settings:get` | 2 | A | 设置与偏好 | maker-ipc |
-| 57 | `maker:agent:pi-kernel-state` | 2 | A | 未登记前缀，处理函数没有用到窗口 API | maker-ipc |
-| 58 | `maker:chat-embedding:get` | 2 | A | 未登记前缀，处理函数没有用到窗口 API | bootstrap-electron |
-| 59 | `maker:chat:display-cache` | 2 | A | 未登记前缀，处理函数没有用到窗口 API | maker-ipc |
-| 60 | `maker:collaboration-settings:get` | 2 | A | 设置与偏好 | maker-ipc |
-| 61 | `maker:memory:get-settings` | 2 | A | 记忆、学习与钩子 | bootstrap-electron |
-| 62 | `maker:schedule:list-sidebar-index-runs` | 2 | A | 自动化 | maker-ipc |
-| 63 | `maker:session:turn-active` | 2 | A | 任务、消息与输入队列 | maker-ipc |
-| 64 | `plugin-market:recommendations` | 2 | A | 插件、技能与 MCP | plugin-market |
-| 65 | `setup-migration:state` | 2 | A | 未登记前缀，处理函数没有用到窗口 API | setup-migration |
-| 66 | `skillhub:scan` | 2 | A | 插件、技能与 MCP | skillhub |
-| 67 | `wecomGroupNotification:get-state` | 2 | A | 伙伴与 IM | wecomGroupNotification |
-| 68 | `worktree:get-for-session` | 2 | A | git 与工作树 | worktree |
-| 69 | `app:get-cindy-make-state` | 1 | A | Cindy Make | bootstrap-electron |
-| 70 | `app:ready-for-bot` | 1 | A | 未登记前缀，处理函数没有用到窗口 API | bootstrap-electron |
-| 71 | `appearance-settings:get` | 1 | A | 设置与偏好 | appearance-settings-ipc |
-| 72 | `check-environment` | 1 | A | 未登记前缀，处理函数没有用到窗口 API | bootstrap-electron |
-| 73 | `cindy-media:storage-stats` | 1 | A | 附件与媒体库 | bootstrap-electron |
-| 74 | `companion-import` | 1 | A | 伙伴与 IM | bot-import |
-| 75 | `database-size-warning:measure` | 1 | A | 设置与偏好 | bootstrap-electron |
-| 76 | `dialogue-workspace:get` | 1 | A | 未登记前缀，处理函数没有用到窗口 API | bootstrap-electron |
-| 77 | `dingtalkBot:get-state` | 1 | A | 伙伴与 IM | im |
-| 78 | `discordBot:get-status` | 1 | A | 伙伴与 IM | im |
-| 79 | `ghosts:take-pending-install` | 1 | A | 插件、技能与 MCP | cindy-brain |
-| 80 | `legacy-migration:get-state` | 1 | A | 未登记前缀，处理函数没有用到窗口 API | legacyUserDataMigration |
-| 81 | `local-agent:connections` | 1 | A | 设备互联与远程执行 | bootstrap-electron |
-| 82 | `local-agent:developer-connection` | 1 | A | 设备互联与远程执行 | bootstrap-electron |
-| 83 | `local-db:bots:read-state:get` | 1 | A | 伙伴与 IM | maker-ipc |
-| 84 | `local-db:bots:workbench:follow-scopes` | 1 | A | 伙伴与 IM | localDb |
-| 85 | `local-db:ensure-ready` | 1 | A | 任务、消息与输入队列 | localDb |
-| 86 | `local-db:maintenance:startup-progress` | 1 | A | 任务、消息与输入队列 | bootstrap-electron |
-| 87 | `local-db:session-import:scan` | 1 | A | 任务、消息与输入队列 | session-import |
-| 88 | `local-db:session-import:status` | 1 | A | 任务、消息与输入队列 | session-import |
-| 89 | `local-db:sessions:set-pinned-card-summaries` | 1 | A | 任务、消息与输入队列 | localDb |
-| 90 | `local-themes:list` | 1 | A | 设置与偏好 | local-themes |
-| 91 | `maker:android:get-config` | 1 | A | 未登记前缀，处理函数没有用到窗口 API | maker-ipc |
-| 92 | `maker:auto-title` | 1 | A | 任务、消息与输入队列 | maker-ipc |
-| 93 | `maker:auxiliary-model-settings:get` | 1 | A | 供应商与模型 | maker-ipc |
-| 94 | `maker:companion-cloud:state` | 1 | A | 伙伴与 IM | maker-ipc |
-| 95 | `maker:issues:list-mine` | 1 | A | 未登记前缀，处理函数没有用到窗口 API | maker-ipc |
-| 96 | `maker:issues:snapshot-mine` | 1 | A | 未登记前缀，处理函数没有用到窗口 API | maker-ipc |
-| 97 | `maker:lsp-mode:get` | 1 | A | 未登记前缀，处理函数没有用到窗口 API | bootstrap-electron |
-| 98 | `maker:mcp:custom:list` | 1 | A | 插件、技能与 MCP | maker-ipc |
-| 99 | `maker:mcp:duplicates:list` | 1 | A | 插件、技能与 MCP | maker-ipc |
-| 100 | `maker:memory:get-settings-state` | 1 | A | 记忆、学习与钩子 | bootstrap-electron |
-| 101 | `maker:pi-packages:list` | 1 | A | 插件、技能与 MCP | maker-ipc |
-| 102 | `maker:plugins:list` | 1 | A | 插件、技能与 MCP | maker-ipc |
-| 103 | `maker:project-automation:pending-imports` | 1 | A | 未登记前缀，处理函数没有用到窗口 API | maker-ipc |
-| 104 | `maker:provider:local-cli-scan` | 1 | A | 供应商与模型 | maker-ipc |
-| 105 | `maker:provider:models-auto-refresh` | 1 | A | 供应商与模型 | maker-ipc |
-| 106 | `maker:remote-ssh:cc-mgr-list-pending-upgrades` | 1 | A | 设备互联与远程执行 | remote-ssh |
-| 107 | `maker:schedule:get-runtime-state` | 1 | A | 自动化 | maker-ipc |
-| 108 | `maker:schedule:list` | 1 | A | 自动化 | maker-ipc |
-| 109 | `maker:schedule:list-runs` | 1 | A | 自动化 | maker-ipc |
-| 110 | `maker:schedule:webhook-receiver` | 1 | A | 自动化 | maker-ipc |
-| 111 | `maker:session-background-activity:list` | 1 | A | 任务、消息与输入队列 | maker-ipc |
-| 112 | `maker:session-background-work:list` | 1 | A | 任务、消息与输入队列 | maker-ipc |
-| 113 | `maker:session:commit-provisional` | 1 | A | 任务、消息与输入队列 | maker-ipc |
-| 114 | `maker:session:prewarm` | 1 | A | 任务、消息与输入队列 | maker-ipc |
-| 115 | `maker:subagent-model-settings:get` | 1 | A | 供应商与模型 | bootstrap-electron |
-| 116 | `maker:sync-provider-model-memory` | 1 | A | 供应商与模型 | maker-ipc |
-| 117 | `maker:usage:history` | 1 | A | 供应商与模型 | maker-ipc |
-| 118 | `maker:vision-bridge-settings:get` | 1 | A | 供应商与模型 | bootstrap-electron |
-| 119 | `plugin-market:consume-removal-notice` | 1 | A | 插件、技能与 MCP | plugin-market |
-| 120 | `plugin-market:lookup` | 1 | A | 插件、技能与 MCP | plugin-market |
-| 121 | `process-monitor:unsubscribe` | 1 | A | 未登记前缀，处理函数没有用到窗口 API | process-monitor |
-| 122 | `projects-root:get` | 1 | A | 设置与偏好 | bootstrap-electron |
-| 123 | `safe-storage-read` | 1 | A | 账号与凭据 | bootstrap-electron |
-| 124 | `skillhub:list-categories` | 1 | A | 插件、技能与 MCP | skillhub |
-| 125 | `skillhub:list-market` | 1 | A | 插件、技能与 MCP | skillhub |
-| 126 | `telegramBot:get-status` | 1 | A | 伙伴与 IM | im |
-| 127 | `terminal:get-default-shell-pref` | 1 | C-后台 | 终端 PTY：换窗口时不能断，网页和手机也要用（优先级低，放后面批次） | maker-ipc |
-| 128 | `terminal:list-available-shells` | 1 | C-后台 | 终端 PTY：换窗口时不能断，网页和手机也要用（优先级低，放后面批次） | maker-ipc |
-| 129 | `wechatBot:get-channel-settings` | 1 | A | 伙伴与 IM | im |
-| 130 | `wechatBot:get-state` | 1 | A | 伙伴与 IM | im |
-| 131 | `wecomBot:get-status` | 1 | A | 伙伴与 IM | im |
-| 132 | `worktree-recycle:list` | 1 | A | git 与工作树 | bootstrap-electron |
-| 133 | `worktree:list-all` | 1 | A | git 与工作树 | worktree |
+| # | 通道 | 类型 | 调用次数 | 归属 | 领域／原因 | 模块 |
+|---:|---|---|---:|---|---|---|
+| 1 | `maker:bot-group:outbox-command` | invoke | 51 | A | 伙伴与 IM | maker-ipc |
+| 2 | `maker:list-desktop-commands` | invoke | 47 | A | 任务、消息与输入队列 | maker-ipc |
+| 3 | `device-link:list-devices` | invoke | 33 | A | 设备互联与远程执行 | device-link |
+| 4 | `ghosts:session-focused` | event | 32 | A | 插件、技能与 MCP | cindy-brain |
+| 5 | `maker:session-background-tasks:list` | invoke | 28 | A | 任务、消息与输入队列 | maker-ipc |
+| 6 | `maker:plugins:get-state` | invoke | 21 | A | 插件、技能与 MCP | maker-ipc |
+| 7 | `device-link:get-state` | invoke | 20 | A | 设备互联与远程执行 | device-link |
+| 8 | `maker:model-context-limit:get` | invoke | 20 | A | 供应商与模型 | maker-ipc |
+| 9 | `ghosts:ui-prompts` | invoke | 19 | A | 插件、技能与 MCP | cindy-brain |
+| 10 | `git-context:get-for-session` | invoke | 19 | A | git 与工作树 | git-context |
+| 11 | `learn:list-runs` | invoke | 18 | A | 记忆、学习与钩子 | learn-host |
+| 12 | `git-context:find-linked-worktree` | invoke | 17 | A | git 与工作树 | git-context |
+| 13 | `maker:get-context-window-bounds` | invoke | 16 | A | 任务、消息与输入队列 | maker-ipc |
+| 14 | `maker:get-session-agent-switch-intent` | invoke | 16 | A | 任务、消息与输入队列 | maker-ipc |
+| 15 | `maker:side-chat:list:v1` | invoke | 16 | A | 任务、消息与输入队列 | maker-ipc |
+| 16 | `provider-group:command` | invoke | 16 | A | 供应商与模型 | provider-group |
+| 17 | `binding:resolve-session` | invoke | 15 | A | 伙伴与 IM | im |
+| 18 | `maker:goal:get-status` | invoke | 15 | A | 任务、消息与输入队列 | maker-ipc |
+| 19 | `maker:session-background-activity` | invoke | 15 | A | 任务、消息与输入队列 | maker-ipc |
+| 20 | `worktree:restore-status` | invoke | 15 | A | git 与工作树 | worktree |
+| 21 | `git-context:pr-refs:list` | invoke | 14 | A | git 与工作树 | git-context |
+| 22 | `local-db:right-sidebar-tabs:list` | invoke | 13 | A | 任务、消息与输入队列 | localDb |
+| 23 | `maker:bot-group:list` | invoke | 13 | A | 伙伴与 IM | maker-ipc |
+| 24 | `maker:subscription-accounts` | invoke | 8 | A | 账号与凭据 | subscription-accounts |
+| 25 | `maker:claude-session-route:get` | invoke | 7 | A | 供应商与模型 | bootstrap-electron |
+| 26 | `maker:model-visibility:sync` | invoke | 7 | A | 供应商与模型 | maker-ipc |
+| 27 | `maker:remote-ssh:list` | invoke | 7 | A | 设备互联与远程执行 | remote-ssh |
+| 28 | `maker:usage:account` | invoke | 7 | A | 供应商与模型 | maker-ipc |
+| 29 | `local-db:bots:model-chain-settings-get` | invoke | 6 | A | 伙伴与 IM | localDb |
+| 30 | `local-db:bots:read-state:update` | invoke | 6 | A | 伙伴与 IM | maker-ipc |
+| 31 | `maker:claude-oauth:status` | invoke | 6 | A | 账号与凭据 | bootstrap-electron |
+| 32 | `maker:im-default-settings:get` | invoke | 6 | A | 伙伴与 IM | bootstrap-electron |
+| 33 | `maker:usage:claude-subscription` | invoke | 6 | A | 供应商与模型 | maker-ipc |
+| 34 | `maker:usage:codex-rate-limits` | invoke | 6 | A | 供应商与模型 | maker-ipc |
+| 35 | `local-db:bots:list` | invoke | 5 | A | 伙伴与 IM | localDb |
+| 36 | `maker:sync-worker-creation-prefs` | event | 5 | A | Orca | maker-ipc |
+| 37 | `binding:list-attached` | invoke | 4 | A | 伙伴与 IM | im |
+| 38 | `desktop:cc-prefs-changed` | event | 4 | A | 伙伴与 IM | im |
+| 39 | `ghosts:models:list` | invoke | 4 | A | 插件、技能与 MCP | cindy-brain |
+| 40 | `maker:bot-read-state` | invoke | 4 | A | 伙伴与 IM | maker-ipc |
+| 41 | `maker:silent-encrypted-retry:get` | invoke | 4 | A | 未登记前缀，处理函数没有用到窗口 API | bootstrap-electron |
+| 42 | `maker:sync-new-maker-draft` | event | 4 | A | 未登记前缀，处理函数没有用到窗口 API | maker-ipc |
+| 43 | `plugin-market:snapshot` | invoke | 4 | A | 插件、技能与 MCP | plugin-market |
+| 44 | `provider-share:command` | invoke | 4 | A | 供应商与模型 | device-link |
+| 45 | `database-size-warning:get-settings` | invoke | 3 | A | 设置与偏好 | bootstrap-electron |
+| 46 | `git-context:pr-refs:list-all` | invoke | 3 | A | git 与工作树 | git-context |
+| 47 | `maker:agent:binary-version` | invoke | 3 | A | 未登记前缀，处理函数没有用到窗口 API | maker-ipc |
+| 48 | `maker:git-safety:get` | invoke | 3 | A | git 与工作树 | bootstrap-electron |
+| 49 | `maker:memory:get` | invoke | 3 | A | 记忆、学习与钩子 | maker-ipc |
+| 50 | `self-hosted-relay:command` | invoke | 3 | A | 设备互联与远程执行 | device-link |
+| 51 | `analytics:settings-get` | invoke | 2 | A | 设置与偏好 | analyticsSettingsService |
+| 52 | `auth:initialize` | invoke | 2 | A | 账号与凭据 | bootstrap-electron |
+| 53 | `database-size-warning:get-status` | invoke | 2 | A | 设置与偏好 | bootstrap-electron |
+| 54 | `feishuBot:get-state` | invoke | 2 | A | 伙伴与 IM | im |
+| 55 | `local-db:maintenance:last-result` | invoke | 2 | A | 任务、消息与输入队列 | bootstrap-electron |
+| 56 | `maker:agent-resource-settings:get` | invoke | 2 | A | 设置与偏好 | maker-ipc |
+| 57 | `maker:agent:pi-kernel-state` | invoke | 2 | A | 未登记前缀，处理函数没有用到窗口 API | maker-ipc |
+| 58 | `maker:chat-embedding:get` | invoke | 2 | A | 未登记前缀，处理函数没有用到窗口 API | bootstrap-electron |
+| 59 | `maker:chat:display-cache` | invoke | 2 | A | 未登记前缀，处理函数没有用到窗口 API | maker-ipc |
+| 60 | `maker:collaboration-settings:get` | invoke | 2 | A | 设置与偏好 | maker-ipc |
+| 61 | `maker:memory:get-settings` | invoke | 2 | A | 记忆、学习与钩子 | bootstrap-electron |
+| 62 | `maker:schedule:list-sidebar-index-runs` | invoke | 2 | A | 自动化 | maker-ipc |
+| 63 | `maker:session:turn-active` | invoke | 2 | A | 任务、消息与输入队列 | maker-ipc |
+| 64 | `plugin-market:recommendations` | invoke | 2 | A | 插件、技能与 MCP | plugin-market |
+| 65 | `setup-migration:state` | invoke | 2 | A | 未登记前缀，处理函数没有用到窗口 API | setup-migration |
+| 66 | `skillhub:scan` | invoke | 2 | A | 插件、技能与 MCP | skillhub |
+| 67 | `wecomGroupNotification:get-state` | invoke | 2 | A | 伙伴与 IM | wecomGroupNotification |
+| 68 | `worktree:get-for-session` | invoke | 2 | A | git 与工作树 | worktree |
+| 69 | `app:get-cindy-make-state` | invoke | 1 | A | Cindy Make | bootstrap-electron |
+| 70 | `app:ready-for-bot` | invoke | 1 | A | 未登记前缀，处理函数没有用到窗口 API | bootstrap-electron |
+| 71 | `appearance-settings:get` | invoke | 1 | A | 设置与偏好 | appearance-settings-ipc |
+| 72 | `check-environment` | invoke | 1 | A | 未登记前缀，处理函数没有用到窗口 API | bootstrap-electron |
+| 73 | `cindy-media:storage-stats` | invoke | 1 | A | 附件与媒体库 | bootstrap-electron |
+| 74 | `companion-import` | invoke | 1 | A | 伙伴与 IM | bot-import |
+| 75 | `database-size-warning:measure` | invoke | 1 | A | 设置与偏好 | bootstrap-electron |
+| 76 | `dialogue-workspace:get` | invoke | 1 | A | 未登记前缀，处理函数没有用到窗口 API | bootstrap-electron |
+| 77 | `dingtalkBot:get-state` | invoke | 1 | A | 伙伴与 IM | im |
+| 78 | `discordBot:get-status` | invoke | 1 | A | 伙伴与 IM | im |
+| 79 | `ghosts:take-pending-install` | invoke | 1 | A | 插件、技能与 MCP | cindy-brain |
+| 80 | `legacy-migration:get-state` | invoke | 1 | A | 未登记前缀，处理函数没有用到窗口 API | legacyUserDataMigration |
+| 81 | `local-agent:connections` | invoke | 1 | A | 设备互联与远程执行 | bootstrap-electron |
+| 82 | `local-agent:developer-connection` | invoke | 1 | A | 设备互联与远程执行 | bootstrap-electron |
+| 83 | `local-db:bots:read-state:get` | invoke | 1 | A | 伙伴与 IM | maker-ipc |
+| 84 | `local-db:bots:workbench:follow-scopes` | invoke | 1 | A | 伙伴与 IM | localDb |
+| 85 | `local-db:ensure-ready` | invoke | 1 | A | 任务、消息与输入队列 | localDb |
+| 86 | `local-db:maintenance:startup-progress` | invoke | 1 | A | 任务、消息与输入队列 | bootstrap-electron |
+| 87 | `local-db:session-import:scan` | invoke | 1 | A | 任务、消息与输入队列 | session-import |
+| 88 | `local-db:session-import:status` | invoke | 1 | A | 任务、消息与输入队列 | session-import |
+| 89 | `local-db:sessions:set-pinned-card-summaries` | invoke | 1 | A | 任务、消息与输入队列 | localDb |
+| 90 | `local-themes:list` | invoke | 1 | A | 设置与偏好 | local-themes |
+| 91 | `maker:android:get-config` | invoke | 1 | A | 未登记前缀，处理函数没有用到窗口 API | maker-ipc |
+| 92 | `maker:auto-title` | invoke | 1 | A | 任务、消息与输入队列 | maker-ipc |
+| 93 | `maker:auxiliary-model-settings:get` | invoke | 1 | A | 供应商与模型 | maker-ipc |
+| 94 | `maker:companion-cloud:state` | invoke | 1 | A | 伙伴与 IM | maker-ipc |
+| 95 | `maker:issues:list-mine` | invoke | 1 | A | 未登记前缀，处理函数没有用到窗口 API | maker-ipc |
+| 96 | `maker:issues:snapshot-mine` | invoke | 1 | A | 未登记前缀，处理函数没有用到窗口 API | maker-ipc |
+| 97 | `maker:lsp-mode:get` | invoke | 1 | A | 未登记前缀，处理函数没有用到窗口 API | bootstrap-electron |
+| 98 | `maker:mcp:custom:list` | invoke | 1 | A | 插件、技能与 MCP | maker-ipc |
+| 99 | `maker:mcp:duplicates:list` | invoke | 1 | A | 插件、技能与 MCP | maker-ipc |
+| 100 | `maker:memory:get-settings-state` | invoke | 1 | A | 记忆、学习与钩子 | bootstrap-electron |
+| 101 | `maker:pi-packages:list` | invoke | 1 | A | 插件、技能与 MCP | maker-ipc |
+| 102 | `maker:plugins:list` | invoke | 1 | A | 插件、技能与 MCP | maker-ipc |
+| 103 | `maker:project-automation:pending-imports` | invoke | 1 | A | 未登记前缀，处理函数没有用到窗口 API | maker-ipc |
+| 104 | `maker:provider:local-cli-scan` | invoke | 1 | A | 供应商与模型 | maker-ipc |
+| 105 | `maker:provider:models-auto-refresh` | invoke | 1 | A | 供应商与模型 | maker-ipc |
+| 106 | `maker:remote-ssh:cc-mgr-list-pending-upgrades` | invoke | 1 | A | 设备互联与远程执行 | remote-ssh |
+| 107 | `maker:schedule:get-runtime-state` | invoke | 1 | A | 自动化 | maker-ipc |
+| 108 | `maker:schedule:list` | invoke | 1 | A | 自动化 | maker-ipc |
+| 109 | `maker:schedule:list-runs` | invoke | 1 | A | 自动化 | maker-ipc |
+| 110 | `maker:schedule:webhook-receiver` | invoke | 1 | A | 自动化 | maker-ipc |
+| 111 | `maker:session-background-activity:list` | invoke | 1 | A | 任务、消息与输入队列 | maker-ipc |
+| 112 | `maker:session-background-work:list` | invoke | 1 | A | 任务、消息与输入队列 | maker-ipc |
+| 113 | `maker:session:commit-provisional` | invoke | 1 | A | 任务、消息与输入队列 | maker-ipc |
+| 114 | `maker:session:prewarm` | invoke | 1 | A | 任务、消息与输入队列 | maker-ipc |
+| 115 | `maker:subagent-model-settings:get` | invoke | 1 | A | 供应商与模型 | bootstrap-electron |
+| 116 | `maker:sync-provider-model-memory` | event | 1 | A | 供应商与模型 | maker-ipc |
+| 117 | `maker:usage:history` | invoke | 1 | A | 供应商与模型 | maker-ipc |
+| 118 | `maker:vision-bridge-settings:get` | invoke | 1 | A | 供应商与模型 | bootstrap-electron |
+| 119 | `plugin-market:consume-removal-notice` | invoke | 1 | A | 插件、技能与 MCP | plugin-market |
+| 120 | `plugin-market:lookup` | invoke | 1 | A | 插件、技能与 MCP | plugin-market |
+| 121 | `process-monitor:unsubscribe` | invoke | 1 | A | 未登记前缀，处理函数没有用到窗口 API | process-monitor |
+| 122 | `projects-root:get` | invoke | 1 | A | 设置与偏好 | bootstrap-electron |
+| 123 | `safe-storage-read` | invoke | 1 | A | 账号与凭据 | bootstrap-electron |
+| 124 | `skillhub:list-categories` | invoke | 1 | A | 插件、技能与 MCP | skillhub |
+| 125 | `skillhub:list-market` | invoke | 1 | A | 插件、技能与 MCP | skillhub |
+| 126 | `telegramBot:get-status` | invoke | 1 | A | 伙伴与 IM | im |
+| 127 | `terminal:get-default-shell-pref` | invoke | 1 | C-后台 | 终端 PTY：换窗口时不能断，网页和手机也要用（优先级低，放后面批次） | maker-ipc |
+| 128 | `terminal:list-available-shells` | invoke | 1 | C-后台 | 终端 PTY：换窗口时不能断，网页和手机也要用（优先级低，放后面批次） | maker-ipc |
+| 129 | `wechatBot:get-channel-settings` | invoke | 1 | A | 伙伴与 IM | im |
+| 130 | `wechatBot:get-state` | invoke | 1 | A | 伙伴与 IM | im |
+| 131 | `wecomBot:get-status` | invoke | 1 | A | 伙伴与 IM | im |
+| 132 | `worktree-recycle:list` | invoke | 1 | A | git 与工作树 | bootstrap-electron |
+| 133 | `worktree:list-all` | invoke | 1 | A | git 与工作树 | worktree |
 
 ## 同步通道 S（14）
 
@@ -257,7 +259,7 @@ S·本地：界面设置与登录首帧提示，由窗口本地读同一份 prof
 | `model-favorites:host-reply` | event | R | 主进程向界面要数据的回执协议：数据在界面本地存储，Host 要用需经窗口往返，先不排期 | 0 | `maker-ipc/modelFavoritesSync.ts` |
 | `setup-migration:host-reply` | event | R | 主进程向界面要数据的回执协议：数据在界面本地存储，Host 要用需经窗口往返，先不排期 | 0 | `setup-migration/rendererPrefsHost.ts` |
 
-## C 类全量（87）
+## C 类全量（88）
 
 C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做的（终端优先级低）。C-两段式：窗口保留处理者做界面动作，数据那一半调 Host，每个需要一个 Host 接口，计入但低频、排在后面。C-窗口本地：路径来自用户在本窗口的选择，客户端模式下照常注册，不计入。C-专项设计：安全边界，先读 docs/product-rules/input-handoff.md，方案出来前不动。
 
@@ -295,6 +297,7 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `ghosts:library-pick-location` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 插件、技能与 MCP，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog；窗口做界面动作，数据那一半调 Host | 0 | `cindy-brain/index.ts` |
 | `ghosts:library-reattach-legacy` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 插件、技能与 MCP，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog；窗口做界面动作，数据那一半调 Host | 0 | `cindy-brain/index.ts` |
 | `ghosts:pick-file` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | 0 | `cindy-brain/index.ts` |
+| `git-review:open-file` | invoke | C-两段式（窗口做界面动作，数据调 Host） | git 与工作树，但处理函数用到窗口 API：shell；窗口做界面动作，数据那一半调 Host | 0 | `git-review/ipc.ts` |
 | `input-handoff:picture` | invoke | C-专项设计（安全边界） | 安全边界待专项设计：主人填写的值只交给宿主执行（input-handoff），远程控制派发；方案出来前不动 | 0 | `maker-ipc/register.ts` |
 | `input-handoff:raise` | invoke | C-专项设计（安全边界） | 安全边界待专项设计：主人填写的值只交给宿主执行（input-handoff），远程控制派发；方案出来前不动 | 0 | `maker-ipc/register.ts` |
 | `input-handoff:submit` | invoke | C-专项设计（安全边界） | 安全边界待专项设计：主人填写的值只交给宿主执行（input-handoff），远程控制派发；方案出来前不动 | 0 | `maker-ipc/register.ts` |
@@ -396,7 +399,7 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | skillhub | 0 | 40 | 0 | 0 | 0 | 0 | 2 | 42 |
 | hook-control | 0 | 29 | 0 | 0 | 0 | 0 | 0 | 29 |
 | remote-ssh | 0 | 28 | 0 | 0 | 0 | 0 | 1 | 29 |
-| git-review | 0 | 21 | 0 | 0 | 0 | 0 | 0 | 21 |
+| git-review | 0 | 20 | 0 | 0 | 0 | 0 | 1 | 21 |
 | billing | 0 | 19 | 0 | 0 | 0 | 0 | 2 | 21 |
 | local-model-runtime | 0 | 19 | 0 | 0 | 0 | 0 | 0 | 19 |
 | plugin-market | 0 | 19 | 0 | 0 | 0 | 0 | 1 | 20 |
@@ -1015,7 +1018,7 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `git-review:get` | invoke | A（git 与工作树） | 0 | `git-review/ipc.ts` |
 | `git-review:image-preview` | invoke | A（git 与工作树） | 0 | `git-review/ipc.ts` |
 | `git-review:markdown-preview` | invoke | A（git 与工作树） | 0 | `git-review/ipc.ts` |
-| `git-review:open-file` | invoke | A（git 与工作树） | 0 | `git-review/ipc.ts` |
+| `git-review:open-file` | invoke | C-两段式（窗口做界面动作，数据调 Host）（git 与工作树，但处理函数用到窗口 API：shell；窗口做界面动作，数据那一半调 Host） | 0 | `git-review/ipc.ts` |
 | `git-review:push` | invoke | A（git 与工作树） | 0 | `git-review/ipc.ts` |
 | `git-review:remote-op` | invoke | A（git 与工作树） | 0 | `git-review/device-op.ts` |
 | `git-review:stage-all` | invoke | A（git 与工作树） | 0 | `git-review/ipc.ts` |
