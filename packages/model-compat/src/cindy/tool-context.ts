@@ -136,10 +136,13 @@ export class ChatBridgeToolContext {
   static fromRequest(request: ResponsesRequest): ChatBridgeToolContext {
     const context = new ChatBridgeToolContext();
     for (const tool of request.tools ?? []) context.addResponseTool(tool);
+    // Top-level tools always belong to this request. When no inline group follows, this is the
+    // whole catalog; otherwise collectHistoryTools snapshots after the current inline group and
+    // before replay, so replayed entries never answer a selector.
+    if (!Array.isArray(request.input) || indexOfCurrentTurnInlineTools(request.input) < 0) {
+      context.recordCurrentSelectors();
+    }
     context.collectHistoryTools(request.input);
-    // Snapshot last: the catalog now holds every declaration this request made, and history
-    // ran before it so replayed entries cannot answer a selector.
-    context.recordCurrentSelectors();
     return context;
   }
 
