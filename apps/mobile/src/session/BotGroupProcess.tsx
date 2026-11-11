@@ -75,7 +75,10 @@ function BotGroupProcessHistory({ process, deviceId }: { process: BotGroupProces
       const active = () => !cancelled;
       setLoading(true);
       void readBotGroupProcessMessages(process, clientId => invoke<BotGroupProcessMessage[]>(deviceId,
-        'local-db:messages:around-client-id', [process.sessionId, clientId, { radius: 80 }], { background: true }), () => !active(), () => { if (active()) stopUpdates(); })
+        'local-db:messages:around-client-id', [process.sessionId, clientId, { radius: 80 }], {
+          background: true,
+          preSend: () => { if (!active()) throw new Error('Group history read cancelled'); },
+        }), () => !active(), () => { if (active()) stopUpdates(); })
         .then(messages => { if (active()) { setResult({ messages, failed: false }); setLoading(false); } })
         .catch(() => { if (active()) { setResult(previous => ({ messages: previous?.messages ?? [], failed: true })); setLoading(false); } })
         .finally(() => {

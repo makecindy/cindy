@@ -494,14 +494,15 @@ it('refreshes every group history on repeated invalidations without a created pu
 // PR #8979 / unit: real group mounts + production invoke policy/scheduler.
 // Twelve pending hidden reads used to fill every foreground slot. A task read
 // must start before any hidden read returns; no real network or timer wait.
-it('keeps foreground capacity available while collapsed group histories prefetch', async () => {
+it('keeps foreground capacity and cancels queued history reads after leaving', async () => {
   const scheduler = new InvokeScheduler();
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
   let started = 0;
+  const sent: string[] = [];
   let foregroundStarted = false;
   history.invoke.mockImplementation((device, channel, _args, options) => scheduler.run(device,
-    resolveInvokePriority(channel, options?.background), 10_000, async () => { started++; await gate; return []; }));
+    resolveInvokePriority(channel, options?.background), 10_000, async () => { options?.preSend?.(); started++; sent.push(_args[1]); await gate; return []; }));
   let foreground: Promise<unknown> | undefined;
   try {
     await act(async () => root.render(el('div', null, ...Array.from({ length: 12 }, (_, i) => el(BotGroupProcess, {
@@ -510,7 +511,13 @@ it('keeps foreground capacity available while collapsed group histories prefetch
     foreground = scheduler.run('mac', resolveInvokePriority('local-db:messages:around-client-id'), 10_000,
       async () => { foregroundStarted = true; return []; });
     expect(foregroundStarted).toBe(true);
-    expect(started).toBeLessThanOrEqual(4);
+    expect(started).toBe(4);
+    await act(async () => { root.render(null); });
+    await act(async () => { root.render(group()); });
+    await act(async () => { release(); await foreground; });
+    // All eight queued old reads must be rejected at the real send boundary.
+    expect(started).toBe(5);
+    expect(sent[4]).toBe('source');
   } finally {
     await act(async () => { root.render(null); release(); await foreground; });
   }

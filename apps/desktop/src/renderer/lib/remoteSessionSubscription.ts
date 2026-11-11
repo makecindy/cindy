@@ -28,9 +28,13 @@ export function createRemoteSessionSubscription(deviceId: string, sessionId: str
       if (!subscriptions.has(key)) {
         // Main clears window topic references when the active link is torn down.
         // Keep the owners, but never reuse an ACK from that stopped link.
-        entry.offStatus = window.electronAPI.deviceLink.onStatusChanged?.(({ status }) => {
+        const offStatus = window.electronAPI.deviceLink.onStatusChanged?.(({ status }) => {
           if (status === 'stopped') entry.ack = undefined;
         });
+        const offControl = window.electronAPI.deviceLink.onControlTargetChanged?.((payload) => {
+          if (payload.deviceId === deviceId && !payload.enabled) entry.ack = undefined;
+        });
+        entry.offStatus = () => { offStatus?.(); offControl?.(); };
       }
       subscriptions.set(key, entry);
       const recovering = !reuse && entry.owners.has(token);

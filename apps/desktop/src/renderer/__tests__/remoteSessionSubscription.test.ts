@@ -3,9 +3,13 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { createRemoteSessionSubscription } from '@/lib/remoteSessionSubscription';
 
 const statusListeners = new Set<(p: { status: 'stopped' | 'connecting' | 'online' }) => void>();
+const controlListeners = new Set<(p: { deviceId: string; enabled: boolean }) => void>();
 const subscribe = vi.fn(async (_deviceId: string, _topics: string[]) => ({ ok: true as const }));
 const unsubscribe = vi.fn(async () => ({ ok: true }));
-Object.assign(window, { electronAPI: { deviceLink: { subscribe, unsubscribe, onStatusChanged: (cb: (p: { status: 'stopped' | 'connecting' | 'online' }) => void) => { statusListeners.add(cb); return () => { statusListeners.delete(cb); }; } } } });
+Object.assign(window, { electronAPI: { deviceLink: { subscribe, unsubscribe,
+  onStatusChanged: (cb: (p: { status: 'stopped' | 'connecting' | 'online' }) => void) => { statusListeners.add(cb); return () => { statusListeners.delete(cb); }; },
+  onControlTargetChanged: (cb: (p: { deviceId: string; enabled: boolean }) => void) => { controlListeners.add(cb); return () => { controlListeners.delete(cb); }; },
+} } });
 afterEach(() => { subscribe.mockReset().mockResolvedValue({ ok: true }); unsubscribe.mockClear(); });
 const settle = async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); };
 
@@ -133,7 +137,7 @@ it('keeps the newer recovery ACK when an older acquisition fails late', async ()
 
 // PR #8979: Main drops its window topic references on relay teardown, but a
 // readable collapsed history remains mounted. Its old ACK cannot survive that.
-it('reacquires one shared ACK after Main tears down the relay link', async () => {
+it.each(['relay', 'device'])('reacquires one shared ACK after Main resets the %s subscription', async reset => {
   const refs = await import('../../main/device-link/subscriptionRefcount');
   refs.resetAll();
   subscribe.mockImplementation(async (deviceId, topics) => { refs.recordSubscribe(1, deviceId, topics); return { ok: true }; });
@@ -142,10 +146,22 @@ it('reacquires one shared ACK after Main tears down the relay link', async () =>
     await Promise.all(owners.map(owner => owner.subscribe()));
     expect(subscribe).toHaveBeenCalledTimes(1);
     expect(refs.snapshotSubscriptions()).toEqual([{ deviceId: 'mac', topics: ['session:relay-reset'] }]);
-    refs.resetAll();
-    statusListeners.forEach(cb => cb({ status: 'stopped' }));
-    statusListeners.forEach(cb => cb({ status: 'connecting' }));
-    statusListeners.forEach(cb => cb({ status: 'online' }));
+    controlListeners.forEach(cb => cb({ deviceId: 'other-mac', enabled: false }));
+    await owners[0].subscribe({ reuse: true });
+    expect(subscribe).toHaveBeenCalledTimes(1);
+    if (reset === 'relay') {
+      refs.resetAll();
+      statusListeners.forEach(cb => cb({ status: 'stopped' }));
+      statusListeners.forEach(cb => cb({ status: 'connecting' }));
+      statusListeners.forEach(cb => cb({ status: 'online' }));
+    } else {
+      refs.resetDevice('mac');
+      controlListeners.forEach(cb => cb({ deviceId: 'mac', enabled: false }));
+      controlListeners.forEach(cb => cb({ deviceId: 'mac', enabled: true }));
+    }
+    const later = createRemoteSessionSubscription('mac', 'relay-reset');
+    owners.push(later);
+    await later.subscribe();
     await Promise.all(owners.map(owner => owner.subscribe({ reuse: true })));
     expect(subscribe).toHaveBeenCalledTimes(2);
     expect(refs.snapshotSubscriptions()).toEqual([{ deviceId: 'mac', topics: ['session:relay-reset'] }]);
@@ -153,4 +169,5 @@ it('reacquires one shared ACK after Main tears down the relay link', async () =>
     expect(subscribe).toHaveBeenCalledTimes(2);
   } finally { owners.forEach(owner => owner.release()); refs.resetAll(); }
   expect(statusListeners.size).toBe(0);
+  expect(controlListeners.size).toBe(0);
 });
