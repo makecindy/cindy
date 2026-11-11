@@ -29,7 +29,7 @@ const mocks = vi.hoisted(() => ({
   status: new Set<(snapshot: { status: string }) => void>(),
   getState: vi.fn(),
   poolCommand: vi.fn(),
-  remotePush: new Set<(push: { deviceId: string; channel: string }, stamp?: unknown) => void>(),
+  remotePush: new Set<(push: { deviceId: string; channel: string; payload?: { providerId: string } }, stamp?: unknown) => void>(),
   poolChanged: new Set<(event: { providerId: string }) => void>(),
   remoteInvoke: vi.fn(),
   realCard: false,
@@ -112,7 +112,7 @@ beforeEach(() => {
     },
   }, deviceLink: {
     invoke: mocks.remoteInvoke,
-    onRemotePush: (listener: (push: { deviceId: string; channel: string }, stamp?: unknown) => void) => {
+    onRemotePush: (listener: (push: { deviceId: string; channel: string; payload?: { providerId: string } }, stamp?: unknown) => void) => {
       mocks.remotePush.add(listener);
       return () => mocks.remotePush.delete(listener);
     },
@@ -882,11 +882,13 @@ describe('GroupMemberQuota', () => {
     await show({ kind: 'device', deviceId: 'mini', providerId: 'anthropic' });
     expect(screen.getByTestId('quota-card').getAttribute('data-usage')).toBe('[25]');
     mocks.remoteInvoke.mockResolvedValue(pool([poolAccount('work', { paused: true, usage: claudeUsage(25) })]));
+    await act(async () => mocks.remotePush.forEach(listener => listener({ deviceId: 'mini', channel: 'subscription-accounts:changed', payload: { providerId: 'openai' } })));
+    expect(mocks.remoteInvoke).toHaveBeenCalledOnce();
     await act(async () => mocks.remotePush.forEach(listener => listener(
-      { deviceId: 'mini', channel: 'subscription-accounts:changed' }, { dataOwnerId: 'someone-else', ownerGeneration: 1 },
+      { deviceId: 'mini', channel: 'subscription-accounts:changed', payload: { providerId: 'anthropic' } }, { dataOwnerId: 'someone-else', ownerGeneration: 1 },
     )));
     expect(mocks.remoteInvoke).toHaveBeenCalledOnce();
-    await act(async () => mocks.remotePush.forEach(listener => listener({ deviceId: 'mini', channel: 'subscription-accounts:changed' })));
+    await act(async () => mocks.remotePush.forEach(listener => listener({ deviceId: 'mini', channel: 'subscription-accounts:changed', payload: { providerId: 'anthropic' } })));
     expect(screen.queryByTestId('quota-card')).toBeNull();
     expect(mocks.remoteInvoke).toHaveBeenCalledTimes(2);
   });

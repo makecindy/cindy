@@ -167,6 +167,27 @@ describe('paused account next-turn handoff', () => {
     expect(h.remote).not.toHaveBeenCalled();
   });
 
+  // Review regressions: replacement is a new authorization route, and remote
+  // readiness must use the requested model's bucket rather than generic status.
+  it('checks imported replacement permissions as a new route', async () => {
+    h.pools.openai = { strategy: 'order', accounts: [{ ...account('default'), paused: true }, account('blocked'), account('allowed')], legacyCodexAccounts: { 'old-blocked': 'blocked' } };
+    h.bindings.set('task:paused', { providerId: 'openai', accountId: 'default' });
+    h.accountAllowed.mockImplementation((id, model, options) => id !== 'old-blocked' || model !== 'gpt-6' || !options.newRoute);
+    const next = await acquireSubscriptionAccount('openai', 'gpt-6', ['task:paused'], false, { resuming: false });
+    expect(next!.account.configDir).toBe('openai/allowed');
+    expect(h.accountAllowed).toHaveBeenCalledWith('old-blocked', 'gpt-6', expect.objectContaining({ newRoute: true }));
+    next!.release();
+  });
+
+  it.each([false, true])('checks the requested remote model bucket (spark limited=%s)', async limited => {
+    const bucket = (usedPercent: number, limitName: string) => ({ limitName, updatedAt: Date.now(), primary: { usedPercent, windowMinutes: 300, resetsAt: Date.now() / 1000 + 3600 }, secondary: null });
+    h.remote.mockResolvedValueOnce({ ok: true, result: { providerId: 'openai', state: 'bound', account: { isDefault: false, number: 1, paused: true, status: 'ready' } } })
+      .mockResolvedValueOnce({ ok: true, result: { providerId: 'openai', accounts: [{ paused: false, status: limited ? 'ready' : 'limited', usage: { codex: { buckets: { codex: bucket(limited ? 5 : 100, 'Codex'), spark: bucket(limited ? 100 : 5, 'GPT-5.3-Codex-Spark') } } } }] } });
+    const result = needsSubscriptionAccountHandoff('task', { providerId: 'openai', agentKind: 'codex', model: 'gpt-5.3-codex-spark', sdkSessionId: 'native', agentDeviceId: 'mini' });
+    if (limited) await expect(result).rejects.toThrow('No subscription account');
+    else expect(await result).toBe(true);
+  });
+
   it('starts a new task on an enabled account even when its draft already has a paused binding', async () => {
     h.bindings.set('task:draft', { providerId: 'anthropic', accountId: 'default' });
     h.pools.anthropic!.accounts[0].paused = true;

@@ -654,7 +654,13 @@ export async function needsSubscriptionAccountHandoff(sessionId: string, row: {
     assertOwner(state);
     const remotePool = poolReply.ok ? poolReply.result as SubscriptionPoolView | null : null;
     if (remotePool?.providerId !== provider || !Array.isArray(remotePool.accounts) ||
-        !remotePool.accounts.some(account => !account.paused && account.status === 'ready'))
+        !remotePool.accounts.some(account => !account.paused &&
+          (account.status === 'ready' || account.status === 'limited') &&
+          !providerGroupMemberUsageState({
+            claudeUsage: account.usage?.claude,
+            codexUsage: account.usage?.codex ? { appServerBuckets: account.usage.codex.buckets, webSnapshot: null } : undefined,
+          }, provider === 'openai' ? row.model?.replace(/^chatgpt\//, '') : row.model ?? undefined,
+          Date.now(), provider === 'openai' ? 'codex' : 'claude-code').limited))
       throw new Error('No subscription account is available');
     return true;
   }
@@ -702,7 +708,7 @@ export async function acquireSubscriptionAccount(
   const latest = readPool(provider);
   if (!latest || latest.disconnected) throw new Error('Subscription accounts changed');
   const boundAccount = binding && latest.accounts.find(a => a.id === binding.accountId);
-  const freshPausedBinding = options.resuming === false && boundAccount?.paused;
+  const freshPausedBinding = options.resuming === false && boundAccount?.paused === true;
   const members = latest.accounts.map((a) => {
     const imported = provider === 'openai' ? readLegacyCodexProviderId(a.id) : undefined;
     const index = pool.accounts.findIndex((p) => p.id === a.id);
@@ -723,7 +729,7 @@ export async function acquireSubscriptionAccount(
       usable: !loggingIn && info?.auth.authenticated === true && (control || (!usage.limited
         && ((Boolean(binding) && !freshPausedBinding) || latest.accounts.length < 2 || !accountCooling(state, provider, a.id, model))))
         && (control || !imported || legacyAccess?.legacyCodexAccountCanRun(imported, model, {
-          remote: options.remote === true, newRoute: !binding && !options.resuming,
+          remote: options.remote === true, newRoute: (!binding || freshPausedBinding) && !options.resuming,
         }) === true),
       running: state.running.get(keyOf(provider, a.id))?.size ?? 0,
       urgency: usage.urgency,

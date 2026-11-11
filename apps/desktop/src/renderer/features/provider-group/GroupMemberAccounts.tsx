@@ -100,6 +100,7 @@ export function useGroupMemberAccounts(
     const offChanged = deviceId
       ? window.electronAPI.deviceLink.onRemotePush?.((push, stamp) => {
           if (push.deviceId === deviceId && push.channel === 'subscription-accounts:changed' &&
+              (push.payload as { providerId?: unknown } | null)?.providerId === observed &&
               isDeviceLinkRemotePushCurrent(push, stamp)) void refresh();
         })
       : window.electronAPI.subscriptionAccounts.onChanged((event) => {
