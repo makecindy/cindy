@@ -193,10 +193,38 @@ a continuous desktop radius starting at zero. The toolkit's
 does not expose blur amount, whereas its in-app acrylic pipeline does. Do not
 substitute an in-app `CreateBackdropBrush` example for a behind-window test.
 
-No Windows device test was performed. A Windows prototype must check whether the
-host sample is already blurred, whether zero can be truly clear, and whether
-the result composes correctly with Electron's transparent content. Tint opacity
-and blur radius must be tested independently.
+No Windows device test was performed for the host backdrop brush path. A Windows
+prototype must check whether the host sample is already blurred, whether zero can be
+truly clear, and whether the result composes correctly with Electron's transparent
+content. Tint opacity and blur radius must be tested independently.
+
+### Device finding: transparent window with Acrylic (2026-11-11)
+
+Windows 11 build 26200, Electron 42.11.12, RTX 5080, two 4K displays (120 Hz and
+60 Hz). A frameless `transparent: true` window with `backgroundMaterial: 'acrylic'`
+that fills the work area flickers: whenever any window on either display is shown or
+hidden (a notification, a tooltip-sized tool window), DWM stops drawing what lies
+behind the window for one or more frames. The material then blurs nothing, the
+translucent sidebar turns into a flat dark fill, and the composed desktop reports a
+non-opaque pixel there (alpha 241 instead of 255). The running app spent about 99% of
+the time in that state, with brief returns to the correct one.
+
+An isolated Electron reproduction with the same window options, sampled at about
+120 Hz while a 3 px tool window on the other display was shown and hidden 24 times in
+3 seconds:
+
+| Window | Time in the wrong state |
+| --- | --- |
+| transparent, Acrylic, fills the work area | 146–266 ms |
+| transparent, Acrylic, 760×560 | 0 ms |
+| transparent, no material, fills the work area | 0 ms |
+| regular (`transparent: false`), Acrylic, maximized or work-area sized | 0 ms |
+
+Disabling delegated compositing made it worse (480 ms); requesting `thickFrame` on a
+transparent window changes nothing because Electron ignores it there. A regular
+frameless window keeps the same Acrylic look, so Windows uses one whenever a system
+backdrop is shown and keeps transparent windows for the clear desktop (no material)
+only.
 
 ## Linux
 

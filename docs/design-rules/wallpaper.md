@@ -135,7 +135,14 @@ theme-tinted frost rather than clear glass. Because that strength is fixed,
 the Windows desktop blur control is a Switch rather than a slider (artwork blur
 stays a slider); turning it on restores the last nonzero shared blur value;
 systems without a native material retain clear transparency. The hint describes
-system-default fallback where adjustable blur is unavailable. A successful native
+system-default fallback where adjustable blur is unavailable. On Windows 11 22H2+ a
+window is created transparent only when the last session ended on a clear desktop
+(blur off); otherwise it is a regular frameless window, because a transparent window
+carrying Acrylic flickers (2026-11-11; see the research document's Windows device
+finding). `transparent` is fixed at creation, so turning desktop blur off in a regular
+window keeps Acrylic until the next launch, and turning it on in a transparent window
+may flicker until then; the switch hint tells users to restart after turning it off.
+Systems without a system backdrop always create transparent windows. A successful native
 call alone is not visual acceptance; keep the research document's validation limits.
 Selecting artwork restores the image/video controls. Reset removes these overrides.
 While a window's opaque in-app wallpaper canvas is active, disable its covered
