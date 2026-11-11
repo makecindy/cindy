@@ -283,6 +283,14 @@ describe('native and Desktop cache writers share one lock', () => {
         expect(fs.existsSync(file)).toBe(false);
       });
       expect(await record('desktop', 'other', fix, b)).toBe(true);
+      // Native retries the lock for 1s, then keeps the learning in memory for
+      // the next user message. This lock was held until the parent observed
+      // success, which a loaded runner can delay past that budget, so let the
+      // bounded attempt settle and start the next message: either path must
+      // merge with Desktop's record rather than replace it.
+      await native.event('persistence-idle');
+      native.send('next');
+      expect((await native.event('next')).sent).toEqual([{ model: 'waiting' }]);
       await vi.waitFor(() => expect(Object.keys(JSON.parse(fs.readFileSync(file, 'utf8')).routes)).toHaveLength(2));
     } finally { await native.stop(); }
   });
