@@ -171,6 +171,9 @@ Cindy 面向大众用户，让人以简单高效的方式用 AI 完成工作。�
 - 新增或修改 Desktop 日志、IPC 错误处理、main 侧业务逻辑与测试、跨平台（macOS／
   Windows）行为，或任何 UI 文案的 i18n 落地前，必须先读
   `docs/dev-rules/engineering-conventions.md`。
+- 新增一处每个功能都要来登记的列表、台账、注册表或版本号前，先读
+  `docs/dev-rules/engineering-conventions.md` §8：不规定「加在开头／末尾」，不让多个 PR
+  改同一行；一项一个文件、按键排序或从内容推导。
 - 新增或改写任一测试前，必须先读
   `docs/dev-rules/engineering-conventions.md` §3.2「新增测试的价值门槛」。测试必须通过
   真实生产入口验证可观察结果，并说明 Bug／规则依据、现有覆盖缺口、最小失败输入和 tier；
