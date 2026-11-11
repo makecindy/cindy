@@ -74,6 +74,22 @@ describe('isAccountUsageLimitError', () => {
 });
 
 describe('UsageLimitAutoResume', () => {
+  // Unit regression: real classifier + reset parser + timer. Earlier cases supplied
+  // sdkError; text-only Claude limits never armed automatic continuation.
+  it('schedules and continues a text-only five-hour limit at the stated reset time', async () => {
+    const now = Date.parse('2026-11-11T10:00:00Z');
+    const resumeAt = Date.parse('2026-11-11T13:30:00Z') + USAGE_LIMIT_RESUME_BUFFER_MS;
+    const h = harness({ now: () => now, resolveResetAt: async (_id, signals) => readTurnUsageResetAt(signals, now) });
+    expect(await h.guard.onTurnError('five-hour', {
+      message: "You've hit your 5-hour limit · resets 2:30am (Pacific/Auckland)",
+    })).toBe(true);
+    expect(h.deps.arm).toHaveBeenCalledWith('five-hour', 1, resumeAt);
+    expect(h.timers.at(-1)?.delayMs).toBe(resumeAt - now);
+    expect(h.deps.continueSession).not.toHaveBeenCalled();
+    await h.fireLast();
+    expect(h.deps.continueSession).toHaveBeenCalledOnce();
+  });
+
   // Unit: real quota classifier + timer callback, using the Fable SDK envelope.
   // No wall-clock wait or model request; normal errors previously used generic text.
   it('waits for the structured Fable deadline and continues once when its timer fires', async () => {

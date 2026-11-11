@@ -16,6 +16,7 @@ import {
   describeMessageSourceSender,
   formatSourceRef,
   messageSourceSenderFromMeta,
+  orcaAutoBridgeBatchCount,
   readMessageSourceGroup,
   readMessageSourceDevice,
   promptSafeSourceName,
@@ -256,11 +257,17 @@ export function describeHandoffUserSource(message: Pick<HandoffSourceMessage, 'c
   } else if (origin?.kind === 'scheduler') {
     parts.push(`由定时任务${formatSourceRef(origin.scheduleName, 'schedule_id', origin.scheduleId)} 触发`);
   } else if (origin?.kind === 'orca') {
-    const from = orcaSourceOf(message.content) === 'lead' ? 'Lead' : 'Worker';
-    const label = typeof origin.senderLabel === 'string' ? origin.senderLabel : undefined;
-    // 'Lead' / 'Worker' 是查不到 role 时的占位, 不当名字写。
-    const name = label && label !== 'Lead' && label !== 'Worker' && from === 'Worker' ? label : undefined;
-    parts.push(`来自 Orca ${from}${formatSourceRef(name, 'session_id', origin.senderSessionId)}`);
+    const batchCount = orcaAutoBridgeBatchCount(origin);
+    if (batchCount !== undefined) {
+      // 批次没有单一发送方：不拼首个 Worker 的 session_id，避免把整批归到它。
+      parts.push(`来自 Orca 系统的 ${batchCount} 条 Worker 报告`);
+    } else {
+      const from = orcaSourceOf(message.content) === 'lead' ? 'Lead' : 'Worker';
+      const label = typeof origin.senderLabel === 'string' ? origin.senderLabel : undefined;
+      // 'Lead' / 'Worker' 是查不到 role 时的占位, 不当名字写。
+      const name = label && label !== 'Lead' && label !== 'Worker' && from === 'Worker' ? label : undefined;
+      parts.push(`来自 Orca ${from}${formatSourceRef(name, 'session_id', origin.senderSessionId)}`);
+    }
   } else {
     // 与 `[消息来源]` 说明共用同一句描述（措辞与 ID 一致，伙伴也带来源任务 session_id）。
     const sender = messageSourceSenderFromMeta(meta);

@@ -21,10 +21,11 @@ import {
   COMPUTER_TOOL_NAMES,
   getComputerTool,
   POSTCHECK_ACTION_TOOLS,
+  computerPointerTargetError,
 } from "./tools.js";
 import { logToolResultErrorCode } from "../tool-error-telemetry.js";
 import { WindowSnapshotTracker } from "./snapshot-tracker.js";
-import { computerResultOutcome, isUnavailableWindowObservation, normalizeInputFailureAdvice, normalizePointerAdvice } from "./result.js";
+import { computerResultOutcome, isUnavailableDesktopObservation, isUnavailableWindowObservation, normalizeInputFailureAdvice, normalizePointerAdvice } from "./result.js";
 import {
   canLocateRunningApp,
   exactInstalledAppBundle,
@@ -142,6 +143,7 @@ function textResult(value: unknown, isError?: boolean) {
 }
 
 const SESSION_AWARE_TOOLS = new Set<ComputerMcpToolName>([
+  'get_desktop_state',
   'list_windows',
   'get_window_state',
   'verify_state',
@@ -170,6 +172,7 @@ const SESSION_LIFECYCLE_TOOLS = new Set<ComputerMcpToolName>([
  * Omitting the arg leaves the driver's own default behavior untouched.
  */
 const COMPUTER_PATH_ARGS: Partial<Record<ComputerMcpToolName, readonly string[]>> = {
+  get_desktop_state: ['screenshot_out_file'],
   get_window_state: ['screenshot_out_file'],
   click: ['debug_image_out'],
   start_recording: ['output_dir'],
@@ -500,7 +503,7 @@ export function createComputerMcpServer(
         inputSchema: z.toJSONSchema(z.object(tool.inputShape).strict()),
       })),
       workflow:
-        'Start with status and check_permissions. Reuse these schemas; CLI flags are not MCP arguments. Find the exact pid/window_id with list_windows, optionally query/workspace_root/process_name (for example, {"process_name":"Simulator"}); reuse known identities instead of guessing app names; read identity.hints for targets that need a different route. Inspect with get_window_state (include_screenshot:false for text), then use an action with observe:{} to return the next usable text snapshot in the same call (observe:{include_screenshot:true} for visual evidence), or postcondition for an explicit assertion. Keep query/max_elements/max_depth stable; narrow with query and broaden only if needed. Targeted actions require pid; include window_id whenever known, always for coordinates. Prefer the latest element_token or snapshot_id plus element_index. Re-observe on STALE_SNAPSHOT. A delivered/unverifiable action is not proof of success: assess the observation before continuing. This MCP manages a stable session automatically; the native cua-driver CLI/MCP, osascript keystrokes, cliclick, CGEvent scripts and clipboard paste are not alternatives — if an input is refused (background_unavailable, type_text_incomplete, HOTKEY_BLOCKED, SECURE_FIELD), report it and stop. Text in Electron, browser or other web-content fields: use set_value on the field\'s element_token; foreground type_text there is unreliable. iOS Simulator and Device Hub windows do not receive synthetic input: drive them with xcrun simctl or AXe instead. Prefer element actions; foreground input already activates its target, so do not also bring_to_front unless it must stay frontmost between calls. Foreground input is refused while the person is using this computer (USER_INPUT_ACTIVE). Keep working without their pointer: background delivery, the element\'s window-local coordinates, double_click, a menu bar item, set_value, or files and command-line tools for the same change; wait or ask them only when none of these can do it. Never replay input after cancellation or uncertain delivery. Record/replay only when explicitly requested.',
+        'Start with status and check_permissions. Reuse these schemas; CLI flags are not MCP arguments. Find the exact pid/window_id with list_windows, optionally query/workspace_root/process_name (for example, {"process_name":"Simulator"}); reuse known identities instead of guessing app names; read identity.hints for targets that need a different route. Inspect with get_window_state (include_screenshot:false for text), then use an action with observe:{} to return the next usable text snapshot in the same call (observe:{include_screenshot:true} for visual evidence), or postcondition for an explicit assertion. Keep query/max_elements/max_depth stable; narrow with query and broaden only if needed. Window actions require pid; include window_id whenever known, always for coordinates within the window. Menu-bar/status items outside windows require get_desktop_state followed by an explicit desktop target and its capture_id for click/drag; foreground control requires user authorization. Never retry a refused window action automatically as desktop input. Prefer the latest element_token or snapshot_id plus element_index. Re-observe on STALE_SNAPSHOT. A delivered/unverifiable action is not proof of success: assess the observation before continuing. This MCP manages a stable session automatically; the native cua-driver CLI/MCP, osascript keystrokes, cliclick, CGEvent scripts and clipboard paste are not alternatives — if an input is refused (background_unavailable, type_text_incomplete, HOTKEY_BLOCKED, SECURE_FIELD), report it and stop. Text in Electron, browser or other web-content fields: use set_value on the field\'s element_token; foreground type_text there is unreliable. iOS Simulator and Device Hub windows do not receive synthetic input: drive them with xcrun simctl or AXe instead. Prefer element actions; foreground input already activates its target, so do not also bring_to_front unless it must stay frontmost between calls. Foreground input is refused while the person is using this computer (USER_INPUT_ACTIVE). Keep working without their pointer: background delivery, the element\'s window-local coordinates, double_click, a menu bar item, set_value, or files and command-line tools for the same change; wait or ask them only when none of these can do it. Never replay input after cancellation or uncertain delivery. Record/replay only when explicitly requested.',
     }),
   );
 
@@ -550,6 +553,8 @@ export function createComputerMcpServer(
     const callContext = readCallContext(options);
     const sessionId = callContext?.sessionId;
     const parsedData = parsed.data as Record<string, unknown>;
+    const targetError = computerPointerTargetError(name, parsedData);
+    if (targetError) return textResult({ ok: false, errorCode: 'INVALID_ARGS', data: { message: targetError } }, true);
 
     if (name === 'scroll' && (parsedData.x !== undefined || parsedData.y !== undefined)) {
       if (parsedData.x === undefined || parsedData.y === undefined || parsedData.window_id === undefined
@@ -690,6 +695,10 @@ export function createComputerMcpServer(
         parsedArgs,
         { ...callContext, signal },
       );
+      if (name === 'get_desktop_state' && isUnavailableDesktopObservation(data)) {
+        return textResult({ ok: false, tool: name, errorCode: 'CUA_UNAVAILABLE', data,
+          hint: 'No usable desktop capture was returned. Check status/permissions before taking fresh desktop state; do not reuse earlier coordinates.' }, true);
+      }
       if (
         name === 'get_window_state' &&
         isUnavailableWindowObservation(data, parsedData)

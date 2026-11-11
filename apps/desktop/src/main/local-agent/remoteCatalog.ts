@@ -2,7 +2,7 @@
 import type { AgentKind } from '@cindy/maker-core';
 import { readDeviceProviderViews } from '../remote-agent/controller/deviceCatalog.js';
 import { remoteBackgroundInvoke } from '../device-link/index.js';
-import { deviceLinkApiFetch } from '../device-link/deviceLinkApi.js';
+import { deviceLinkApiFetch } from '../device-link/deviceLinkApi.desktop.js';
 import { getReceivedShares } from '../device-link/providerShareGuest.js';
 import { readDeviceLinkSettings } from '../device-link/settings-store.desktop.js';
 import type { DeviceLinkDeviceView } from '../../shared/deviceLinkIpc.js';

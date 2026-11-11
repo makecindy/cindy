@@ -38,7 +38,7 @@ vi.mock('../../appSessionState', () => ({
   getActiveAppSession: () => ({ mode: 'cloud', dataOwnerId: 'cache-owner' }),
   activeOwnerScopeKey: () => 'cache-owner:0',
 }));
-vi.mock('../mediaTransfer', () => ({ removeRemote: vi.fn() }));
+vi.mock('../mediaTransfer.desktop', () => ({ removeRemote: vi.fn() }));
 vi.mock('../mediaFetch', () => ({ resolveAuthorizedMedia: mock.resolve }));
 vi.mock('../settings-store.desktop', () => ({ readDeviceLinkSettings: () => mock.settings }));
 vi.mock('../broadcast-tap', () => ({

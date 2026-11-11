@@ -453,8 +453,8 @@ describe('imported Gemini native image capability', () => {
     pi: { ...preset.runtimes.pi!, catalogPresetId: preset.id, models: imported },
   } }, { presets: [preset] });
   it.each([undefined, true, false])('keeps imported Gemini image input consistent for supportsImageInput=%s', async supportsImageInput => {
-    expect(provider.models.pi![0].supportsImageInput).toBeUndefined();
-    expect(provider.models.pi![0].modalities).toBeUndefined();
+    expect(provider.models.pi![0].supportsImageInput).toBe(true);
+    expect(provider.models.pi![0].modalities?.input).toContain('image');
     // Compare the same imported model with no declaration and explicit on/off values.
     const model = { ...provider.models.pi![0], supportsImageInput };
     const row = invocationModelRecord(model, model.route?.baseUrl ?? provider.routing.pi!.upstream!)!;
