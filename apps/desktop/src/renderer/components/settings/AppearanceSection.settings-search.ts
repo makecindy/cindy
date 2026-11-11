@@ -85,6 +85,8 @@ export const appearanceSettings = defineSettings({
       'settings.appearance.wallpaper.desktopVisibilityHint',
       'settings.appearance.wallpaper.desktopBlurLabel',
       'settings.appearance.wallpaper.desktopBlurHint',
+      'settings.appearance.wallpaper.sidebarVisibilityLabel',
+      'settings.appearance.wallpaper.sidebarVisibilityHint',
 
     ],
     options: [
