@@ -70,6 +70,8 @@ import {
   closeFirstRunGuide,
   firstRunGuideSteps,
   parkFirstRunGuide,
+  parkFirstRunGuideForConnection,
+  updateFirstRunGuideConnections,
   resumeFirstRunGuide,
   useFirstRunGuide,
   type FirstRunGuideContext,
@@ -194,23 +196,12 @@ function FirstRunGuideBody({ context, parked }: { context: FirstRunGuideContext;
     if (stepRef.current === 'models' || stepRef.current === 'import') parkFirstRunGuide();
   }, [location.key]);
 
-  // The wizard may rename or change a preset: its route ID is not the created connection ID.
-  // Capture usable connections once on departure, for all connection entry points.
-  const pendingConnection = useRef<Set<string> | null>(null);
-
-  // Come back by itself once the reason for leaving is settled.
+  // The handoff coordinator owns completion. Credential pushes cannot finish a dialog.
   useEffect(() => {
-    if (!parked) {
-      pendingConnection.current = null;
-      return;
-    }
-    const pending = pendingConnection.current;
-    if (step === 'models' && pending && providers.some((provider) =>
-      provider.connected && !pending.has(provider.id),
-    )) {
-      pendingConnection.current = null;
-      resumeFirstRunGuide();
-    }
+    if (!parked) return;
+    if (step === 'models') updateFirstRunGuideConnections(
+      providers.filter(provider => provider.connected).map(provider => provider.id),
+    );
     if (step === 'migration' && !migrationDialogOpen) {
       refreshMigration();
       resumeFirstRunGuide();
@@ -316,8 +307,7 @@ function FirstRunGuideBody({ context, parked }: { context: FirstRunGuideContext;
   const giftedBalance = balance ? Number(balance.promotionalCredits) > 0 : false;
 
   const goConnect = (id: string | null) => {
-    pendingConnection.current = new Set(providers.filter((provider) => provider.connected).map((provider) => provider.id));
-    parkFirstRunGuide();
+    parkFirstRunGuideForConnection(providers.filter(provider => provider.connected).map(provider => provider.id));
     navigate(id ? `/settings?tab=providers&connect=${encodeURIComponent(id)}` : '/settings?tab=providers&wizard=1');
   };
   const connectedRows = providers.filter((provider) => provider.connected && provider.id !== 'xd').slice(0, MODEL_ROWS);
@@ -418,7 +408,7 @@ function FirstRunGuideBody({ context, parked }: { context: FirstRunGuideContext;
                   <DoneLine>{t('firstRunGuide.models.cindy.active')}</DoneLine>
                 )}
                 {canOpenBilling ? (
-                  <Button variant="secondary" size="sm" tone="quiet" compact type="button" onClick={() => { pendingConnection.current = null; navigate('/settings?tab=billing'); }}>
+                  <Button variant="secondary" size="sm" tone="quiet" compact type="button" onClick={() => navigate('/settings?tab=billing')}>
                     {t('billing.sidebar')}
                   </Button>
                 ) : null}

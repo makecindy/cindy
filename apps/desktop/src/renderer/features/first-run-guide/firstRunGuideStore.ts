@@ -6,7 +6,7 @@
  * the guide: the window hides, a small bar offers the way back, and the step it was on is
  * kept. Nothing here is persisted; "shown once" is Main's decision.
  */
-import { useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
 
 export interface FirstRunGuideContext {
   /** Opened from Settings: every step is offered, whatever was detected. */
@@ -33,6 +33,10 @@ let state: FirstRunGuideState = {
   migration: false,
   legacyMigrated: false,
 };
+// One handoff belongs to one guide opening. Dialogs claim it before authorizing;
+// their actual completion, not a credential push, decides when to return.
+let connectionWait: { connected: Set<string>; inDialog: boolean } | null = null;
+
 const listeners = new Set<() => void>();
 
 function emit(next: FirstRunGuideState): void {
@@ -41,19 +45,60 @@ function emit(next: FirstRunGuideState): void {
 }
 
 export function openFirstRunGuide(context: FirstRunGuideContext): void {
+  connectionWait = null;
   emit({ ...context, open: true, parked: false, session: state.session + 1 });
 }
 
 export function closeFirstRunGuide(): void {
+  connectionWait = null;
   if (state.open) emit({ ...state, open: false, parked: false });
 }
 
 export function parkFirstRunGuide(): void {
-  if (state.open && !state.parked) emit({ ...state, parked: true });
+  if (state.open && !state.parked) {
+    connectionWait = null;
+    emit({ ...state, parked: true });
+  }
 }
 
 export function resumeFirstRunGuide(): void {
+  connectionWait = null;
   if (state.open && state.parked) emit({ ...state, parked: false });
+}
+
+/** Start a model-page handoff. Route-driven parking must not replace this wait. */
+export function parkFirstRunGuideForConnection(connectedIds: string[]): void {
+  if (!state.open) return;
+  connectionWait = { connected: new Set(connectedIds), inDialog: false };
+  if (!state.parked) emit({ ...state, parked: true });
+}
+
+/** Native detail pages have no wizard: only their newly usable connection completes the step. */
+export function updateFirstRunGuideConnections(connectedIds: string[]): void {
+  const wait = connectionWait;
+  if (state.open && state.parked && wait && !wait.inDialog
+    && connectedIds.some(id => !wait.connected.has(id))) resumeFirstRunGuide();
+}
+
+/** Bind the existing dialog's after-exit callbacks to this handoff, including manual forms. */
+export function useFirstRunGuideConnectionDialog() {
+  const handle = useRef<{ complete(): void; cancel(): void } | null>(null);
+  useEffect(() => {
+    const wait = connectionWait;
+    if (state.open && state.parked && wait) {
+      wait.inDialog = true;
+      handle.current = {
+        complete: () => { if (connectionWait === wait) resumeFirstRunGuide(); },
+        cancel: () => { if (connectionWait === wait) connectionWait = null; },
+      };
+    }
+    // Unmount is not completion. A stale save must not resume the guide. Keep the
+    // handoff parked until explicit completion or manual return; StrictMode may remount.
+    return () => { handle.current = null; };
+  }, []);
+  const complete = useCallback(() => handle.current?.complete(), []);
+  const cancel = useCallback(() => handle.current?.cancel(), []);
+  return { complete, cancel };
 }
 
 export function getFirstRunGuideState(): FirstRunGuideState {

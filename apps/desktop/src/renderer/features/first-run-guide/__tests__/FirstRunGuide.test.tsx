@@ -2,13 +2,13 @@
 /**
  * PR #9997: real guide navigation must stay parked until a new connection is usable;
  * a delayed balance must survive stepping away. Step-selection tests cannot cover effects.
- * Minimal failures: Cindy AI already connected; balance resolves on the finish step. Tier: unit. Standalone Vitest duration: 3.01s (339ms tests).
+ * Minimal failures: Cindy AI already connected; balance resolves on the finish step. Tier: unit. Standalone Vitest duration: 2.42s (403ms tests).
  */
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, expect, it, vi } from 'vitest';
 import { FirstRunGuide } from '../FirstRunGuide';
-import { closeFirstRunGuide, getFirstRunGuideState, openFirstRunGuide, parkFirstRunGuide } from '../firstRunGuideStore';
+import { closeFirstRunGuide, getFirstRunGuideState, openFirstRunGuide, parkFirstRunGuide, parkFirstRunGuideForConnection, useFirstRunGuideConnectionDialog } from '../firstRunGuideStore';
 
 const mock = vi.hoisted(() => ({
   providers: [{ id: 'xd', name: 'Cindy AI', connected: true }, { id: 'openai', name: 'OpenAI', connected: false }],
@@ -108,4 +108,45 @@ it('forgets the previous connection wait after a manual return', async () => {
   view.rerender(<MemoryRouter><FirstRunGuide /></MemoryRouter>);
   expect(getFirstRunGuideState().parked).toBe(true);
   expect(screen.queryByRole('dialog')).toBeNull();
+});
+
+// PR #9997 OAuth: connected credentials can arrive before the dialog's model-selection step ends.
+function ConnectionDialogProbe({ callbacks }: { callbacks: { complete?: () => void; cancel?: () => void } }) {
+  const handoff = useFirstRunGuideConnectionDialog();
+  callbacks.complete = handoff.complete;
+  callbacks.cancel = handoff.cancel;
+  return null;
+}
+
+it.each(['complete', 'cancel', 'unmount'] as const)('does not cover an unfinished OAuth dialog, then handles %s', async outcome => {
+  mock.preset = true;
+  mock.balance.mockResolvedValue(null);
+  const view = await showModels();
+  fireEvent.click(screen.getByRole('button', { name: /OpenRouter/ }));
+  const callbacks: { complete?: () => void; cancel?: () => void } = {};
+  view.rerender(<MemoryRouter><FirstRunGuide /><ConnectionDialogProbe callbacks={callbacks} /></MemoryRouter>);
+  mock.providers = [...mock.providers, { id: 'renamed-oauth-account', name: 'OAuth account', connected: true }];
+  view.rerender(<MemoryRouter><FirstRunGuide /><ConnectionDialogProbe callbacks={callbacks} /></MemoryRouter>);
+  expect(getFirstRunGuideState().parked).toBe(true);
+  expect(screen.queryByRole('dialog')).toBeNull();
+  if (outcome === 'unmount') {
+    view.rerender(<MemoryRouter><FirstRunGuide /></MemoryRouter>);
+    act(() => callbacks.complete?.()); // Late completion from an unmounted dialog is ignored.
+  } else act(() => callbacks[outcome]?.());
+  expect(getFirstRunGuideState().parked).toBe(outcome !== 'complete');
+});
+
+it('ignores an old dialog completion after the guide is closed and reopened', async () => {
+  mock.balance.mockResolvedValue(null);
+  const view = await showModels();
+  fireEvent.click(screen.getByRole('button', { name: /OpenAI/ }));
+  const callbacks: { complete?: () => void; cancel?: () => void } = {};
+  view.rerender(<MemoryRouter><FirstRunGuide /><ConnectionDialogProbe callbacks={callbacks} /></MemoryRouter>);
+  act(() => {
+    closeFirstRunGuide();
+    openFirstRunGuide({ manual: false, migration: false, legacyMigrated: false });
+    parkFirstRunGuideForConnection(['xd']);
+    callbacks.complete?.();
+  });
+  expect(getFirstRunGuideState().parked).toBe(true);
 });
