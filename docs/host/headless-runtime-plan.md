@@ -540,8 +540,8 @@ withAccountFreeOwnerCommit：主线 notify=false 只发 pending，分支补发�
 | `bootstrapSession` | 必需 | 真实实现 | 首批 Host createSession + listen + 配置快照；bootstrap 和 onVendorTurnReserved 都绑定实际 Session，创建的 signal 传给 Maker 第二个参数。完整启动后续抽取。 |
 | `markOrcaRoleIfNeeded` | 必需 | 暂不支持 | 非空角色拒绝；普通任务无角色时才允许无操作。 |
 | `broadcastSessionCreated` | 必需 | 真实实现 | 只发布已有任务的 session_changed，不标 action:create，不重复创建 DB 行。 |
-| `prepareSendUserMessage` | 必需 | 真实实现 | 当前保留文本、mention 和本机绝对文件路径；需要缓存/OSS/base64 物化的引用明确拒绝，下一步抽取原标准化入口。 |
-| `materializeDirectSendOssAttachments` | 可选 | 真实实现 | 复用原物化服务与失败清理；未接通的直发附件明确拒绝，不能跳过。 |
+| `prepareSendUserMessage` | 必需 | 真实实现 | Host 已装配共享归一化器，发送/插话统一解析本机文件、cindy-media、xdt-image 和内存图片块；远程引用在入队前明确拒绝。 |
+| `materializeDirectSendOssAttachments` | 可选 | 暂不支持 | 当前 Host 只有共享队列发送入口，本机图片在入队前调用共享 materializer；未接 OSS/Peer 传输，不提供绕过队列的直发物化。 |
 | `createDbMessage` | 必需 | 真实实现 | 现有 persistMessage / durable write，完整透传 agentMeta、清空边界及广播条件。 |
 | `captureCindyLearnInvocation` | 可选 | 暂不支持 | 未接入原捕获器前不授予 /learn 的隐式能力；不伪造授权。 |
 | `rewindPersistedUserMessageAfterClear` | 可选 | 真实实现 | 复用消息回退持久服务，清空竞态不得残留已失效用户行。 |
@@ -933,3 +933,46 @@ Host 装配还须捕获实际 owner/DbClient、跨异步边界检查有效性，
   没有使用正式登录或正式数据，不等于真实模型/账号验收。
 - 未跑桌面全量；没有新的桌面 GUI、打包版、Windows 或手机实测。
   Host 附件装配及其余未完成项不因主线同步视为完成；仍未推送或开 PR。
+
+### Host 本机附件接线（2026-11-11）
+
+`createHostAttachments` 已接到正式启动器的输入队列，发送和插话使用同一个共享归一化器。
+本机路径图片在入队前经现有 `ingestMedia` 与补偿日志入仓，队列及历史引用都改成托管地址；
+普通本机文件保留路径。已有 `cindy-media://` 读取先核对捕获账号的媒体账目；
+`xdt-image://` 沿用现有缓存目录和解析服务，内存图片块沿用私有临时文件流程。
+这不是网页上传功能，HTTP `/chat` 的文本合同未改；OSS/Peer 引用及不认识的地址在准备阶段
+明确拒绝，尚未接共享中转服务，不宣称远程附件可用。
+
+附件生命周期复用 `QueuedAttachmentOwnershipRegistry`：重复入队不重复导入，编辑保留仍被
+引用的附件，丢弃须等替换快照成功落盘；用户行写入后转交历史持有，失败可重试时不清理。
+快照失败保留旧引用及字节，不凭内存中已经移除就删除可恢复内容。停止发生在准备期间时，
+准备代次检查拒绝接受并撤回本次引用；换号后的清理使用原 DbClient，不读取新账号数据库。
+
+**物理回收的边界**：当前不同账号仍共用 profile 下的媒体字节根。Host 准备失败或队列
+丢弃只删除自己创建的引用，不删零引用 blob 记录或物理字节；否则无法证明另一个账号
+没有引用同一哈希。正式 recycler 尚未共用，保留下来的零引用内容会占用磁盘，不能记成
+已回收。旧数据库关闭导致撤引用失败时同样保留内容，现有补偿/任务媒体清理另行处理。
+没有新增媒体根目录、表、协议或额外持久清理状态，桌面的清理行为未改。
+
+每个现有 owner 输入运行时持有独立临时根，所有实例使用同一个进程存活身份；这样孤儿
+扫描不会互删，同一进程内不同账号出现相同任务 ID 也不会共用任务临时目录。完整任务关闭
+和 owner 运行时销毁清理临时文件，工作目录漂移引起的 runtime-only 刷新不清理。
+
+新增验证通过真实队列、隔离文件系统及内存 SQLite 覆盖图片/文件发送和插话、编辑保留、
+快照失败、入库失败、停止回滚、换号后的引用/字节保护，以及同任务 ID 的临时目录隔离。
+原有测试未删除或弱化。把输入队列和执行器恢复到上一提交后，新发送用例失败于缺少托管
+图片地址；恢复接线后通过。原生 Codex 验收额外断言本地模拟上游收到 PNG 图片字节和文件
+路径，真实 SQLite 历史里保存托管地址。
+
+本检查点门禁：Host 225 项通过（4.68 秒），Host 类型检查通过；桌面附件/发送/插话调用方
+4 文件 577 项通过；原生 Codex 隔离实跑三条 PASS。Host 队列单文件 82 项为 2.87 秒。
+日志在 `/tmp/cindy-host-local-attachments-final-host-tests.log`、
+`/tmp/cindy-host-local-attachments-final-host-types.log`、
+`/tmp/cindy-host-local-attachments-final-desktop-tests.log`、
+`/tmp/cindy-host-local-attachments-native.log`，先红证据在
+`/tmp/cindy-host-local-attachments-baseline-red.log`。本次未重跑整仓或桌面类型检查，
+上一检查点的桌面类型检查记录保留，不能当作本次新增实跑。
+
+仍未验证真实账号、真实模型、真实 Pi、打包版、Windows、手机，以及真实桌面附件操作。
+附件归一化主体和桌面装配在本检查点没有改动。归档恢复、完整引擎切换、启动闭包和正式
+调度器装配继续按前述计划推进；本检查点仍仅本地提交，未推送或开 PR。

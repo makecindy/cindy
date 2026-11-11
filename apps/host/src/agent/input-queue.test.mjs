@@ -1,11 +1,18 @@
 import { runDeviceLinkInvokeContext } from '../../../desktop/src/main/device-link/invoke-context.ts';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
+import { getTableColumns, getTableName } from 'drizzle-orm';
+import { mediaBlobs, mediaRefs } from '../../../desktop/src/main/localDb/schema.ts';
+import { createBlobStore } from '../../../desktop/src/main/cindy-media/blobStore.ts';
+import { createMediaIngest } from '../../../desktop/src/main/cindy-media/ingestCore.ts';
+import { createMediaRefCompensationJournal } from '../../../desktop/src/main/cindy-media/refCompensationJournal.ts';
+import { createImageCacheStore } from '../../../desktop/src/main/imageCacheStore.ts';
+import { createHostAttachments } from '../attachments.ts';
 import { setCurrentDbClient, clearCurrentDbClient } from '../../../desktop/src/main/localDb/client/current.ts';
 import { saveAgentInputQueueSnapshot, loadAgentInputQueueSnapshot, getPersistedInputClientIds } from '../../../desktop/src/main/localDb/agentInputQueueSnapshots.ts';
 import { markSessionTurnStarted, markSessionTurnEnded, drainSessionActiveTurnWrites } from '../../../desktop/src/main/localDb/sessionActiveTurn.ts';
@@ -52,6 +59,7 @@ function createFakeMaker() {
         sent: [],
         sendOptions: [],
         steerOptions: [],
+        steerMessages: [],
         aborted: 0,
         async setModel(model, settings) { Object.assign(session.options, { model }, settings); },
         async setEffort(effort) { session.options.effort = effort; },
@@ -83,6 +91,7 @@ function createFakeMaker() {
         },
         async steer(text, options = {}) {
           await options.beforeProviderStart?.();
+          session.steerMessages.push(text);
           session.steerOptions.push(options);
           session.sent.push(`steer:${typeof text === 'string' ? text : text.content}`);
         },
@@ -836,6 +845,177 @@ for (const invalidation of ['owner', 'turn', 'app-context']) {
     assert.equal(consumed, 0);
   });
 }
+
+// Unit with isolated filesystem + in-memory SQLite: exercise Host queue and
+// real attachment assembly together. Previous coverage used a text-only port,
+// so it could not detect lost managed refs, wrong-owner rollback or premature
+// deletion after a failed snapshot. Minimal inputs: one local image queued,
+// edited/stopped/switched between accounts. No real account or model is used.
+const attachmentPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=', 'base64');
+function attachmentHarness(t, queueOverrides = {}) {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'cindy-host-attachments-'));
+  const databases = [];
+  const queues = [];
+  const newOwner = userId => {
+    const sqlite = new Database(':memory:'); databases.push(sqlite);
+    for (const table of [mediaBlobs, mediaRefs]) {
+      sqlite.exec(`CREATE TABLE "${getTableName(table)}" (${Object.values(getTableColumns(table))
+        .map(column => `"${column.name}" ${column.getSQLType()}${column.primary ? ' PRIMARY KEY' : ''}`).join(',')})`);
+    }
+    return { userId, clientEpoch: databases.length, client: { drizzle: drizzle(sqlite) }, sqlite };
+  };
+  let owner = newOwner('attachment-owner-a');
+  const blobStore = createBlobStore({ getUserDataDir: () => root });
+  const imageCacheStore = createImageCacheStore(() => root);
+  const journal = createMediaRefCompensationJournal({ getUserDataDir: () => root,
+    activeOwnerScopeKey: () => `${owner.userId}:${owner.clientEpoch}`,
+    getActiveAppSession: () => ({ dataOwnerId: owner.userId }), isAppSessionBoundaryPending: () => false });
+  const ingest = createMediaIngest({ blobStore, withMediaRefCompensation: journal.withMediaRefCompensation });
+  const services = [];
+  const createAttachments = ({ assertCurrent }) => {
+    const service = createHostAttachments({ getOwner: () => owner, assertCurrent,
+      blobStore, imageCacheStore, journal, ingest, getTempDir: () => path.join(root, 'temp') });
+    services.push(service); return service;
+  };
+  const h = createHarness({ getOwner: () => owner, createAttachments, ...queueOverrides });
+  queues.push(h.queue);
+  t.after(async () => {
+    try { for (const queue of queues) await queue.dispose(); }
+    finally {
+      for (const db of databases) db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+  const image = path.join(root, 'image.png'); writeFileSync(image, attachmentPng);
+  const file = path.join(root, 'note.txt'); writeFileSync(file, 'local file');
+  const attached = (clientId, source = image) => ({ clientId, text: 'read attachment',
+    chatMessage: { clientId, role: 'user', content: 'read attachment' },
+    files: [{ path: source, name: path.basename(source), category: 'image', ext: '.png' }],
+    persistedContent: JSON.stringify({ text: 'read attachment', images: [{ url: source }], files: [] }) });
+  const refs = (account = owner) => account.sqlite.prepare('SELECT * FROM media_refs').all();
+  return { ...h, root, image, file, blobStore, imageCacheStore, ingest, attached, refs, services, createAttachments,
+    owner: () => owner, switchOwner: () => (owner = newOwner('attachment-owner-b')) };
+}
+
+test('Host sends managed local images and files and steers through the same normalizer', async t => {
+  const h = attachmentHarness(t);
+  const item = h.attached('first');
+  item.files.push({ path: h.file, name: 'note.txt', category: 'file', ext: '.txt' });
+  await enqueue(h, 'attachments', item);
+  const session = h.maker.getSession('attachments');
+  const image = session.sent[0].find(block => block.type === 'image');
+  assert.deepEqual(readFileSync(image.path), attachmentPng);
+  assert.match(image.managedUrl, /^cindy-media:\/\//);
+  assert.equal(session.sent[0].find(block => block.type === 'file').path, h.file);
+  const row = h.persisted.find(row => row.clientId === 'first');
+  assert.equal(JSON.parse(row.content).images[0].url, image.managedUrl);
+  assert.equal(h.refs().length, 1);
+  assert.equal(await h.queue.steer('attachments', h.attached('steer', image.managedUrl)), true);
+  assert.equal(session.steerMessages[0].content.find(block => block.type === 'image').path, image.path);
+  await h.queue.disposeSession('attachments');
+  assert.equal(h.refs().length, 1); // Durable transcript retains the staged ref.
+  assert.deepEqual(readFileSync(image.path), attachmentPng);
+});
+
+test('Host queue edits keep referenced images and release dropped copies only after a durable snapshot', async t => {
+  let failSnapshot = false;
+  const h = attachmentHarness(t, { persistQueueSnapshot: async () => {
+    if (failSnapshot) throw new Error('snapshot disk unavailable');
+  } });
+  await enqueue(h, 'attachments', { clientId: 'running', text: 'first' });
+  await h.queue.enqueue('attachments', h.attached('queued'));
+  await h.queue.enqueue('attachments', h.attached('queued')); // Retry creates no new ownership.
+  assert.equal(h.refs().length, 1);
+  const queued = h.queue.projection('attachments').pendingQueue[0];
+  await h.queue.updateContent('attachments', 'queued', { ...queued, text: 'keep the picture' });
+  assert.equal(h.refs().length, 1);
+  const storedPath = h.blobStore.resolveSafe(queued.files[0].url).absPath;
+  failSnapshot = true;
+  await assert.rejects(h.queue.remove('attachments', 'queued'), /snapshot disk unavailable/);
+  assert.equal(h.refs().length, 1);
+  assert.equal(existsSync(storedPath), true);
+  failSnapshot = false;
+  // A separately queued copy is explicitly removable; the failed snapshot's
+  // ownership is retained rather than guessing that crash recovery cannot use it.
+  await h.queue.enqueue('attachments', h.attached('removable'));
+  assert.equal(h.refs().length, 2);
+  await h.queue.updateContent('attachments', 'removable', { text: 'text only', files: [], persistedContent: 'text only' });
+  await waitFor(() => h.refs().length === 1);
+  assert.equal(existsSync(storedPath), true);
+});
+
+test('Host rollback releases only the originating account ref and keeps shared bytes', async t => {
+  const h = attachmentHarness(t);
+  const firstOwner = h.owner();
+  const first = await h.services[0].materialize('same-task', h.attached('a'), () => {});
+  assert.equal(h.refs(firstOwner).length, 1);
+  h.switchOwner();
+  const secondService = h.createAttachments({ assertCurrent() {} });
+  const second = await secondService.materialize('same-task', h.attached('b'), () => {});
+  const sharedPath = h.blobStore.resolveSafe(second.item.files[0].url).absPath;
+  await first.cleanupBeforeAcceptance();
+  assert.equal(h.refs(firstOwner).length, 0);
+  assert.equal(h.refs().length, 1);
+  assert.deepEqual(readFileSync(sharedPath), attachmentPng);
+  await second.cleanupBeforeAcceptance();
+  assert.equal(h.refs().length, 0);
+  assert.equal(existsSync(sharedPath), true); // Recycler owns physical deletion.
+});
+
+test('Host account runtimes with the same task id do not remove each others temporary attachments', async t => {
+  const h = attachmentHarness(t);
+  const message = { type: 'user', content: [{ type: 'image', base64: attachmentPng.toString('base64'), mimeType: 'image/png' }] };
+  // Use separate runtime-bound services just as dispose/relogin does.
+  const a = h.createAttachments({ assertCurrent() {} });
+  const first = await a.prepareUserMessage('same-task', message);
+  h.switchOwner();
+  const b = h.createAttachments({ assertCurrent() {} });
+  const second = await b.prepareUserMessage('same-task', message);
+  const firstPath = first.content[0].path; const secondPath = second.content[0].path;
+  assert.notEqual(firstPath, secondPath);
+  assert.equal(existsSync(firstPath), true); // Startup orphan sweep preserved live peer.
+  await a.closeSession('same-task');
+  assert.equal(existsSync(firstPath), false);
+  assert.deepEqual(readFileSync(secondPath), attachmentPng);
+  await b.closeSession('same-task');
+});
+
+test('Host rejects unsupported or missing attachments before queue acceptance and does not hide ingest errors', async t => {
+  const h = attachmentHarness(t);
+  for (const source of ['oss://not-connected', path.join(h.root, 'missing.png')]) {
+    await assert.rejects(h.queue.enqueue('attachments', h.attached('rejected', source)));
+    assert.equal(h.queue.projection('attachments').pendingQueue.length, 0);
+    assert.equal(h.maker.getSession('attachments'), null);
+  }
+  h.owner().sqlite.exec("CREATE TRIGGER fail_media BEFORE INSERT ON media_refs BEGIN SELECT RAISE(ABORT, 'media write failed'); END");
+  await assert.rejects(h.queue.enqueue('attachments', h.attached('rejected')), /media write failed/);
+  assert.equal(h.refs().length, 0);
+  assert.equal(h.maker.getSession('attachments'), null);
+  h.owner().sqlite.exec('DROP TRIGGER fail_media');
+  await enqueue(h, 'attachments', h.attached('retry'));
+  assert.equal(h.refs().length, 1);
+});
+
+test('stopping Host during image ingest rejects the preparation and compensates staged refs', async t => {
+  const h = attachmentHarness(t);
+  let entered; let release;
+  const entering = new Promise(resolve => { entered = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  const original = h.ingest.ingestMedia;
+  h.ingest.ingestMedia = async (...args) => {
+    const value = await original(...args);
+    entered(); await gate; return value;
+  };
+  const pending = h.queue.enqueue('attachments', h.attached('cancelled'));
+  const rejected = assert.rejects(pending, /cancelled before acceptance/);
+  await entering;
+  const stopping = h.queue.stop('attachments');
+  release();
+  await rejected; await stopping;
+  assert.equal(h.refs().length, 0);
+  assert.equal(h.queue.projection('attachments').pendingQueue.length, 0);
+  assert.equal(h.maker.getSession('attachments'), null);
+});
 
 // Unit, attachment handoff: preserve local file support through the shared
 // sender; unresolved transfer references cannot appear accepted with no file.

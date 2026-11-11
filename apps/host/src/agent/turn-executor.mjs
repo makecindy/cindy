@@ -226,7 +226,7 @@ export function createTurnExecutor(deps) {
     },
     // Runtime creation updates an existing task; it does not create another row.
     broadcastSessionCreated: id => deps.hub.publish({ type: 'session_changed', sessionId: id }),
-    prepareSendUserMessage: prepareHostUserMessage,
+    prepareSendUserMessage: deps.prepareUserMessage ?? prepareHostUserMessage,
     createDbMessage: async (id, message, options) => {
       const history = historyFor(id);
       await history.drain();
@@ -316,7 +316,7 @@ export function createTurnExecutor(deps) {
     },
     assertInputAllowed: async id => { await readExecutionSession(id); },
     assertInputCurrent: assertSteerCurrent,
-    prepareUserMessageForAgent: prepareHostUserMessage,
+    prepareUserMessageForAgent: deps.prepareUserMessage ?? prepareHostUserMessage,
     readReplyQuoteNote,
     readAutoReviewHistory,
     readSessionSource: async id => (await readExecutionSession(id)).source ?? null,

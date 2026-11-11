@@ -107,6 +107,7 @@ import { createInteractionBroker } from './agent/interactions.mjs';
 import { messageToCamel, sessionToCamel } from '../../desktop/src/main/localDb/mapper.ts';
 import { readHostSessionList, readHostSession } from './session-reads.js';
 import { createHostMessageStore, createHostMessageRecovery } from './message-store.js';
+import { createHostAttachments } from './attachments.js';
 import { createSubagentReadService } from '../../desktop/src/main/localDb/ipc/subagentReadService.js';
 import { configureUserDataDir, configureAppDataDir, getUserDataDir } from '../../desktop/src/main/userDataPath.js';
 import { botSessionLinks, messages as messageTable, projectAliases as projectAliasTable, sessions as sessionTable } from '../../desktop/src/main/localDb/schema.js';
@@ -810,6 +811,9 @@ const messageRecovery = createHostMessageRecovery({ getOwner: getCurrentDbClient
 
 const inputQueue = createInputQueue({
   getOwner: getCurrentDbClientSnapshot,
+  createAttachments: ({ assertCurrent }: { assertCurrent(): void }) => createHostAttachments({
+    getOwner: getCurrentDbClientSnapshot, assertCurrent,
+  }),
   interactions,
   getMaker: () => {
     if (!agentGraph) throw new Error('agent runtime is not ready');

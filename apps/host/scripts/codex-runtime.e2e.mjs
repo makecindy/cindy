@@ -63,6 +63,7 @@ const { eq } = await import('drizzle-orm');
 const { sessions, messages } = await import('../../desktop/src/main/localDb/schema.ts');
 const { markSessionTurnStarted, markSessionTurnEnded, drainSessionActiveTurnWrites } = await import('../../desktop/src/main/localDb/sessionActiveTurn.ts');
 const { createInputQueue } = await import('../src/agent/input-queue.mjs');
+const { createHostAttachments } = await import('../src/attachments.ts');
 const { createEventHub } = await import('../src/events.mjs');
 const { createHostMessageStore } = await import('../src/message-store.ts');
 const { createChatHandler } = await import('../src/chat.mjs');
@@ -151,6 +152,7 @@ try {
   };
   const makeQueue = () => createInputQueue({ getMaker: () => graph.maker, hub, readSession,
     getOwner: getCurrentDbClientSnapshot,
+    createAttachments: ({ assertCurrent }) => createHostAttachments({ getOwner: getCurrentDbClientSnapshot, assertCurrent }),
     persistMessage: createHostMessageStore({ getOwner: getCurrentDbClientSnapshot, publish: event => hub.publish(event) }),
     markStarted: async id => { markSessionTurnStarted(id); await drainSessionActiveTurnWrites(id); },
     markEnded: async (id, at) => { markSessionTurnEnded(id, at); await drainSessionActiveTurnWrites(id); },
@@ -194,6 +196,40 @@ try {
   releaseBlockedResponse();
   await stoppedReply;
   assert.equal(queue.projection(sessionId).turnInProgress, false);
+  // Real native input conversion, beyond the fake Session unit tests: the
+  // provider must receive image bytes and a local file through the shared path.
+  const attachmentTask = 'attachment-native-fixture';
+  await new OwnerSessionStorage({ db: () => database }).create({ id: attachmentTask,
+    title: 'Attachment fixture', agentKind: 'codex', model: 'fixture-model', workDir: root });
+  await database.drizzle.update(sessions).set({ providerId: 'cprov-fixture' }).where(eq(sessions.id, attachmentTask));
+  const imagePath = path.join(root, 'image.png');
+  await fs.copyFile(new URL('../../desktop/src/renderer/assets/login/wordmark.png', import.meta.url), imagePath);
+  const filePath = path.join(root, 'note.txt');
+  await fs.writeFile(filePath, 'native attachment fixture');
+  let timer, unsubscribe;
+  const completedAttachment = new Promise((resolve, reject) => {
+    timer = setTimeout(() => reject(new Error('Native attachment turn timed out')), 45_000);
+    unsubscribe = hub.subscribe(event => {
+      if (event.sessionId !== attachmentTask) return;
+      if (event.event?.type === 'done') resolve();
+      if (event.event?.type === 'error') reject(new Error(`Native attachment failed: ${JSON.stringify(event.event.data)}`));
+    });
+  });
+  void completedAttachment.catch(() => {});
+  const beforeAttachments = requests.length;
+  try {
+    await queue.enqueue(attachmentTask, { clientId: 'native-attachment', text: 'return synthetic complete',
+      files: [{ path: imagePath, category: 'image', ext: '.png', name: 'image.png' },
+        { path: filePath, category: 'file', ext: '.txt', name: 'note.txt' }],
+      persistedContent: JSON.stringify({ text: 'return synthetic complete', images: [{ url: imagePath }], files: [{ path: filePath }] }) });
+    await completedAttachment;
+    const wireInput = JSON.stringify(requests.slice(beforeAttachments).map(request => request.body.input));
+    assert.match(wireInput, /data:image\/png;base64,/);
+    assert.ok(wireInput.includes(filePath));
+    const attachmentRows = await database.drizzle.select().from(messages).where(eq(messages.sessionId, attachmentTask));
+    assert.match(attachmentRows.find(row => row.clientId === 'native-attachment').content, /cindy-media:\/\/blobs\//);
+  } finally { clearTimeout(timer); unsubscribe?.(); }
+  console.log('PASS production Host attachments + native Codex: local image bytes reach upstream, file path is preserved and managed image URL is persisted (synthetic local upstream)');
   console.log('PASS shared Host HTTP + queue + native Codex: send, persisted UUID/reply, steer, runtime reopen and stop (synthetic local upstream)');
   assert.ok(requests.length >= 3);
   console.log('PASS native Codex + production Host: gateway and custom provider turns; key rotation during a live turn preserves completion and the next gateway task uses the new key');
