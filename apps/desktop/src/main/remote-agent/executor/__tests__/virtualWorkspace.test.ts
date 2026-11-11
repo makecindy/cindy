@@ -663,6 +663,8 @@ describe('virtual workspace', () => {
    * #9718: the old router preserves shadow paths in plugin/MCP bodies, then masks the bad
    * write on readback. Existing file and scheduler tests do not cover this tool boundary.
    * Minimal failure: ghost_call -> call_tool -> args.message containing the virtual root.
+   * Review regressions: serialized NUL/opaque payloads, URL parentheses and a file's
+   * encoding alongside commit_message were missing from the original boundary coverage.
    * Tier: unit; real router, captured outgoing request and temporary stored bytes, no network.
    */
   it.each([
@@ -674,7 +676,7 @@ describe('virtual workspace', () => {
     const file = path.join(project, 'report.txt');
     const virtualFile = api.join(virtual, 'report.txt');
     const localFile = written(file, virtual);
-    const url = 'https://example.test/view?reference=' + virtual.replace(/\\/g, '/');
+    const url = 'https://example.test/view?reference=(' + virtual.replace(/\\/g, '/') + '/report.txt)';
     const unchanged = '中文 /api/v1 relative/input.txt ' + url;
     // Source text is deliberately not a whole path. Its slash/escape semantics must survive.
     const source = 'const file = ' + JSON.stringify(virtualFile) + '; const api = "/api/v1";';
@@ -688,12 +690,19 @@ describe('virtual workspace', () => {
       text: ['See ' + virtualFile],
       opaque: virtualFile,
       token: virtualFile,
+      file_update: {
+        content: 'aGVsbG8=', encoding: 'base64', commit_message: 'Update ' + virtualFile, message: 'See ' + virtualFile,
+      },
       actions: [
         { file_path: virtualFile, content: source, encoding: 'text' },
         { content: nested(virtualFile) },
         { content: Buffer.from(virtualFile).toString('base64'), encoding: 'base64' },
         { content: virtualFile, encoding: 'opaque' },
         { content: '\0' + virtualFile },
+        { content: JSON.stringify({ text: '\0' + virtualFile }) },
+        { content: JSON.stringify({ content: JSON.stringify([{ content: virtualFile, encoding: 'opaque' }]) }) },
+        { content: 'Payload:\n' + JSON.stringify({ text: '\0' + virtualFile }) },
+        { content: JSON.stringify({ text: 'See ' + virtualFile, nested: { content: virtualFile, encoding: 'base64' } }) },
       ],
     };
     let received: typeof payload | undefined;
@@ -721,6 +730,7 @@ describe('virtual workspace', () => {
         ...payload, message: 'Edit ' + localFile, commit_message: 'Update ' + localFile,
         body: 'At ' + localFile + ' ' + unchanged,
         description: 'At ' + localFile, text: ['See ' + localFile],
+        file_update: { ...payload.file_update, commit_message: 'Update ' + localFile, message: 'See ' + localFile },
         actions: [
           { file_path: file, content: localSource, encoding: 'text' },
           { content: nested(localFile) },

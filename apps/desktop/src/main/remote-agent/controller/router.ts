@@ -45,6 +45,25 @@ const PATH_ARGUMENTS = new Set([
 
 /** 只还原明确的正文参数；标识、凭证及其它不透明业务字符串保持原样。 */
 const TEXT_ARGUMENTS = new Set(['message', 'commitmessage', 'body', 'content', 'text', 'description']);
+const ENCODED_TEXT_ARGUMENTS = new Set(['message', 'body', 'content', 'text']);
+
+function isTextEncoding(encoding: unknown): boolean {
+  return encoding === undefined || (typeof encoding === 'string' && /^(?:text|utf-?8)$/i.test(encoding));
+}
+
+/** 序列化正文没有载荷 schema；内层存在非文本数据时保留整段，不能让 JSON 解码绕过保护。 */
+function hasNonTextContent(value: unknown): boolean {
+  if (typeof value === 'string') {
+    if (value.includes('\0')) return true;
+    if (/^\s*[{["]/.test(value)) {
+      try { return hasNonTextContent(JSON.parse(value)); } catch { /* 普通正文继续检查逐行 JSON。 */ }
+    }
+    return value.includes('\n') && value.split('\n').some(hasNonTextContent);
+  }
+  if (Array.isArray(value)) return value.some(hasNonTextContent);
+  if (!value || typeof value !== 'object') return false;
+  return !isTextEncoding((value as Record<string, unknown>).encoding) || Object.values(value).some(hasNonTextContent);
+}
 
 /**
  * 交给另一个任务读取并执行的正文：协同的派活与回报、任务之间的消息。远程 Agent 写下的是它自己
@@ -105,17 +124,22 @@ export function createReverseHttpRouter(deps: ReverseHttpRouterDeps) {
       const fieldContext = pathTextContext(key);
       if (fieldContext === 'ambiguous-path') return workspace.mapTextFromAgent(value, fieldContext);
       if (fieldContext === 'path' || PATH_ARGUMENTS.has(key.replace(/_/g, '').toLowerCase())) return workspace.mapAlias(value);
-      if (textContent && TEXT_ARGUMENTS.has(key.replace(/_/g, '').toLowerCase()) && !value.includes('\0')) {
+      if (textContent && TEXT_ARGUMENTS.has(key.replace(/_/g, '').toLowerCase()) && !hasNonTextContent(value)) {
         return localText(value, workspace);
       }
       return value;
     }
     if (Array.isArray(value)) return value.map((item) => mapArguments(item, handoffText, key, textContent));
     if (!value || typeof value !== 'object') return value;
-    // 如 GitLab actions[].encoding=base64：不解码或改写非文本载荷，路径参数仍按原规则处理。
+    // 如 GitLab 文件写入：encoding 约束 content，不影响同级 commit_message 等正文。
+    // 没有 content 的载荷仍认可 message/body/text 的显式编码；路径参数沿用原规则。
     const encoding = (value as Record<string, unknown>).encoding;
-    const plainText = textContent && (encoding === undefined || (typeof encoding === 'string' && /^(?:text|utf-?8)$/i.test(encoding)));
-    return Object.fromEntries(Object.entries(value).map(([name, item]) => [name, mapArguments(item, handoffText, name, plainText)]));
+    const hasContent = Object.keys(value).some((name) => name.toLowerCase() === 'content');
+    return Object.fromEntries(Object.entries(value).map(([name, item]) => {
+      const field = name.toLowerCase();
+      const encoded = hasContent ? field === 'content' : ENCODED_TEXT_ARGUMENTS.has(field);
+      return [name, mapArguments(item, handoffText, name, textContent && (!encoded || isTextEncoding(encoding)))];
+    }));
   };
   const projectResult = (value: unknown, key = ''): unknown => {
     if (typeof value === 'string') {

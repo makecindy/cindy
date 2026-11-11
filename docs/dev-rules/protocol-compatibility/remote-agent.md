@@ -240,6 +240,8 @@ Codex 原生图片恢复（#6412）在既有 `maker:remote-agent:v1` 上追加�
   在 A 转发到真实工具前还原已知路径别名，覆盖 `ghost_call → call_tool → args`（对象或 JSON 字符串）及嵌套数组。
   复用事件正文的 JSON／文件链接／源码分隔符处理，HTTP 与媒体 URL、未知业务字符串保持原样；
   含 NUL 的正文及显式非文本 `encoding` 载荷不改写、不解码（缺省、`text`、`utf8`、`utf-8` 为文本）。
+  有 `content` 时编码只约束它，否则约束 `message`／`body`／`text`；同级 `commit_message` 等正文仍还原。
+  序列化正文（含嵌套 JSON／逐行 JSON）发现 NUL 或非文本编码时整段保留，包括其中的普通文字，不猜测内部载荷 schema。
   原有仅保留正文的策略会使插件写入影子路径，而 JSON／SSE 读回又掩盖错误（#9718）；回归直接核对工具边界与存储字节。
   指定派活服务的 `message`／`initial_task` 与 `prompt` 仍优先按任务交接规则还原；其它服务的 `initial_task` 不套用该规则。
   不新增路径别名、权限、插件声明或线上字段；存量插件无需重装或重新确认。官方／自建中转仍透传既有 HTTP 请求字节，
