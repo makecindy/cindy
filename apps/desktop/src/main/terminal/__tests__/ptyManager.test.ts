@@ -250,6 +250,21 @@ describe('PtyManager.create', () => {
 // 需求 22 要求宿主托管命令与作业；旧覆盖只有窗口推送，未覆盖续读、内存上限或无窗口 owner。
 // 最小失败输入：两次读取同一游标、缓冲溢出、replace 环境及停止后写入；tier: unit，注入 fake PTY。
 describe('PtyManager host process lifecycle', () => {
+  // Performance contract for #9825: ordinary UI terminals must keep their old
+  // push-only path. The existing managed-job tests do not cover an unused reader.
+  // Minimal input: one UI PTY emitting a 32 KiB frame; unit, injected fake PTY.
+  it('does not retain or measure UI output when no managed reader was requested', () => {
+    const mgr = makeManager();
+    const owner = makeFakeWebContents() as unknown as WebContents;
+    mgr.create({ id: 'ui', cwd: '/tmp', owner });
+    const byteLength = vi.spyOn(Buffer, 'byteLength');
+    const chunk = 'x'.repeat(32 * 1024);
+    lastSpawn!.__triggerData(chunk);
+    expect(dataPayloads).toEqual([{ target: owner, payload: { id: 'ui', chunk } }]);
+    expect(mgr.read('ui').chunks).toEqual([]);
+    expect(byteLength).not.toHaveBeenCalled();
+  });
+
   it('starts a program with an exact environment and keeps it across restart', () => {
     vi.stubEnv('CINDY_PRIVATE_TEST_TOKEN', 'host-only');
     const mgr = makeManager();
@@ -273,7 +288,7 @@ describe('PtyManager host process lifecycle', () => {
     const mgr = makeManager();
     const owner = makeFakeWebContents() as unknown as WebContents;
     const other = makeFakeWebContents() as unknown as WebContents;
-    mgr.create({ id: 'p', cwd: '/tmp', owner });
+    mgr.create({ id: 'p', cwd: '/tmp', owner, retainOutput: true });
     lastSpawn!.__triggerData('hello'); lastSpawn!.__triggerData('中文');
     const first = mgr.read('p');
     expect(first.chunks.map(chunk => chunk.data)).toEqual(['hello', '中文']);
@@ -290,7 +305,7 @@ describe('PtyManager host process lifecycle', () => {
   it('reports gaps for bounded output and resets a cursor from a previous process generation', () => {
     const mgr = makeManager();
     const owner = makeFakeWebContents() as unknown as WebContents;
-    mgr.create({ id: 'p', cwd: '/tmp', owner });
+    mgr.create({ id: 'p', cwd: '/tmp', owner, retainOutput: true });
     const initial = mgr.read('p');
     for (let i = 0; i < 300; i++) lastSpawn!.__triggerData('界'.repeat(10000));
     const retained = mgr.read('p', 0, initial.generation);
@@ -307,7 +322,7 @@ describe('PtyManager host process lifecycle', () => {
   it('stops POSIX input while retaining output, then disposes all resources for its owner', async () => {
     const mgr = makeManager({ platform: 'linux' });
     const owner = makeFakeWebContents() as unknown as WebContents;
-    mgr.create({ id: 'p', cwd: '/tmp', owner });
+    mgr.create({ id: 'p', cwd: '/tmp', owner, retainOutput: true });
     lastSpawn!.__triggerData('retained');
     mgr.write('p', 'queued'); mgr.stop('p'); await Promise.resolve();
     expect(lastSpawn!.__killed).toBe(true);

@@ -117,6 +117,8 @@ export interface CreateOptions<Owner extends PtyOwner = WebContents> {
   inheritEnv?: boolean;
   /** Omit for the existing interactive shell; args are passed without shell interpolation. */
   program?: { command: string; args: string[] };
+  /** Managed jobs opt into cursor retention; ordinary UI output stays push-only. */
+  retainOutput?: boolean;
 }
 
 export interface CreateResult {
@@ -181,6 +183,7 @@ interface PtySession<Owner extends PtyOwner> {
   env?: CreateOptions['env'];
   inheritEnv?: boolean;
   program?: CreateOptions['program'];
+  retainOutput?: boolean;
   active: boolean;
   stopping: boolean;
   generation: string;
@@ -433,6 +436,7 @@ export class PtyManager<Owner extends PtyOwner = WebContents> {
       env: old.env,
       inheritEnv: old.inheritEnv,
       program: old.program,
+      retainOutput: old.retainOutput,
       owner,
     });
   }
@@ -513,9 +517,10 @@ export class PtyManager<Owner extends PtyOwner = WebContents> {
       env: opts.env ? { ...opts.env } : undefined,
       inheritEnv: opts.inheritEnv,
       program,
+      retainOutput: opts.retainOutput,
       active: true,
       stopping: false,
-      generation: randomUUID(),
+      generation: opts.retainOutput ? randomUUID() : '',
       startedAt: Date.now(),
       output: [],
       outputBytes: 0,
@@ -528,7 +533,13 @@ export class PtyManager<Owner extends PtyOwner = WebContents> {
       exitDisposer: { dispose() {} },
     };
 
-    session.dataDisposer = pty.onData((chunk: string) => {
+    const emitData = (chunk: string) => {
+      if (!session.active) return;
+      if (!session.owner.isDestroyed()) {
+        this.sink.emitData(session.owner, { id: session.id, chunk });
+      }
+    };
+    session.dataDisposer = pty.onData(opts.retainOutput ? (chunk: string) => {
       if (!session.active) return;
       // Bound both memory and frame count; split without breaking surrogate pairs.
       for (let start = 0; start < chunk.length;) {
@@ -544,10 +555,8 @@ export class PtyManager<Owner extends PtyOwner = WebContents> {
       // node-pty 在 utf8 模式下已经按 UTF-8 边界切，再走 decoder 主要是对 Buffer
       // 兜底（极端情况下出现 surrogate pair 跨 chunk）。这里 chunk 是 string，
       // 直接转发即可，decoder.write 仅在某些异常路径上有意义。
-      if (!session.owner.isDestroyed()) {
-        this.sink.emitData(session.owner, { id: session.id, chunk });
-      }
-    });
+      emitData(chunk);
+    } : emitData);
 
     session.exitDisposer = pty.onExit(({ exitCode, signal }) => {
       if (!session.active) return;

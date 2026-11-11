@@ -92,7 +92,7 @@ export class HostTerminalService {
     const entry = this.resolve(scope, true)!;
     const id = randomUUID();
     try {
-      this.manager.create({ ...input, id, cwd, owner: entry.owner, inheritEnv: false, env: scope.environment });
+      this.manager.create({ ...input, id, cwd, owner: entry.owner, inheritEnv: false, env: scope.environment, retainOutput: true });
       scope.assertCurrent(); signal?.throwIfAborted();
       return this.manager.list(entry.owner).find(item => item.id === id)!;
     } catch (error) {
