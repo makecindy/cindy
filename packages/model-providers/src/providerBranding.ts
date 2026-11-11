@@ -1,3 +1,5 @@
+export { MODEL_SPECTRUM_COLORS } from './modelSpectrum.js';
+
 /**
  * Provider branding is pure catalog metadata shared by desktop and mobile.
  *
@@ -77,13 +79,14 @@ export const PROVIDER_LOGO_PATHS = {
   vllm: 'm23.6 0-8.721 4.59L9.829 24h7.41zM9.83 24V5.142H.4Z',
 } as const;
 
-export type ProviderLogoKind = keyof typeof PROVIDER_LOGO_PATHS | 'anthropic' | 'openai' | 'xd' | 'cindy';
+export type ProviderLogoKind = keyof typeof PROVIDER_LOGO_PATHS | 'anthropic' | 'openai' | 'xd' | 'cindy' | 'openai-spectrum';
 
 /** Device-link 等运行时边界不能信任静态 union；未知未来值应安全回退。 */
 export function isProviderLogoKind(value: unknown): value is ProviderLogoKind {
   return (
     value === 'anthropic'
     || value === 'openai'
+    || value === 'openai-spectrum'
     || value === 'xd'
     || value === 'cindy'
     || (

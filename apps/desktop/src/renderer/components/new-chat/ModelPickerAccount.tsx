@@ -90,13 +90,16 @@ function ScopedModelPickerAccount({
     preview: Partial<Record<SubscriptionProvider, ModelPickerAccount | null>>;
   } | null>(null);
   useEffect(() => {
+    // Clear only when the owner/directory/task scope changes. Background refreshes
+    // keep the last complete view until the next snapshot is ready; the render
+    // guard below prevents a previous scope from being displayed in the meantime.
+    setResult(null);
     let epoch = 0;
     let pending = false;
     let queued = false;
     let disposed = false;
     const refresh = async () => {
       const current = ++epoch;
-      setResult(null);
       if (pending) {
         queued = true;
         return;

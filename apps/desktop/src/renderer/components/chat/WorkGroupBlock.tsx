@@ -106,6 +106,7 @@ export function collectLiveWorkActivities(
 }
 
 export interface WorkGroupBlockProps {
+  pluginUi: import('@/cindy-brain/PluginUiContributions').PluginUiMessageCandidates;
   /** Teammates keep public execution details collapsed, including while running. */
   compact?: boolean;
   deferred?: import('@cindy/maker-shared/message-window').DeferredHistoryWork;
@@ -126,10 +127,11 @@ export interface WorkGroupBlockProps {
   journalTitle?: ReactNode | ((elapsed: ReactNode) => ReactNode);
 }
 
-function ToolActivityRow({ activity }: { activity: ProjectedToolActivity }) {
+function ToolActivityRow({ activity, pluginUi }: { activity: ProjectedToolActivity; pluginUi: WorkGroupBlockProps['pluginUi'] }) {
   return (
     <div data-live-work-activity="tool" className="w-full min-w-0">
       <AgentActionRow
+        pluginUi={pluginUi}
         message={activity.message}
         toolResult={activity.toolResult}
         showRawCommand
@@ -221,9 +223,11 @@ type HistoryWorkLine = import('@cindy/maker-shared/message-window').HistoryWorkL
 function ToolLineRow({
   line,
   onActivate,
+  pluginUi,
 }: {
   line: Extract<HistoryWorkLine, { kind: 'tool' }>;
   onActivate: () => void;
+  pluginUi: WorkGroupBlockProps['pluginUi'];
 }) {
   const message = useMemo<ChatMessage>(
     () => ({
@@ -238,6 +242,7 @@ function ToolLineRow({
   return (
     <div data-live-work-activity="tool" className="w-full min-w-0">
       <AgentActionRow
+        pluginUi={pluginUi}
         message={message}
         showRawCommand
         status={line.status}
@@ -311,16 +316,18 @@ function ExpandedWorkGroupChild({
   child,
   toolActivities,
   compact,
+  pluginUi,
 }: {
   child: WorkGroupChild;
   toolActivities?: ProjectedToolActivity[];
   compact?: boolean;
+  pluginUi: WorkGroupBlockProps['pluginUi'];
 }) {
   if (child.kind === 'tools') {
     return (
       <>
         {toolActivities?.map((activity) => (
-          <ToolActivityRow key={activity.key} activity={activity} />
+          <ToolActivityRow key={activity.key} activity={activity} pluginUi={pluginUi} />
         ))}
       </>
     );
@@ -331,6 +338,7 @@ function ExpandedWorkGroupChild({
   if (child.kind === 'group') {
     return (
       <WorkGroupBlock
+        pluginUi={pluginUi}
         compact={compact}
         blockId={child.blockId}
         durationMs={child.durationMs}
@@ -351,7 +359,7 @@ export function WorkGroupBlock(props: WorkGroupBlockProps) {
 const InspectTeammateProcess = createContext<(() => void) | null>(null);
 
 /** One turn contains ordered work segments separated by unchanged public prose. */
-function TeammateProcessBlock({ blockId, childItems, isStreaming = false, journalTitle, deferred, durationMs, startedAtMs }: WorkGroupBlockProps) {
+function TeammateProcessBlock({ blockId, childItems, isStreaming = false, journalTitle, deferred, durationMs, startedAtMs, pluginUi }: WorkGroupBlockProps) {
   const { t } = useTranslation();
   const memory = useExpandedBlockMemory(blockId);
   const manual = useExpandedBlockMemory(`${blockId}:manual`);
@@ -403,6 +411,7 @@ function TeammateProcessBlock({ blockId, childItems, isStreaming = false, journa
           {segments.map((segment, index) => segment.kind === 'content'
             ? <Fragment key={segment.key}>{segment.item.kind === 'rendered' && segment.item.renderNode()}</Fragment>
             : <TeammateWorkSegment key={segment.key} blockId={`${blockId}:${segment.key}`} childItems={segment.items}
+                pluginUi={pluginUi}
                 active={isStreaming && index === segments.length - 1} onInspect={inspect} />)}
           {flattened.loaders.filter(loader => loader.failed).map(loader => <Button key={loader.key} variant="secondary" onClick={loader.retry}>{t('chat.errorBanner.retry')}</Button>)}
         </div></InspectTeammateProcess.Provider>
@@ -426,8 +435,9 @@ export function TeammateElapsedTitle({ running, durationMs, startedAtMs }: { run
     : t(running ? 'chat.teammateProcess.processing' : 'chat.teammateProcess.worked')}</>;
 }
 
-export function TeammateWorkSegment({ blockId, childItems, active = false, onInspect }: {
+export function TeammateWorkSegment({ blockId, childItems, active = false, onInspect, pluginUi }: {
   blockId: string; childItems: WorkGroupChild[]; active?: boolean; onInspect?(): void;
+  pluginUi: WorkGroupBlockProps['pluginUi'];
 }) {
   const { t } = useTranslation();
   const memory = useExpandedBlockMemory(blockId);
@@ -451,12 +461,13 @@ export function TeammateWorkSegment({ blockId, childItems, active = false, onIns
       {content}<ChevronRight size={12} className={cn(CHAT_CHEVRON_TRANSITION_CLASS, 'shrink-0', memory.expanded && 'rotate-90')} />
     </button> : <div className="flex min-h-7 items-center gap-2 text-14 text-[var(--text-secondary)]">{content}</div>}
     {tools.length > 0 && <Collapse open={memory.expanded}><div className="mt-1 ml-6 flex min-w-0 flex-col gap-1">
-      {tools.map(child => <ExpandedWorkGroupChild key={child.key} child={child} toolActivities={projection.toolActivitiesByChildKey.get(child.key)} />)}
+      {tools.map(child => <ExpandedWorkGroupChild key={child.key} child={child} pluginUi={pluginUi} toolActivities={projection.toolActivitiesByChildKey.get(child.key)} />)}
     </div></Collapse>}
   </div>;
 }
 
 function ActivityWorkGroupBlock({
+  pluginUi,
   compact = false,
   deferred,
   blockId,
@@ -649,14 +660,14 @@ function ActivityWorkGroupBlock({
             {workLines
               ? workLines.map((line) =>
                   line.kind === 'tool' ? (
-                    <ToolLineRow key={line.key} line={line} onActivate={onToggle} />
+                    <ToolLineRow key={line.key} line={line} onActivate={onToggle} pluginUi={pluginUi} />
                   ) : (
                     <ThinkingLineRow key={line.key} line={line} onActivate={onToggle} />
                   ),
                 )
               : liveActivities.map((activity) =>
                   activity.kind === 'tool' ? (
-                    <ToolActivityRow key={activity.key} activity={activity} />
+                    <ToolActivityRow key={activity.key} activity={activity} pluginUi={pluginUi} />
                   ) : (
                     <ThinkingActivityRow key={activity.key} activity={activity} />
                   ),
@@ -676,6 +687,7 @@ function ActivityWorkGroupBlock({
               childItems.map((child) => (
                 <Fragment key={child.key}>
                   <ExpandedWorkGroupChild
+                    pluginUi={pluginUi}
                     child={child}
                     compact={compact}
                     toolActivities={

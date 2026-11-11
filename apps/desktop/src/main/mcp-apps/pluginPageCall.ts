@@ -10,7 +10,7 @@ export interface PluginPageCall {
   onProgress?: (progress: PluginPageProgress) => void;
   instance: string;
   revision: string;
-  sessionId: string;
+  sessionId: string | null;
   clientId: string;
   tool: string;
   assertCurrent(): Promise<void>;

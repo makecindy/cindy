@@ -400,12 +400,19 @@ relay 原有 60 秒主动续期节流保持不变。
 
 ## Cindy 托管的预装技能
 
-随包技能字节改变时必须递增 `BUILT_IN_SKILLS_BUNDLE_VERSION`。运行
+随包技能的版本号 = `BUILT_IN_SKILLS_BUNDLE_VERSION_BASE` + `apps/desktop/resources/system-skills/_versions/`
+下的 `*.md` 记录文件数，运行时从随包目录读取（`readBuiltInSkillsBundleVersion`）。随包技能字节
+改变时在该目录新增一个记录文件（`YYYY-MM-DD-<主题>.md`，一行说明改了什么）；不改基数，不改、
+不删、不重命名已有记录。版本号原先是每次改动都要加一的同一个整数（近 30 天改了 94 次），
+任意两个改内置技能的 PR 都在那一行冲突；改成各加各的文件后不再写同一行，两个来源合成后的
+版本号也自动高于任一来源。缺少记录目录或目录为空时运行时拒绝准备（不当作低版本处理，否则
+会把本包的技能判为比已安装的旧，悄悄保留旧字节）。运行
 `pnpm check:built-in-skills`，对照完整 Git 历史核验工作区实际字节（含未跟踪文件），
 同版本不同内容或版本倒退会阻断；不会改 index、已安装技能或用户配置。检查在 CI 与
 个人版 `check` 安装依赖前执行，不给普通 Forge 打包增加 Git 历史要求（源码压缩包与
 浅克隆仍可打包，但不能声称通过此检查）。合成构建核验所有父分支，不能只和
-merge-base 比较：两个来源各自用了同一个新版本号，合成结果仍须再递增。可重复传
+merge-base 比较：两个来源各自到达同一个版本号时，合成结果必须更新——各自的记录文件合到一起后
+自然满足；合并时若保留了旧式的 `BUILT_IN_SKILLS_BUNDLE_VERSION` 行，检查会阻断。可重复传
 `--base-ref <ref>` 纳入额外基准（例如不在当前祖先链中的上一次个人构建）。需要完整
 Git checkout；浅克隆先 `git fetch --unshallow`，不在缺失历史时假定核验通过。
 `.gitattributes` 固定整个资源目录的原始字节，避免 Windows 换行转换复用同一个版本号。

@@ -77,6 +77,7 @@ export function SidebarWindowLayout() {
   }, []);
   const isMac = window.electronAPI?.platform === 'darwin';
   const [ctx, setCtx] = useState<SidebarWindowContext | null>(null);
+  const [activeTabId, setActiveTabId] = useState<string | null>(null);
   // 预热窗口初始隐藏；由 main 的 visibility push 驱动 Shell 内各子面板暂停/恢复。
   const [windowVisible, setWindowVisible] = useState(false);
   useDeviceLinkRemoteProjects(windowVisible, 'sidebar');
@@ -314,15 +315,15 @@ export function SidebarWindowLayout() {
         )}
       </div>
 
-      {/* 内容区:Shell 零改动复用。sessionId=null(主窗不在会话视图 / 尚无上报)
-          时 Shell 自渲染空白,叠一层"跟随主窗口会话"占位文案;窗口不自动关
-          (避免主窗路由抖动导致窗口闪没)。 */}
+      {/* 无任务且 Shell 没有承载页签时显示占位；全局页不依赖任务。
+          隐藏窗口仍由覆盖层阻隔交互，窗口不随主窗路由抖动自动关闭。 */}
       <div className="relative flex flex-1 flex-col overflow-hidden">
         <DetachedBotMenuOwnerContext.Provider value={sessionId && ctx?.botOwner
           ? { sessionId, botId: ctx.botOwner.botId,
               canonical: ctx.botOwner.canonical && !ctx.remoteHostId && !ctx.deviceLinkDeviceId }
           : null}>
           <RightSidebarShell
+            onActiveTabChange={setActiveTabId}
             sessionId={sessionId}
             workdir={ctx?.workdir ?? ''}
             remoteHostId={ctx?.remoteHostId ?? null}
@@ -332,7 +333,7 @@ export function SidebarWindowLayout() {
             isMac={isMac}
           />
         </DetachedBotMenuOwnerContext.Provider>
-        {(!windowVisible || !sessionId) && (
+        {(!windowVisible || (!sessionId && !activeTabId)) && (
           <div className="absolute inset-0 z-10 flex items-center justify-center bg-[var(--panel-bg)]">
             <span className="text-13 text-[var(--text-tertiary)]">
               {t('rightSidebar.window.followPlaceholder')}

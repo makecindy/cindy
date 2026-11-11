@@ -3,7 +3,7 @@ import { constants } from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { parseAttachmentOssRef, parsePeerAttachmentRef } from '@cindy/device-link';
-import type { writeTempFile, materializeDirectSendOssAttachments } from '../maker-ipc/normalizeAttachments.js';
+import type { writeTempFile, materializeDirectSendOssAttachments } from '../maker-ipc/normalizeAttachments.desktop.js';
 
 interface MailAttachmentHost {
   writeTempFile: typeof writeTempFile;

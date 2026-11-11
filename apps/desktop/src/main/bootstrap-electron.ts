@@ -135,6 +135,7 @@ import {
   readPersistedWindowMaximized,
   type MainWindowMaximizeRecoveryController,
 } from './mainWindowMaximizeRecovery';
+import { installWindowsTransparentTitleBar } from './windowsTransparentTitleBar';
 import {
   commitReplacedNormalBounds,
   fitReplacementStartupBounds,
@@ -1237,7 +1238,7 @@ import {
 } from './cindy-brain/index.js';
 import { setCodexImageAuthBinding } from './cindy-brain/codexImageAuthBinding.js';
 import { configureMailAttachmentHost } from './cindy-brain/mailAttachmentUpload.js';
-import { writeTempFile, materializeDirectSendOssAttachments } from './maker-ipc/normalizeAttachments.js';
+import { writeTempFile, materializeDirectSendOssAttachments } from './maker-ipc/normalizeAttachments.desktop.js';
 import { listActiveClaudeBackgroundActivitySessions } from './maker-host/claude-session-background-activity.js';
 import { registerRelaunchBusyActivityIpc } from './relaunchBusyActivityIpc.js';
 import { describeRelaunchTurns } from './relaunchTurnFacts.js';
@@ -4446,6 +4447,9 @@ const createWindow = () => {
     },
   });
   markAppContentWindow(mainWindow);
+  installWindowsTransparentTitleBar(mainWindow, () => {
+    mainWindowMaximizeRecoveryController?.notifyUserUnmaximizeIntent();
+  });
   installSelectionContextMenu(mainWindow);
   installWindowResponsivenessDiagnostics(mainWindow, { label: 'main' });
   mainWindowRef = mainWindow;
