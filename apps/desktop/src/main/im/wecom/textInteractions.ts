@@ -4,12 +4,13 @@ import { escapeWecomMarkdown, type IMMessageEvent, type WecomIM } from '@cindy/i
 import { autoReviewUnavailablePromptLine, permissionOperationPreview, permissionPromptDescription } from '../shared/autoReviewUnavailablePrompt';
 import { isStopCommand } from '../shared/controlCommands';
 import { imText } from '../shared/imText';
-import { localizedReplyWords, matchesReplyWord } from '../shared/replyWords';
+import { localizedReplyWords, matchesReplyWord, type ReplyWords } from '../shared/replyWords';
 import type { SharedPermission } from '../../maker-ipc/sharedPermission';
 import { interactionChoiceReceivedText, permissionOutcomeText } from '../shared/permissionPresentation';
 
 interface PendingInteraction {
   request: InteractionRequest;
+  words: ReplyWords;
   resolve: (decision: InteractionDecision) => void;
   timer: ReturnType<typeof setTimeout>;
 }
@@ -49,7 +50,8 @@ export class WecomTextInteractions {
       settle(defaultDecision(request, 'wecom_interaction_timeout'));
     }, INTERACTION_TIMEOUT_MS);
     timer.unref?.();
-    const entry = { request, resolve: settle, timer };
+    const words = localizedReplyWords();
+    const entry = { request, words, resolve: settle, timer };
     this.pending.set(userId, entry);
     if (shared) void shared.result.then((decision) => {
       if (this.pending.get(userId) === entry) this.pending.delete(userId);
@@ -58,7 +60,7 @@ export class WecomTextInteractions {
     });
 
     try {
-      await this.im.sendMarkdownText(userId, formatWecomInteractionPrompt(request));
+      await this.im.sendMarkdownText(userId, formatWecomInteractionPrompt(request, words));
       if (shared) void shared.result.then((decision) => this.im.sendText(userId,
         permissionOutcomeText(decision, request.kind === 'permission' ? request.toolName : undefined),
       )).catch(() => {});
@@ -92,9 +94,9 @@ export class WecomTextInteractions {
       pending.resolve(defaultDecision(pending.request, 'wecom_interaction_cancelled_by_stop'));
       return false;
     }
-    const decision = parseReply(pending.request, event.text);
+    const decision = parseReply(pending.request, event.text, pending.words);
     if (!decision) {
-      const words = localizedReplyWords();
+      const words = pending.words;
       void this.im.sendText(
         event.senderId,
         imText(`${K}.invalidReply`, { allow: words.allow, deny: words.deny }),
@@ -109,11 +111,10 @@ export class WecomTextInteractions {
   }
 }
 
-export function formatWecomInteractionPrompt(request: InteractionRequest): string {
+export function formatWecomInteractionPrompt(request: InteractionRequest, words = localizedReplyWords()): string {
   if (request.kind === 'permission') {
     const toolName = escapeWecomMarkdown(request.displayName ?? request.toolName);
     const unavailable = autoReviewUnavailablePromptLine(request);
-    const words = localizedReplyWords();
     return `${imText(`${K}.permissionTitle`, { toolName })}
 ${permissionPromptDescription(request) ?? ''}
 ${unavailable ? `\n${unavailable}\n` : ''}
@@ -127,7 +128,6 @@ ${imText(`${K}.permissionFooter`, { allow: words.allow, deny: words.deny })}`;
   }
   if (request.kind === 'plan_review') {
     const plan = request.plan.length > 6_000 ? `${request.plan.slice(0, 6_000)}…` : request.plan;
-    const words = localizedReplyWords();
     return `${imText(`${K}.planIntro`)}
 
 ${plan}
@@ -156,11 +156,10 @@ function defaultDecision(request: InteractionRequest, reason: string): Interacti
   return { kind: 'permission', behavior: 'deny', reason };
 }
 
-function parseReply(request: InteractionRequest, rawText: string): InteractionDecision | null {
+function parseReply(request: InteractionRequest, rawText: string, words: ReplyWords): InteractionDecision | null {
   const text = rawText.trim();
   if (!text) return null;
   const normalized = text.toLowerCase();
-  const words = localizedReplyWords();
   const is = (fixed: string[], localized: string) => matchesReplyWord(normalized, fixed, localized);
   if (request.kind === 'permission') {
     if (is(['允许', '同意', '确认', 'allow', 'yes', 'y'], words.allow)) {

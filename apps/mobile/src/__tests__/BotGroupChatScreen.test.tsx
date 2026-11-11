@@ -3083,7 +3083,7 @@ describe('mobile group threads', () => {
     expect(byId(`botGroup.thread.context.${rootId}.action.quote`)).not.toBeNull();
     await click(`botGroup.thread.more.${rootId}`);
     expect(byId(`botGroup.thread.context.${rootId}.sheet`)?.textContent)
-      .toContain(new Date(rootMessage().createdAt).toLocaleString());
+      .toContain(new Date(rootMessage().createdAt).toLocaleString('zh-CN'));
   });
 
   it.each(['root', 'shared'] as const)('restores the retained group viewport without scrolling or marking it read after opening a %s topic entry', async entry => {

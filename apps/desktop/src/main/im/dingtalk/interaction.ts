@@ -4,7 +4,7 @@ import type { DingTalkIM } from '@cindy/im';
 import { autoReviewUnavailablePromptLine, permissionOperationPreview, permissionPromptDescription } from '../shared/autoReviewUnavailablePrompt';
 import type { SharedPermission } from '../../maker-ipc/sharedPermission';
 import { imText } from '../shared/imText';
-import { localizedReplyWords, matchesReplyWord } from '../shared/replyWords';
+import { localizedReplyWords, matchesReplyWord, type ReplyWords } from '../shared/replyWords';
 import { permissionOutcomeText } from '../shared/permissionPresentation';
 
 // 钉钉与 iMessage 共用这套纯文本交互(iMessage 直接复用本文件)。
@@ -21,8 +21,9 @@ export function handleDingTalkTextInteraction(
   if (request.kind === 'ask_user_question') {
     return answerQuestions(im, userId, request);
   }
-  const result = im.requestTextReply(userId, formatInteractionPrompt(request), (text) =>
-    parseInteractionReply(request, text),
+  const words = localizedReplyWords();
+  const result = im.requestTextReply(userId, formatInteractionPrompt(request, words), (text) =>
+    parseInteractionReply(request, text, words),
     options?.timeoutMs,
     shared,
   ).catch((error) => {
@@ -52,10 +53,9 @@ async function answerQuestions(
   return { kind: 'ask_user_question', answers };
 }
 
-function formatInteractionPrompt(request: InteractionRequest): string {
+function formatInteractionPrompt(request: InteractionRequest, words = localizedReplyWords()): string {
   if (request.kind === 'permission') {
     const unavailable = autoReviewUnavailablePromptLine(request);
-    const words = localizedReplyWords();
     const operation = permissionOperationPreview(request);
     return [
       imText(`${K}.permissionTitle`, { toolName: request.toolName }),
@@ -66,7 +66,6 @@ function formatInteractionPrompt(request: InteractionRequest): string {
     ].join('\n');
   }
   if (request.kind === 'plan_review') {
-    const words = localizedReplyWords();
     return [
       imText(`${K}.planReady`),
       imText(`${K}.planFooter`, { approve: words.approve, deny: words.deny }),
@@ -112,11 +111,11 @@ function parseQuestionAnswer(
 function parseInteractionReply(
   request: InteractionRequest,
   rawText: string,
+  words: ReplyWords = localizedReplyWords(),
 ): InteractionDecision | null {
   const text = rawText.trim();
   if (!text) return null;
   const normalized = text.toLowerCase();
-  const words = localizedReplyWords();
   const is = (fixed: string[], localized: string) => matchesReplyWord(normalized, fixed, localized);
   if (request.kind === 'permission') {
     if (is(['允许', '同意', '确认', '继续', 'allow', 'yes', 'y'], words.allow)) {

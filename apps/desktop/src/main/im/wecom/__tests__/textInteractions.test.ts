@@ -218,3 +218,26 @@ describe('formatWecomInteractionPrompt', () => {
       });
   });
 });
+
+it.each([
+  ['permission', 'erlauben', 'allow'], ['permission', 'ablehnen', 'deny'],
+  ['plan_review', 'genehmigen', 'allow'], ['plan_review', 'ablehnen', 'deny'],
+] as const)('keeps pending %s reply %s valid after a language change', async (kind, reply, behavior) => {
+  let intercept!: (event: IMMessageEvent) => boolean;
+  const im = {
+    onTextMessageIntercept: (handler: typeof intercept) => { intercept = handler; },
+    onStatusChange: vi.fn(),
+    sendMarkdownText: vi.fn(async (_user: string, prompt: string) => { expect(prompt).toContain(reply); }),
+    sendText: vi.fn(async () => ({})),
+  } as unknown as WecomIM;
+  const interactions = new WecomTextInteractions(im);
+  setMainLocale('de');
+  const request: InteractionRequest = kind === 'permission' ? permissionRequest({})
+    : { kind, requestId: 'switch', plan: 'Plan' };
+  const result = interactions.handle('user', request);
+  setMainLocale('en');
+  intercept({ senderId: 'user', text: 'unrelated' } as IMMessageEvent);
+  expect(im.sendText).toHaveBeenCalledWith('user', expect.stringContaining('erlauben'));
+  intercept({ senderId: 'user', text: reply } as IMMessageEvent);
+  await expect(result).resolves.toMatchObject({ kind, behavior });
+});

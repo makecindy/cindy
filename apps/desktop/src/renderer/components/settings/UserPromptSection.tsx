@@ -2,7 +2,7 @@ import { personalizationDetailsSettings } from './PersonalizationDetails.setting
 import { useSettingDefinition } from './useSettingDefinition';
 import { Button } from '@/components/ui/button';
 import { SettingsCard, SettingsField } from '@/components/ui/settings-rows';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -35,10 +35,7 @@ export function UserPromptSection() {
     toast.success(t('settings.personalization.toast.saved'));
   }, [canSave, draft, setValue, t]);
 
-  const counter = useMemo(
-    () => `${length.toLocaleString(appI18n.language)} / ${USER_PROMPT_MAX_LENGTH.toLocaleString(appI18n.language)}`,
-    [length],
-  );
+  const counter = `${length.toLocaleString(appI18n.language)} / ${USER_PROMPT_MAX_LENGTH.toLocaleString(appI18n.language)}`;
 
   return (
     <SettingsCard>

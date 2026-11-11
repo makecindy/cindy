@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { setMainLocale } from '../../../i18n.desktop';
 import { ui } from '../uiText';
+import { localizedReplyWords } from '../../shared/replyWords';
 import { __testing } from '../WechatIM';
 
 describe('WeChat UI text', () => {
@@ -83,4 +84,19 @@ describe('WeChat UI text', () => {
       ),
     ).toEqual({ kind: 'permission', behavior: 'allow' });
   });
+});
+
+it.each([
+  ['permission', 'erlauben', 'allow'], ['permission', 'ablehnen', 'deny'],
+  ['plan_review', 'genehmigen', 'allow'], ['plan_review', 'ablehnen', 'deny'],
+] as const)('uses the prompt snapshot for WeChat %s reply %s', (kind, reply, behavior) => {
+  setMainLocale('de');
+  const request = kind === 'permission'
+    ? { kind, requestId: 'switch', toolName: 'Bash', input: {} }
+    : { kind, requestId: 'switch', plan: 'Plan' };
+  const words = localizedReplyWords();
+  expect(__testing.formatWechatInteractionPrompt(request, words)).toContain(reply);
+  setMainLocale('en');
+  expect(__testing.parseWechatInteractionReply(request, reply, words)).toMatchObject({ kind, behavior });
+  expect(__testing.parseWechatInteractionReply(request, 'unrelated', words)).toBeNull();
 });

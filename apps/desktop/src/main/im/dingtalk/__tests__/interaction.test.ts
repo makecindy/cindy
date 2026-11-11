@@ -142,3 +142,24 @@ describe('dingtalk text interactions in other interface languages', () => {
     expect(__testing.parseInteractionReply(request, '允许')).toEqual({ kind: 'permission', behavior: 'allow' });
   });
 });
+
+// Exercise the actual prompt/parser handoff, also reused by iMessage.
+it.each([
+  ['permission', 'erlauben', 'allow'], ['permission', 'ablehnen', 'deny'],
+  ['plan_review', 'genehmigen', 'allow'], ['plan_review', 'ablehnen', 'deny'],
+] as const)('keeps %s reply %s valid after a language change', async (kind, reply, behavior) => {
+  setMainLocale('de');
+  const request = kind === 'permission'
+    ? { kind, requestId: 'switch', toolName: 'Bash', input: {} }
+    : { kind, requestId: 'switch', plan: 'Plan' };
+  const im = {
+    requestTextReply: vi.fn(async (_user: string, prompt: string, parse: (text: string) => unknown) => {
+      expect(prompt).toContain(reply);
+      setMainLocale('en');
+      expect(parse('unrelated')).toBeNull();
+      return parse(reply);
+    }),
+    sendText: vi.fn(),
+  } as unknown as DingTalkIM;
+  await expect(handleDingTalkTextInteraction(im, 'user', request)).resolves.toMatchObject({ kind, behavior });
+});

@@ -48,7 +48,7 @@ import {
   resolvePermissionMode,
 } from '../shared/permissionModeControl';
 import { imText } from '../shared/imText';
-import { localizedReplyWords, matchesReplyWord } from '../shared/replyWords';
+import { localizedReplyWords, matchesReplyWord, type ReplyWords } from '../shared/replyWords';
 import { ui } from './uiText';
 import { countQueuedWechatTasks, WechatTaskStore, type WechatActiveBinding, type WechatTask } from './taskStore';
 import type { DbClient } from '../../localDb/client/DbClient';
@@ -121,6 +121,7 @@ function activePeerIdForSession<
 
 interface PendingWechatInteraction {
   request: InteractionRequest;
+  words: ReplyWords;
   resolve: (decision: InteractionDecision) => void;
   timer: NodeJS.Timeout;
 }
@@ -605,7 +606,8 @@ export class WechatIM extends BaseIM implements RichChannelIM {
       settle(defaultWechatInteractionDecision(request, 'wechat_interaction_timeout'));
     }, options?.timeoutMs ?? WECHAT_INTERACTION_CONFIRM_TIMEOUT_MS);
     timer.unref?.();
-    const entry = { request, resolve: settle, timer };
+    const words = localizedReplyWords();
+    const entry = { request, words, resolve: settle, timer };
     this.#pendingInteractions.set(userId, entry);
     if (shared) void shared.result.then((decision) => {
       if (this.#pendingInteractions.get(userId) === entry) this.#pendingInteractions.delete(userId);
@@ -613,7 +615,7 @@ export class WechatIM extends BaseIM implements RichChannelIM {
       resolvePending(decision);
     });
     try {
-      await this.sendText(userId, formatWechatInteractionPrompt(request));
+      await this.sendText(userId, formatWechatInteractionPrompt(request, words));
       if (shared) void shared.result.then((decision) => this.sendText(userId,
         permissionOutcomeText(decision, request.kind === 'permission' ? request.toolName : undefined),
       )).catch(() => {});
@@ -1275,11 +1277,11 @@ export class WechatIM extends BaseIM implements RichChannelIM {
     if (!pending) return;
     const accepted = await this.#requireStore().markAccepted(task.bindingEpoch, task.id);
     if (!accepted) throw new Error('WECHAT_ACCEPT_CAS_REJECTED');
-    const decision = parseWechatInteractionReply(pending.request, text);
+    const decision = parseWechatInteractionReply(pending.request, text, pending.words);
     if (!decision) {
       await this.#commitInteractionReply(
         task,
-        imText('imBot.text.wechat.interaction.invalidReply', localizedReplyWords()),
+        imText('imBot.text.wechat.interaction.invalidReply', pending.words),
       );
       await this.#flushCurrentOutbox(task.bindingEpoch);
       return;
@@ -1298,7 +1300,7 @@ export class WechatIM extends BaseIM implements RichChannelIM {
   ): Promise<void> {
     const pending = this.#pendingInteractions.get(message.senderId);
     if (!pending) return;
-    const decision = parseWechatInteractionReply(pending.request, message.text);
+    const decision = parseWechatInteractionReply(pending.request, message.text, pending.words);
     if (decision) {
       clearTimeout(pending.timer);
       this.#pendingInteractions.delete(message.senderId);
@@ -1310,7 +1312,7 @@ export class WechatIM extends BaseIM implements RichChannelIM {
           peerId: message.senderId,
           text: decision
             ? interactionChoiceReceivedText()
-            : imText('imBot.text.wechat.interaction.invalidReply', localizedReplyWords()),
+            : imText('imBot.text.wechat.interaction.invalidReply', pending.words),
           contextToken: message.contextToken,
           clientId: randomUUID(),
         },
@@ -2145,7 +2147,7 @@ function hasWechatTaskContent(text: string, attachments: readonly WechatTaskAtta
   return text.trim().length > 0 || attachments.length > 0;
 }
 
-function formatWechatInteractionPrompt(request: InteractionRequest): string {
+function formatWechatInteractionPrompt(request: InteractionRequest, words = localizedReplyWords()): string {
   if (request.kind === 'permission') {
     const unavailable = autoReviewUnavailablePromptLine(request);
     const preview = permissionOperationPreview(request);
@@ -2154,11 +2156,11 @@ function formatWechatInteractionPrompt(request: InteractionRequest): string {
     });
     return `${title}
 ${permissionPromptDescription(request) ?? ''}
-${unavailable ? `${unavailable}\n` : ''}${preview ? `${imText('imBot.text.wechat.interaction.operationPreview', { preview })}\n` : ''}${imText('imBot.text.wechat.interaction.permissionReplyHint', localizedReplyWords())}`;
+${unavailable ? `${unavailable}\n` : ''}${preview ? `${imText('imBot.text.wechat.interaction.operationPreview', { preview })}\n` : ''}${imText('imBot.text.wechat.interaction.permissionReplyHint', words)}`;
   }
   if (request.kind === 'plan_review') {
     const plan = request.plan.length > 6_000 ? `${request.plan.slice(0, 6_000)}…` : request.plan;
-    return imText('imBot.text.wechat.interaction.planReview', { plan, ...localizedReplyWords() });
+    return imText('imBot.text.wechat.interaction.planReview', { plan, ...words });
   }
   const question = request.questions[0];
   if (!question) return imText('imBot.text.wechat.interaction.askNoQuestion');
@@ -2188,11 +2190,11 @@ function defaultWechatInteractionDecision(
 function parseWechatInteractionReply(
   request: InteractionRequest,
   rawText: string,
+  words: ReplyWords = localizedReplyWords(),
 ): InteractionDecision | null {
   const text = rawText.trim();
   if (!text) return null;
   const normalized = text.toLowerCase();
-  const words = localizedReplyWords();
   const is = (fixed: string[], localized: string) => matchesReplyWord(normalized, fixed, localized);
   if (request.kind === 'permission') {
     if (is(['允许', '同意', '确认', 'allow', 'yes', 'y'], words.allow)) {

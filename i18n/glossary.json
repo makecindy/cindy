@@ -55,6 +55,13 @@
       },
       "checkCase": false,
       "alsoAllowed": {
+        "fr": [
+          { "text": "Actif", "when": "标题或状态标签使用大写首字母。" },
+          { "text": "active", "when": "阴性名词使用 active / actives，阳性复数 actifs 已包含标准词干。" }
+        ],
+        "de": [
+          { "text": "aktiv", "when": "句中形容词使用小写，并按性、数、格变为 aktive / aktiven 等。" }
+        ],
         "zh-CN": [
           {
             "text": "生效中",
