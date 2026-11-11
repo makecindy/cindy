@@ -358,12 +358,38 @@ export class ChatBridgeToolContext {
   }
 
   /**
-   * Register the tool-search definitions this turn loaded.
+   * Snapshot the selectors this turn's own declarations may answer.
    *
-   * They belong to the current catalog: a follow-up may force one by name. Registering them
-   * here (rather than predicting their Chat names) means the snapshot sees whatever
-   * `reserveName` actually chose, including hash suffixes from a collision.
+   * Taken from the catalog after the current declarations are registered, so the snapshot names
+   * are the ones actually advertised. Replayed history is excluded: a name that only appears
+   * there must not become a forced selector.
    */
+  private recordCurrentSelectors(): void {
+    for (const [identity, chatName] of this.chatNamesByResponseName) {
+      const [kind, namespace, name] = identity.split('\0');
+      if (!name) continue;
+      const identityKey = kind + '\0' + (namespace === undefined ? '' : namespace) + '\0' + name;
+      this.currentIdentities.set(identityKey, chatName);
+      if (!namespace) {
+        this.recordCurrentSelector(kind, name, chatName);
+        this.currentBareSelectors.set(kind + '\0' + name, chatName);
+        continue;
+      }
+      // Codex accepts the bare child name, the dotted `namespace.name` spelling and the
+      // flattened wire name. Index all of them with one ambiguity rule. `exec` keeps only the
+      // qualified spellings: a bare `exec` switches on upstream nested-helper normalization.
+      if (name !== CODE_MODE_EXEC_TOOL_NAME) this.recordCurrentSelector(kind, name, chatName);
+      this.recordCurrentSelector(kind, namespace + '.' + name, chatName);
+      this.recordCurrentSelector(kind, `${namespace}__${name}`, chatName);
+    }
+  }
+
+  private recordCurrentSelector(kind: string, selector: string, chatName: string): void {
+    const key = kind + '\0' + selector;
+    const existing = this.currentSelectors.get(key);
+    this.currentSelectors.set(key, existing === undefined || existing === chatName ? chatName : null);
+  }
+
   private addLoadedToolSearchTools(input: ResponsesRequest['input']): void {
     if (!Array.isArray(input)) return;
     const boundary = indexOfCurrentTurnInlineTools(input);
