@@ -35,6 +35,7 @@ import {
 
 const SWITCH_ERROR_KEYS: Record<CompanionCloudFailureCode, string> = {
   HOME_CONFLICT: 'bots.cloud.switchConflict',
+  LOCAL_CINDY_CONFLICT: 'bots.cloud.localCindyConflict',
   OFFLINE: 'bots.cloud.switchOffline',
   NOT_ENABLED: 'bots.cloud.notEnabled',
   TARGET_UNAVAILABLE: 'bots.cloud.targetUnavailable',

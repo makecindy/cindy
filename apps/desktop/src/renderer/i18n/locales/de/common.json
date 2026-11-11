@@ -11702,6 +11702,7 @@
       "takeOverConflict": "{{name}} ist bereits auf „{{device}}“ umgezogen",
       "takeOverOffline": "Der Server ist nicht erreichbar, daher kann {{name}} hier gerade nicht fortfahren",
       "takeOverFailed": "{{name}} konnte auf diesem Computer nicht übernommen werden",
+      "localCindyConflict": "Auf dem übernehmenden Computer gibt es bereits eine andere Cindy. Führe die doppelten Cindys zusammen oder wähle einen anderen Hauptcomputer",
       "notEnabled": "Dieser Server unterstützt keinen Wechsel des Hauptcomputers",
       "readOnlyNote": "Dieses Gespräch ist in der Cloud gespeichert und schreibgeschützt",
       "empty": "Noch kein Gespräch in der Cloud",

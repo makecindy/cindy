@@ -11702,6 +11702,7 @@
       "takeOverConflict": "{{name}} has already moved to “{{device}}”",
       "takeOverOffline": "Can’t reach the server, so {{name}} can’t continue here right now",
       "takeOverFailed": "Couldn’t take over {{name}} on this computer",
+      "localCindyConflict": "The computer taking over already has another Cindy. Merge the duplicate Cindys or choose a different main computer",
       "notEnabled": "This server doesn’t support changing the main computer",
       "readOnlyNote": "This conversation is saved in the cloud and is read only",
       "empty": "No conversation in the cloud yet",

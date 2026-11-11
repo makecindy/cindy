@@ -11657,6 +11657,7 @@
       "takeOverConflict": "{{name}} 已經換到「{{device}}」繼續了",
       "takeOverOffline": "連不上伺服器，暫時無法在這台電腦繼續",
       "takeOverFailed": "未能在這台電腦上接手 {{name}}",
+      "localCindyConflict": "接手的電腦上已有另一位 Cindy。請先合併重複的 Cindy，或選擇其他主力電腦",
       "notEnabled": "目前的伺服器不支援更換主力電腦",
       "readOnlyNote": "這裡是雲端儲存的對話，只能檢視",
       "empty": "還沒有雲端對話",

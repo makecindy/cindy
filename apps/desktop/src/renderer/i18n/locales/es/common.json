@@ -11801,6 +11801,7 @@
       "takeOverConflict": "{{name}} ya se trasladó a “{{device}}”",
       "takeOverOffline": "No se puede conectar con el servidor, por lo que {{name}} no puede continuar aquí en este momento",
       "takeOverFailed": "No se pudo tomar el control de {{name}} en esta computadora",
+      "localCindyConflict": "El ordenador que va a tomar el relevo ya tiene otra Cindy. Combina las Cindys duplicadas o elige otro ordenador principal",
       "notEnabled": "Este servidor no admite cambiar la computadora principal",
       "readOnlyNote": "Esta conversación está guardada en la nube y es de solo lectura",
       "empty": "Aún no hay ninguna conversación en la nube",

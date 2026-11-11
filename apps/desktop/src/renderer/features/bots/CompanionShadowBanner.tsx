@@ -35,7 +35,8 @@ export function CompanionShadowBanner({ botId, name }: { botId: string; name: st
       if (result.ok) { await ensureBotProfilesLoaded(true).catch(() => undefined); return; }
       if (result.code === 'HOME_CONFLICT') toast.info(t('bots.cloud.takeOverConflict', { name, device }));
       else setError(t(result.code === 'OFFLINE' ? 'bots.cloud.takeOverOffline' : result.code === 'NOT_ENABLED'
-        ? 'bots.cloud.notEnabled' : 'bots.cloud.takeOverFailed', { name }));
+        ? 'bots.cloud.notEnabled' : result.code === 'LOCAL_CINDY_CONFLICT'
+          ? 'bots.cloud.localCindyConflict' : 'bots.cloud.takeOverFailed', { name }));
     } catch {
       if (isDataOwnerGenerationCurrent(owner)) setError(t('bots.cloud.takeOverFailed', { name }));
     } finally {

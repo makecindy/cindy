@@ -209,6 +209,15 @@ describe('CloudCompanionOfflineView', () => {
     expect(h.toast).toHaveBeenCalledWith('bots.cloud.takeOverConflict:{"name":"Mia","device":"Tablet"}');
   });
 
+  it('explains the local Cindy conflict without navigating away', async () => {
+    maker.getCompanionTranscript.mockResolvedValue(page);
+    maker.takeOverCompanion.mockResolvedValue({ ok: false, code: 'LOCAL_CINDY_CONFLICT' });
+    renderView();
+    fireEvent.click(screen.getByText('bots.cloud.continueHere'));
+    expect(await screen.findByText('bots.cloud.localCindyConflict:{"name":"Mia"}')).toBeTruthy();
+    expect(h.navigate).not.toHaveBeenCalled();
+  });
+
   it('explains a failed take-over inline and lets the user try again', async () => {
     maker.getCompanionTranscript.mockResolvedValue(page);
     maker.takeOverCompanion.mockResolvedValueOnce({ ok: false, code: 'OFFLINE' }).mockResolvedValueOnce({ ok: true });
@@ -281,6 +290,17 @@ describe('BotHomeComputerSetting', () => {
     show(snapshot('laptop'));
     openMenu();
     expect(await screen.findByText('bots.cloud.homeOutdated:{"name":"Mia","device":"Laptop"}')).toBeTruthy();
+  });
+
+  it('explains a local Cindy conflict when changing the main computer', async () => {
+    maker.getCompanionHomeChoices.mockResolvedValue(local());
+    maker.switchCompanionHome.mockResolvedValue({ ok: false, code: 'LOCAL_CINDY_CONFLICT' });
+    show(snapshot('desk'));
+    openMenu();
+    fireEvent.click(await screen.findByText('bots.cloud.switchTo:{"device":"Laptop"}'));
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.cloud.switchAction:{"device":"Laptop"}' }));
+    expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'bots.cloud.localCindyConflict:{"name":"Mia","device":"Laptop"}');
+    expect(h.navigate).not.toHaveBeenCalled();
   });
 
   it('shows why a move did not happen', async () => {
@@ -357,6 +377,17 @@ describe('companionCloudStore', () => {
 });
 
 describe('CompanionShadowBanner', () => {
+  it('explains the local Cindy conflict on the shadowed copy', async () => {
+    const { CompanionShadowBanner } = await import('../CompanionShadowBanner');
+    resetCompanionCloudStoreForTests(snapshot('laptop'));
+    maker.getCompanionCloudState.mockResolvedValue(snapshot('laptop'));
+    maker.takeOverCompanion.mockResolvedValue({ ok: false, code: 'LOCAL_CINDY_CONFLICT' });
+    render(<CompanionShadowBanner botId="mia" name="Mia" />);
+    fireEvent.click(screen.getByText('bots.cloud.continueHere'));
+    expect(await screen.findByText('bots.cloud.localCindyConflict:{"name":"Mia"}')).toBeTruthy();
+    expect(h.navigate).not.toHaveBeenCalled();
+  });
+
   it('opens the companion on its main computer or takes it over here', async () => {
     const { CompanionShadowBanner } = await import('../CompanionShadowBanner');
     resetCompanionCloudStoreForTests(snapshot('laptop'));

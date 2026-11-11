@@ -155,7 +155,8 @@ function CloudCompanionOfflineContent({ botId, deviceId, name, avatar, avatarCol
           navigate(`/bots/remote/${encodeURIComponent(result.homeDeviceId)}/${encodeURIComponent(botId)}`);
         } else setState({ kind: 'conflict', device: winner });
       } else setState({ kind: 'error', key: result.code === 'OFFLINE' ? 'bots.cloud.takeOverOffline'
-        : result.code === 'NOT_ENABLED' ? 'bots.cloud.notEnabled' : 'bots.cloud.takeOverFailed' });
+        : result.code === 'NOT_ENABLED' ? 'bots.cloud.notEnabled' : result.code === 'LOCAL_CINDY_CONFLICT'
+          ? 'bots.cloud.localCindyConflict' : 'bots.cloud.takeOverFailed' });
     } catch {
       if (isDataOwnerGenerationCurrent(owner)) setState({ kind: 'error', key: 'bots.cloud.takeOverFailed' });
     }
