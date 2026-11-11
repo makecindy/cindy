@@ -43,7 +43,13 @@ import {
   type SubscriptionPoolView,
   type SubscriptionProvider,
 } from '../../../shared/subscriptionAccounts';
-import type { ProviderGroupStrategy } from '../../../shared/providerGroup';
+import {
+  CONCURRENCY_LIMIT_OPTIONS,
+  CONCURRENCY_LIMIT_UNLIMITED,
+  concurrencyLimitFromOption,
+  concurrencyLimitOptionValue,
+  type ProviderGroupStrategy,
+} from '../../../shared/providerGroup';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 import { providersSettings } from './ProvidersSection.settings-search';
 import { useSettingDefinition } from './useSettingDefinition';
@@ -350,20 +356,23 @@ export function SubscriptionAccountsSection({
                         <Select
                           {...accountSetting.controlProps}
                           label={t('providerGroup.member.limitAria', { name })}
-                          value={String(account.limit)}
+                          value={concurrencyLimitOptionValue(account)}
                           disabled={busy}
                           size="compact"
                           width="xs"
-                          options={Array.from({ length: 16 }, (_, n) => ({
-                            value: String(n + 1),
-                            label: t('providerGroup.member.limitOption', { count: n + 1 }),
+                          options={CONCURRENCY_LIMIT_OPTIONS.map((value) => ({
+                            value,
+                            label:
+                              value === CONCURRENCY_LIMIT_UNLIMITED
+                                ? t('providerGroup.member.limitUnlimited')
+                                : t('providerGroup.member.limitOption', { count: Number(value) }),
                           }))}
                           onValueChange={(value) =>
                             void run({
                               action: 'configure',
                               providerId,
                               accountId: account.id,
-                              limit: Number(value),
+                              limit: concurrencyLimitFromOption(value),
                             })
                           }
                         />
