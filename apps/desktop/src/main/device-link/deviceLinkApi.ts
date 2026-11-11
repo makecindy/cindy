@@ -30,7 +30,7 @@ export interface DeviceLinkApiPorts {
 export function createDeviceLinkApi(ports: DeviceLinkApiPorts) {
 const { getClientEndpoint, serverApiFetch, activeSelfHostedRelay, readCurrentDeviceDirectory, legacyDeviceView } = ports;
 
-async function agentNetOnlyFetch<T>(relay: ActiveSelfHostedRelay, apiPath: string, method: string, body: unknown, assertRoute: () => void): Promise<T> {
+async function agentNetOnlyFetch<T>(relay: ActiveSelfHostedRelay, apiPath: string, method: string, body: unknown, assertRoute: () => void, signal?: AbortSignal): Promise<T> {
   const { agentNetClientForRelay } = await ports.prepareAgentNetRuntime();
   const { activeOwnerScopeKey, isAppSessionBoundaryPending } = await ports.prepareOwnerScope();
   assertRoute();
@@ -39,7 +39,7 @@ async function agentNetOnlyFetch<T>(relay: ActiveSelfHostedRelay, apiPath: strin
   const api = agentNetClientForRelay(relay.relayId, relay.baseUrl);
   if (api.rootPublicKey !== relay.ownerPublicKey) throw new Error('AGENT_NET_IDENTITY_MISMATCH');
   if (apiPath === '/api/device-link/devices' && method === 'GET') {
-    const directory = await api.directory();
+    const directory = await api.directory(signal);
     assertCurrent();
     return { devices: directory.map((device) => legacyDeviceView(device, relay.deviceId)) } as T;
   }
@@ -148,6 +148,7 @@ async function deviceLinkApiFetch<T>(
         () => {
           if (activeSelfHostedRelay() || officialDeviceLinkApiBase() !== base) throw new Error('DEVICE_LINK_SCOPE_CHANGED');
         },
+        opts.signal,
       ) as Promise<T>;
     }
     return officialDeviceLinkApiFetch<T>(apiPath, opts);
@@ -155,7 +156,7 @@ async function deviceLinkApiFetch<T>(
   const routeKey = (value: typeof relay | null) => value && JSON.stringify([value.relayId, value.baseUrl, value.deviceId, value.credential, value.scopeKey]);
   const selected = routeKey(relay);
   const assertRoute = () => { if (selected !== routeKey(activeSelfHostedRelay())) throw new Error('DEVICE_LINK_SCOPE_CHANGED'); };
-  if (isAgentNetOnlyRelay(relay)) return agentNetOnlyFetch<T>(relay, apiPath, opts.method ?? 'GET', opts.body, assertRoute);
+  if (isAgentNetOnlyRelay(relay)) return agentNetOnlyFetch<T>(relay, apiPath, opts.method ?? 'GET', opts.body, assertRoute, opts.signal);
   if (apiPath === DEVICE_DIRECTORY_PATH && (opts.method ?? 'GET') === 'GET') {
     return readCurrentDeviceDirectory(
       () => throttledDirectoryRead(relay.baseUrl, (extra) => serverApiFetch(apiPath, {
@@ -163,6 +164,7 @@ async function deviceLinkApiFetch<T>(
         skipAutoRefresh: true, skipSessionInvalidation: true,
       })),
       assertRoute,
+      opts.signal,
     ) as Promise<T>;
   }
   const device = /^\/api\/device-link\/devices\/([^/?#]+)$/.exec(apiPath);

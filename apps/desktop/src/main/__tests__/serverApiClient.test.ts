@@ -290,6 +290,38 @@ describe('serverApiFetch', () => {
     expect(error).not.toHaveProperty('httpStatus');
   });
 
+  // 测试价值
+  // - 生产入口与可观察结果:`serverApiFetch` 的真实入口,**只有 timeoutMs**(没有调用方
+  //   signal)时响应头已到但正文卡住 → 抛出的 ServerApiError 带真实状态码,且 401 仍然
+  //   走共享刷新路径。
+  // - Bug/规则依据:Codex review #9360「Preserve HTTP status on internal response-body
+  //   timeouts」—— 自己的超时把正文掐断时状态被归一成 0,已知的 401 不再进刷新 / 登出
+  //   路径,400/403/404 也被当成连不上。
+  // - 现有覆盖缺口:上面两个「正文卡住」用例都带调用方 signal(状态挂在中止原因上),
+  //   没有覆盖**只有 timeoutMs** 的调用方(状态无处可挂,只能由响应本身带出去)。
+  // - 最小失败输入:ok:false/status:401 + json() 永不 settle + 只传 timeoutMs。
+  // - tier:unit(electron net 为进程内 fake)。
+  it('keeps the known status when our own deadline cuts a non-OK body short', async () => {
+    mocks.netFetch.mockImplementation((_url: string, opts: RequestInit) => Promise.resolve({
+      ok: false,
+      status: 401,
+      json: () => new Promise((_yes, no) => {
+        opts.signal?.addEventListener('abort', () => {
+          const error = new Error('the body read was aborted');
+          error.name = 'AbortError';
+          no(error);
+        }, { once: true });
+      }),
+    } as unknown as Response));
+    const error = await serverApiFetch('/api/device-link/devices', {
+      baseUrl: 'https://api.example.invalid', timeoutMs: 5,
+    }).then(() => { throw new Error('the stalled body must reject'); }, (error: unknown) => error);
+    expect(error).toBeInstanceOf(ServerApiError);
+    expect((error as ServerApiError).statusCode).toBe(401);
+    // 状态保住之后,401 仍然走共享刷新(归一成 status 0 时这一步不会发生)。
+    expect(mocks.refresh).toHaveBeenCalled();
+  });
+
   // Unit: exercise the real quota reader through the HTTP client. Previously its
   // mocked client hid recurring warnings for a successful legacy fallback.
   it.each([

@@ -195,7 +195,16 @@ async function rawFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<RawR
       // 吞掉它会让上层拿到 200 + 空体(EMPTY_RESPONSE),被当成一次权威响应 ——
       // 设备目录那一路会因此把有界旧快照一起丢掉(超时本该只是暂时性失败)。
       // 保留 abort 原因,让它按 status 0 的暂时性失败走。
-      if (controller?.signal.aborted) throw error;
+      if (controller?.signal.aborted) {
+        // 但**响应头已经表态**(401/403/404/429...)时,状态是权威的:正文卡住不改变结论。
+        // 把它归一成 status 0 会让已知的 401 变成网络错 —— 刷新 / 登出路径不再触发,
+        // 400/403/404 也被当成连不上(Codex review #9360「Preserve HTTP status on
+        // internal response-body timeouts」)。只有 200 + 卡住的正文仍是暂时性失败。
+        if (responseStatus !== undefined) {
+          return { ok: false, status: responseStatus, data: null, retryAt, servedBaseUrl: baseUrl };
+        }
+        throw error;
+      }
       log.warn('response read failed', opts.logLabel ?? redactedLogPath(apiPath),
         { status: response.status },
         opts.redactErrorDetails || opts.logLabel ? '[response details hidden]' : requestErrorMessage(error));

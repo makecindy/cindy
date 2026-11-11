@@ -139,8 +139,14 @@ export class PortableAgentNetClient implements SocketClient {
       && requests.length <= 128 && (!this.delegation || requests.length === 0)
       && requests.every(request => delegationRequestPolicyValid(request, this.certificate));
   }
-  async directory(): Promise<DeviceView[]> {
-    const result = await this.request<{ rootPublicKey: string; devices: DeviceView[] }>('GET', '/directory');
+  /**
+   * Read the encrypted directory. `signal` carries the caller's own deadline so a
+   * bounded read does not leave this request running past it: the next retry would
+   * otherwise start a second physical directory read while this one is still in
+   * flight (Codex review #9360).
+   */
+  async directory(signal?: AbortSignal): Promise<DeviceView[]> {
+    const result = await this.request<{ rootPublicKey: string; devices: DeviceView[] }>('GET', '/directory', undefined, signal ? { signal } : undefined);
     if (result.rootPublicKey !== this.rootPublicKey || !Array.isArray(result.devices) || !this.trustedDirectory(result.devices, [])) {
       throw new Error('UNTRUSTED_DIRECTORY');
     }

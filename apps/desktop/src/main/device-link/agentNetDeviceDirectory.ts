@@ -25,6 +25,12 @@ export function projectAgentNetDevice(device: AgentNetDeviceView, selfId: string
 export async function readCurrentDeviceDirectory(
   readLegacy: () => Promise<{ devices: DeviceView[] }>,
   assertRoute: () => void,
+  /**
+   * 调用方的总期限。它也要管住加密那一腿:加密目录读有自己的 10 秒超时,不带这个
+   * signal 的话,调用方到期后这条读还活着,下一次重试会在它还在飞的时候再发一条
+   * 物理读(Codex review #9360「Apply the caller deadline to the Agent Net directory read」)。
+   */
+  signal?: AbortSignal,
 ): Promise<{ devices: DeviceView[] }> {
   const scope = activeOwnerScopeKey();
   const assertOwner = () => {
@@ -45,7 +51,7 @@ export async function readCurrentDeviceDirectory(
     return readLegacy();
   }
   const readEncrypted = async () => {
-    const devices = await api.directory();
+    const devices = await api.directory(signal);
     assertCurrent();
     // AgentNetClient verifies pinned root, membership, subject and certificates.
     return { devices: devices.map(device => projectAgentNetDevice(device, api.certificate.deviceId)) };

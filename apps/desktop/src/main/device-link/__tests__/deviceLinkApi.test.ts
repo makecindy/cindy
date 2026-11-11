@@ -100,6 +100,32 @@ describe('deviceLinkApiFetch', () => {
     expect(mocks.v2Request).not.toHaveBeenCalled(); expect(mocks.netFetch).not.toHaveBeenCalled();
   });
 
+  // 调用方的总期限必须管住**加密那一腿**:加密目录读自带 10 秒超时,不带 signal 时调用方
+  // 到期后它还活着,下一次重试会在它还在飞的时候再发一条物理读(Codex review #9360
+  // 「Apply the caller deadline to the Agent Net directory read」)。
+  // 最小失败输入:V2 激活 + 只走加密 + 调用方 abort;修复前 V2 读拿到的是 undefined signal,
+  // abort 之后它仍要等自己的超时。tier:unit(真实 deviceLinkApi + agentNetDirectory,electron
+  // net / agent-net 运行时为进程内 fake)。
+  it('applies the caller deadline to the encrypted directory read', async () => {
+    mocks.v2Active = true; mocks.onlyEncrypted = true;
+    let aborted = false;
+    mocks.v2Directory.mockImplementation((signal?: AbortSignal) => new Promise((_resolve, reject) => {
+      signal?.addEventListener('abort', () => {
+        aborted = true;
+        reject(new Error('the directory read was aborted'));
+      }, { once: true });
+    }));
+    const controller = new AbortController();
+    const pending = deviceLinkApiFetch('/api/device-link/devices', { signal: controller.signal })
+      .then(() => { throw new Error('the aborted directory read must not succeed'); }, (error: unknown) => error);
+    await vi.waitFor(() => expect(mocks.v2Directory).toHaveBeenCalledTimes(1));
+    expect(mocks.v2Directory).toHaveBeenCalledWith(controller.signal);
+    controller.abort();
+    const error = await pending;
+    expect(aborted).toBe(true);
+    expect(String((error as Error)?.message ?? error)).toContain('aborted');
+  });
+
   // /models 复用真实目录读取与 API 路由；旧 caller 直接用 serverApiFetch 会把官方 token 发到自建中转。
   // 最小输入为自建路由 + 空设备目录，不能仅 mock 新 helper，否则会漏掉 caller 未迁移的问题。tier: unit。
   it('uses the relay credential when the local Agent reads its remote model directory', async () => {
