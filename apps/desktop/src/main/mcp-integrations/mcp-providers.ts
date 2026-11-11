@@ -152,6 +152,7 @@ export interface DesktopMcpProvidersDeps {
   askUserQuestionAsync?: XdtHelperMcpDeps['askUserQuestionAsync'];
   manageUserQuestions?: XdtHelperMcpDeps['manageUserQuestions'];
   runtimeCapabilities?: XdtHelperMcpDeps['runtimeCapabilities'];
+  mcpGateway?: XdtHelperMcpDeps['mcpGateway'];
   botCapabilities: Pick<ReturnType<typeof createBotCapabilityService>, 'list' | 'select'> & Partial<Pick<ReturnType<typeof createBotCapabilityService>, 'models' | 'setDefaultModel'>>;
   createMediaDownloadContext?: CindyGhostsHostDeps['createMediaDownloadContext'];
   /** 当前 Desktop 版本，供 Forge 为具体插件包生成默认 minCindyVersion。 */
@@ -727,6 +728,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       }) },
       getSessionProject: readCurrentSessionProject,
       runtimeCapabilities: deps.runtimeCapabilities,
+      mcpGateway: deps.mcpGateway,
       productHelpDocs: HELP_KNOWLEDGE,
       // Install / auto-update requests become owner-only Host cards (see agent-app-update/).
       appUpdate: createAgentAppUpdateCallbacks((sessionId, sessionInstanceId) =>

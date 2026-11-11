@@ -4,7 +4,7 @@ import { registerRuntimeSettingsSection } from '../app-settings/runtime.js';
 import { z as settingsSchema } from 'zod';
 import { registerPreferenceControlIpc } from '../app-settings/preferences.js';
 import { configureModelSettingsActions } from '../app-settings/models.js';
-import { McpSetupBridge } from './mcpSetupBridge.js';
+import { McpSetupBridge, completeMcpSetup } from './mcpSetupBridge.js';
 import type { McpSetupProposal, McpSetupRequest } from '../../shared/mcpSetup.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 import { measureTraceOperation } from '../performance-trace/measure.js';
@@ -3434,13 +3434,20 @@ const mcpSetupBridge = new McpSetupBridge({
 });
 onAppSessionInvalidated(() => mcpSetupBridge.cleanupAll());
 
-export function requestMcpSetupForSession(
+export async function requestMcpSetupForSession(
   sessionId: string, sessionInstanceId: string, proposal: McpSetupProposal,
 ) {
   const owner = activeOwnerScopeKey();
-  return mcpSetupBridge.request(sessionId, proposal, () =>
-    !isAppSessionBoundaryPending() && activeOwnerScopeKey() === owner &&
-    getMakerIfReady()?.getSession(sessionId)?.instanceId === sessionInstanceId);
+  const session = getMakerIfReady()?.getSession(sessionId);
+  const isCurrent = () => !isAppSessionBoundaryPending() && activeOwnerScopeKey() === owner &&
+    !!session && session.instanceId === sessionInstanceId &&
+    getMakerIfReady()?.getSession(sessionId) === session && session.getStatus() === 'active';
+  const result = await mcpSetupBridge.request(sessionId, proposal, isCurrent);
+  return completeMcpSetup(result, {
+    isCurrent,
+    mount: serverId => session!.mountMcpServer(serverId),
+    read: serverId => session!.readMcpServerTools(serverId),
+  });
 }
 
 const renameSessionsConfirmBridge = new RenameSessionsConfirmBridge({

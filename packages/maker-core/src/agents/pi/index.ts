@@ -3770,6 +3770,7 @@ export class PiAgent extends BaseAgent {
     let mcpBridge: PiExtraSpawnConfig['mcpBridge'] = null;
     let mcpEnv: PiExtraSpawnConfig['mcpEnv'] = {};
     let disposeSessionCtx: (() => void) | undefined;
+    let refreshMcpConfig: PiExtraSpawnConfig['refreshMcpConfig'];
     const registeredMcpServerNames = new Set<string>();
     // 远端会话:host 可 gate 掉 in-process MCP bridge(loopback URL 远端够不到;
     // Phase 1 不桥 orca/memory/ghost)。外部 HTTP MCP 直连不受影响。
@@ -3813,8 +3814,10 @@ export class PiAgent extends BaseAgent {
           },
         );
         mcpBridge = extra?.mcpBridge ?? null;
+        if (mcpBridge && opts.remoteHostId) mcpBridge = { ...mcpBridge, refreshSupported: false };
         mcpEnv = extra?.mcpEnv ?? {};
         disposeSessionCtx = extra?.disposeSessionCtx;
+        refreshMcpConfig = extra?.refreshMcpConfig;
         // 归属判定只认本会话实际注册过的 server 名(见 shared/mcp-tool-target.ts:
         // 盲切 `__` 会让第三方 server 冒名顶替第一方信任表)。
         for (const server of mcpBridge?.servers ?? []) {
@@ -5674,7 +5677,7 @@ export class PiAgent extends BaseAgent {
         ...Object.keys(authEnv),
         ...Object.keys(nativeEnv),
         ...Object.keys(mcpEnv),
-        ...(mcpBridge && mcpBridge.servers.length > 0 ? [PI_MCP_BRIDGE_ENV] : []),
+        ...(mcpBridge && (mcpBridge.servers.length > 0 || mcpBridge.refreshSupported === true) ? [PI_MCP_BRIDGE_ENV] : []),
         ...(hosted ? [DEVICE_HOSTED_PI_ENV] : []),
         // 子代理路由快照:虽然不是凭证,但它是**控制面** —— 一次获批的 bash 拿到路径就能改写
         // provider/model,让后续每次委派都打到攻击者选定的 endpoint(提示词与代码随之外泄)。
@@ -5753,7 +5756,7 @@ export class PiAgent extends BaseAgent {
         // 保留稳定 system/tool 前缀的长缓存。不支持的 provider 会忽略该选项；
         // 支持者（如 Anthropic）可避免较长会话在短 TTL 后重新计费。
         PI_CACHE_RETENTION: 'long',
-        ...(mcpBridge && mcpBridge.servers.length > 0 ? { [PI_MCP_BRIDGE_ENV]: JSON.stringify(mcpBridge) } : {}),
+        ...(mcpBridge && (mcpBridge.servers.length > 0 || mcpBridge.refreshSupported === true) ? { [PI_MCP_BRIDGE_ENV]: JSON.stringify(mcpBridge) } : {}),
         CINDY_LOCAL_HOST_TOOLS_ONLY: opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly ? '1' : '',
       };
       // 不继承宿主进程里碰巧存在的同名变量；Windows 环境键大小写不敏感，必须先清掉
@@ -5896,6 +5899,35 @@ export class PiAgent extends BaseAgent {
               textOnlyPolicyReady = false;
               return;
             }
+          }
+          // Private runtime RPC: no interaction, tool result, transcript or global env.
+          if (event.type === 'extension_ui_request' && event.method === 'input'
+              && event.title === 'cindy:mcp-config') {
+            const id = typeof event.id === 'string' ? event.id : '';
+            const alive = () => !closed && !piProcessExited && !proc.isClosed && !accountBoundaryTeardown;
+            void (async () => {
+              try {
+                const query = JSON.parse(typeof event.placeholder === 'string' ? event.placeholder : '{}');
+                if (!id || !alive() || !refreshMcpConfig || opts.remoteHostId || hosted
+                    || !Number.isSafeInteger(query.revision)) throw new Error('unavailable');
+                const update = await refreshMcpConfig(query.revision);
+                if (!alive()) { update?.config?.disposeSessionCtx?.(); return; }
+                if (update) {
+                  const oldDispose = disposeSessionCtx;
+                  const nextDispose = update.config?.disposeSessionCtx;
+                  // Old leases remain valid for calls already dispatched, until close.
+                  disposeSessionCtx = () => { nextDispose?.(); oldDispose?.(); };
+                  registeredMcpServerNames.clear();
+                  for (const server of update.config?.mcpBridge?.servers ?? []) registeredMcpServerNames.add(server.name);
+                }
+                proc.send({ type: 'extension_ui_response', id, value: JSON.stringify(update
+                  ? { revision: update.revision, bridge: update.config?.mcpBridge ?? { token: '', servers: [] }, env: update.config?.mcpEnv ?? {} }
+                  : { unchanged: true }) });
+              } catch {
+                if (id && alive()) proc.send({ type: 'extension_ui_response', id, cancelled: true });
+              }
+            })();
+            return;
           }
           if (event.type === 'extension_ui_request') {
             if (event.method === 'input' &&

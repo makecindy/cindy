@@ -11,7 +11,7 @@ const hookStart = source.indexOf("  pi.on('tool_call', async");
 const hookEnd = source.indexOf('\n  });', hookStart) + '\n  });'.length;
 const compiled = ts.transpileModule(
   source.slice(source.indexOf('const CINDY_MCP_LIST_TOOLS'), source.indexOf('// Pi 内置 find 依赖 fd'))
-    + '\nglobalThis.Client = McpHttpClient; globalThis.Gateway = CindyMcpGateway; globalThis.connect = connectServer;'
+    + '\nglobalThis.Client = McpHttpClient; globalThis.Gateway = CindyMcpGateway; globalThis.connect = connectServer; globalThis.installRefresh = installMcpConfigRefresh;'
     + '\nglobalThis.installApproval = (mcpGateway, pi) => {' + source.slice(hookStart, hookEnd) + '\n};',
   { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } },
 ).outputText;
@@ -51,7 +51,7 @@ function gatewayWithFetch(fetchImpl: typeof fetch) {
     .execute('call', { server: 'cindy', tool: 'ghost_call', args: { ghost_id: 'demo' } }, signal);
   let approvalHook: any;
   context.installApproval(gateway, { on: (_event: string, handler: unknown) => { approvalHook = handler; } });
-  return { call, gateway, client,
+  return { call, gateway, client, installRefresh: (cfg: unknown) => context.installRefresh(gateway, cfg),
     approve: () => approvalHook({ toolName: 'cindy_mcp_call_tool', toolCallId: 'call',
       input: { server: 'cindy', tool: 'ghost_call', args: { ghost_id: 'demo' } } },
       { ui: { input: async () => 'allow' } }),
@@ -63,6 +63,89 @@ function gatewayWithFetch(fetchImpl: typeof fetch) {
 afterEach(() => vi.useRealTimers());
 
 describe('Pi MCP request lifecycle', () => {
+  // Actual refresh RPC consumer: private credentials are used for initialize/list/call,
+  // but never returned by discovery. No wall-clock sleeps or external services.
+  it('pulls a newer config, connects once, reuses it and revokes an unchanged-schema endpoint', async () => {
+    const requests: Array<{ method: string; auth: string | null }> = [];
+    const fetchImpl = vi.fn(async (_url: unknown, init: RequestInit) => {
+      const body = JSON.parse(String(init.body));
+      requests.push({ method: body.method, auth: new Headers(init.headers).get('authorization') });
+      return Response.json({ result: body.method === 'tools/list'
+        ? { tools: [{ name: 'ping', inputSchema: { type: 'object' } }] }
+        : { content: [{ type: 'text', text: 'ok' }] } });
+    });
+    const h = gatewayWithFetch(fetchImpl as typeof fetch);
+    h.installRefresh({ refreshSupported: true, configRevision: 0, servers: [] });
+    let revision = 1;
+    let removed = false;
+    const input = vi.fn(async (_title, payload) => JSON.stringify(JSON.parse(payload).revision === revision
+      ? { unchanged: true }
+      : { revision, bridge: { token: '', servers: removed ? [] : [{ name: 'fresh', url: 'https://example.test/mcp',
+          remote: { headerEnvVars: { authorization: 'TEST_AUTH' }, startupTimeoutMs: 1000, requestTimeoutMs: 1000 } }] },
+          env: { TEST_AUTH: 'Bearer fake-refresh-' + revision } }));
+    await h.gateway.refreshConfig({ ui: { input } });
+    const discovered = await h.list({ server: 'fresh', tool: 'ping' });
+    expect(JSON.stringify(discovered)).not.toContain('fake-refresh');
+    expect(h.gateway.resolveCall({ server: 'fresh', tool: 'ping' })).not.toBeNull();
+    const approved = h.gateway.approvalDefinition(h.gateway.resolveCall({ server: 'fresh', tool: 'ping' }));
+    await h.list({ server: 'fresh' });
+    expect(requests.filter(r => r.method === 'initialize')).toHaveLength(1);
+    revision = 2;
+    await h.list({ server: 'fresh' });
+    expect(requests.filter(r => r.method === 'initialize')).toHaveLength(2);
+    expect(requests.at(-1)?.auth).toBe('Bearer fake-refresh-2');
+    expect(h.gateway.approvalDefinition(h.gateway.resolveCall({ server: 'fresh', tool: 'ping' }))).not.toBe(approved);
+    revision = 3;
+    removed = true;
+    await h.list({ server: 'fresh' });
+    expect(h.gateway.resolveCall({ server: 'fresh', tool: 'ping' })).toBeNull();
+  });
+
+  // A refresh outage must not silently authorize the old service, and concurrent
+  // discovery must share one in-flight refresh instead of creating duplicate clients.
+  it('coalesces refreshes and fails closed without dispatch when the host is unavailable', async () => {
+    const fetchImpl = vi.fn();
+    const h = gatewayWithFetch(fetchImpl);
+    let release!: () => void;
+    const refresh = vi.fn(() => new Promise<void>(resolve => { release = resolve; }));
+    h.gateway.setConfigRefresher(refresh);
+    const a = h.list();
+    const b = h.list();
+    expect(refresh).toHaveBeenCalledTimes(1);
+    release();
+    await Promise.all([a, b]);
+    h.gateway.setConfigRefresher(async () => { throw new Error('host unavailable'); });
+    await expect(h.call()).rejects.toThrow('host unavailable');
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  // Regression: newly saved services stayed absent in an existing Pi instance.
+  // Unit: exercise the generated gateway, unlike known-server recovery coverage.
+  it('discovers a newly added server and removes it without restarting', async () => {
+    const h = gatewayWithFetch(vi.fn());
+    let revision = 0;
+    h.gateway.setConfigRefresher(async () => {
+      if (revision === 1) h.gateway.add('new_server', h.client, [{ name: 'ping' }]);
+      if (revision === 2) h.gateway.remove('new_server');
+    });
+    expect((await h.list({ server: 'new_server' })).details.errorCode).toBe('UNKNOWN_SERVER');
+    revision = 1;
+    expect((await h.list({ server: 'new_server' })).details.tools[0].name).toBe('ping');
+    revision = 2;
+    expect((await h.list({ server: 'new_server' })).details.errorCode).toBe('UNKNOWN_SERVER');
+  });
+  it('keeps an approval valid through same-config transport recovery', async () => {
+    const fetchImpl = vi.fn(async () => Response.json({ result: { content: [{ type: 'text', text: 'ok' }] } }));
+    const h = gatewayWithFetch(fetchImpl);
+    await h.approve();
+    h.client.needsReconnect = true;
+    h.gateway.registerReconnect('cindy', async () => ({ client: { needsReconnect: false,
+      request: (method: string, params: unknown, signal?: AbortSignal) => h.client.request(method, params, signal) },
+      tools: [{ name: 'ghost_call', inputSchema: h.gateway.resolveCall({ server: 'cindy', tool: 'ghost_call' }).tool.inputSchema }],
+    }));
+    await expect(h.call()).resolves.toMatchObject({ content: [{ text: 'ok' }] });
+  });
+
   // r4411121969: previous recovery tests changed definitions inside execute;
   // this unit drives the real approval hook before a preceding discovery replaces it.
   it('rejects a changed definition discovered after approval and permits a freshly approved call', async () => {

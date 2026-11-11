@@ -1182,6 +1182,33 @@ it.each(['claude-code', 'codex', 'pi'] as const)('opens MCP Settings through the
     request.mockClear();
     await client.callTool({ name: 'call_tool', arguments: { name: 'request_mcp_setup', args: { url: 'https://example.test/mcp?token=test-invalid-token' } } });
     expect(request).not.toHaveBeenCalled();
+    // Models emit `HTTP` / ` sse `; the form must still open with the canonical enum.
+    const normalized = parsePayload(await client.callTool({ name: 'call_tool', arguments: {
+      name: 'request_mcp_setup', args: { name: ' Example ', url: ' https://example.test/mcp ', transport: ' HTTP ' },
+    } }));
+    expect(normalized).toMatchObject({ ok: true, status: 'saved' });
+    expect(request).toHaveBeenLastCalledWith(expect.objectContaining(context), {
+      name: 'Example', url: 'https://example.test/mcp', transport: 'http',
+    });
+    // A non-transport value must fail fast with an actionable payload, not open a form.
+    const badTransport = parsePayload(await client.callTool({ name: 'call_tool', arguments: {
+      name: 'request_mcp_setup', args: { name: 'Example', url: 'https://example.test/mcp', transport: 'websocket' },
+    } }));
+    expect(badTransport).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS', data: { field: 'transport', allowed: ['http', 'sse'] } });
+    expect(request).toHaveBeenCalledTimes(1);
+    request.mockClear();
+    // Regression: all engines must receive truthful lifecycle outcomes.
+    for (const outcome of [
+      { status: 'timed_out', formPresented: false },
+      { status: 'interrupted' },
+      { status: 'unavailable', reason: 'request_in_progress' },
+      { status: 'saved', serverId: 'custom_example', runtimeState: 'not-mounted', toolCount: 0 },
+    ]) {
+      request.mockResolvedValueOnce(outcome as Awaited<ReturnType<typeof request>>);
+      expect(parsePayload(await client.callTool({ name: 'call_tool', arguments: {
+        name: 'request_mcp_setup', args: {},
+      } }))).toEqual({ ok: true, ...outcome });
+    }
   } finally { await client.close(); await server.close(); }
 });
 
@@ -1366,5 +1393,41 @@ it('routes Pi version checks and exact-version installs to the managed runtime',
       .toMatchObject({ control: { availability: 'requires_local_task', operations: [] } });
     expect(await invoke('update_pi_runtime', { source: 'upstream', version: '1.4.0' })).toMatchObject({ ok: false });
     expect(call).toHaveBeenCalledTimes(2);
+  } finally { await client.close(); await server.close(); }
+});
+
+// Regression, unit real MCP transport: newly saved services must be reachable
+// through the already connected helper; native harness tool snapshots do not change.
+it.each(['codex', 'claude-code', 'pi'] as const)('discovers and invokes a newly saved MCP through the existing %s helper', async agentKind => {
+  let saved = false;
+  let current = true;
+  const context = { agentKind, workingDir: '/fixture', sessionId: 'task', sessionInstanceId: 'instance', mcpCallerKind: 'root' as const };
+  const gateway = vi.fn(async (_context: LiziMcpSessionContext, input: { action: string }) => ({ content: [{ type: 'text' as const,
+    text: JSON.stringify(saved ? { ok: true, action: input.action, pong: input.action === 'call' } : { ok: false }) }] }));
+  const server = createXdtHelperMcpServer({ mcpGateway: gateway, mcpSetup: async () => {
+    saved = true;
+    return { status: 'saved', serverId: 'custom_example', runtimeState: 'not-mounted' };
+  } }, { ...context, getSessionContext: () => current ? context : undefined });
+  const client = new Client({ name: 'live-helper-test', version: '1' });
+  const [ct, st] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(st), client.connect(ct)]);
+  const call = (name: string, args: Record<string, unknown>) => client.callTool({ name: 'call_tool', arguments: { name, args } });
+  try {
+    const catalog = parsePayload(await client.callTool({ name: 'list_tools', arguments: { key: 'tools.mcp' } }));
+    expect(JSON.stringify(catalog)).toContain('list_mcp_tools');
+    expect(JSON.stringify(catalog)).toContain('call_mcp_tool');
+    const receipt = parsePayload(await call('request_mcp_setup', {}));
+    expect(receipt).toMatchObject({ status: 'saved', runtimeState: 'not-mounted', next: {
+      tool: 'list_mcp_tools', args: { server: 'custom_example' }, callWith: 'call_mcp_tool',
+    } });
+    expect(parsePayload(await call('list_mcp_tools', { server: 'custom_example' }))).toMatchObject({ ok: true, action: 'list' });
+    expect(parsePayload(await call('call_mcp_tool', { server: 'custom_example', tool: 'ping', arguments: {} }))).toMatchObject({ ok: true, pong: true });
+    expect(gateway).toHaveBeenLastCalledWith(expect.objectContaining(context), {
+      action: 'call', server: 'custom_example', tool: 'ping', arguments: {},
+    }, expect.any(AbortSignal));
+    current = false;
+    const denied = parsePayload(await call('call_mcp_tool', { server: 'custom_example', tool: 'ping', arguments: {} }));
+    expect(denied.ok).toBe(false);
+    expect(gateway).toHaveBeenCalledTimes(2);
   } finally { await client.close(); await server.close(); }
 });

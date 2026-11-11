@@ -8838,6 +8838,10 @@
       }
     },
     "mcp": {
+      "setup": {
+        "loadFailed": "Não foi possível abrir o formulário de configuração. Tente novamente.",
+        "savedDeliveryFailed": "A configuração foi salva, mas o resultado não foi entregue. Tente novamente sem salvar de novo."
+      },
       "title": "Ferramentas externas",
       "subtitle": "Conecte seus próprios servidores MCP remotos. Servidores HTTP/Streamable HTTP funcionam com Claude e Codex; SSE funciona apenas com Claude.",
       "cancel": "Cancelar",
@@ -8851,7 +8855,7 @@
       "dialog": {
         "createTitle": "Adicionar servidor MCP",
         "editTitle": "Editar servidor MCP",
-        "desc": "Apenas MCP remoto http / sse. Novas Sessões poderão chamá-lo após salvar; Sessões em andamento não serão afetadas.",
+        "desc": "Apenas MCP remoto http / sse. Um servidor salvo pode ser chamado na tarefa atual imediatamente; alguns engines só o adicionam à lista nativa de ferramentas no próximo envio ou em uma nova sessão.",
         "teammateDesc": "Apenas MCP remoto http / sse. Depois de salvar, seu colega o adiciona às ferramentas dele e pode usá-lo a partir da próxima mensagem desta conversa, sem precisar de uma nova Sessão."
       },
       "fields": {
@@ -8884,7 +8888,7 @@
       },
       "deleteConfirm": {
         "title": "Excluir \"{{name}}\"?",
-        "message": "Novas Sessões não carregarão mais este MCP.",
+        "message": "Após excluir, a tarefa atual não pode mais chamar este MCP; os engines o removem da lista nativa no próximo envio ou em uma nova sessão.",
         "confirm": "Excluir"
       },
       "duplicates": {

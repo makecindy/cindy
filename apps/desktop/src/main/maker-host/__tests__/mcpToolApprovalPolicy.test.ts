@@ -717,3 +717,12 @@ describe('cross-device actions use the task permission mode', () => {
     expect(helper(undefined)).toBe('prompt-each-time');
   });
 });
+
+// A gateway invocation must not inherit cindy_helper's trusted-server approval.
+it.each([
+  { toolName: 'call_mcp_tool', toolParams: { server: 'custom_example', tool: 'ping', arguments: {} } },
+  { toolName: 'call_tool', toolParams: { name: 'call_mcp_tool', args: { server: 'custom_example', tool: 'delete', arguments: {} } } },
+  { toolParams: { name: 'call_mcp_tool', args: { server: 'custom_example', tool: 'ping', arguments: {} } } },
+])('reviews each actual gateway target instead of trusting the helper: %j', input => {
+  expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', ...input })).toBe('prompt-each-time');
+});

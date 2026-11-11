@@ -64,6 +64,8 @@ it('keeps text-only policy local and ordinary tools independent of host UI failu
   runInNewContext(compiled, {
     process: { env: { CINDY_PI_TURN_TOOL_POLICY: 'runtime-token' } },
     guestToolGate: null,
+    CINDY_MCP_LIST_TOOLS: 'cindy_mcp_list_tools',
+    CINDY_MCP_CALL_TOOL: 'cindy_mcp_call_tool',
     currentPermissionState: () => { permissionReads++; return { reviewOnly: false, mode: 'bypassPermissions' }; },
     pi: { on: (event: string, callback: (event: any, ctx: any) => any) => { handlers.set(event, callback); } },
   });

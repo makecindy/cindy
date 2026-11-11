@@ -8723,6 +8723,10 @@
       }
     },
     "mcp": {
+      "setup": {
+        "loadFailed": "無法開啟設定表單，請重試。",
+        "savedDeliveryFailed": "設定已儲存，但結果未能送達。請重試，無需重新儲存。"
+      },
       "title": "外部工具",
       "subtitle": "接入你自己的遠端 MCP 伺服器。HTTP / Streamable HTTP 伺服器 Claude 和 Codex 均可呼叫；SSE 僅支援 Claude。",
       "cancel": "取消",
@@ -8736,7 +8740,7 @@
       "dialog": {
         "createTitle": "新增 MCP 伺服器",
         "editTitle": "編輯 MCP 伺服器",
-        "desc": "僅支援遠端 http / sse 型 MCP。儲存後新建或重啟的 Agent 會話即可呼叫，正在執行的 Agent 會話不受影響。",
+        "desc": "僅支援遠端 http / sse 型 MCP。儲存後目前任務即可呼叫；引擎的原生工具清單可能要等到下一輪傳送或新會話才出現。",
         "teammateDesc": "僅支援遠端 http / sse 型 MCP。儲存後夥伴會把它加入自己的工具，在本對話的下一則訊息起即可使用，無需新建任務。"
       },
       "fields": {
@@ -8769,7 +8773,7 @@
       },
       "deleteConfirm": {
         "title": "刪除 “{{name}}”？",
-        "message": "刪除後新建或重啟的 Agent 會話將不再載入該 MCP。",
+        "message": "刪除後目前任務不再能呼叫該 MCP；引擎的原生工具清單會在下一輪或新會話中移除。",
         "confirm": "刪除"
       },
       "duplicates": {

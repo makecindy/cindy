@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { McpServerDialog } from '@/components/settings/McpServerDialog';
 import { listCustomMcpServers } from '@/lib/customMcpServers';
 import { toast } from '@/lib/toast';
+import { ErrorNotice } from '@/components/ui/error-notice';
 import { Button } from '@/components/ui/button';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerPushCurrent, type DataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import type { McpSetupRequest } from '../../../shared/mcpSetup';
@@ -44,6 +45,8 @@ export function McpSetupPrompt({ request, teammate }: { request: McpSetupRequest
   const { t } = useTranslation();
   const [ids, setIds] = useState<string[] | null>(null);
   const [failedResult, setFailedResult] = useState<{ serverId?: string } | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [finished, setFinished] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const submittingRef = useRef(false);
@@ -67,29 +70,36 @@ export function McpSetupPrompt({ request, teammate }: { request: McpSetupRequest
   };
   useEffect(() => {
     let current = true;
+    setLoadFailed(false);
     void listCustomMcpServers().then(servers => {
       if (current) setIds(servers.map(server => server.id));
     }).catch(() => {
       if (!current) return;
-      toast.error(t('settings.mcp.toast.saveFailed'));
-      void finish();
+      setLoadFailed(true);
     });
     return () => { current = false; };
-  }, [request.requestId]);
+  }, [request.requestId, loadAttempt]);
+  useEffect(() => {
+    if (!ids || finished) return;
+    // A presentation acknowledgement never authorizes tools or settles the request.
+    void window.electronAPI.maker.resolveInteraction(request.requestId, {
+      kind: 'mcp_setup', status: 'presented',
+    }).catch(() => {});
+  }, [ids, request.requestId, finished]);
   if (finished) return null;
-  if (failedResult) return <section role="alert"
-    className="w-full min-w-0 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-4">
-    <p className="text-13 text-[var(--text-primary)]">
-      {t(failedResult.serverId ? 'settings.mcp.toast.created' : 'settings.mcp.toast.saveFailed')}
-    </p>
-    <div className="mt-4 flex flex-wrap justify-end gap-2.5">
-      <Button variant="secondary" size="lg" palette="confirmation" disabled={submitting}
-        onClick={() => { void finish(); }}>{t('settings.mcp.cancel')}</Button>
+  if (loadFailed || failedResult) return <ErrorNotice role="alert"
+    message={t(loadFailed ? 'settings.mcp.setup.loadFailed' : failedResult?.serverId
+      ? 'settings.mcp.setup.savedDeliveryFailed' : 'settings.mcp.toast.saveFailed')}
+    actions={<>
+      {!failedResult?.serverId && <Button variant="secondary" size="lg" palette="confirmation" disabled={submitting}
+        onClick={() => { void finish(); }}>{t('settings.mcp.cancel')}</Button>}
       <Button variant="primary" size="lg" palette="confirmation" loading={submitting}
-        onClick={() => { void finish(failedResult.serverId); }}>{t('commonUi.retry')}</Button>
-    </div>
-  </section>;
-  if (!ids) return null;
+        onClick={() => {
+          if (loadFailed) setLoadAttempt(attempt => attempt + 1);
+          else void finish(failedResult?.serverId);
+        }}>{t('commonUi.retry')}</Button>
+    </>} />;
+  if (!ids) return <p role="status" className="text-13 text-[var(--text-secondary)]">{t('ccAgent.common.loading')}</p>;
   return <McpServerDialog embedded teammate={teammate} proposal={request.proposal} existingIds={ids}
     onSaved={serverId => { void finish(serverId); }} onClose={() => { void finish(); }} />;
 }

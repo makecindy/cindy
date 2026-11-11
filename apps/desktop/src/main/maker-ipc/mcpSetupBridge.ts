@@ -7,6 +7,7 @@ interface Pending {
   sessionId: string;
   request: McpSetupRequest;
   isCurrent: () => boolean;
+  formPresented: boolean;
   promise: Promise<McpSetupResult>;
   resolve: (result: McpSetupResult) => void;
   timer: ReturnType<typeof setTimeout>;
@@ -22,24 +23,32 @@ export class McpSetupBridge {
   }) {}
 
   request(sessionId: string, proposal: McpSetupProposal, isCurrent: () => boolean): Promise<McpSetupResult> {
-    if (!isCurrent()) return Promise.resolve({ status: 'cancelled' });
+    if (!isCurrent()) return Promise.resolve({ status: 'interrupted' });
     for (const entry of this.pending.values()) {
       if (entry.sessionId !== sessionId) continue;
-      if (entry.isCurrent()) return entry.promise;
-      this.settle(entry.request.requestId, { status: 'cancelled' });
+      if (entry.isCurrent()) {
+        const previous = entry.request.proposal;
+        if (previous.name === proposal.name && previous.url === proposal.url && previous.transport === proposal.transport) {
+          return entry.promise;
+        }
+        return Promise.resolve({ status: 'unavailable', reason: 'request_in_progress' });
+      }
+      this.settle(entry.request.requestId, { status: 'interrupted' });
     }
     const request: McpSetupRequest = {
       kind: 'mcp_setup', requestId: createDesktopOnlyConfirmationRequestId(), proposal,
     };
     let resolve!: Pending['resolve'];
     const promise = new Promise<McpSetupResult>(done => { resolve = done; });
-    const timer = setTimeout(() => this.settle(request.requestId, { status: 'cancelled' }),
+    const timer = setTimeout(() => this.settle(request.requestId, isCurrent()
+      ? { status: 'timed_out', formPresented: this.pending.get(request.requestId)?.formPresented ?? false }
+      : { status: 'interrupted' }),
       this.deps.timeoutMs ?? HOST_CONFIRM_TIMEOUT_MS);
-    this.pending.set(request.requestId, { sessionId, request, isCurrent, promise, resolve, timer });
+    this.pending.set(request.requestId, { sessionId, request, isCurrent, formPresented: false, promise, resolve, timer });
     try {
       this.deps.broadcast(MAKER_PUSH.INTERACTION_REQUEST, { sessionId, request });
     } catch {
-      this.settle(request.requestId, { status: 'cancelled' });
+      this.settle(request.requestId, { status: 'unavailable', reason: 'presentation_failed' });
     }
     return promise;
   }
@@ -49,7 +58,7 @@ export class McpSetupBridge {
   pendingSnapshots(sessionId?: string): Array<{ sessionId: string; request: McpSetupRequest }> {
     return [...this.pending.values()].flatMap(entry => {
       if (!entry.isCurrent()) {
-        this.settle(entry.request.requestId, { status: 'cancelled' });
+        this.settle(entry.request.requestId, { status: 'interrupted' });
         return [];
       }
       return sessionId === undefined || entry.sessionId === sessionId
@@ -62,7 +71,15 @@ export class McpSetupBridge {
     if (!entry) return false;
     const value = decision as Record<string, unknown> | null;
     if (!value || value.kind !== 'mcp_setup') return false;
-    if (value.status === 'cancelled' || !entry.isCurrent()) {
+    if (!entry.isCurrent()) {
+      this.settle(requestId, { status: 'interrupted' });
+      return true;
+    }
+    if (value.status === 'presented') {
+      entry.formPresented = true;
+      return true;
+    }
+    if (value.status === 'cancelled') {
       this.settle(requestId, { status: 'cancelled' });
       return true;
     }
@@ -74,12 +91,12 @@ export class McpSetupBridge {
 
   cleanupForSession(sessionId: string): void {
     for (const entry of this.pending.values()) {
-      if (entry.sessionId === sessionId) this.settle(entry.request.requestId, { status: 'cancelled' });
+      if (entry.sessionId === sessionId) this.settle(entry.request.requestId, { status: 'interrupted' });
     }
   }
 
   cleanupAll(): void {
-    for (const id of this.pending.keys()) this.settle(id, { status: 'cancelled' });
+    for (const id of this.pending.keys()) this.settle(id, { status: 'interrupted' });
   }
 
   private settle(requestId: string, result: McpSetupResult): void {
@@ -88,9 +105,31 @@ export class McpSetupBridge {
     this.pending.delete(requestId);
     clearTimeout(entry.timer);
     entry.resolve(result);
-    this.deps.broadcast(MAKER_PUSH.INTERACTION_DISMISSED, {
+    try { this.deps.broadcast(MAKER_PUSH.INTERACTION_DISMISSED, {
       sessionId: entry.sessionId, requestId, reason: 'resolved',
       resolvedAs: result.status === 'saved' ? 'allow' : 'deny',
-    });
+    }); } catch { /* The waiter is settled even if its renderer has closed. */ }
+  }
+}
+
+/** Preserve the saved receipt even when the engine cannot refresh or inspect it.
+ * Only engine metadata returns to the model; no credentials or business calls.
+ */
+export async function completeMcpSetup(result: McpSetupResult, deps: {
+  isCurrent: () => boolean;
+  mount: (serverId: string) => Promise<boolean>;
+  read: (serverId: string) => Promise<{ state: string; tools: unknown[] } | null>;
+}): Promise<McpSetupResult> {
+  if (result.status !== 'saved') return result;
+  if (!deps.isCurrent()) return { status: 'interrupted' };
+  try {
+    await deps.mount(result.serverId);
+    if (!deps.isCurrent()) return { status: 'interrupted' };
+    const report = await deps.read(result.serverId);
+    if (!deps.isCurrent()) return { status: 'interrupted' };
+    return { ...result, runtimeState: report?.state ?? 'unverified',
+      ...(report ? { toolCount: report.tools.length } : { runtimeReason: 'status_unavailable' as const }) };
+  } catch {
+    return deps.isCurrent() ? { ...result, runtimeState: 'unverified', runtimeReason: 'check_failed' } : { status: 'interrupted' };
   }
 }

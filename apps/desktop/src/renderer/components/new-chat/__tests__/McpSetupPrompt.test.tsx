@@ -66,9 +66,10 @@ function Probe({ sessionId = 'task', enabled = true }: { sessionId?: string; ena
 
 // A lost result must not turn an already saved configuration into another create.
 it.each(['saved', 'cancelled'] as const)('retries a failed %s result without saving credentials again', async status => {
-  api.resolveInteraction.mockRejectedValueOnce(new Error('test-only IPC failure'));
   render(<McpSetupPrompt request={request} />);
   const token = await screen.findByLabelText('settings.mcp.fields.token');
+  api.resolveInteraction.mockClear();
+  api.resolveInteraction.mockRejectedValueOnce(new Error('test-only IPC failure'));
   if (status === 'saved') fireEvent.change(token, { target: { value: 'test-invalid-token' } });
   fireEvent.click(screen.getByRole('button', { name: status === 'saved' ? 'settings.mcp.save' : 'settings.mcp.cancel' }));
   await screen.findByRole('alert');
@@ -86,16 +87,17 @@ it.each(['saved', 'cancelled'] as const)('retries a failed %s result without sav
   expect(store).toHaveBeenCalledTimes(status === 'saved' ? 1 : 0);
 });
 
-it('can cancel result delivery after saving, and retires a request that has already expired', async () => {
-  api.resolveInteraction.mockRejectedValueOnce(new Error('test-only lost response'));
+it('preserves saved evidence when delivery fails, and retires an expired request without recreating it', async () => {
   render(<McpSetupPrompt request={request} />);
   await screen.findByLabelText('settings.mcp.fields.token');
+  api.resolveInteraction.mockRejectedValueOnce(new Error('test-only lost response'));
   fireEvent.click(screen.getByRole('button', { name: 'settings.mcp.save' }));
   await screen.findByRole('alert');
   api.resolveInteraction.mockResolvedValueOnce({ accepted: false });
-  fireEvent.click(screen.getByRole('button', { name: 'settings.mcp.cancel' }));
+  expect(screen.queryByRole('button', { name: 'settings.mcp.cancel' })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'commonUi.retry' }));
   await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
-  expect(api.resolveInteraction).toHaveBeenLastCalledWith(request.requestId, { kind: 'mcp_setup', status: 'cancelled' });
+  expect(api.resolveInteraction).toHaveBeenLastCalledWith(request.requestId, { kind: 'mcp_setup', status: 'saved', serverId: 'custom_example' });
   expect(api.createCustomMcpServer).toHaveBeenCalledOnce();
 });
 
@@ -122,4 +124,18 @@ it('does not resurrect a dismissed form from a late recovery snapshot', async ()
   act(() => dismiss({ sessionId: 'task', requestId: request.requestId }));
   await act(async () => complete([{ request }]));
   expect(screen.queryByLabelText('settings.mcp.fields.token')).toBeNull();
+});
+
+// Unit regression: rejected configuration listing used to silently send cancelled.
+// The existing suite only exercised a successful list; one rejection must leave
+// a visible retry, without saving or manufacturing an owner decision.
+it('keeps a failed form load actionable and acknowledges presentation only after retry', async () => {
+  api.listCustomMcpServers.mockRejectedValueOnce(new Error('test-only list failure'));
+  render(<McpSetupPrompt request={request} />);
+  await screen.findByRole('alert');
+  expect(api.resolveInteraction).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'commonUi.retry' }));
+  await screen.findByLabelText('settings.mcp.fields.token');
+  expect(api.resolveInteraction).toHaveBeenCalledWith(request.requestId, { kind: 'mcp_setup', status: 'presented' });
+  expect(api.createCustomMcpServer).not.toHaveBeenCalled();
 });

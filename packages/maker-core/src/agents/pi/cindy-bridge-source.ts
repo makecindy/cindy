@@ -2804,6 +2804,7 @@ class McpHttpClient {
   constructor(
     private readonly server: McpServerRef,
     private readonly token: string,
+    private readonly authEnv: Readonly<Record<string, string | undefined>> = process.env,
   ) {
     let parsed: URL;
     try {
@@ -2853,7 +2854,7 @@ class McpHttpClient {
           if (typeof envName !== 'string' || !envName) {
             throw new McpBridgeError('invalid authentication configuration');
           }
-          const value = process.env[envName];
+          const value = this.authEnv[envName];
           if (value === undefined) throw new McpBridgeError('missing authentication environment');
           h.set(headerName, value);
         }
@@ -3179,6 +3180,29 @@ class CindyMcpGateway {
   >();
   private readonly unavailableServers = new Map<string, string>();
   private readonly clients = new Map<string, McpHttpClient>();
+  private readonly connectionVersions = new Map<string, number>();
+  private configRefresher?: (ctx?: any) => Promise<void>;
+  private configRefreshPending?: Promise<void>;
+
+  setConfigRefresher(refresh: (ctx?: any) => Promise<void>): void { this.configRefresher = refresh; }
+
+  async refreshConfig(ctx?: any): Promise<void> {
+    if (!this.configRefresher) return;
+    if (!this.configRefreshPending) {
+      this.configRefreshPending = this.configRefresher(ctx).finally(() => { this.configRefreshPending = undefined; });
+    }
+    await this.configRefreshPending;
+  }
+
+  remove(serverName: string): void {
+    for (const [key, tool] of this.tools) if (tool.serverName === serverName) this.tools.delete(key);
+    this.clients.delete(serverName);
+    this.innerListingCache.delete(serverName);
+    this.unavailableServers.delete(serverName);
+    this.reconnectors.delete(serverName);
+    this.connectionVersions.set(serverName, (this.connectionVersions.get(serverName) ?? 0) + 1);
+  }
+
   private readonly reconnectors = new Map<string, () => Promise<{ client: McpHttpClient; tools: any[] }>>();
   private readonly reconnecting = new Map<string, Promise<void>>();
   /** 已披露工具：键为 server + NUL + tool，值为该工具当前 schema 的指纹。 */
@@ -3279,6 +3303,9 @@ class CindyMcpGateway {
       if (tool.serverName === serverName) this.tools.delete(key);
     }
     this.innerListingCache.delete(serverName); // 工具表刷新 → 内层代拉缓存一并失效
+    // Transport recovery keeps the same configuration identity. Only a config
+    // replacement/removal (remove) invalidates approvals for an unchanged schema.
+    if (!this.connectionVersions.has(serverName)) this.connectionVersions.set(serverName, 0);
     this.clients.set(serverName, client);
     this.unavailableServers.delete(serverName);
     for (const rawTool of tools) {
@@ -3322,9 +3349,12 @@ class CindyMcpGateway {
     if (!this.needsRecovery(serverName)) return;
     let pending = this.reconnecting.get(serverName);
     if (!pending) {
-      pending = this.reconnectors.get(serverName)!().then(({ client, tools }) => {
+      const reconnect = this.reconnectors.get(serverName)!;
+      pending = reconnect().then(({ client, tools }) => {
+        if (this.reconnectors.get(serverName) !== reconnect) return;
         this.add(serverName, client, tools);
       }).catch((error) => {
+        if (this.reconnectors.get(serverName) !== reconnect) return;
         this.markUnavailable(serverName, safeMcpFailure(error));
         throw new McpBridgeError('reconnect failed: ' + safeMcpFailure(error));
       }).finally(() => { this.reconnecting.delete(serverName); });
@@ -3502,7 +3532,7 @@ class CindyMcpGateway {
   }
 
   approvalDefinition(call: ResolvedMcpGatewayCall): string {
-    return mcpGatewayKey(call.tool.serverName, call.tool.name) + ':' + this.schemaFingerprint(call.tool);
+    return mcpGatewayKey(call.tool.serverName, call.tool.name) + ':' + this.connectionVersions.get(call.tool.serverName) + ':' + this.schemaFingerprint(call.tool);
   }
 
   rememberApproval(toolCallId: unknown, definition: string): void {
@@ -3783,6 +3813,7 @@ class CindyMcpGateway {
     details: unknown;
   }> {
     // 这次调用没问过权限（hook 判未披露时跳过）→ 一律回路标，不看披露状态。
+    await this.refreshConfig();
     const permissionSkipped = this.consumePermissionSkipped(toolCallId);
     const approvedDefinition = toolCallId ? this.approvedDefinitions.get(toolCallId) : undefined;
     if (toolCallId) this.approvedDefinitions.delete(toolCallId);
@@ -4101,7 +4132,8 @@ class CindyMcpGateway {
         },
         additionalProperties: false,
       },
-      execute: async (_toolCallId: string, params: unknown, signal?: AbortSignal) => {
+      execute: async (_toolCallId: string, params: unknown, signal?: AbortSignal, _onUpdate?: unknown, ctx?: any) => {
+        await this.refreshConfig(ctx);
         const server = recordInput(params).server;
         if (typeof server === 'string' && this.needsRecovery(server)) {
           try { await this.recover(server, signal); } catch (error) {
@@ -4150,11 +4182,69 @@ class CindyMcpGateway {
   }
 }
 
-async function connectServer(server: McpServerRef, token: string): Promise<{
+function installMcpConfigRefresh(mcpGateway: CindyMcpGateway, cfg: {
+  token?: string; servers?: McpServerRef[]; configRevision?: number; refreshSupported?: boolean;
+}): void {
+  const servers = cfg.servers ?? [];
+  const token = cfg.token ?? '';
+  if (cfg.refreshSupported === true && Number.isSafeInteger(cfg.configRevision)) {
+    let revision = cfg.configRevision!;
+    let context: any;
+    const fingerprints = new Map<string, string>();
+    const fingerprint = (server: McpServerRef, env: Readonly<Record<string, string | undefined>>, localToken: string) =>
+      createHash('sha256').update(JSON.stringify([server, server.remote
+        ? Object.values(server.remote.headerEnvVars).map(key => env[key]) : localToken])).digest('hex');
+    for (const server of servers) fingerprints.set(server.name, fingerprint(server, process.env, token));
+    mcpGateway.setConfigRefresher(async (ctx) => {
+      if (ctx) context = ctx;
+      if (!context?.ui?.input) throw new McpBridgeError('configuration refresh unavailable');
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        let timer;
+        let response;
+        try {
+          response = await Promise.race([
+            context.ui.input('cindy:mcp-config', JSON.stringify({ revision })),
+            new Promise((_, reject) => { timer = setTimeout(() => reject(new McpBridgeError('configuration refresh timed out')), 15000); }),
+          ]);
+        } finally { if (timer) clearTimeout(timer); }
+        let update;
+        try { update = JSON.parse(response); } catch { throw new McpBridgeError('configuration refresh unavailable'); }
+        if (update?.unchanged === true) return;
+        if (!Number.isSafeInteger(update?.revision) || update.revision < revision
+            || !Array.isArray(update.bridge?.servers) || !update.env || typeof update.env !== 'object') {
+          throw new McpBridgeError('invalid configuration refresh');
+        }
+        const nextNames = new Set<string>(update.bridge.servers.map((server: McpServerRef) => server.name));
+        for (const name of fingerprints.keys()) {
+          if (!nextNames.has(name)) { mcpGateway.remove(name); fingerprints.delete(name); }
+        }
+        await Promise.all(update.bridge.servers.map(async (server: McpServerRef) => {
+          const nextFingerprint = fingerprint(server, update.env, update.bridge.token);
+          if (fingerprints.get(server.name) === nextFingerprint) return;
+          // Revoke old definitions before awaiting the replacement connection.
+          mcpGateway.remove(server.name);
+          const connect = () => connectServer(server, update.bridge.token, update.env);
+          mcpGateway.registerReconnect(server.name, connect);
+          try {
+            const connected = await connect();
+            mcpGateway.add(server.name, connected.client, connected.tools);
+          } catch (error) { mcpGateway.markUnavailable(server.name, safeMcpFailure(error)); }
+          fingerprints.set(server.name, nextFingerprint);
+        }));
+        revision = update.revision;
+        // Verify the host revision after handshakes: a concurrent save must not
+        // publish a stale connection as the latest catalog.
+      }
+      throw new McpBridgeError('configuration changed during refresh; retry discovery');
+    });
+  }
+}
+
+async function connectServer(server: McpServerRef, token: string, authEnv?: Readonly<Record<string, string | undefined>>): Promise<{
   client: McpHttpClient;
   tools: any[];
 }> {
-  const client = new McpHttpClient(server, token);
+  const client = new McpHttpClient(server, token, authEnv);
   await client.initialize();
   const tools: any[] = [];
   const seenCursors = new Set<string>();
@@ -4951,6 +5041,10 @@ export default async function cindyBridge(piApi: any) {
         reason: 'Cindy Review only permits read-only access to this task and its explicit artifacts.',
       };
     }
+    if (event.toolName === CINDY_MCP_LIST_TOOLS || event.toolName === CINDY_MCP_CALL_TOOL) {
+      try { await mcpGateway.refreshConfig(ctx); }
+      catch { return { block: true, reason: 'MCP configuration refresh unavailable; retry discovery.' }; }
+    }
     if (event.toolName === 'ask_user_question') return;
     if (FILE_WRITE_BUILTINS.has(event.toolName)) {
       try {
@@ -5527,7 +5621,7 @@ export default async function cindyBridge(piApi: any) {
   // ── MCP 桥 ────────────────────────────────────────────────────────────────
   const raw = process.env.CINDY_PI_MCP_BRIDGE;
   if (!raw) return;
-  let cfg: { token?: string; servers?: McpServerRef[]; botMemoryFacade?: boolean };
+  let cfg: { token?: string; servers?: McpServerRef[]; botMemoryFacade?: boolean; deniedTools?: string[]; configRevision?: number; refreshSupported?: boolean };
   try {
     cfg = JSON.parse(raw);
   } catch {
@@ -5549,10 +5643,11 @@ export default async function cindyBridge(piApi: any) {
       console.error('[cindy-bridge] connect ' + server.name + ' failed: ' + safeMcpFailure(err));
     }
   }));
+  installMcpConfigRefresh(mcpGateway, cfg);
   // Keep the generic capability surface constant at two schemas. When the
   // first-party Bot facade is present, add its one stable high-frequency schema;
   // every low-frequency/external MCP still stays behind discovery.
-  if (servers.length > 0) {
+  if (servers.length > 0 || cfg.refreshSupported === true) {
     try {
       mcpGateway.register(pi, { botMemoryFacade: cfg.botMemoryFacade === true });
       console.error('[cindy-bridge] MCP gateway ready (' + mcpGateway.size + ' tools; companion facade=' + (cfg.botMemoryFacade === true) + ')');

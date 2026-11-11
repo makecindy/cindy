@@ -820,7 +820,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
 
   function buildDeps(
     bridgeMode:
-        | 'controls' | 'local' | 'orca' | 'local-multi' | 'bot-memory' | 'remote' | 'remote-sse' | 'remote-paginated' | 'remote-failures' | 'recovery' = 'local',
+        | 'controls' | 'live-refresh' | 'local' | 'orca' | 'local-multi' | 'bot-memory' | 'remote' | 'remote-sse' | 'remote-paginated' | 'remote-failures' | 'recovery' = 'local',
     logger: Logger = noopLogger,
   ): AgentDeps {
     return {
@@ -857,6 +857,16 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
         if (bridgeMode === 'controls') return {
           mcpBridge: { token: MCP_TOKEN, servers: [{ name: 'cindy_helper', url: mcpUrl + '/controls' }] },
         };
+        if (bridgeMode === 'live-refresh') {
+          return {
+            configRevision: 0,
+            mcpBridge: { token: MCP_TOKEN, servers: [], configRevision: 0, refreshSupported: true },
+            refreshMcpConfig: async (revision) => revision === 1 ? null : {
+              revision: 1, config: { mcpBridge: { token: MCP_TOKEN,
+                servers: [{ name: 'cindy_echo', url: mcpUrl }] } },
+            },
+          };
+        }
         if (bridgeMode === 'recovery') {
           return { mcpBridge: { token: MCP_TOKEN, servers: [{ name: 'recovery', url: mcpUrl + '/recovery' }] } };
         }
@@ -1027,7 +1037,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
     permissionMode: 'ask' | 'bypassPermissions',
     resolver: (req: InteractionRequest) => Promise<InteractionDecision>,
     bridgeMode:
-        | 'controls' | 'local' | 'orca' | 'local-multi' | 'bot-memory' | 'remote' | 'remote-sse' | 'remote-paginated' | 'recovery' = 'local',
+        | 'controls' | 'live-refresh' | 'local' | 'orca' | 'local-multi' | 'bot-memory' | 'remote' | 'remote-sse' | 'remote-paginated' | 'recovery' = 'local',
     prompt = 'call the echo tool',
     localHostOnly: boolean | 'native' = false,
     // 披露记录按 sessionId 落盘，所以要真正走到「首次未披露」必须给独立会话；
@@ -1119,6 +1129,25 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
     expect(approvals).toEqual(['mcp__cindy_helper__request_input_handoff']);
     expect(latestToolResultContent(requests.at(-1)!)).toContain('image-handoff');
     expect(requests).toHaveLength(2);
+  });
+
+  // Live Pi, stable model tool schemas, host-private refresh RPC, real local MCP.
+  // Regression: a runtime launched before configuration could not discover a saved server.
+  it('discovers and calls a newly configured MCP in the same live Pi turn', { timeout: 90_000 }, async () => {
+    echoCalls.length = 0;
+    const approvals: string[] = [];
+    const { requests, events, requestBodies } = await runOneTurn('ask', async (req) => {
+      if (req.kind === 'permission') approvals.push(req.toolName);
+      return { kind: 'permission', behavior: 'allow' };
+    }, 'live-refresh', 'call the echo tool', false, 'mcp-live-refresh');
+    expect(echoCalls.map(c => c.text)).toEqual(['hello-pi']);
+    expect(approvals).toContain('mcp__cindy_echo__echo');
+    const schemas = JSON.stringify(requests[0].tools);
+    expect(requests.every(request => JSON.stringify(request.tools) === schemas)).toBe(true);
+    const system = JSON.stringify(requests[0].system);
+    expect(requests.every(request => JSON.stringify(request.system) === system)).toBe(true);
+    expect(requestBodies.join('')).not.toContain(MCP_TOKEN);
+    expect(JSON.stringify(events)).not.toContain(MCP_TOKEN);
   });
 
   it.each(['disconnect', 'expired', 'sse-eof'] as const)('recovers MCP %s through real Pi without replaying a write', { timeout: 90_000 }, async (mode) => {

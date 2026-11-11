@@ -1932,6 +1932,8 @@ export class ClaudeCodeAgent extends BaseAgent {
       }
       if (currentQ === q) nonHarnessMcpServerNames = fallbackNames;
     };
+    let activeMcpServers: Record<string, McpServerConfig> = {};
+    let mountingMcp: Promise<boolean> | undefined;
     let duplicateMcpChoices: { skipHostServers: string[]; denyNativeServers: string[]; nativeServersToKeep?: string[] } = { skipHostServers: [], denyNativeServers: [] };
     const buildMcpServers = (): Record<string, McpServerConfig> | undefined => {
       const client = opts[LOCAL_AGENT_CLIENT];
@@ -3806,6 +3808,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       // File diagnostics cannot establish effective managed policy. Start with all
       // host connections, then honor a native choice only after the CLI confirms it.
       const mcpServers = buildMcpServers();
+      activeMcpServers = mcpServers ?? {};
       // A prebound request id is not a resume source until its input is accepted.
       let resumeSdkSid = durableSdkSessionId ?? configuredResumeSessionId;
       let modelUsageCumulativeStartsAtZero = !resumeSdkSid;
@@ -4770,6 +4773,7 @@ export class ClaudeCodeAgent extends BaseAgent {
               .filter(([name]) => !requestedHostSkips.includes(name)));
             const result = await query.setMcpServers(selectedServers);
             const removed = new Set(result.removed);
+            activeMcpServers = Object.fromEntries(Object.entries(activeMcpServers).filter(([name]) => !removed.has(name)));
             hostMcpServerNames = new Set([...hostMcpServerNames].filter(name => !removed.has(name)));
             registeredMcpServerNames = new Set([...registeredMcpServerNames].filter(name => !removed.has(name)));
             nonHarnessMcpServerNames = new Set([...nonHarnessMcpServerNames].filter(name => !removed.has(name)));
@@ -7675,6 +7679,44 @@ export class ClaudeCodeAgent extends BaseAgent {
           throw new Error('Claude Code SDK does not support getContextUsage');
         }
         return await getContextUsage.call(q) as import('../../types/context-usage.js').ContextUsageData;
+      },
+
+      async mountMcpServer(serverName: string) {
+        // Onboarding only adds a newly saved custom connection. Replacing/removing
+        // active connections has separate revocation and duplicate-selection semantics.
+        if (closed || reviewMode || opts.remoteHostId || hosted || opts[LOCAL_AGENT_CLIENT]
+          || !/^custom_[a-z0-9_-]{1,33}$/.test(serverName)
+          || !isBotMcpServerAllowed(opts.botRuntimeProfile?.mcpPolicy, serverName)) return false;
+        while (mountingMcp) await mountingMcp;
+        if (closed || pendingRewindTo || typeof q.setMcpServers !== 'function') return false;
+        if (Object.prototype.hasOwnProperty.call(activeMcpServers, serverName)) return true;
+        if (duplicateMcpChoices.skipHostServers.includes(serverName)) return false;
+        const provider = mcpProviders.find(candidate => candidate.name === serverName);
+        if (!provider?.toClaudeSdkConfig) return false;
+        const context: McpProviderContext = {
+          agentKind: 'claude-code', workingDir: opts.workingDir, vendorOptions: vo,
+          sessionId: opts.sessionId, sessionInstanceId: opts.sessionInstanceId,
+          mcpCallerKind: 'root', mcpCallerAttested: true,
+        };
+        context.getSessionContext = () => context;
+        if (provider.isEnabled && !provider.isEnabled(context)) return false;
+        const config = provider.toClaudeSdkConfig(context) as McpServerConfig | null;
+        if (!config) return false;
+        const currentQuery = q;
+        const next = { ...activeMcpServers, [serverName]: config };
+        const mount = (async () => {
+          const result = await currentQuery.setMcpServers(next);
+          if (closed || q !== currentQuery || result.errors?.[serverName]) return false;
+          activeMcpServers = next;
+          hostMcpServerNames = new Set([...hostMcpServerNames, serverName]);
+          registeredMcpServerNames = new Set([...registeredMcpServerNames, serverName]);
+          // Preserve the actual server identity for the existing approval policy.
+          await refreshSdkMcpProvenance(currentQuery);
+          return true;
+        })();
+        mountingMcp = mount;
+        try { return await mount; }
+        finally { if (mountingMcp === mount) mountingMcp = undefined; }
       },
 
       async readMcpServerTools(serverName: string) {
