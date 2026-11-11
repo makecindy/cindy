@@ -166,9 +166,19 @@ export async function withStore(
   }
   try {
     const opened = manager;
+    // 一次工具调用可能先后打开两份记忆 (账号级、项目)。每次打开都会按「当时」的账号
+    // 重新绑定, 所以必须在每一次打开前按入口账号复核: 否则 A 账号发起的操作会在中途
+    // 切换后落到 B 账号的同名文件上, 事后的最终复核只能报错、撤不回已经做完的删除。
     const open = async (scope: MemoryScopeName): Promise<MakerMemoryStore | null> => {
       const key = scopes[scope];
-      return key ? opened.getStore(key) : null;
+      if (!key) return null;
+      if (scopeAtEntry !== null && deps.getManager().currentOwnerScopeKey?.() !== scopeAtEntry) {
+        throw new MemoryError(
+          'not-ready',
+          'owner scope changed during async memory operation; aborting (retry against current scope)',
+        );
+      }
+      return opened.getStore(key);
     };
     const data = await fn(store, { store, scopeKey, manager, scopes, open });
     // 操作后复核: owner 在 fn 执行期间切换 → 结果不可信, 不得按成功返回。

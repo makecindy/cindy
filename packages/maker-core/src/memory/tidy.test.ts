@@ -358,6 +358,20 @@ describe('MakerMemoryManager.tidy', () => {
     manager.dispose();
   });
 
+  // 评审 (Codex P1, 同一族: 一次操作跨多份 store 时, 每次打开前按入口账号复核)。
+  it('一轮任务整理多份记忆: 前一份之后账号切换, 后面的不再整理', async () => {
+    let owner = 'account-a';
+    const { manager } = managerWith(() => null, undefined, () => owner);
+    const tidy = vi.spyOn(manager, 'tidy').mockImplementation(async () => {
+      owner = 'account-b';
+      return { status: 'not-due' };
+    });
+
+    await expect(manager.tidyIfDue(WORKDIR)).rejects.toThrow(/not-ready|memory/);
+    expect(tidy).toHaveBeenCalledTimes(1);
+    manager.dispose();
+  });
+
   it('伙伴的记忆不参与整理', async () => {
     const { manager, reviewOneShot } = managerWith(() => mergePlan);
     expect(await manager.tidy(buildBotMemoryScopeKey('bot-1'), 'manual')).toEqual({ status: 'unavailable' });

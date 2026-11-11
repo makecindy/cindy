@@ -1360,8 +1360,12 @@ export class MakerMemoryManager {
     if (this.deps.isIndependentScope?.(scopeKey) === true) return [];
     const scopes = this.memoryScopesFor(scopeKey);
     const runs: TidyRun[] = [];
+    // 这一轮任务属于入口时的账号: 逐份整理之间账号若切换, 后面的不再整理
+    // (tidy 各自只绑定自己的入口账号, 不知道上一份是谁的)。
+    const scopeAtEntry = this.deps.ownerScopeKey?.() ?? null;
     for (const key of [scopes.project, scopes.user]) {
       if (!key) continue;
+      this.assertScopeUnchanged(scopeAtEntry);
       const outcome = await this.tidy(key, 'auto');
       if (outcome.status === 'done' && outcome.run) runs.push(outcome.run);
     }
