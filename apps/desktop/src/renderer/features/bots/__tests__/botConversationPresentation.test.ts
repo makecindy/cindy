@@ -22,6 +22,21 @@ const shape = (items: readonly RenderItem[]): string => items.map((item) => item
 const project = (items: RenderItem[], streaming: boolean) =>
   simplifyBotRenderItems(groupWorkRuns(items, streaming), streaming);
 
+it('shows a historical scheduled final result so opening the chat can mark it read (#9835)', () => {
+  const previous = message('previous', 'assistant', 'Earlier answer', {
+    turnCompleted: true, createdAt: '2026-11-10T10:00:00.000Z',
+  });
+  const scheduled = message('schedule-result:run-1', 'assistant', 'Scheduled result', {
+    createdAt: '2026-11-10T10:01:00.000Z',
+  });
+  const visible = botProcessItems(groupWorkRuns([previous, scheduled], false), false);
+  expect(proseIds(visible)).toEqual(['previous', 'schedule-result:run-1']);
+  expect(latestSettledAssistantMs(visible)).toBe(Date.parse('2026-11-10T10:01:00.000Z'));
+  expect(proseIds(project([previous, { ...scheduled, message: {
+    ...scheduled.message, turnCompleted: false,
+  } }], false))).toEqual(['previous']);
+});
+
 // Unit regression: same production grouping and projection as MessageStream.
 // Existing tests expected progress to disappear; exercise the metadata handoff.
 it('keeps working prose through streaming metadata and tools, folding only after the answer', () => {

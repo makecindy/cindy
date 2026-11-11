@@ -68,8 +68,7 @@ jobs:
       - name: Check settings search coverage
         env:
           SETTINGS_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before || 'HEAD^' }}
-          SETTINGS_PR_HEAD: ${{ github.event.pull_request.head.sha }}
-        run: pnpm check:settings-search --base-ref "$SETTINGS_BASE_REF" --pr-head "$SETTINGS_PR_HEAD"
+        run: pnpm check:settings-search --base-ref "$SETTINGS_BASE_REF"
 
       # test:unit 的 runner 自测不能跟着 Vitest 分片重复执行；在检查 job 中跑一次，
       # Linux 单测分片只负责 workspace unit tier。
@@ -256,6 +255,12 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Run Host regressions
         run: pnpm --filter @cindy/host test
+      # Types are platform independent: once is enough. A shared desktop body that
+      # gains a port wired only in the desktop assembly passes the desktop checks
+      # and fails here instead of at runtime in the Host.
+      - name: Typecheck Host
+        if: matrix.os == 'ubuntu-latest'
+        run: pnpm --filter @cindy/host typecheck
 
   # 保留原 required check 名 verify；Host 仅允许明确无关时跳过，选择失败也阻断。
   verify:

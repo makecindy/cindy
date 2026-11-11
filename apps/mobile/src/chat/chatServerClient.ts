@@ -450,6 +450,7 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
     ...(room.kind !== 'direct' && page.snapshot.reads ? { notificationMode: mainRead?.muted ? 'none' as const : mainRead?.notification_scope ?? 'all' as const } : {}),
     serverBacked: true, supportsGroupLeave: room.kind !== 'direct', dissolvedAt: room.dissolved_at ?? null, archived: room.archived, selfActorId: selfId,
     // Invite links are created by an owner or admin this account controls, as on Desktop.
+    canStopAll: room.kind !== 'direct' && !!chatGroupManager(page.snapshot, selfId),
     canInvite: room.kind !== 'direct' && !room.dissolved_at && active.some(member => member.ownerActorId === selfId && ['owner', 'admin'].includes(member.role)),
     topic: room.topic, description: room.description,
     supportsSettingsManagement: room.kind === 'group', supportsMemberRemoval: room.kind === 'group',
@@ -461,7 +462,9 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
     openPlan: open ? { id: open.id, status: open.status, currentStep: open.currentStep, stepCount: open.steps.length,
       currentBotName: currentStep?.botName ?? null, currentStepStatus: currentStep?.status ?? null, ...(open.kind ? { kind: open.kind } : {}) } : null,
     plans, messages: projectBotGroupExecutionFailures(messages, failures),
-    hasMoreBefore: page.before !== null, round: { status: speakers.length ? 'running' : 'idle', speakers, canContinue: false }, supportsAttachments: true };
+    hasMoreBefore: page.before !== null, round: { status: speakers.length ? 'running' : 'idle', speakers, canContinue: false,
+      othersActive: executions.some(execution => ['queued', 'running', 'needs_input'].includes(execution.status)
+        && execution.requester_id !== selfId && !members.some(member => member.id === execution.bot_id && member.ownerActorId === selfId)) }, supportsAttachments: true };
 }
 
 export function createChatServerClient(request: ChatRequest, personalList = createConversationListState(),
@@ -601,7 +604,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
           text: message.reply.content.map(block => block.text ?? block.fallback ?? block.caption ?? '').join('\n') } } : {}),
       })) };
     },
-    lifecycleCapabilities: () => ({ supportsDissolve, supportsListRemoval, singleSpeaker, supportsMemberAvatar, supportsMentionAudiences, supportsNotificationSettings }),
+    lifecycleCapabilities: () => ({ supportsDissolve, supportsListRemoval, singleSpeaker, supportsMemberAvatar, supportsMentionAudiences, supportsNotificationSettings, supportsScopedStop: singleSpeaker }),
     async groupSettings(roomId: string) {
       const [snapshot, self] = await Promise.all([
         request<ChatSnapshot>(`/conversations/${chatId(roomId)}/snapshot`), identity(),
@@ -879,31 +882,76 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       await request(`/conversations/${room}/plans/${planId}`, 'POST',
         { operationId, expectedRevision: plan.revision, action, ...edit }, manager?.id === self ? undefined : manager?.id, signal);
     },
-    async stop(roomId: string, operationId: string) {
+    async stop(roomId: string, operationId: string, scope?: 'all', current = () => true) {
       const room = chatId(roomId);
-      const self = await identity();
-      const snapshot = await request<ChatSnapshot>(`/conversations/${room}/snapshot`);
+      const check = () => { if (!current()) throw new Error('OWNER_CHANGED'); };
+      const call: ChatRequest = async <T,>(path: string, method?: 'GET' | 'POST' | 'PATCH', body?: unknown, actorId?: string) => {
+        check();
+        const result = await request<T>(path, method, body, actorId);
+        check();
+        return result;
+      };
+      check();
+      const self = await identity(); check();
+      const snapshot = await call<ChatSnapshot>(`/conversations/${room}/snapshot`);
+      const manager = chatGroupManager(snapshot, self);
+      if (scope === 'all' && (!singleSpeaker || !manager)) throw new Error('ROLE_REQUIRED');
+      const everything = scope === 'all';
+      const asManager = manager?.id === self ? undefined : manager?.id;
+      const humanIsManager = snapshot.members.some(member => member.id === self && member.state === 'joined' && ['owner', 'admin'].includes(member.role));
       const ownBots = new Set(snapshot.members.filter(member => member.state === 'joined' && member.kind === 'bot' && member.ownerActorId === self).map(member => member.id));
-      const plans = await request<Array<{ id: string; status: string; creator_id: string; revision: number }>>(`/conversations/${room}/plans`);
+      const plans = await call<ChatPlan[]>(`/conversations/${room}/plans`);
       const stoppedPlans = new Set<string>();
+      const refusedPlans = new Map<string, unknown>();
+      const refusedExecutions = new Map<string, unknown>();
       const refused = (error: unknown) => !!error && typeof error === 'object' && 'status' in error && [403, 404, 409].includes(Number(error.status));
-      for (const plan of plans.filter(plan => plan.creator_id === self && ['proposed', 'running', 'waiting'].includes(plan.status))) {
+      const fail = (error: unknown) => {
+        if (error && typeof error === 'object' && 'status' in error && Number(error.status) === 409) throw new Error('REVISION_CONFLICT');
+        throw error;
+      };
+      let stopped = false;
+      let unknownRequester = false;
+      for (const plan of plans.filter(plan => (everything || plan.creator_id === self) && ['proposed', 'running', 'waiting'].includes(plan.status))) {
         try {
-          await request(`/conversations/${room}/plans/${chatId(plan.id)}`, 'POST', { operationId: `${operationId}:plan:${plan.id}`, expectedRevision: plan.revision, action: 'stop' });
-          stoppedPlans.add(plan.id);
-        } catch (error) { if (!refused(error)) throw error; }
+          await call(`/conversations/${room}/plans/${chatId(plan.id)}`, 'POST',
+            { operationId: `${operationId}:plan:${plan.id}`, expectedRevision: plan.revision, action: 'stop' },
+            plan.creator_id === self ? undefined : asManager);
+          stoppedPlans.add(plan.id); stopped = true;
+        } catch (error) { if (!refused(error)) throw error; refusedPlans.set(plan.id, error); }
       }
-      const executions = await request<ChatExecution[]>(`/conversations/${room}/executions`);
+      const executions = await call<ChatExecution[]>(`/conversations/${room}/executions`);
       for (const execution of executions.filter(execution => ['queued', 'running', 'needs_input'].includes(execution.status) && !(execution.plan_id && stoppedPlans.has(execution.plan_id)))) {
-        const asBot = execution.requester_id !== self && ownBots.has(execution.bot_id);
-        if (execution.requester_id !== self && !asBot) continue;
+        const asBot = !everything && execution.requester_id !== self && ownBots.has(execution.bot_id);
+        if (!everything && execution.requester_id !== self && !asBot) {
+          if (execution.requester_id) continue;
+          if (humanIsManager) { unknownRequester = true; continue; }
+        }
         try {
-          await request(`/conversations/${room}/executions/${chatId(execution.id)}/control`, 'POST',
-            { operationId: `${operationId}:execution:${execution.id}`, action: 'stop' }, asBot ? execution.bot_id : undefined);
-        } catch (error) {
-          if (!refused(error)) throw error;
+          await call(`/conversations/${room}/executions/${chatId(execution.id)}/control`, 'POST',
+            { operationId: `${operationId}:execution:${execution.id}`, action: 'stop' },
+            asBot ? execution.bot_id : everything && execution.requester_id !== self ? asManager : undefined);
+          stopped = true;
+        } catch (error) { if (!refused(error)) throw error; refusedExecutions.set(execution.id, error); }
+      }
+      // A simultaneous completion may explain a refusal, but absence from a recent
+      // page does not prove completion. Keep the original rejection until settled.
+      if (refusedPlans.size) {
+        const latest = await call<ChatPlan[]>(`/conversations/${room}/plans`);
+        for (const [planId, error] of refusedPlans) {
+          if (!latest.some(plan => plan.id === planId && ['done', 'stopped', 'dismissed', 'superseded'].includes(plan.status))) fail(error);
+          stopped = true;
         }
       }
+      if (refusedExecutions.size) {
+        const latest = await call<ChatExecution[]>(`/conversations/${room}/executions`);
+        for (const [executionId, error] of refusedExecutions) {
+          if (!latest.some(execution => execution.id === executionId && ['succeeded', 'failed', 'cancelled', 'stopping'].includes(execution.status))) fail(error);
+          stopped = true;
+        }
+      }
+      if (unknownRequester) throw new Error('STOP_OWNERSHIP_UNKNOWN');
+      if (!stopped) throw new Error(executions.some(execution => ['queued', 'running', 'needs_input'].includes(execution.status))
+        || plans.some(plan => ['proposed', 'running', 'waiting'].includes(plan.status)) ? 'ROLE_REQUIRED' : 'NOTHING_TO_STOP');
     },
     async older(roomId: string, page: ChatPage): Promise<ChatPage> {
       if (!page.before) return page;

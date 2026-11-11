@@ -49,11 +49,21 @@ import {
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { shouldApplyExclusiveProviderRerouteLive } from '../maker-host/model-route-guard-live.js';
 import { dbToMakerAgentKind, makerToDbAgentKind, normalizeDbAgentKind } from '../../shared/agentKindConversion.js';
+import { decideProviderGroupFailure, providerGroupFailureSignals } from '../provider-group/failurePolicy.js';
 
 function throwIfAgentSwitchAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted) {
     throw new Error('agent switch aborted');
   }
+}
+
+/**
+ * 要换过去的那台此刻接不了这个任务(连不上、保留的远程任务数已满、不提供这个模型等)，与原生记录能不能恢复无关：
+ * 改用摘要同样打不开。判定沿用供应商组的唯一口径(provider-group/failurePolicy)。
+ */
+function isSwitchTargetUnavailable(error: unknown): boolean {
+  const decision = decideProviderGroupFailure(providerGroupFailureSignals(error), 'target');
+  return decision.action === 'switch' && decision.cause === 'unavailable';
 }
 
 /**
@@ -267,8 +277,6 @@ export interface MakerSessionAgentSwitchHandlerDeps {
     sessionId: string,
     after?: { createdAt: number; rowid: number },
   ): Promise<HandoffSourceMessage[]>;
-  /** 伙伴工作记忆账本渲染段(botWorkingMemory);全量交接时带上,增量交接(停泊会话 resume)不带。 */
-  readWorkingMemoryNote?(sessionId: string): Promise<string | null>;
   /**
    * Phase 2:查目标引擎的停泊原生会话(边界行派生)。缺省(测试最小 harness /
    * 显式关闭)= 恒无绑定,回落 v1 全量交接行为。fromAgentDeviceId 用于排除在
@@ -539,7 +547,6 @@ export async function relocateForFreshStart(
     MakerSessionAgentSwitchHandlerDeps,
     | 'getSessionRow'
     | 'listMessagesForHandoff'
-    | 'readWorkingMemoryNote'
     | 'applyAgentSwitchToDb'
     | 'setSessionProvider'
     | 'insertBoundaryMessage'
@@ -574,7 +581,6 @@ export async function relocateForFreshStart(
     fromLabel: `${agentEngineLabel(dbKind)} (on a different computer)`,
     toLabel: agentEngineLabel(dbKind),
     sessionId,
-    workingMemory: (await deps.readWorkingMemoryNote?.(sessionId)) ?? null,
   });
   const fromAgentDeviceId = params.from ? params.from.agentDeviceId : row.agentDeviceId ?? null;
   const fromProviderId = params.from ? params.from.providerId : row.providerId;
@@ -1038,9 +1044,7 @@ export async function performSessionAgentSwitch(
     // 附带早期原文检索指引(get_chat_history / search_chat_history 定向到本会话)。
     sessionId,
   };
-  // 全量交接(全新原生会话)带伙伴工作记忆账本;增量交接的目标引擎仍持有离场前记忆,不带。
-  const workingMemory = (await deps.readWorkingMemoryNote?.(sessionId)) ?? null;
-  const buildFullHandoff = () => buildHandoffText(fullSourceMessages, { ...handoffOptsBase, workingMemory });
+  const buildFullHandoff = () => buildHandoffText(fullSourceMessages, handoffOptsBase);
   let handoff: string;
   if (parked) {
     const deltaMessages = await deps.listMessagesForHandoff(sessionId, {
@@ -1187,6 +1191,15 @@ export async function performSessionAgentSwitch(
           nativeBootstrapReady = true;
         } catch (error) {
           await restoreNativeProbeSource(error);
+          // The target cannot take the task at all, so a summary would fail the same way
+          // and only discard the native context. Do not ask: the caller keeps the task on
+          // the source computer and sends there (provider-groups.md §6.2「换不过去」).
+          if (isSwitchTargetUnavailable(error)) {
+            deps.log.warn('agent-switch: quota relocation target cannot take the task; staying on the source', {
+              sessionId, error: error instanceof Error ? error.message : String(error),
+            });
+            throw error;
+          }
           relocatedNativeId = null;
           handoff = buildFullHandoff();
           deps.log.warn('agent-switch: native quota relocation failed; restored source before summary confirmation', {

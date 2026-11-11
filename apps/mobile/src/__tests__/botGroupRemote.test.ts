@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { groupExecutionVisualFixture } from '@/debug/groupExecutionVisualFixture';
+import { getRemoteResource } from '@/device-link/remoteResources';
 import type { HostedRemoteCollectionItem } from '@/device-link/remoteResources';
 import { botGroupComposerPlanState, chatGroupMembership, openBotGroupPlan } from '@cindy/maker-shared/botGroupPresentation';
 import {
@@ -60,18 +62,19 @@ describe('parseBotGroupChatData', () => {
   });
   it('preserves skip permissions, pending-skip support, execution identity and skipped rows from the computer', () => {
     const base = chatData().plans[0];
-    const parsed = parseBotGroupChatData(chatData({ plans: [{ ...base, kind: 'talk', canManage: true, supportsPendingSkip: true,
+    const parsed = parseBotGroupChatData(chatData({ plans: [{ ...base, kind: 'talk', canManage: true, supportsPendingSkip: true, canSetAutoContinue: true,
       steps: [
         { ...base.steps[0], status: 'running', executionId: 'turn', executionStatus: 'queued' },
         { ...base.steps[1], status: 'skipped' },
       ],
     }] }))!;
-    expect(parsed.plans[0]).toMatchObject({ canManage: true, supportsPendingSkip: true, steps: [
+    expect(parsed.plans[0]).toMatchObject({ canManage: true, supportsPendingSkip: true, canSetAutoContinue: true, steps: [
       { executionId: 'turn', executionStatus: 'queued' }, { status: 'skipped' },
     ] });
-    const legacy = parseBotGroupChatData(chatData({ plans: [{ ...base, canManage: 'true', supportsPendingSkip: 'true' }] }))!;
+    const legacy = parseBotGroupChatData(chatData({ plans: [{ ...base, canManage: 'true', supportsPendingSkip: 'true', canSetAutoContinue: 'true' }] }))!;
     expect(legacy.plans[0].canManage).toBeUndefined();
     expect(legacy.plans[0].supportsPendingSkip).toBe(false);
+    expect(legacy.plans[0].canSetAutoContinue).toBe(false);
   });
   // The remote resource must preserve the queue semantics before choosing composer copy.
   it.each([
@@ -212,6 +215,16 @@ describe('parseBotGroupChatData', () => {
     expect(parsed.round).toEqual({ status: 'running', speakers: [{ botId: 'abu', sessionId: 's1', activity: 'step' }], canContinue: false });
     expect(parsed.openPlan).toMatchObject({ id: 'p1', status: 'waiting', currentStepStatus: 'done' });
     expect(parsed.hasMoreBefore).toBe(true);
+  });
+
+  // Unit/protocol: old hosts silently ignore scope, so only literal capabilities permit all.
+  it.each([true, false, undefined, 'true'])('preserves stop permission separately from scope support (%s)', supportsScopedStop => {
+    const parsed = parseBotGroupChatData(chatData({ canStopAll: true, supportsScopedStop,
+      round: { status: 'running', speakers: [], othersActive: true },
+    }))!;
+    expect(parsed.canStopAll).toBe(true);
+    expect(parsed.round.othersActive).toBe(true);
+    expect(parsed.supportsScopedStop).toBe(supportsScopedStop === true);
   });
 
   it('reads attachments and the attachment support flag, keeping only computer media addresses', () => {
@@ -375,4 +388,13 @@ it('retains notification capability and confirmed mode from a computer', () => {
   expect(parseBotGroupChatData(chatData({ supportsNotificationSettings: true, notificationMode: 'mentions' })))
     .toMatchObject({ supportsNotificationSettings: true, notificationMode: 'mentions' });
   expect(parseBotGroupChatData(chatData({ notificationMode: 'unknown' }))?.notificationMode).toBeUndefined();
+});
+
+// Unit/protocol: missing fallbackMarkdown discarded the new native fixture's rich block.
+// Existing fixtures bypassed getRemoteResource; validate this scene via the real resource normalizer.
+it('opens the execution acceptance scene through the actual remote resource reader', async () => {
+  const ref = { collectionId: 'bot-groups', kind: 'bot-group', id: 'execution-qa' };
+  const resource = await getRemoteResource(async <T,>(_device: string, channel: string, args?: unknown[]) =>
+    groupExecutionVisualFixture(channel, args ?? []) as T, { deviceId: 'mock', deviceName: 'Mock' }, ref, 'zh-CN', ['bot-group-chat']);
+  expect(botGroupChatDataFromResource(resource)?.round.speakers).toHaveLength(4);
 });

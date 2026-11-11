@@ -1,0 +1,11 @@
+
+running 1 test
+test initial_timeout_keeps_the_first_flight_available_for_measurement ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 36 filtered out; finished in 0.00s
+
+   Compiling agent-net-core v0.0.0 (/private/var/folders/5q/jtyznds12rjf0tqkwvczcmvh0000gn/T/cindy-agent-net-opt-iwx5iyl4/regression)
+   Compiling agent-net-sim v0.0.0 (/private/var/folders/5q/jtyznds12rjf0tqkwvczcmvh0000gn/T/cindy-agent-net-opt-iwx5iyl4/regression/sim)
+    Finished `sim` profile [optimized] target(s) in 1.37s
+     Running tests/reliability.rs (/var/folders/5q/jtyznds12rjf0tqkwvczcmvh0000gn/T/cindy-agent-net-opt-iwx5iyl4/regression-target/sim/deps/reliability-2b52743125a82e3e)
+FIRSTFLIGHT finish=395307 wire=267838 stats=Some(Stats { packets_sent: 191, packets_received: 33, wire_bytes_sent: 265822, wire_bytes_received: 693, retransmitted_segments: 1, bundled_segments: 0, parity_packets: 0, recovered_segments: 0, timeout_losses: 1, fast_losses: 0, spurious_losses: 1, duplicate_packets: 0, rejected_packets: 0, srtt_us: 250114, min_rtt_us: 250112, bandwidth: 4468833, random_loss_ppm: 0, rate_cap: 0, pacing_rate: 12892583 })

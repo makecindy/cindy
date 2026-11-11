@@ -3,6 +3,8 @@ import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import { useProviderShareWeeklyQuota } from '@/features/provider-share/useProviderShareWeeklyQuota';
 import { History, LayoutGrid, Star } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { ModelPickerAccountBoundary, useModelPickerAccount } from './ModelPickerAccount';
+import { ModelPoolQuotaDetails, useModelPoolQuota, type ModelPoolQuota } from './ModelPoolQuota';
 
 import type { ProviderView } from '@cindy/model-providers';
 
@@ -230,8 +232,17 @@ function RailButton(props: RailButtonProps) {
   if (props.shareDeviceId) {
     return <SharedProviderQuotaButton {...props} shareDeviceId={props.shareDeviceId} />;
   }
+  // Groups already resolve an executing member. Keep that member's runtime
+  // mirror, rather than previewing a new allocation on the same computer.
+  if (props.provider && props.groupNote)
+    return <ProviderQuotaButton {...props} provider={props.provider} />;
   return props.provider ? (
-    <ProviderQuotaButton {...props} provider={props.provider} />
+    <ModelPickerAccountBoundary
+      providerId={props.provider.auth?.method === 'oauth' ? props.provider.id : ''}
+      deviceId={props.usageDeviceId}
+    >
+      <ProviderQuotaButton {...props} provider={props.provider} />
+    </ModelPickerAccountBoundary>
   ) : (
     <RailButtonView {...props} />
   );
@@ -243,8 +254,23 @@ function SharedProviderQuotaButton(props: RailButtonProps & { shareDeviceId: str
 }
 
 function ProviderQuotaButton(props: RailButtonProps & { provider: ProviderView }) {
+  const { t } = useTranslation();
+  const pickerAccount = useModelPickerAccount(props.provider.id, props.usageDeviceId);
   const quota = useProviderWeeklyQuota(props.provider, { deviceId: props.usageDeviceId });
-  return <RailButtonView {...props} quota={quota} />;
+  const pool = useModelPoolQuota(props.provider.id, props.usageDeviceId);
+  const identity = pool
+    ? t('providerGroup.member.accountCount', { count: pool.members.length })
+    : pickerAccount
+      ? (pickerAccount.identity ?? t('subscriptionAccounts.unassigned'))
+      : props.accountIdentity;
+  const displayedQuota = pool
+    ? pool.average === null
+      ? null
+      : { usedPercent: 100 - pool.average, resetsAt: null }
+    : quota;
+  return (
+    <RailButtonView {...props} accountIdentity={identity} quota={displayedQuota} pool={pool} />
+  );
 }
 
 function RailButtonView({
@@ -257,31 +283,50 @@ function RailButtonView({
   disabled,
   children,
   quota,
+  pool,
 }: RailButtonProps & {
   quota?: ReturnType<typeof useProviderWeeklyQuota>;
+  pool?: ModelPoolQuota | null;
 }) {
   const { t } = useTranslation();
   const remaining = quota ? Math.round(100 - quota.usedPercent) : null;
-  const quotaLabel =
-    remaining === null
+  const quotaLabel = pool
+    ? pool.label
+    : remaining === null
       ? null
       : `${t('quotaCard.weeklyLabel')} · ${t('quotaCard.remainingPercent', { percent: remaining })}`;
   const reset = formatQuotaResetCountdown(quota?.resetsAt, Date.now(), t);
   // 供应商组：组名不带某一台的账号，账号跟在「当前在 {电脑} 上运行」后面。
   const displayLabel = groupNote ? label : providerAccountLabel(label, accountIdentity);
   const note = groupNote ? providerAccountLabel(groupNote, accountIdentity) : null;
-  const description = [note, quotaLabel].filter(Boolean).join(' · ');
-  const tooltip =
-    quotaLabel || note ? (
-      <>
-        <div>{displayLabel}</div>
-        {note && <div>{note}</div>}
-        {quotaLabel && <div>{quotaLabel}</div>}
-        {reset && <div>{reset}</div>}
-      </>
-    ) : (
-      displayLabel
-    );
+  const accountLines = pool?.members.map((member) =>
+    [
+      member.identity,
+      member.remaining === null
+        ? '—'
+        : `${t('quotaCard.weeklyLabel')} · ${t('quotaCard.remainingPercent', { percent: member.remaining })}`,
+      member.reset,
+      member.resetSoon ? t('subscriptionAccounts.quotaResetSoon') : null,
+    ]
+      .filter(Boolean)
+      .join(' · '),
+  );
+  const description = [note, quotaLabel, ...(accountLines ?? [])].filter(Boolean).join(' · ');
+  const tooltip = pool ? (
+    <>
+      <div>{displayLabel}</div>
+      <ModelPoolQuotaDetails pool={pool} />
+    </>
+  ) : quotaLabel || note ? (
+    <>
+      <div>{displayLabel}</div>
+      {note && <div>{note}</div>}
+      {quotaLabel && <div>{quotaLabel}</div>}
+      {reset && <div>{reset}</div>}
+    </>
+  ) : (
+    displayLabel
+  );
   return (
     <Tip
       text={tooltip}
@@ -306,6 +351,13 @@ function RailButtonView({
         )}
       >
         <span className="flex h-[24px] items-center justify-center">{children}</span>
+        {!!pool?.resetSoonCount && (
+          <span
+            aria-hidden
+            data-pool-reset-soon
+            className="pointer-events-none absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-[var(--warning-fg)]"
+          />
+        )}
         {quota && (
           <span
             aria-hidden="true"

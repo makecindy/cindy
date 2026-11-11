@@ -6,7 +6,7 @@ import { deviceDisplayName } from '@/device-link/deviceName';
  * 「其他电脑」标题。一个都没开的电脑不出现,列表不随设备数变长。
  * 别人分享给被控电脑的供应商(供应商分享)同样按「一台电脑」接在后面,见 providerShareRemoteCatalogs。
  */
-import type { DeviceView } from '@cindy/device-link';
+import type { DeviceView, ProviderShareFavoriteSource } from '@cindy/device-link';
 import type { ProviderView } from '@cindy/model-providers/registry';
 import { remoteInvocationModels } from '@cindy/model-providers';
 import type { NewSessionRemoteAgentPick } from './newSession';
@@ -25,6 +25,8 @@ export interface RemoteAgentCatalog {
   status: 'loading' | 'ready' | 'error';
   /** 此刻连不上(只因任务的 Agent 在这台才留在清单里,目录可能来自缓存)。 */
   offline?: true;
+  /** 分享来的供应商的收藏身份。同账号电脑没有这个字段。 */
+  favoriteSource?: ProviderShareFavoriteSource;
   providers: ProviderView[];
   modelVisibilityOverrides?: Record<string, boolean>;
 }
@@ -98,6 +100,7 @@ export function providerShareRemoteCatalogs(input: {
       status: payload ? 'ready' : 'error',
       // 已暂停 / 分享者电脑不在线的分享只因被选着才留在清单里:与留下的离线电脑一样标出,选不了。
       ...(reachable ? {} : { offline: true as const }),
+      ...(share.favoriteSource ? { favoriteSource: share.favoriteSource } : {}),
       providers: payload
         ? remoteAgentProviders(payload.providers).filter((provider) => provider.id === share.providerId)
         : [],

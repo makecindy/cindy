@@ -181,6 +181,9 @@ export function createGitSnapshotCoordinator(
         maxTokens: ONESHOT_MAX_TOKENS,
         timeoutMs: operation ? Math.max(1, Math.min(1_000, operation.deadlineAtMs - performance.now())) : ONESHOT_TIMEOUT_MS,
         ...(operation ? { signal: operation.signal } : {}),
+        // Codex 的默认模型到 thread/start 后才知道:拿到具体模型再做一次模型级停用裁决。
+        beforeDispatch: async (route) =>
+          !(route?.model && await isAgentOneShotRouteDisabled(agentKind, route.model)),
       });
     },
     logger,

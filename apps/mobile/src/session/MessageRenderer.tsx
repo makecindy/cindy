@@ -280,7 +280,7 @@ import {
   useRemoteSessionMessages,
 } from '@/session/remoteSessionStore';
 import {
-  isCrossDeviceSourceSessionId,
+  parseSourceSessionTarget,
   shouldShowSourceDevice,
   type MessageSourceDevice,
   type MessageSourcePlugin,
@@ -3389,7 +3389,7 @@ function SessionOriginLabel({
       idText={sourceIdText(sourceMeta)
         ?? (senderSessionId ? t('message.renderer.sourceSessionId', { id: senderSessionId }) : undefined)}
       label={sessionOriginLabel(origin)}
-      onPress={onOpen && senderSessionId && !isCrossDeviceSourceSessionId(senderSessionId)
+      onPress={onOpen && senderSessionId && parseSourceSessionTarget(senderSessionId)
         ? () => onOpen(senderSessionId)
         : undefined}
       openHint={t('message.renderer.openSessionOrigin')}
@@ -3946,7 +3946,7 @@ function MessageBubble({
     />
   ) : null;
   const hasBubbleContent = !!(
-    item.message.systemCardType || displayBubbleBody || item.message.secondaryBody ||
+    hookSource || item.message.systemCardType || displayBubbleBody || item.message.secondaryBody ||
     // A quote or reply target alone still needs the bubble, e.g. an attachment-only reply.
     (companionQuote && (replyQuote || replyTarget))
   );

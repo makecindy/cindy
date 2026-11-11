@@ -64,7 +64,8 @@
       "discord": "Discord",
       "wechat": "WeChat",
       "wecom": "WeCom",
-      "dingtalk": "DingTalk"
+      "dingtalk": "DingTalk",
+      "imessage": "iMessage"
     },
     "modelMismatch": "Este turno foi respondido por {{actual}} em vez do modelo selecionado {{selected}} (redução temporária de capacidade do lado do servidor)",
     "copyStateCopying": "A copiar",

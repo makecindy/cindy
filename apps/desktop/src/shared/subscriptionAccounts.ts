@@ -16,6 +16,8 @@ export interface SubscriptionPoolConfig {
   disconnected?: boolean;
   /** Upgrade-only: preserve an already authorized private Cindy Codex home. */
   legacyCodexDefault?: boolean;
+  /** Upgrade aliases: old connection ID -> pool account ID. Retained after removal to prevent re-import. */
+  legacyCodexAccounts?: Record<string, string>;
   strategy: ProviderGroupStrategy;
   accounts: SubscriptionAccountConfig[];
 }
@@ -56,10 +58,12 @@ export interface SubscriptionPoolView {
   providerId: SubscriptionProvider;
   configured: boolean;
   strategy: ProviderGroupStrategy;
+  /** Present only for an explicitly task-scoped read; null means no recorded binding. */
+  boundAccountId?: string | null;
   accounts: SubscriptionAccountView[];
 }
 export type SubscriptionAccountCommand =
-  | { action: 'read'; providerId: SubscriptionProvider }
+  | { action: 'read'; providerId: SubscriptionProvider; taskId?: string }
   /** Advisory login presentation only; never binds detected system credentials. */
   | { action: 'preview'; providerId: SubscriptionProvider }
   | { action: 'add'; providerId: SubscriptionProvider; loginKey: string }
@@ -91,6 +95,18 @@ export const DEFAULT_SUBSCRIPTION_ACCOUNT: SubscriptionAccountConfig = {
   limit: 4,
   weight: 1,
 };
+/**
+ * Before anything signs in, the host still lists the CLI default slot. Signed out, idle and with no
+ * known identity it is not an account yet; a known identity that needs signing in again still is.
+ */
+export function isUnusedDefaultAccount(account: SubscriptionAccountView): boolean {
+  return (
+    account.id === 'default' &&
+    account.status === 'signed-out' &&
+    account.running === 0 &&
+    !account.identity
+  );
+}
 export function isSubscriptionProvider(value: unknown): value is SubscriptionProvider {
   return value === 'anthropic' || value === 'openai';
 }

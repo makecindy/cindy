@@ -81,3 +81,14 @@ test('missing declared dependency fails instead of accepting stale output', () =
   write('proxy/src/index.ts', 1000);
   assert.throws(() => bundleInputDigest(path.join(root, 'proxy'), [path.join(root, 'missing')]), /dependency is missing/);
 }));
+
+// Build-input integrity: changing the Rust ABI/dependency manifest must not reuse old WASM.
+// Existing TS-only cache cases cannot detect Cargo-only changes; unit, temporary files, <1s.
+test('Rust package and ABI manifests invalidate the staged WASM even when timestamps are preserved', () => fixture((root, write) => {
+  const { bundle, digest } = cache(root, write);
+  for (const file of ['proxy/Cargo.toml', 'proxy/Cargo.lock', 'compat/Cargo.toml']) {
+    recordBundleInputs(bundle, digest());
+    write(file, 1000);
+    assert.equal(bundleInputsMatch(bundle, digest()), false);
+  }
+}));

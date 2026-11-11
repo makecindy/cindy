@@ -12,6 +12,9 @@ const h = vi.hoisted(() => ({
   error: false,
   hold: false,
   accountResult: undefined as unknown,
+  oldAuthenticated: false,
+  oldLogin: vi.fn<(...args: unknown[]) => Promise<{ ok: boolean; reason?: string }>>(async () => ({ ok: true })),
+  oldCancel: vi.fn(),
 }));
 vi.mock('node:child_process', () => ({ spawn: h.spawn }));
 vi.mock('@cindy/maker-core', () => ({
@@ -23,6 +26,11 @@ vi.mock('@cindy/maker-core', () => ({
   }),
 }));
 vi.mock('../../agent-binaries/index.js', () => ({ getReadyBinaryPath: () => h.binary }));
+vi.mock('../../maker-host/codex-account-auth.desktop.js', () => ({
+  codexAccountState: () => ({ authenticated: h.oldAuthenticated, errorReason: h.oldAuthenticated ? undefined : 'oauth_expired' }),
+  loginCodexAccount: h.oldLogin,
+  cancelCodexAccountLogin: h.oldCancel,
+}));
 vi.mock('../../maker-host/claude-native-cli.desktop.js', () => ({
   refreshClaudeCliLoginStatus: vi.fn(),
   readClaudeCliPlanUsage: vi.fn(),
@@ -33,6 +41,8 @@ import {
   readNativeAccount,
   loginNativeAccount,
   readNativeCodexTokens,
+  readLegacyCodexProviderAccount,
+  loginLegacyCodexProviderAccount,
 } from '../nativeCli.js';
 
 const children: (EventEmitter & {
@@ -45,6 +55,9 @@ beforeEach(() => {
   h.error = false;
   h.hold = false;
   h.accountResult = undefined;
+  h.oldAuthenticated = false;
+  h.oldLogin.mockReset().mockResolvedValue({ ok: true });
+  h.oldCancel.mockReset();
   children.length = 0;
   h.spawn.mockReset().mockImplementation((_binary, args, options) => {
     const child = Object.assign(new EventEmitter(), {
@@ -89,6 +102,26 @@ beforeEach(() => {
 });
 afterEach(() => vi.useRealTimers());
 describe('official Codex profiles', () => {
+  // Upgrade 2026-11-11, standard: a revoked imported login cannot be resurrected
+  // by reading its still-present token file; successful reads keep the old native profile.
+  it('honors the old connection revocation before reading its native account', async () => {
+    expect(await readLegacyCodexProviderAccount('openai-old', '/fixture/imported')).toMatchObject({ authenticated: false, errorReason: 'oauth_expired' });
+    expect(h.spawn).not.toHaveBeenCalled();
+    h.oldAuthenticated = true;
+    expect(await readLegacyCodexProviderAccount('openai-old', '/fixture/imported')).toMatchObject({ authenticated: true, plan: 'plus' });
+    expect(h.spawn.mock.calls[0][2].env.CODEX_HOME).toBe('/fixture/imported');
+  });
+
+  it('uses the original login cancellation path for an imported connection', async () => {
+    const controller = new AbortController();
+    h.oldLogin.mockImplementation(async (_id, isCurrent) => {
+      controller.abort();
+      expect((isCurrent as () => boolean)()).toBe(false);
+      return { ok: true };
+    });
+    await expect(loginLegacyCodexProviderAccount('openai-old', controller.signal)).rejects.toThrow('login_cancelled');
+    expect(h.oldCancel).toHaveBeenCalledWith('openai-old');
+  });
   // #9517, unit: the real account reader must distinguish provider-managed
   // authentication from a signed-out ChatGPT account; older tests only returned ChatGPT.
   it.each([
