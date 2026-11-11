@@ -17700,6 +17700,7 @@
       "copied": "Copié : {{label}}",
       "copyFailed": "Impossible de copier : {{label}}. Sélectionnez le contenu et copiez-le manuellement.",
       "urlUnavailable": "L'adresse de réception n'est pas disponible pour le moment.",
+      "unsupportedFormat": "Cette version ne prend pas en charge le format de cet expéditeur.",
       "quotaNotifyTitle": "Limite de réceptions Webhook atteinte",
       "quotaExhausted": "Les {{limit}} réceptions Webhook du jour sont épuisées. Reprise à {{time}}. D'ici là, les événements externes ne déclencheront pas de tâches. Les exécutions planifiées et la consommation des modèles ne sont pas affectées.",
       "signedOut": "Connectez-vous à votre compte Cindy pour reprendre la réception. Vos réglages sont conservés.",
