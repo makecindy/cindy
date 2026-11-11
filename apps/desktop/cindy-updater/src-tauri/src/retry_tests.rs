@@ -152,6 +152,107 @@ fn unknown_created_process_preserves_new_tree_and_recovery_backup() {
 }
 
 // Integration tier, explicitly invoked by check-windows-updater-launch.mjs.
+// Exercise a real delayed exit and a PE importing a deliberately absent DLL:
+// instant Wait(handle,0) wrongly accepts both and discards the old backup.
+// These cannot be modeled by the fake-file replacement unit tests. Normal
+// exit remains accepted, including Electron's single-instance handoff/quit.
+#[cfg(target_os = "windows")]
+#[test]
+#[ignore = "requires the isolated Windows launcher integration driver"]
+fn real_launcher_startup_failures_restore_old_app() {
+    use std::os::windows::process::CommandExt;
+    struct RestoreEarlyExit(Option<std::ffi::OsString>);
+    impl Drop for RestoreEarlyExit {
+        fn drop(&mut self) {
+            match self.0.take() {
+                Some(value) => std::env::set_var("CINDY_LAUNCH_TEST_EARLY_EXIT", value),
+                None => std::env::remove_var("CINDY_LAUNCH_TEST_EARLY_EXIT"),
+            }
+        }
+    }
+    let _restore = RestoreEarlyExit(std::env::var_os("CINDY_LAUNCH_TEST_EARLY_EXIT"));
+    assert!(std::env::var_os("CINDY_VERSION_SYNC_KEY").is_none());
+    // This error mode is inherited by the test's created child, preventing a
+    // missing DLL from leaving an interactive system dialog in unattended CI.
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn SetErrorMode(mode: u32) -> u32;
+    }
+    unsafe { SetErrorMode(0x0001 | 0x0002) };
+    let mut parent = std::process::Command::new(std::env::var("ComSpec").unwrap())
+        .args(["/d", "/c", "exit", "0"])
+        .creation_flags(0x08000000)
+        .spawn()
+        .unwrap();
+    assert!(parent.wait().unwrap().success());
+    for (variable, exit_code, expect_failure) in [
+        ("CINDY_UPDATER_TEST_EXE", Some("86"), true),
+        ("CINDY_UPDATER_MISSING_DLL_TEST_EXE", None, true),
+        ("CINDY_UPDATER_TEST_EXE", Some("0"), false),
+    ] {
+        let fixture = Fixture::new();
+        let mut args = fixture.args.clone();
+        args.pid = parent.id();
+        match exit_code {
+            Some(code) => std::env::set_var("CINDY_LAUNCH_TEST_EARLY_EXIT", code),
+            None => std::env::remove_var("CINDY_LAUNCH_TEST_EARLY_EXIT"),
+        }
+        let image =
+            fs::read(std::env::var_os(variable).expect("integration driver required")).unwrap();
+        let mut zip = zip::ZipWriter::new(File::create(&args.zip).unwrap());
+        for (name, bytes) in [
+            ("Cindy.exe", image.as_slice()),
+            ("resources/app.asar", b"new app".as_slice()),
+        ] {
+            zip.start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(bytes).unwrap();
+        }
+        zip.finish().unwrap();
+        let mut done = false;
+        let mut failure = None;
+        run(args.clone(), |event| match event {
+            InstallerEvent::Done => done = true,
+            InstallerEvent::Failed {
+                error,
+                can_retry,
+                relaunch_on_close,
+            } => {
+                failure = Some((error, can_retry, relaunch_on_close));
+            }
+            _ => {}
+        });
+        // Wait only for our disposable executable before asserting/cleanup,
+        // including on the old code where Done was emitted too early.
+        let mut sys = System::new();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !collect_appdir_processes(&mut sys, &args.app_dir, std::process::id()).is_empty() {
+            assert!(Instant::now() < deadline, "fixture child did not exit");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        if expect_failure {
+            assert!(
+                !done,
+                "startup failure was accepted and the backup discarded: {variable}/{exit_code:?}"
+            );
+            let (error, can_retry, relaunch) = failure.expect("startup failure must be reported");
+            assert!(error.contains("已回滚到旧版本"), "{error}");
+            assert!(can_retry && relaunch);
+            fixture.assert_old_app();
+            assert!(retry_available(&retry_archive(&args)));
+        } else {
+            assert!(
+                done,
+                "normal exit must not be treated as a startup crash: {failure:?}"
+            );
+            assert!(failure.is_none());
+            assert_eq!(fs::read(args.app_dir.join("Cindy.exe")).unwrap(), image);
+        }
+    }
+    std::env::remove_var("CINDY_LAUNCH_TEST_EARLY_EXIT");
+}
+
+// Integration tier, explicitly invoked by check-windows-updater-launch.mjs.
 // The launcher-only matrix cannot observe replacement, rollback, retained ZIP
 // or Close. Use the real installer entry and an isolated executable that waits
 // for our release file. Never call the updater's global stale-temp sweep or use

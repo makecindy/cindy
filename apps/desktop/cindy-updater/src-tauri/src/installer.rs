@@ -52,10 +52,8 @@ const APPDIR_PROCESS_GRACE: Duration = Duration::from_secs(5);
 /// (Windows needs a beat to release image locks post-TerminateProcess).
 const APPDIR_PROCESS_KILL_WAIT: Duration = Duration::from_secs(3);
 const APPDIR_PROCESS_POLL: Duration = Duration::from_millis(500);
-/// How long we'll WAIT for the new process to register in sysinfo before
-/// declaring the launch failed. Polled — happy path exits in 100-300ms
-/// instead of always sleeping the full duration.
-#[cfg(not(target_os = "windows"))]
+/// Windows observes the created handle for early nonzero exits; other platforms
+/// retain the existing process-list polling. Neither is a full readiness check.
 const LAUNCH_VERIFY_TIMEOUT: Duration = Duration::from_secs(3);
 #[cfg(not(target_os = "windows"))]
 const LAUNCH_VERIFY_POLL: Duration = Duration::from_millis(100);
@@ -420,9 +418,15 @@ fn run_inner<F: FnMut(InstallerEvent)>(
     replace_and_launch(args, &extract_dir, &backup_dir, attempt, emit, |exe_path| {
         let process = spawn_detached(exe_path)?;
         #[cfg(target_os = "windows")]
-        match crate::windows_launch::is_running(&process) {
-            Ok(true) => return Ok(()),
-            Ok(false) => anyhow::bail!("新进程 {} 在启动后已退出", args.exe_name),
+        match crate::windows_launch::wait_for_exit(&process, LAUNCH_VERIFY_TIMEOUT) {
+            // A normal exit includes Electron relinquishing the single-instance
+            // lock or the user quitting. It must not cause a rollback/relaunch.
+            Ok(None) | Ok(Some(0)) => return Ok(()),
+            Ok(Some(code)) => anyhow::bail!(
+                "新进程 {} 在启动观察期间异常退出（退出码 0x{:08X}）",
+                args.exe_name,
+                code
+            ),
             Err(error) => return Err(LaunchStateUnknown(error).into()),
         }
         #[cfg(not(target_os = "windows"))]
@@ -491,7 +495,7 @@ where
     match install_result {
         Ok(()) => {
             logger::info(format!(
-                "[installer] LAUNCH VERIFIED: {} is running",
+                "[installer] LAUNCH VERIFIED: {} passed the startup check",
                 args.exe_name
             ));
             // Best-effort metadata only, outside the file replacement/rollback

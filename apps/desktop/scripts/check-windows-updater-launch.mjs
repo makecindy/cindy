@@ -33,10 +33,18 @@ windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Securit
   await fs.writeFile(path.join(project, 'src/main.rs'), `
 #[path = ${JSON.stringify(launchSource)}] mod windows_launch;
 use std::{mem, ptr, os::windows::{io::AsRawHandle, process::CommandExt}};
-use windows_sys::Win32::{Foundation::{CloseHandle, WAIT_OBJECT_0}, Security::{TOKEN_QUERY, TOKEN_ELEVATION, TokenElevation, GetTokenInformation}, System::Threading::{OpenProcessToken, GetCurrentProcess, GetExitCodeProcess, WaitForSingleObject, CreateEventW, SetEvent}};
+use windows_sys::Win32::{Foundation::{CloseHandle, WAIT_OBJECT_0}, Security::{TOKEN_QUERY, TOKEN_ELEVATION, TokenElevation, GetTokenInformation}, System::Threading::{OpenProcessToken, GetCurrentProcess, WaitForSingleObject, CreateEventW, SetEvent}};
 fn main() {
+    // Suppress loader-error dialogs only in these disposable test processes.
+    // The production updater and the desktop shell's error mode are untouched.
+    #[link(name = "kernel32")] extern "system" { fn SetErrorMode(mode: u32) -> u32; }
+    unsafe { SetErrorMode(0x0001 | 0x0002) };
     let args: Vec<_> = std::env::args().collect();
     if args.len() == 1 {
+        if let Ok(code) = std::env::var("CINDY_LAUNCH_TEST_EARLY_EXIT") {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            std::process::exit(code.parse().unwrap());
+        }
         let mut token = ptr::null_mut();
         assert_ne!(unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) }, 0);
         let mut elevation: TOKEN_ELEVATION = unsafe { mem::zeroed() };
@@ -66,15 +74,19 @@ fn main() {
     match windows_launch::spawn_detached(std::path::Path::new(&args[1]), |error| println!("fallback: {error}")) {
         Ok(process) => {
             assert_eq!(unsafe { WaitForSingleObject(process.as_raw_handle(), 10_000) }, WAIT_OBJECT_0);
-            let mut exit_code = 0;
-            assert_ne!(unsafe { GetExitCodeProcess(process.as_raw_handle(), &mut exit_code) }, 0);
-            assert_eq!(exit_code, 0);
-            assert!(!windows_launch::is_running(&process).unwrap());
+            assert_eq!(windows_launch::wait_for_exit(&process, std::time::Duration::ZERO).unwrap(), Some(0));
         }
         Err(error) if args.get(2).map(|arg| arg == "missing").unwrap_or(false) => println!("creation-failed: {error}"),
         Err(error) => panic!("{error}"),
     }
 }
+`);
+  await fs.mkdir(path.join(project, 'src/bin'));
+  const missingLibrary = `cindy_missing_startup_${randomUUID().replaceAll('-', '')}.dll`;
+  await fs.writeFile(path.join(project, 'src/bin/missing-dll.rs'), `
+#[link(name = ${JSON.stringify(missingLibrary)}, kind = "raw-dylib")]
+extern "system" { fn missing_dependency(); }
+fn main() { unsafe { missing_dependency() }; }
 `);
   execFileSync(cargo, ['build', '--offline', '--manifest-path', path.join(project, 'Cargo.toml')], {
     stdio: 'inherit', windowsHide: true, timeout: 180_000,
@@ -94,6 +106,7 @@ fn main() {
     const env = { ...process.env, CINDY_LAUNCH_TEST_RECEIPT: receipt, CINDY_LAUNCH_TEST_CONTEXT: 'synthetic-only' };
     delete env.__COMPAT_LAYER;
     delete env.CINDY_LAUNCH_TEST_RELEASE;
+    delete env.CINDY_LAUNCH_TEST_EARLY_EXIT;
     if (mode === 'compat-admin') env.__COMPAT_LAYER = 'RUNASADMIN';
     const output = execFileSync(exe, [target], { cwd: root, env, encoding: 'utf8', windowsHide: true, timeout: 15_000 });
     const [elevated, cwd, context] = (await fs.readFile(receipt, 'utf8')).split('|');
@@ -109,10 +122,11 @@ fn main() {
   assert.match(output, /creation-failed:/);
   console.log('PASS: missing target returns a definite creation failure');
   if (process.argv.includes('--transaction')) {
-    const env = { ...process.env, CINDY_UPDATER_TEST_EXE: exe };
+    const env = { ...process.env, CINDY_UPDATER_TEST_EXE: exe, CINDY_UPDATER_MISSING_DLL_TEST_EXE: path.join(project, 'target/debug/missing-dll.exe') };
     delete env.CINDY_VERSION_SYNC_KEY;
     delete env.__COMPAT_LAYER;
-    execFileSync(cargo, ['test', '--locked', '--manifest-path', path.join(root, 'apps/desktop/cindy-updater/src-tauri/Cargo.toml'), 'real_launcher_transactions_rollback_retry_and_close', '--', '--ignored', '--nocapture'], {
+    delete env.CINDY_LAUNCH_TEST_EARLY_EXIT;
+    execFileSync(cargo, ['test', '--locked', '--manifest-path', path.join(root, 'apps/desktop/cindy-updater/src-tauri/Cargo.toml'), 'real_launcher_', '--', '--ignored', '--test-threads=1', '--nocapture'], {
       env, stdio: 'inherit', windowsHide: true, timeout: 180_000,
     });
     console.log('PASS: isolated installer replacement, sequential upgrades, rollback, Retry and Close through the production launcher');

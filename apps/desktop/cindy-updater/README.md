@@ -116,8 +116,10 @@ privileges or modify token ACLs. Environment and cwd retain the original detache
 launch's updater context. If the Shell is unavailable or creation fails before
 there is a child, the original detached launch remains the fallback and may
 inherit the updater's elevation, including an explicitly admin-only target.
-Windows verifies this process handle instead of a global process-name match.
-Creation/liveness is not a full application readiness check. An unknown handle
+Windows observes this handle for three seconds instead of a global name match
+or an immediate liveness snapshot. Nonzero early exits enter rollback; normal
+exit remains accepted, including single-instance handoff or the user quitting.
+Creation/observation is not a full application readiness check. An unknown handle
 state or surviving install-directory process blocks overwrite rollback, keeps
 the recovery backup and disables automatic Retry/relaunch. Running elevated clients
 are supported by the common Windows deep-link handoff; see the authoritative
@@ -128,6 +130,9 @@ Retry controls retain the five-language WebView catalog and existing theme style
 
 A release uses the updater bundled with the currently installed Cindy. Shipping
 a new updater does not change the process already performing that update.
+Installed-product tests must also cover the next update using the new updater.
+Builds and isolated fixtures do not establish antivirus/EDR compatibility;
+interception or quarantine needs validation in the relevant security environment.
 
 ## Build
 

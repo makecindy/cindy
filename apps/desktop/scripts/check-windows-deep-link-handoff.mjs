@@ -143,8 +143,8 @@ fn main() {
     let exe = std::env::current_exe().unwrap();
     let text = exe.to_string_lossy();
     let text = text.strip_prefix(r"\\\\?\\").unwrap_or(&text);
-    let process = windows_launch::launch_via_desktop_shell(std::path::Path::new(text)).unwrap().unwrap();
-    assert!(windows_launch::is_running(&process).unwrap());
+    let process = windows_launch::spawn_detached(std::path::Path::new(text), |error| panic!("normal desktop parent required: {error}")).unwrap();
+    assert!(windows_launch::wait_for_exit(&process, std::time::Duration::ZERO).unwrap().is_none());
   } else {
     assert!(windows_launch::launch_via_desktop_shell(std::path::Path::new("missing-test-app.exe")).unwrap().is_none());
     let status = std::process::Command::new(${JSON.stringify(process.execPath)})

@@ -10,6 +10,7 @@ use std::{
     },
     path::Path,
     ptr,
+    time::Duration,
 };
 use windows_sys::Win32::{
     Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT},
@@ -18,7 +19,7 @@ use windows_sys::Win32::{
         TOKEN_QUERY, TOKEN_USER,
     },
     System::Threading::{
-        CreateProcessW, DeleteProcThreadAttributeList, GetCurrentProcess,
+        CreateProcessW, DeleteProcThreadAttributeList, GetCurrentProcess, GetExitCodeProcess,
         InitializeProcThreadAttributeList, OpenProcess, OpenProcessToken,
         UpdateProcThreadAttribute, WaitForSingleObject, CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS,
         EXTENDED_STARTUPINFO_PRESENT, PROCESS_CREATE_PROCESS, PROCESS_INFORMATION,
@@ -248,11 +249,26 @@ pub(crate) fn spawn_detached(
         .map(Into::into)
 }
 
-/// Query the exact created process, not a global name match or a reused PID.
-pub(crate) fn is_running(process: &OwnedHandle) -> io::Result<bool> {
-    match unsafe { WaitForSingleObject(process.as_raw_handle(), 0) } {
-        WAIT_TIMEOUT => Ok(true),
-        WAIT_OBJECT_0 => Ok(false),
+/// Observe the exact created process for a bounded startup window. Creation
+/// returns before DLL initialization: a zero-duration query alone can discard
+/// the backup just before a loader failure/early crash. None means still alive;
+/// Some(code) is read only AFTER the handle is signalled, including exit 259.
+pub(crate) fn wait_for_exit(process: &OwnedHandle, timeout: Duration) -> io::Result<Option<u32>> {
+    let millis = u32::try_from(timeout.as_millis())
+        .ok()
+        .filter(|value| *value < u32::MAX)
+        .ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "invalid process wait budget")
+        })?;
+    match unsafe { WaitForSingleObject(process.as_raw_handle(), millis) } {
+        WAIT_TIMEOUT => Ok(None),
+        WAIT_OBJECT_0 => {
+            let mut code = 0;
+            if unsafe { GetExitCodeProcess(process.as_raw_handle(), &mut code) } == 0 {
+                return Err(last_error("GetExitCodeProcess(child)"));
+            }
+            Ok(Some(code))
+        }
         _ => Err(last_error("WaitForSingleObject(child)")),
     }
 }
