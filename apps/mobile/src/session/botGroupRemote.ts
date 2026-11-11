@@ -283,7 +283,11 @@ function parseStep(value: unknown): BotGroupPlanStepView | null {
   const task = text(record?.task, 4_096);
   if (!record || position === null || !botId || !status || task === null) return null;
   return { position, botId, botName: text(record.botName, MAX_NAME) ?? '', task, status,
-    ...(id(record.resultMessageId) ? { resultMessageId: id(record.resultMessageId)! } : {}),
+    // An explicit null means the turn published nothing (NO_REPLY); a missing field is an older
+    // projection that never reported it. Keeping them apart is what lets the queue show a skipped
+    // turn instead of claiming it spoke (#9909).
+    ...(record.resultMessageId === null ? { resultMessageId: null }
+      : id(record.resultMessageId) ? { resultMessageId: id(record.resultMessageId)! } : {}),
     ...(id(record.executionId) ? { executionId: id(record.executionId)! } : {}),
     ...(typeof record.executionStatus === 'string' ? { executionStatus: record.executionStatus } : {}) };
 }
