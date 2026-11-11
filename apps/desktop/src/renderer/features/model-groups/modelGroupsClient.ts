@@ -40,10 +40,20 @@ export function refreshModelGroups(): Promise<void> {
   return loading;
 }
 
-export async function saveModelGroups(next: ModelGroupsConfig): Promise<ModelGroupsConfig> {
-  const saved = await window.electronAPI.modelGroups.set(next);
-  publish(saved);
-  return saved;
+let saving: Promise<unknown> = Promise.resolve();
+
+/**
+ * 保存排队执行，每次都在上一次保存的结果上改：连点两次「上移」或改名后马上再改别的，
+ * 后一次不会用旧的一份把前一次盖掉。
+ */
+export function saveModelGroups(change: (latest: ModelGroupsConfig) => ModelGroupsConfig): Promise<ModelGroupsConfig> {
+  const run = saving.then(async () => {
+    const saved = await window.electronAPI.modelGroups.set(change(current));
+    publish(saved);
+    return saved;
+  });
+  saving = run.catch(() => undefined);
+  return run;
 }
 
 /** 当前账号的模型组；每次挂载重新读一次，覆盖换账号和别的窗口里的修改。 */

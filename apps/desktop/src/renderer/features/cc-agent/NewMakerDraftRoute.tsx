@@ -1149,8 +1149,9 @@ export function NewMakerDraftRoute() {
     [pluginModelsAllowed, modelGroupsConfig, activeModelGroup, navigate],
   );
   /** 组里没有能用的模型时，说明里写用户原来选的那个模型的显示名。 */
+  const localProvidersForGroupNoteRef = useRef<ReturnType<typeof useProviders>['providers']>([]);
   const keptModelNameForGroupNote = (agentKind: Parameters<typeof dbToMakerAgentKind>[0], providerId: string | null | undefined, model: string) =>
-    localProviders.find((provider) => provider.id === providerId)
+    localProvidersForGroupNoteRef.current.find((provider) => provider.id === providerId)
       ?.models[dbToMakerAgentKind(agentKind)]?.find((item) => item.id === model)?.name ?? displayNameOfStoredModelId(model);
   const wtBranchTarget: DraftWorktreeBranchTarget = {
     deviceId: effectiveDeviceLinkDeviceId ?? null,
@@ -1393,6 +1394,7 @@ export function NewMakerDraftRoute() {
     loading: localProvidersLoading,
     loadFailed: localProvidersLoadFailed,
   } = useProviders();
+  localProvidersForGroupNoteRef.current = localProviders;
   const modelEnginePrefsVersion = useModelEnginePrefsVersion();
   const modelPresetVersion = useProviderModelMemoryVersion();
   const hasLegacyDefaultChoice = useMemo(

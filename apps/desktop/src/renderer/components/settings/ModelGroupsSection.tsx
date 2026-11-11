@@ -123,9 +123,9 @@ export function ModelGroupsSection() {
   const [preview, setPreview] = useState<{ routeId: string; result: ModelGroupResolveResult } | null>(null);
   const [previewing, setPreviewing] = useState(false);
 
-  const save = useCallback(async (next: ModelGroupsConfig) => {
+  const save = useCallback(async (change: (latest: ModelGroupsConfig) => ModelGroupsConfig) => {
     try {
-      await saveModelGroups(next);
+      await saveModelGroups(change);
       setPreview(null);
       return true;
     } catch (error) {
@@ -135,9 +135,9 @@ export function ModelGroupsSection() {
     }
   }, [t]);
   const updateRoute = (id: string, patch: (route: ModelGroupRoute) => ModelGroupRoute) =>
-    save({ ...config, routes: config.routes.map((route) => (route.id === id ? patch(route) : route)) });
+    save((latest) => ({ ...latest, routes: latest.routes.map((route) => (route.id === id ? patch(route) : route)) }));
   const updateMode = (id: string, patch: (mode: ModelGroupMode) => ModelGroupMode) =>
-    save({ ...config, modes: config.modes.map((mode) => (mode.id === id ? patch(mode) : mode)) });
+    save((latest) => ({ ...latest, modes: latest.modes.map((mode) => (mode.id === id ? patch(mode) : mode)) }));
 
   const strategyOptions = useMemo(
     () => MODEL_GROUP_STRATEGIES.map((value) => ({ value, label: t(`modelGroups.strategy.${value}.title`) })),
@@ -154,13 +154,13 @@ export function ModelGroupsSection() {
 
   const addRoute = async () => {
     const route: ModelGroupRoute = { id: crypto.randomUUID(), name: t('modelGroups.settings.newRouteName'), strategy: 'expiring', candidates: [] };
-    if (await save({ ...config, routes: [...config.routes, route] })) setView({ kind: 'route', id: route.id });
+    if (await save((latest) => ({ ...latest, routes: [...latest.routes, route] }))) setView({ kind: 'route', id: route.id });
   };
   const addMode = async () => {
     const first = config.routes[0];
     if (!first) return;
     const mode: ModelGroupMode = { id: crypto.randomUUID(), name: t('modelGroups.settings.newModeName'), target: { type: 'route', routeId: first.id } };
-    if (await save({ ...config, modes: [...config.modes, mode] })) setView({ kind: 'mode', id: mode.id });
+    if (await save((latest) => ({ ...latest, modes: [...latest.modes, mode] }))) setView({ kind: 'mode', id: mode.id });
   };
   const back = () => setView({ kind: 'list' });
 
@@ -191,7 +191,7 @@ export function ModelGroupsSection() {
         confirmText: t('modelGroups.settings.delete'),
         cancelText: t('modelGroups.settings.cancel'),
       })) return;
-      if (await save({ routes: config.routes.filter((item) => item.id !== route.id), modes: config.modes })) back();
+      if (await save((latest) => ({ ...latest, routes: latest.routes.filter((item) => item.id !== route.id) }))) back();
     };
     const shown = preview?.routeId === route.id ? preview.result : null;
     const full = route.candidates.length >= MODEL_GROUP_LIMITS.candidates;
@@ -283,7 +283,7 @@ export function ModelGroupsSection() {
                     <div className="w-[280px] max-w-full">
                       <ModelSelector
                         data-setting-id={modelGroupsSettings.routes.id}
-                        localOnlyReason="plugin-task-local-route"
+                        localOnlyReason="model-group-local-source"
                         disabled={full}
                         modelId=""
                         effort=""
@@ -378,7 +378,7 @@ export function ModelGroupsSection() {
         confirmText: t('modelGroups.settings.delete'),
         cancelText: t('modelGroups.settings.cancel'),
       })) return;
-      if (await save({ routes: config.routes, modes: config.modes.filter((item) => item.id !== mode.id) })) back();
+      if (await save((latest) => ({ ...latest, modes: latest.modes.filter((item) => item.id !== mode.id) }))) back();
     };
     const targetNames = target.type === 'model' ? namesOf(target) : null;
     return (
@@ -424,7 +424,7 @@ export function ModelGroupsSection() {
                     <div className="w-[280px] max-w-full">
                       <ModelSelector
                         data-setting-id={modelGroupsSettings.modes.id}
-                        localOnlyReason="plugin-task-local-route"
+                        localOnlyReason="model-group-local-source"
                         modelId={target.type === 'model' ? target.model : ''}
                         vendorKey={target.type === 'model' ? target.agentKind : undefined}
                         currentProviderId={target.type === 'model' ? target.providerId : null}
