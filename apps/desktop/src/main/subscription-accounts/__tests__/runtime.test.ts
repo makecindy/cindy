@@ -1122,6 +1122,39 @@ describe('native account assignment on the executing computer', () => {
     expect(await readSubscriptionPoolAccountUsages('anthropic')).toBeUndefined();
     expect((await readSubscriptionPool('anthropic')).accounts.every((a) => !a.usage)).toBe(true);
   });
+  // User-reported quota oscillation / unit: frequent SDK events used to renew
+  // the cache clock forever. Existing tests never cross endpoint TTL with events.
+  it('refreshes authoritative Claude percentages despite continuous SDK events', async () => {
+    let now = 1_800_000_000_000;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      h.pools.anthropic = { strategy: 'order', accounts: [account('default')] };
+      const reset = now / 1000 + 604800;
+      h.usage.mockResolvedValue({ claudeUsage: {
+        source: 'oauth-endpoint', updatedAt: now, sevenDay: { utilization: 22, resetsAt: reset },
+      } });
+      const lease = await acquireSubscriptionAccount('anthropic', 'claude-sonnet', []);
+      for (let i = 0; i < 5; i++) {
+        now += 31_000;
+        observeSubscriptionAccountUsage(lease!.account, {
+          rateLimitType: 'seven_day', utilization: 0.2, resetsAt: reset, status: 'allowed',
+        });
+        expect((await readSubscriptionPool('anthropic')).accounts[0].usage?.claude?.sevenDay?.utilization).toBe(22);
+      }
+      expect(h.usage).toHaveBeenCalledTimes(1);
+      now += 31_000;
+      h.usage.mockResolvedValue({ claudeUsage: {
+        source: 'oauth-endpoint', updatedAt: now, sevenDay: { utilization: 24, resetsAt: reset },
+      } });
+      observeSubscriptionAccountUsage(lease!.account, {
+        rateLimitType: 'seven_day', utilization: 0.2, resetsAt: reset, status: 'allowed',
+      });
+      expect((await readSubscriptionPool('anthropic')).accounts[0].usage?.claude?.sevenDay?.utilization).toBe(24);
+      expect(h.usage).toHaveBeenCalledTimes(2);
+      lease!.release();
+    } finally { clock.mockRestore(); }
+  });
+
   it('keeps Codex credits for the account card when quota events update its buckets', async () => {
     h.pools.openai = { strategy: 'order', accounts: [account('default')] };
     h.usage.mockResolvedValue({

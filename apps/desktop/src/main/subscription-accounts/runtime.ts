@@ -199,7 +199,9 @@ export function observeSubscriptionAccountUsage(
             : cached.usage?.claudeUsage,
         }
       : { ...cached.usage, codexUsage };
-  state.cache.set(key, { ...cached, usage, at: Date.now() });
+  // The event updates usage, not the last account/endpoint read. Renewing `at`
+  // here lets a stream of SDK events postpone authoritative polling indefinitely.
+  state.cache.set(key, { ...cached, usage });
   changed(provider);
 }
 async function snapshot(

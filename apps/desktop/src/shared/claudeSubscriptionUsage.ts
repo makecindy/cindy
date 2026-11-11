@@ -283,15 +283,28 @@ function mergeHeaderWindow(
   previous: ClaudeUsageWindow | null | undefined,
   incoming: ClaudeUsageWindow | null | undefined,
   updatedAt: number | null | undefined,
+  previousSource: ClaudeSubscriptionUsageSnapshot['source'],
 ): ClaudeUsageWindow | null | undefined {
-  if (!incoming) return previous;
+  const authority = previous?.utilizationSource ?? previousSource;
+  const known: ClaudeUsageWindow | null | undefined = previous && (authority === 'oauth-endpoint' || authority === 'unified-headers')
+    ? { ...previous, utilizationSource: authority }
+    : previous;
+  if (!incoming) return known;
   const changedWindow = previous?.resetsAt != null && incoming.resetsAt != null
     && previous.resetsAt !== incoming.resetsAt;
   const expiredWindow = previous?.resetsAt != null && updatedAt != null
     && previous.resetsAt * 1000 <= updatedAt;
-  if (!previous || changedWindow || expiredWindow) return incoming;
+  if (!previous || changedWindow || expiredWindow)
+    return { ...incoming, utilizationSource: 'unified-headers' };
+  // The endpoint owns percentages for a known live window. SDK events may use
+  // a different precision; alternating those values makes remaining quota jump.
+  // Status is still merged immediately below, independently of this percentage.
+  if (authority === 'oauth-endpoint' && previous.resetsAt != null && updatedAt != null
+      && previous.resetsAt * 1000 > updatedAt)
+    return { ...known!, severity: incoming.severity ?? previous.severity };
   return {
     ...incoming,
+    utilizationSource: 'unified-headers',
     resetsAt: incoming.resetsAt ?? previous.resetsAt,
     severity: incoming.severity ?? previous.severity,
   };
@@ -301,7 +314,7 @@ function mergeHeaderWindow(
 
 /**
  * 双源合并:
- *   - incoming 为 headers 源 → 以 prev 为底做增量:只覆盖 headers 有的 5h / 7d 窗口与
+ *   - incoming 为 headers 源 → 以 prev 为底做增量:只补缺失或已换周期的 5h / 7d 百分比与
  *     整体状态,保留 endpoint 独有的 scoped / extraUsage / subscriptionType / severity
  *     不被清掉(headers 没有这些维度,不代表它们消失了)。
  *   - incoming 为 endpoint 源 → 全量替换(endpoint 是权威全集),仅 subscriptionType /
@@ -325,11 +338,14 @@ export function mergeClaudeSubscriptionUsageSnapshot(
     return incoming;
   }
 
+  if (typeof prev.updatedAt === 'number' && typeof incoming.updatedAt === 'number'
+      && incoming.updatedAt < prev.updatedAt) return prev;
+
   if (incoming.source === 'unified-headers') {
     return {
       ...prev,
-      fiveHour: mergeHeaderWindow(prev.fiveHour, incoming.fiveHour, incoming.updatedAt),
-      sevenDay: mergeHeaderWindow(prev.sevenDay, incoming.sevenDay, incoming.updatedAt),
+      fiveHour: mergeHeaderWindow(prev.fiveHour, incoming.fiveHour, incoming.updatedAt, prev.source),
+      sevenDay: mergeHeaderWindow(prev.sevenDay, incoming.sevenDay, incoming.updatedAt, prev.source),
       rateLimitStatus: incoming.rateLimitStatus ?? prev.rateLimitStatus,
       representativeClaim: incoming.representativeClaim ?? prev.representativeClaim,
       updatedAt: incoming.updatedAt ?? prev.updatedAt,
