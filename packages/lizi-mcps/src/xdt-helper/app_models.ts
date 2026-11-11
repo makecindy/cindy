@@ -57,7 +57,7 @@ export const appProviderChange = z.discriminatedUnion('action', [
     command: z.strictObject({ action: z.enum(['read', 'add', 'login', 'cancel', 'remove', 'configure']),
       accountId: id.optional(), loginKey: z.string().regex(/^[A-Za-z0-9_-]{1,100}$/).optional(),
       strategy: z.enum(['least', 'round', 'order', 'weight', 'usage']).optional(),
-      paused: z.boolean().optional(), limit: z.number().int().min(1).max(16).optional(), weight: z.number().int().min(1).max(100).optional(),
+      paused: z.boolean().optional(), limit: z.number().int().min(1).max(16).nullable().optional(), weight: z.number().int().min(1).max(100).optional(),
     }) }),
 ]);
 export type AppModelsRequest =
@@ -95,7 +95,7 @@ export function registerAppModelsTools(registry: XdtHelperToolRegistry, callback
     description: '修改用户指定模型的一项高级配置；visible 控制是否在选择器显示，不等于停用；value=null 删除该项覆盖并跟随默认，不影响其它配置。价格只影响本地用量估算，不改供应商实际账单。复用设置页校验与生效逻辑。',
     inputShape: { target, change: appModelConfiguration }, handler: input => invoke({ operation: 'set', ...input }) });
   registry.register({ name: 'configure_model_provider', category: 'settings',
-    description: '管理这台电脑的供应商名称、顺序、开关与模型发现。subscriptionAccounts 管 Anthropic/OpenAI 订阅账号：command.action=read 查看账号状态；add/login 使用官方 CLI 浏览器登录（需唯一 loginKey），cancel 用同一 loginKey；configure 设置策略或账号暂停、并发上限、权重；remove 移出非默认账号，保留 CLI 文件。账号 id 来自 read，不收凭证或自定义路径。供应商 remove/restore 只管理已断开内置来源的显示。',
+    description: '管理这台电脑的供应商名称、顺序、开关与模型发现。subscriptionAccounts 管 Anthropic/OpenAI 订阅账号：command.action=read 查看账号状态；add/login 使用官方 CLI 浏览器登录（需唯一 loginKey），cancel 用同一 loginKey；configure 设置策略或账号暂停、并发上限（limit=null 为不限制，未设置过即不限制；达到上限不再分配新任务）、权重；remove 移出非默认账号，保留 CLI 文件。账号 id 来自 read，不收凭证或自定义路径。供应商 remove/restore 只管理已断开内置来源的显示。',
     inputShape: { change: appProviderChange }, handler: input => invoke({ operation: 'provider', ...input }) });
   registry.register({ name: 'configure_model_connection', category: 'settings',
     description: '直接配置这台电脑的 API 模型连接，无需 Computer Use。presets 查看模板；create 使用 presetId 或显式 runtimes（模型可先为空），返回新连接 ID；read 查看连接。API key 只由主人通过 Cindy 安全输入卡交给宿主，禁止在参数、对话或文件中传密钥；不同端点分别填写。none 仅用于免密本机服务。setKey 更换指定引擎密钥；setRuntime 设置一个引擎的端点、协议与型号，变更端点时重新安全输入密钥，保留其它引擎；remove 删除该连接及专属凭证，不删历史。refreshModels 获取并合并型号、保留用户覆盖；setModels 设置型号名单；test 经保存路线发最小推理请求，可能计费。保存、目录发现、推理验证分别报告。需要重载且 Codex 正忙时返回 confirmationRequired，不写入；主人同意中断后可从 Claude Code/Pi 使用 interruptCodex=true，不能中断调用工具的 Codex 自己。不支持 SSH；手机可经原有加密代输入卡填写密钥。',
