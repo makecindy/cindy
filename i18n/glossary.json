@@ -1636,6 +1636,25 @@
       "note": "群聊里「别的成员已经看过这条消息」的状态（消息气泡下的双勾、「N 人已读」）。与「Read」作动词（读取文件）无关；只用于消息读取状态。"
     },
     {
+      "id": "message-status-replied",
+      "status": "proposed",
+      "en": "Replied",
+      "translations": {
+        "zh-CN": "已回复",
+        "zh-TW": "已回覆",
+        "ja": "返信あり",
+        "ko": "회신 있음",
+        "fr": "Répondu",
+        "es": "Respondido",
+        "de": "Beantwortet",
+        "pt-PT": "Respondido",
+        "pt-BR": "Respondido",
+        "zh-Hant-x-lzh": "已覆",
+        "zh-Hans-x-lzh": "已覆"
+      },
+      "note": "已投递消息的送达状态之一（chat.botStartedTasks.status.consumed / get_message_status 的 consumed）：对方任务在该消息之后出现了回复。刻意不用「已读 / Read」，那是群聊已读回执专用；文言版取「已覆」，与 botTaskLetter.replied 的「覆书」同源。"
+    },
+    {
       "id": "migration-assistant",
       "status": "proposed",
       "en": "Migration Assistant",

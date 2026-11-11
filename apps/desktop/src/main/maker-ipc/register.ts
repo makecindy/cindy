@@ -255,7 +255,7 @@ import {
   DL_SESSION_REFERENCE_CAPABILITY_CHANNEL,
   readInputDeliveryClientIds,
 } from '@cindy/device-link';
-import { and, asc, desc, eq, gte, inArray, isNull, like, lt, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, inArray, isNull, like, lt, or, sql } from 'drizzle-orm';
 import { applyScheduledModelSelection, createScheduledModelScope, createScheduledModelSelectionResolver, writeScheduledModelBaselineIfProfileCurrent, ScheduledModelSelectionBusyError, type ScheduledModelSelection, type ScheduledModelSelectionLease } from './scheduledModelSelection';
 import { parseScheduledModelBaseline, type ScheduledModelBaseline } from '../../shared/scheduledModelBaseline';
 import { recoverRenamedSessionModelBeforeSend } from './renamedSessionModelRecovery';
@@ -421,6 +421,12 @@ import {
   type SessionQueueMoveResult,
   type SessionQueueSteerResult,
 } from './sessionQueueControl.js';
+import {
+  classifySessionMessageStatus,
+  type MessageStatusQueueEntry,
+  type MessageStatusReplyRow,
+  type SessionMessageStatusSnapshot,
+} from './messageStatus.js';
 import {
   createSessionBindingLifecycle,
   createSessionCloseTeardown,
@@ -2679,6 +2685,21 @@ interface OrcaCollabService {
   ) => Promise<
     | { ok: true; counts: Record<string, number> }
     | { ok: false; errorCode: 'HOST_NOT_READY' | 'INTERNAL'; message: string }
+  >;
+  /**
+   * 单条已投递消息的送达状态（get_message_status 的本机实现；device-link
+   * 远程入口 maker:input:message-status 复用同一函数）。只读，不触发投递。
+   */
+  getMessageStatus: (params: {
+    sessionId: string;
+    messageId: string;
+  }) => Promise<
+    | ({ ok: true } & SessionMessageStatusSnapshot)
+    | {
+        ok: false;
+        errorCode: 'NOT_FOUND' | 'HOST_NOT_READY' | 'INTERNAL';
+        message: string;
+      }
   >;
   updateSessionQueuedMessage: (params: {
     callerSessionId: string;
@@ -14180,7 +14201,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // Older controllers still offer a stop chip on old task cards; nothing runs through them any more.
   ipcMain.handle(MAKER_INVOKE.BOT_DELEGATION_CANCEL, async (event) => {
     if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
-    return { ok: false as const, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Teammate background tasks were retired' };
+    return {
+      ok: false as const,
+      errorCode: 'UNSUPPORTED_CAPABILITY',
+      message:
+        'Teammate background tasks were retired: 伙伴不再有可取消的后台任务入口。' +
+        '如需确认某条消息是否送达/被回复，请用 cindy_helper 的 get_message_status 按需查询' +
+        '（send_to_session 回执里的 queued_message_id 作 message_id，目标可为 deviceId::sessionId）。',
+    };
   });
   const captureSessionOwner = () => {
     const owner = getCurrentDbClientSnapshot();
@@ -17904,6 +17932,135 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     createId,
   });
 
+  /**
+   * get_message_status 的本机实现：队列快照（含崩溃恢复）→ active turn →
+   * messages 表持久化行与首个回复行，归并成 queued/processing/dispatched/
+   * consumed/failed。device-link 远程入口复用同一函数，保证两侧口径一致。
+   */
+  const readSessionMessageStatus = async (
+    sessionId: string,
+    messageId: string,
+  ): Promise<
+    | ({ ok: true } & SessionMessageStatusSnapshot)
+    | {
+        ok: false;
+        errorCode: 'NOT_FOUND' | 'HOST_NOT_READY' | 'INTERNAL';
+        message: string;
+      }
+  > => {
+    try {
+      const meta = await maker.getSessionMeta(sessionId);
+      if (!meta) {
+        return { ok: false, errorCode: 'NOT_FOUND', message: `session ${sessionId} not found` };
+      }
+      await inputCoordinator.ensureQueueRestored(sessionId);
+      if (!inputCoordinator.isQueueRestored(sessionId)) {
+        return {
+          ok: false,
+          errorCode: 'INTERNAL',
+          message: `queue restore incomplete for ${sessionId}`,
+        };
+      }
+      const queueEntry =
+        (inputCoordinator
+          .getQueueInspection(sessionId)
+          .find((entry) => entry.queuedMessageId === messageId) as
+          | MessageStatusQueueEntry
+          | undefined) ?? null;
+      const db = getDbClient().drizzle;
+      const messageRowid = sql<number>`"messages"."rowid"`;
+      const [persisted] = await db
+        .select({
+          id: messages.id,
+          role: messages.role,
+          createdAt: messages.createdAt,
+          rewindAt: messages.rewindAt,
+          rowid: messageRowid,
+        })
+        .from(messages)
+        .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, messageId)))
+        .limit(1);
+      let cleared = false;
+      let firstReply: MessageStatusReplyRow | null = null;
+      if (persisted) {
+        const [sessionRow] = await db
+          .select({ clearedAt: sessions.clearedAt })
+          .from(sessions)
+          .where(eq(sessions.id, sessionId))
+          .limit(1);
+        cleared =
+          typeof sessionRow?.clearedAt === 'number' &&
+          persisted.createdAt <= sessionRow.clearedAt;
+        const [reply] = await db
+          .select({
+            id: messages.id,
+            role: messages.role,
+            createdAt: messages.createdAt,
+            rowid: messageRowid,
+          })
+          .from(messages)
+          .where(
+            and(
+              eq(messages.sessionId, sessionId),
+              or(
+                gt(messages.createdAt, persisted.createdAt),
+                and(
+                  eq(messages.createdAt, persisted.createdAt),
+                  gt(messageRowid, persisted.rowid),
+                ),
+              ),
+              inArray(messages.role, ['assistant', 'error']),
+              isNull(messages.rewindAt),
+            ),
+          )
+          .orderBy(asc(messages.createdAt), asc(messageRowid))
+          .limit(1);
+        if (reply) {
+          let content = '';
+          if (reply.role === 'error') {
+            const [errorRow] = await db
+              .select({ content: messages.content })
+              .from(messages)
+              .where(eq(messages.id, reply.id))
+              .limit(1);
+            content = errorRow?.content ?? '';
+          }
+          firstReply = { role: reply.role, createdAt: reply.createdAt, content };
+        }
+      }
+      const snapshot = classifySessionMessageStatus({
+        queueEntry,
+        isActiveTurnInput: inputCoordinator
+          .getActiveInputClientIds(sessionId)
+          .includes(messageId),
+        persisted: persisted
+          ? {
+              role: persisted.role,
+              createdAt: persisted.createdAt,
+              rewindAt: persisted.rewindAt,
+              cleared,
+            }
+          : null,
+        firstReply,
+      });
+      if (!snapshot) {
+        return {
+          ok: false,
+          errorCode: 'NOT_FOUND',
+          message: `message ${messageId} not found in session ${sessionId}`,
+        };
+      }
+      return { ok: true, ...snapshot };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        ok: false,
+        errorCode: isDbClientNotReadyError(err) ? 'HOST_NOT_READY' : 'INTERNAL',
+        message,
+      };
+    }
+  };
+
   // ─── 把 internal 业务函数发布到 module-level holder ────────────────────
   // mcp-providers.ts 的 cindy_helper control deps 通过
   // tryGetOrcaCollabService() 拿到这些函数引用, 让 MCP tool
@@ -17949,6 +18106,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         };
       }
     },
+    getMessageStatus: (params) =>
+      readSessionMessageStatus(params.sessionId, params.messageId),
     updateSessionQueuedMessage: (params) => sessionControlService.updateQueuedMessage(params),
     cancelSessionQueuedMessage: (params) => sessionControlService.cancelQueuedMessage(params),
     steerSessionQueuedMessage: (params) => sessionControlService.steerQueuedMessage(params),
@@ -21676,6 +21835,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       inputDeliveryVersion: 1,
       ...(deliveryReceipts ? { deliveryReceipts } : {}),
     };
+  });
+
+  // 只读：单条已投递消息的送达状态。仅 device-link 远程入口（cindy_helper
+  // get_message_status 的跨电脑查询）；本机 MCP 经 orcaCollabServiceHolder 直调，
+  // 不暴露给 renderer。与 get-projection 同级的数据敏感度（同账号受控设备）。
+  ipcMain.handle(MAKER_INVOKE.INPUT_MESSAGE_STATUS, async (_e, sessionId: unknown, messageId: unknown) => {
+    if (!isDeviceLinkInvoke()) {
+      throwIpcError('PERMISSION_DENIED', 'maker:input:message-status is device-link only');
+    }
+    const sid = requireSessionId(sessionId);
+    if (typeof messageId !== 'string' || !messageId.trim() || messageId.length > 256) {
+      throwIpcError('INVALID_PARAMS', 'Invalid messageId');
+    }
+    return readSessionMessageStatus(sid, messageId.trim());
   });
 
   // device-link 出方向:远程入队消息的 OSS 引用(files[] + persistedContent)在入队前一次性物化成本地

@@ -103,6 +103,8 @@ export type SendToRemoteSessionCallback = (params: {
       wakeKind: "resumed" | "already-active" | "queued";
       targetTitle: string | null;
       targetLastUserSendAt: string | null;
+      /** 跨电脑目标进入输入队列时返回的可寻址句柄（目标侧 clientId）。 */
+      queuedMessageId?: string;
     },
     string
   >
@@ -138,6 +140,7 @@ const DESCRIPTION = [
   "- 传 target_session_id → jump:投递到该既有 session(已关闭会自动 resume),wake_kind 返 resumed / already-active;目标正在跑 turn 时消息进入其输入队列、当前 turn 结束后自动派发,wake_kind 返 queued(无需重试)。",
   "- 目标在另一台电脑:target_session_id 传 deviceId::sessionId(history 类目 list_sessions 用 device 参数查到的 id 就是这个形式),消息经远程控制通道发给那台电脑上的既有任务,对方显示来自本任务。要求对方电脑在线并已开启远程控制;新建远程任务则省略 target_session_id 并传 device。",
   "- 不传 target_session_id → create:新建任务并发送首条消息，可用 title 指定简短标题。本机 Agent / model / effort / Fast 缺省继承当前任务；device 指向另一台电脑时采用那台电脑的新任务默认。返回 wake_kind=created、target_session_id、project_path 与实际 working_dir；后续消息用返回的 id。",
+  "- 送达回执：jump 投递进入输入队列时，成功返回里带 queued_message_id（目标侧输入 clientId，跨电脑目标同样返回）；create 或即时派发的消息可能不返回该字段。之后可用 history/get_message_status(session_id=目标, message_id=queued_message_id) 按需查询该消息是 queued / processing / dispatched / consumed / failed；跨电脑目标传 deviceId::sessionId。只在需要时查一次，不要轮询。",
   "【项目】本机省略 project_path 时继承来源任务的项目。远程创建不继承来源电脑的路径；省略项目时按目标 working_dir 匹配已有项目，否则创建不绑项目的任务。list_projects(device) 查询目标电脑项目。来源本来不绑项目时：working_dir 在某个已登记且可见的项目里，就归到最近的那个项目（回执 project_note 会说明）；否则新任务也不绑项目。无法可靠确定来源归属时明确失败。也可显式复用 get_current_session_id.project_path；跨项目用 control/list_projects 选择已有项目。传 project_path:null 明确创建不绑项目的任务。临时目录、仓库子目录、worktree 都不会变成新项目。确需新增或恢复项目时，单独调用 create_project。",
   "",
   "【执行配置(仅 create 模式)】agent_kind 可选 claude-code / codex / pi；model 使用宿主模型目录返回的精确 id；effort / fast 按目标模型能力校验。只改 Agent 却留下不属于目标 Agent 的继承模型会返 INVALID_ARGS，不会自动挑列表第一项。跨 Agent/model 时模型来源交给 host 既有默认路由解析。本机完全不传这些字段时保持原有 dispatcher 继承行为；远程创建按目标电脑默认配置。jump 模式忽略这些字段，不修改既有 session。",
@@ -340,6 +343,7 @@ export function registerSendToSessionTool(
           wake_kind: remote.wakeKind,
           target_title: remote.targetTitle,
           target_last_user_send_at: remote.targetLastUserSendAt,
+          ...(remote.queuedMessageId ? { queued_message_id: remote.queuedMessageId } : {}),
         });
       }
       const result = await deps.sendToSession({

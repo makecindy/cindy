@@ -14375,12 +14375,19 @@
       "open": "啟差事「{{title}}」",
       "untitled": "無名之差事",
       "startedOne": "已啟差事",
-      "handedToOne": "付與差事"
+      "handedToOne": "付與差事",
+      "status": {
+        "queued": "queued",
+        "processing": "處理中",
+        "consumed": "已覆",
+        "failed": "失敗"
+      }
     },
     "botTaskLetter": {
       "replied": "覆書",
       "toggle": "啟閉「{{title}}」之覆書",
-      "openTask": "啟差事"
+      "openTask": "啟差事",
+      "replyFromPrefix": "回覆自"
     }
   },
   "ccAgent": {

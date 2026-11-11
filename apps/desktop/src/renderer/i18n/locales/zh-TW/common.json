@@ -14375,12 +14375,19 @@
       "open": "開啟任務「{{title}}」",
       "untitled": "未命名任務",
       "startedOne": "開了任務",
-      "handedToOne": "交給任務"
+      "handedToOne": "交給任務",
+      "status": {
+        "queued": "queued",
+        "processing": "處理中",
+        "consumed": "已回覆",
+        "failed": "失敗"
+      }
     },
     "botTaskLetter": {
       "replied": "回信",
       "toggle": "展開或收合「{{title}}」的回信",
-      "openTask": "開啟任務"
+      "openTask": "開啟任務",
+      "replyFromPrefix": "回覆自"
     }
   },
   "ccAgent": {

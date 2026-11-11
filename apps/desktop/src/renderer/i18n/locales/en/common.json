@@ -14441,12 +14441,19 @@
       "open": "Open task “{{title}}”",
       "untitled": "Untitled task",
       "startedOne": "Started",
-      "handedToOne": "Handed to"
+      "handedToOne": "Handed to",
+      "status": {
+        "queued": "queued",
+        "processing": "Processing",
+        "consumed": "Replied",
+        "failed": "Failed"
+      }
     },
     "botTaskLetter": {
       "replied": "replied",
       "toggle": "Show or hide the reply from “{{title}}”",
-      "openTask": "Open task"
+      "openTask": "Open task",
+      "replyFromPrefix": "Reply from"
     }
   },
   "ccAgent": {

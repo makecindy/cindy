@@ -30,6 +30,7 @@ export {
   type RenameSessionsResult,
 } from './rename_sessions.js';
 export {
+  parseQualifiedSessionId,
   registerSendToSessionTool,
   type SendToSessionCallback,
   type SendToSessionDeps,
@@ -138,6 +139,13 @@ export {
   type SessionQueueDeps,
   type SessionQueuedMessageEntry,
 } from './list_session_queue.js';
+export {
+  registerGetMessageStatusTool,
+  type MessageStatusDeps,
+  type MessageStatusErrorCode,
+  type MessageStatusSnapshot,
+  type MessageStatusState,
+} from './get_message_status.js';
 export {
   registerUpdateSessionQueuedMessageTool,
   registerCancelSessionQueuedMessageTool,

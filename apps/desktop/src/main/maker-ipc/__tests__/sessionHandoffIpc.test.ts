@@ -248,6 +248,7 @@ describe('maker:session:handoff (receiving computer)', () => {
       wakeKind: 'resumed',
       targetTitle: 'target',
       targetLastUserSendAt: null,
+      queuedMessageId: 'remote-task-action:receipt-one',
     });
     expect(s.send).toHaveBeenCalledWith({
       clientId: 'remote-task-action:receipt-one', forceQueue: true, taskActionDeliveryGuard: expect.any(Function),
