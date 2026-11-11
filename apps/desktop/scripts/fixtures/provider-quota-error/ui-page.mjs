@@ -7,6 +7,9 @@ export default {
   real: 'ErrorBanner, ErrorTailErrorBanner, localized provider quota summary and raw error disclosure',
   notCovered: 'Live API calls, provider billing, account balance changes and retry execution',
   cases: {
+    subscription: { about: 'Bound subscription usage limit with a trusted reset time' },
+    'subscription-history': { about: 'The same account limit in persisted history' },
+    'subscription-narrow': { about: 'Account binding and recovery guidance at 320 px', viewport: { width: 320, height: 480 } },
     default: { about: '#8705: custom provider balance error has an actionable summary' },
     gateway: { about: 'Positive control: a known Cindy source exposes the balance action by its accessible name' },
     'unknown-source': { about: 'Unknown source gets a quota summary without a Cindy recharge action' },
@@ -14,6 +17,14 @@ export default {
     narrow: { about: 'Quota summary wraps on a narrow display', viewport: { width: 320, height: 480 } },
   },
   async check(page, ui) {
+    if (ui.case.startsWith('subscription')) {
+      const resetAt = await page.evaluate(() => window.__uiPage.t('chat.subscriptionAccountError.limitedUntil', {
+        resetAt: new Intl.DateTimeFormat(document.documentElement.lang.replace(/-x-lzh$/, '') || 'en', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(1900000000000)),
+      }));
+      assert.ok(await page.getByText(resetAt, { exact: true }).isVisible());
+      assert.equal(await page.getByText(await ui.t('chat.errorBanner.replyFailed'), { exact: true }).count(), 0);
+      return;
+    }
     const gateway = ui.case === 'gateway';
     assert.ok(await page.getByText(await ui.t(gateway ? 'chat.errorBanner.gatewayQuotaExhausted' : 'providerError.QUOTA_EXCEEDED'), { exact: true }).isVisible());
     assert.equal(await page.getByText(await ui.t('chat.errorBanner.replyFailed'), { exact: true }).count(), 0);

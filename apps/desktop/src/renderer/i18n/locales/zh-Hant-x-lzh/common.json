@@ -862,6 +862,7 @@
       "runningCount_other": "{{count}} 件差事方行",
       "limitAria": "{{name}} 之並行上限",
       "limitOption_other": "並行 {{count}}",
+      "limitUnlimited": "不限",
       "weightAria": "{{name}} 之權重",
       "weightOption": "輕重 {{weight}}",
       "assignAria": "分差事予 {{name}}",
@@ -14248,6 +14249,8 @@
       "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "此乃舊版分享，啟「唯用 Agent-Net」時暫不可用。關此開關即可續之，亦可易他模型。",
       "REMOTE_AGENT_GROUP_USAGE_LIMIT": "此模型之可用名籍已達耗用上限。可改用他模型，或待限額重置後續之。",
       "REMOTE_AGENT_GROUP_UNAVAILABLE": "供方組中之機今皆不能行此差事：或皆離線、已暫停分配、方冷卻，或無此模型。可至此供方之「遠端與分享」頁察組內之機。",
+      "REMOTE_AGENT_GROUP_FULL": "可行此務之帳號或電腦，並行皆已至上限。俟運行之務畢，或於供應商設定中增其上限。",
+      "SUBSCRIPTION_ACCOUNTS_FULL": "可行此務之帳號或電腦，並行皆已至上限。俟運行之務畢，或於供應商設定中增其上限。",
       "REMOTE_AGENT_DEVICE_LIMIT": "此裝置所留遠端差事之數已達上限。可封存暫不用之差事，或請遠方之機主於「遠端與分享」中提高上限。",
       "REMOTE_AGENT_TOTAL_LIMIT": "遠方之機所留差事總數已達上限。請彼機主人釋暫不用之差事，或於「遠端與分享」中提高上限。",
       "REMOTE_AGENT_RESUME_LOST": "前於彼機之言談未能接續，Agent 將無前之上下文而續行。",
@@ -14445,6 +14448,14 @@
       "replied": "覆書",
       "toggle": "啟閉「{{title}}」之覆書",
       "openTask": "啟差事"
+    },
+    "subscriptionAccountError": {
+      "limited": "此差事所用訂閱帳號，用量已盡。可待用量重設後再試，或另選模型來源。此差事仍繫原帳號，不自動更換。",
+      "limitedUntil": "此差事所用訂閱帳號，用量已盡，預計 {{resetAt}} 重設。可待重設後再試，或另選模型來源。此差事仍繫原帳號，不自動更換。",
+      "loginRequired": "此差事所用訂閱帳號需要重新登入。請在執行差事的電腦上重新登入該帳號，再重試。",
+      "signingIn": "此差事所用訂閱帳號正在登入，請完成登入後重試。",
+      "unavailable": "此差事所繫訂閱帳號，無法用於本次請求。請於執行差事的電腦檢查模型供方的帳號設定，或另選模型來源。",
+      "legacy": "此差事所繫訂閱帳號，暫不可用。請於執行差事的電腦檢查登入與用量，或另選模型來源。此差事不自動更換帳號。"
     }
   },
   "ccAgent": {

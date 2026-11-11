@@ -332,12 +332,27 @@ describe('same-harness native relocation', () => {
     expect(deps.setPendingHandoff).toHaveBeenLastCalledWith('s1', expect.stringContaining('你好'), undefined);
   });
 
-  it('keeps cross-harness switching on the existing handoff path', async () => {
+  // #9973, unit: ordinary and Orca Lead switches must deliver early constraints
+  // through the real switch transaction; the previous short fixture could not lose its middle.
+  it.each([null, 'lead'] as const)('keeps early constraints in the cross-harness handoff (role=%s)', async (orcaRole) => {
     const relocateNativeHistory = vi.fn();
-    const { deps } = makeDeps({ relocateNativeHistory, getSessionRow: vi.fn(async () => makeRow({ workingDir: '/project' })) });
+    const initial = `${'background '.repeat(25)}Review only; do not modify files.${'context '.repeat(25)}`;
+    const history = [
+      { role: 'user', content: initial, createdAt: 1 },
+      ...Array.from({ length: 4 }, (_, i) => [
+        { role: 'user', content: `Progress ${i}`, createdAt: 2 + i * 2 },
+        { role: 'assistant', content: 'Checking', createdAt: 3 + i * 2 },
+      ]).flat(),
+    ];
+    const { deps } = makeDeps({ relocateNativeHistory,
+      getSessionRow: vi.fn(async () => makeRow({ workingDir: '/project', orcaRole })),
+      listMessagesForHandoff: vi.fn(async () => history),
+    });
     await performSessionAgentSwitch(deps, { ...validParams, agentDeviceId: 'mini', applyNow: true });
     expect(relocateNativeHistory).not.toHaveBeenCalled();
     expect(deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({ sdkSessionId: null }));
+    expect(deps.insertBoundaryMessage).toHaveBeenCalledWith('s1', expect.objectContaining({ handoff: expect.stringContaining(initial) }));
+    expect(deps.setPendingHandoff).toHaveBeenCalledWith('s1', expect.stringContaining(initial), undefined);
   });
 
   it('restores the source before opening a native copy whose fallback boundary could not be saved', async () => {

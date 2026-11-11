@@ -4,6 +4,7 @@ import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import type { ProviderGroupRemoteClient } from '../provider-group/remoteClient.js';
 import type { ProviderGroupBinding } from '../provider-group/bindings.desktop.js';
 import type { ProviderGroupRouter } from '../provider-group/router.js';
+import { PROVIDER_GROUP_FULL_ERROR } from '../provider-group/failurePolicy.js';
 
 export interface LocalAgentExecutionRoute {
   providerId: string;
@@ -68,6 +69,7 @@ export function createLocalAgentGroupRouteResolver(deps: {
     deps.assertCurrent();
     if (pick.kind === 'none') return route; // No group, or an older peer.
     if (pick.kind === 'unavailable') {
+      if (pick.full) throw new Error(PROVIDER_GROUP_FULL_ERROR);
       throw new Error('[REMOTE_AGENT_UNAVAILABLE] No provider group member is available.');
     }
     const member = pick.member;
