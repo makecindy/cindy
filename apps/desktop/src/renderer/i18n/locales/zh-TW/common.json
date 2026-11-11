@@ -11320,6 +11320,7 @@
           "projectFolder": "這台電腦上的資料夾",
           "projectDirAutoHint": "依儲存庫自動找到的本機專案。",
           "organizerHint": "安排誰做哪一步；預設是第一位夥伴。",
+          "organizerProjectHint": "安排誰做哪一步，也回答沒有 @ 人的訊息；預設是第一位夥伴。",
           "autoContinueHint": "關閉時，每一步都等你點「繼續」。",
           "workCaption": "選了 git 專案時，每次分工都會開新分支，不動你手上的程式碼。專案資料夾和自動交接只在這台電腦上生效。",
           "me": "我在本群",

@@ -11449,6 +11449,7 @@
           "projectFolder": "Pasta neste computador",
           "projectDirAutoHint": "Encontrada entre os seus projetos a partir do repositório.",
           "organizerHint": "Decide quem executa cada passo. Por predefinição, esta função cabe ao primeiro colega.",
+          "organizerProjectHint": "Decide quem executa cada passo e responde às mensagens que não @mencionam ninguém. Por predefinição, esta função cabe ao primeiro colega.",
           "autoContinueHint": "Quando desativado, cada passo aguarda que o utilizador continue.",
           "workCaption": "Num projeto git, cada divisão do trabalho tem o seu próprio ramo, mantendo o seu código intacto. A pasta do projeto e as passagens automáticas entre colegas aplicam-se apenas neste computador.",
           "me": "Eu neste grupo",

@@ -11365,6 +11365,7 @@
           "projectFolder": "Folder on this computer",
           "projectDirAutoHint": "Found from the repository among your projects.",
           "organizerHint": "Decides who does each step. Defaults to the first teammate.",
+          "organizerProjectHint": "Decides who does each step and answers messages that @mention no one. Defaults to the first teammate.",
           "autoContinueHint": "When off, each step waits for you to continue.",
           "workCaption": "With a git project, each work split gets its own branch, so your code stays untouched. The project folder and automatic handoffs apply on this computer only.",
           "me": "You in this group",

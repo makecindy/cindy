@@ -44,6 +44,12 @@ const liveTaskCard = z.object({
    */
   outbox: z.array(z.object({ op: z.string(), text: z.string(), threadRootId: z.string().uuid().nullable(),
     quote: z.boolean().optional(), attempts: z.number().int().nonnegative().optional(), retryAt: z.number().optional() })).optional(),
+  /**
+   * Turn ends whose main-group result is still being written (the reply, bounded like the outbox):
+   * kept until the result joins the outbox, so a restart meanwhile still writes it, once, under
+   * the same operation.
+   */
+  pendingResults: z.array(z.object({ op: z.string(), text: z.string() })).optional(),
   /** The posted message's server revision; the next edit expects it. */
   revision: z.number().int().positive(), createdAt: z.number(),
 });

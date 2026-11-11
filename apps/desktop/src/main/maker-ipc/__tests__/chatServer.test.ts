@@ -1587,6 +1587,43 @@ describe('Chat Server result delivery and refresh', () => {
     expect(cards.at(-1)).toMatchObject({ summary: asked });
   });
 
+  // bot-group-chat.md §10 (restart while the result is written): the helper call runs after the turn
+  // end; quitting meanwhile used to lose the main-group result while the Thread reply survived. The
+  // reply is kept with the turn end, so after a restart the sync writes and posts the result once,
+  // under the operation recorded before the quit. Unit: real service, card store survives the restart.
+  it('posts a main-group result left unwritten when the app restarted during the helper call', async () => {
+    const cardId = '70000000-0000-4000-8000-000000000001';
+    taskCardStore.value = { [cardId]: { roomId, botId, threadRootId: null, taskId: 'task-1', deviceId: null, title: 'Fix login',
+      requesterName: 'Owner', botName: 'Bot (Owner)', state: 'running', revision: 1, createdAt: Date.now() } };
+    const posts: Array<{ operationId: string; threadRootId?: string; content: Array<{ text?: string }> }> = [];
+    deps.readGroupTaskStatus = vi.fn(async () => ({ title: 'Fix login', state: 'idle' as const }));
+    deps.condenseTaskReply = vi.fn(() => new Promise<string | null>(() => {}));
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route === `/conversations/${roomId}/messages` && method === 'POST') { posts.push(body); return { body: { id: '70000000-0000-4000-8000-000000000002', revision: 1 } }; }
+      if (method === 'PATCH' && route.includes('/messages/')) return { body: { revision: 2 } };
+      return response(route);
+    });
+    await start();
+    const reply = `## Preflight **failed**\n\n${'The lint step failed, see the log. '.repeat(6).trim()}`;
+    void service.settleLaneTurn({ ...terminal, sessionId: 'task-1', activeInputClientId: 'created-with', resultMessageClientId: 'reply-1', resultText: reply });
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(posts.map(post => post.operationId)).toEqual([expect.stringMatching(`^task-reply:${cardId}:`)]);
+    const pending = (taskCardStore.value[cardId] as { pendingResults: Array<{ op: string }> }).pendingResults;
+    expect(pending).toEqual([{ op: expect.stringMatching(`^task-result:${cardId}:`), text: reply }]);
+    // The app quits during the helper call and starts again.
+    service.dispose();
+    deps.condenseTaskReply = vi.fn(async () => 'The lint step failed; the log is in the thread.');
+    service = withChatServer({ dispose: vi.fn() } as unknown as BotGroupChatService, deps);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(posts.slice(1)).toEqual([{ operationId: pending[0]!.op, mentions: [], content: [
+      expect.objectContaining({ namespace: 'cindy.quote', data: expect.objectContaining({ messageId: cardId }) }),
+      { type: 'text', text: 'The lint step failed; the log is in the thread.' }] }]);
+    expect(taskCardStore.value[cardId]).toMatchObject({ pendingResults: [], outbox: [] });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(posts).toHaveLength(2);
+    expect(deps.condenseTaskReply).toHaveBeenCalledOnce();
+  });
+
   // bot-group-chat.md §10 (2026-11-11 owner decision): words in the Thread under a task card go
   // into the card's task as one message from that member, and the task's reply is the Thread reply.
   // Only the owner's own words speak for the owner; chat-only access or a gone task keep the lane.

@@ -11354,6 +11354,7 @@
           "projectFolder": "Ordner auf diesem Computer",
           "projectDirAutoHint": "Anhand des Repositorys unter deinen Projekten gefunden.",
           "organizerHint": "Legt fest, wer die einzelnen Schritte übernimmt. Standardmäßig das erste Teammitglied.",
+          "organizerProjectHint": "Legt fest, wer die einzelnen Schritte übernimmt, und beantwortet Nachrichten, in denen niemand mit @ erwähnt wird. Standardmäßig das erste Teammitglied.",
           "autoContinueHint": "Wenn deaktiviert, wartet jeder Schritt, bis du fortfährst.",
           "workCaption": "Bei einem Git-Projekt erhält jede Arbeitsteilung einen eigenen Branch, damit dein Code unverändert bleibt. Projektordner und automatische Übergaben gelten nur auf diesem Computer.",
           "me": "Du in dieser Gruppe",

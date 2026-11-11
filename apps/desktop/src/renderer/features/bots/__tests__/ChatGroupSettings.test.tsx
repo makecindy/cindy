@@ -334,6 +334,17 @@ it('saves the group repository from the project section', async () => {
   expect(mocks.updateBotGroup).toHaveBeenCalledOnce();
 });
 
+// bot-group-chat.md §7.1 (2026-11-11): in a project group the organizer also answers messages that
+// @ nobody, except where only @mentioned teammates reply; the 负责人 row must not claim it otherwise.
+it.each([
+  ['a project, anyone may reply', { kind: 'github' as const, repo: 'makecindy/cindy' }, 'all', 'organizerProjectHint'],
+  ['a project, only @mentioned reply', { kind: 'github' as const, repo: 'makecindy/cindy' }, 'mentioned', 'organizerHint'],
+  ['no project', null, 'all', 'organizerHint'],
+] as const)('describes the organizer for %s', (_case, project, replyMode, hint) => {
+  renderAt({ ...group(true), singleSpeaker: true, supportsGroupProject: true, project, replyMode }, 'manage');
+  expect(screen.getByText(key(hint))).toBeTruthy();
+});
+
 it('does not offer leaving when this account owns every group owner, including its companion', () => {
   renderAt(group(true));
   expect(queryRow(LEAVE)).toBeNull();

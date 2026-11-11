@@ -271,10 +271,11 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
             trailing={<ProjectFolder dir={group.projectDir} auto={group.projectDirAuto === true} busy={busy} onChoose={() => void chooseProjectDir()} onClear={() => void updateWorkSettings({ projectDir: null })} />} />
         </SettingsCard>
       </SettingsSection>
-      {/* The organizer arranges a 分工 whose steps are not written out. */}
+      {/* The organizer arranges a 分工 whose steps are not written out; in a project group it also
+          answers messages that @ nobody (§7.1). */}
       <SettingsSection title={t(key('work'))} caption={t(key('workCaption'))}>
         <SettingsCard>
-          {companions.length > 0 && <SettingsRow wrap title={t('bots.groupChat.organizer')} hint={t(key('organizerHint'))}
+          {companions.length > 0 && <SettingsRow wrap title={t('bots.groupChat.organizer')} hint={t(key(group.project && replyMode === 'all' ? 'organizerProjectHint' : 'organizerHint'))}
             trailing={<Select label={t('bots.groupChat.organizer')} value={group.organizerBotId ?? ''} disabled={busy} size="compact" className="max-w-[220px]" truncateOptions
               options={activeCompanions.map(member => ({ value: member.botId, label: member.name }))}
               onValueChange={organizerBotId => void updateWorkSettings({ organizerBotId })} />} />}

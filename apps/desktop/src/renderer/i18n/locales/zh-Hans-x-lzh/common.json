@@ -11309,6 +11309,7 @@
           "projectFolder": "此机之文件夹",
           "projectDirAutoHint": "依库自寻之本机案。",
           "organizerHint": "排定谁行何步；预设为首位同僚。",
+          "organizerProjectHint": "排定谁行何步，亦答无人被 @ 之言；预设为首位同僚。",
           "autoContinueHint": "停之，则每步皆候君点「续」。",
           "workCaption": "择 git 项目时，每次分工皆开新分支，不动君手中之代码。案之卷匣与自动交接仅于此机生效。",
           "me": "吾于本群",

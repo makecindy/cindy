@@ -2219,6 +2219,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   const TASK_RESULT_SHORT_CHARS = 140;
   /** Turn ends a card remembers, so the same end seen again posts nothing again. */
   const TASK_TURNS_KEPT = 20;
+  /** Results a card waits to write at most; an older one still unwritten is dropped. */
+  const TASK_PENDING_RESULTS_KEPT = 3;
   /** Read-modify-write of one card record against the current file, never a stale copy. */
   function updateTaskCard(messageId: string, change: (card: ChatLiveTaskCardRecord) => ChatLiveTaskCardRecord | null) {
     if (!current()) return;
@@ -2258,17 +2260,38 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       next.turns = [...(card.turns ?? []), turn].slice(-TASK_TURNS_KEPT);
       if (fromThread || !text) return next;
       next.outbox = [...(card.outbox ?? []), { op: op('task-reply', messageId), text: text.slice(0, 16000), threadRootId: card.threadRootId ?? messageId }];
-      if (!card.threadRootId) results.push(messageId);
+      // Written down before the result is: a restart while the helper writes it still leaves it to do.
+      if (!card.threadRootId) {
+        next.pendingResults = [...(card.pendingResults ?? []), { op: op('task-result', messageId), text: text.slice(0, 16000) }].slice(-TASK_PENDING_RESULTS_KEPT);
+        results.push(messageId);
+      }
       return next;
     });
     void syncTaskCards(true);
-    if (!results.length) return;
-    const result = text.length <= TASK_RESULT_SHORT_CHARS && !/\n\s*\n/.test(text.trim()) ? text
-      : (await deps.condenseTaskReply?.(text).catch(() => null))?.trim() || line;
-    if (!result) return;
-    for (const messageId of results) updateTaskCard(messageId, card => ({ ...card, outbox: [...(card.outbox ?? []),
-      { op: op('task-result', messageId), text: result.slice(0, 16000), threadRootId: null, quote: true }] }));
-    void syncTaskCards(true);
+    for (const messageId of results) await writeTaskResults(messageId);
+  }
+  /** Results being written on this computer now; a pass meanwhile leaves them to the writer. */
+  const writingTaskResults = new Set<string>();
+  /**
+   * The main-group result of each turn end still pending on a card: a short one-paragraph reply as
+   * it is, else the helper's 1–3 sentences, else the reply's line. It joins the outbox under the
+   * operation recorded with the turn end, so it is posted once even if written again after a restart.
+   */
+  async function writeTaskResults(messageId: string) {
+    for (const pending of taskCards().read()[messageId]?.pendingResults ?? []) {
+      if (!current() || writingTaskResults.has(pending.op)) continue;
+      writingTaskResults.add(pending.op);
+      try {
+        const text = pending.text;
+        const result = text.length <= TASK_RESULT_SHORT_CHARS && !/\n\s*\n/.test(text) ? text
+          : (await deps.condenseTaskReply?.(text).catch(() => null))?.trim() || botGroupLiveTaskReplyLine(text);
+        updateTaskCard(messageId, card => ({ ...card,
+          pendingResults: card.pendingResults?.filter(o => o.op !== pending.op),
+          outbox: !result || card.outbox?.some(o => o.op === pending.op) ? card.outbox
+            : [...(card.outbox ?? []), { op: pending.op, text: result.slice(0, 16000), threadRootId: null, quote: true }] }));
+      } finally { writingTaskResults.delete(pending.op); }
+      void syncTaskCards(true);
+    }
   }
   /**
    * Posts what a card's task left for the group, oldest first, as the teammate and naming nobody;
@@ -2312,6 +2335,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         if (Date.now() - card.createdAt > TASK_CARD_FOLLOW_MS) { updateTaskCard(messageId, () => null); continue; }
         // Only the computer running the task reads it; another of my computers keeps its own cards.
         if (card.deviceId && selfDeviceId && card.deviceId !== selfDeviceId) continue;
+        // A result left unwritten (the app quit while the helper wrote it) is written now.
+        if (card.pendingResults?.length) void writeTaskResults(messageId)
+          .catch(error => deps.log?.warn('Group task result could not be written', chatErrorDiagnostic(error)));
         await postTaskOutbox(messageId);
         const status = await deps.readGroupTaskStatus(card.taskId).catch(() => undefined);
         if (status === undefined) continue;
