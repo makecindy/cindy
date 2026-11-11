@@ -32,12 +32,11 @@ export function createTerminalToolExecutor(ports: Ports): NonNullable<XdtHelperM
       const id = caller.pluginId, ghost = ports.getGhost(id);
       const revision = ghostInstallApprovalToken(ghost?.approval);
       plugin.assertCurrent();
-      const assertCurrent = () => {
-        const latest = ports.getGhost(id);
+      const assertCurrent = (latest = ports.getGhost(id)) => {
         if (!sameOwner() || !ghost || !latest || latest.dir !== ghost.dir || ghostInstallApprovalToken(latest.approval) !== revision ||
             !hasPluginHostToolGroupApproval(latest, 'terminal')) throw new Error('TERMINAL_SCOPE_CHANGED');
       };
-      assertCurrent();
+      assertCurrent(ghost);
       return { key: JSON.stringify([owner.dataOwnerId, owner.ownerGeneration, 'plugin', id]), revision: JSON.stringify([ghost!.dir, revision]),
         pluginId: id, defaultCwd: ports.pluginDirectory(id), createDefaultCwd: true,
         environment: pluginNodeEnvironment(id), assertCurrent };
