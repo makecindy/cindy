@@ -25,15 +25,27 @@ function fixture() {
     assertQuota: vi.fn(async () => {}), import: importCopies,
     delete: vi.fn(async (id: string, _ref: string, root: string) => { copies.delete(`${root}:${id}`); return true; }) };
   const confirmShare = vi.fn(async (_facts: unknown, _current: () => boolean) => true);
+  const getGhost = vi.fn((id: string) => id === 'source' ? source : id === 'target' ? target : null);
   const service = new HostStorageService({ ownerKey: () => `owner-${generation}`,
-    getGhost: id => id === 'source' ? source : id === 'target' ? target : null,
+    getGhost,
     listGhosts: () => [source, target], providers: [provider], handoff: handoff as never, confirmShare });
   const share = () => service.request('source', { op: 'share', targetPluginId: 'target', source: { provider: 'fixture', key: 'data' } }, () => true);
-  return { service, source, target, snapshot, importCopies, confirmShare, handoff, copies, share,
+  return { service, source, target, snapshot, importCopies, confirmShare, handoff, copies, share, getGhost,
     changeOwner() { generation++; } };
 }
 
 describe('shared Host storage', () => {
+  // Unit performance contract: provider discovery has one synchronous segment;
+  // a provider operation must still reload authority after its await. Earlier
+  // cases covered revocation but not redundant synchronous receipt reads.
+  it('reuses one synchronous source projection and reloads it after provider execution', async () => {
+    const f = fixture();
+    expect(await f.service.request('source', { op: 'providers' }, () => true)).toMatchObject({ ok: true });
+    expect(f.getGhost).toHaveBeenCalledTimes(1);
+    f.getGhost.mockClear();
+    expect(await f.service.request('source', { op: 'call', provider: 'fixture', request: { op: 'read' } }, () => true)).toMatchObject({ ok: true });
+    expect(f.getGhost).toHaveBeenCalledTimes(2);
+  });
   // Trusted confirmation labels must not recursively interpret plugin names or
   // filenames as Host template fields (owner confirmation cannot be forged).
   it('keeps template-like plugin labels literal in the owner confirmation', () => {
