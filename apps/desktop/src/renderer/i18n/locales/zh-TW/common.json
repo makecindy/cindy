@@ -8741,6 +8741,8 @@
         "createTitle": "新增 MCP 伺服器",
         "editTitle": "編輯 MCP 伺服器",
         "desc": "僅支援遠端 http / sse 型 MCP。儲存後目前任務即可呼叫；引擎的原生工具清單可能要等到下一輪傳送或新會話才出現。",
+                "matchNotice": "已存在同端點的連線，儲存會更新該條目。",
+                "createInstead": "改為新建一條",
         "teammateDesc": "僅支援遠端 http / sse 型 MCP。儲存後夥伴會把它加入自己的工具，在本對話的下一則訊息起即可使用，無需新建任務。"
       },
       "fields": {

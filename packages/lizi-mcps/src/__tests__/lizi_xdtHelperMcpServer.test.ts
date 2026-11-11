@@ -1202,13 +1202,25 @@ it.each(['claude-code', 'codex', 'pi'] as const)('opens MCP Settings through the
       { status: 'timed_out', formPresented: false },
       { status: 'interrupted' },
       { status: 'unavailable', reason: 'request_in_progress' },
-      { status: 'saved', serverId: 'custom_example', runtimeState: 'not-mounted', toolCount: 0 },
     ]) {
       request.mockResolvedValueOnce(outcome as Awaited<ReturnType<typeof request>>);
       expect(parsePayload(await client.callTool({ name: 'call_tool', arguments: {
         name: 'request_mcp_setup', args: {},
       } }))).toEqual({ ok: true, ...outcome });
     }
+    // Saved while the engine's native list is stale still carries an explicit hint, so a model
+    // cannot read pending/not-mounted/unverified as a connection failure.
+    request.mockResolvedValueOnce({ status: 'saved', serverId: 'custom_example', runtimeState: 'not-mounted', toolCount: 0 } as Awaited<ReturnType<typeof request>>);
+    const savedStale = parsePayload(await client.callTool({ name: 'call_tool', arguments: {
+      name: 'request_mcp_setup', args: {},
+    } }));
+    expect(savedStale).toMatchObject({ ok: true, status: 'saved', serverId: 'custom_example', runtimeState: 'not-mounted' });
+    expect(String(savedStale.hint)).toContain('不是连接失败');
+    request.mockResolvedValueOnce({ status: 'saved', serverId: 'custom_example', runtimeState: 'connected', toolCount: 2 } as Awaited<ReturnType<typeof request>>);
+    const savedFresh = parsePayload(await client.callTool({ name: 'call_tool', arguments: {
+      name: 'request_mcp_setup', args: {},
+    } }));
+    expect(savedFresh.hint).toBeUndefined();
   } finally { await client.close(); await server.close(); }
 });
 

@@ -8741,6 +8741,8 @@
         "createTitle": "添加 MCP 服务器",
         "editTitle": "编辑 MCP 服务器",
         "desc": "仅支持远程 http / sse 型 MCP。保存后当前任务即可调用；引擎的原生工具列表可能要等到下一轮发送或新会话才出现。",
+                "matchNotice": "已存在同端点的连接，保存会更新该条目。",
+                "createInstead": "改为新建一条",
         "teammateDesc": "仅支持远程 http / sse 型 MCP。保存后伙伴会把它加入自己的工具，在本对话的下一条消息起即可使用，无需新建任务。"
       },
       "fields": {

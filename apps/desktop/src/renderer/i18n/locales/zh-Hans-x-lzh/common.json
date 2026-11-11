@@ -8741,6 +8741,8 @@
         "createTitle": "增 MCP 服务器",
         "editTitle": "修 MCP 服务器",
         "desc": "仅支持远程 http / sse 型 MCP。存后本差事即可调用；引擎原生工具之列，或须待下一轮或新差事方现。",
+                "matchNotice": "已有同端口之接通，存则更新此条。",
+                "createInstead": "改为另立一条",
         "teammateDesc": "仅支持远程 http / sse 型 MCP。存后同僚自纳为己用，于此言谈下一则讯息起即可用之，毋须新开差事。"
       },
       "fields": {

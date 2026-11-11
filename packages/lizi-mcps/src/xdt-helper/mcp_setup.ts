@@ -66,9 +66,18 @@ export function registerMcpSetupTool(
       };
       try {
         const result = await request(context, normalized);
-        return okPayload({ ...result, ...(gatewayAvailable && result.status === 'saved' ? {
-          next: { tool: 'list_mcp_tools', args: { server: result.serverId }, callWith: 'call_mcp_tool' },
-        } : {}) });
+        // runtimeState 只描述引擎原生工具列表。把这件事写进回执，避免模型把
+        // pending / not-mounted / unverified 读成“连接失败”而要求重装或新建任务。
+        const nativeListHint = result.status === 'saved' && result.runtimeState && result.runtimeState !== 'connected'
+          ? { hint: `配置已保存。runtimeState=${result.runtimeState} 只描述引擎原生工具列表，不是连接失败；直接用 next 的 list_mcp_tools → call_mcp_tool 即可，无需“继续”、新任务、worker 或重装。` }
+          : {};
+        return okPayload({
+          ...result,
+          ...nativeListHint,
+          ...(gatewayAvailable && result.status === 'saved' ? {
+            next: { tool: 'list_mcp_tools', args: { server: result.serverId }, callWith: 'call_mcp_tool' },
+          } : {}),
+        });
       }
       catch { return errorPayload('MCP_SETUP_UNAVAILABLE', 'Could not open the MCP Settings form.'); }
     },

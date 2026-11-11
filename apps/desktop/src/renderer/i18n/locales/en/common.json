@@ -8784,6 +8784,8 @@
         "createTitle": "Add MCP server",
         "editTitle": "Edit MCP server",
         "desc": "Remote http / sse MCP only. A saved server can be called from the current task right away; some engines add it to their native tool list on a later send or in a new session.",
+                "matchNotice": "A connection with this endpoint already exists; saving updates that entry.",
+                "createInstead": "Create a new one instead",
         "teammateDesc": "Remote http / sse MCP only. After saving, your teammate adds it to their tools and can use it from the next message in this chat, with no new session needed."
       },
       "fields": {

@@ -8856,6 +8856,8 @@
         "createTitle": "Ajouter un serveur MCP",
         "editTitle": "Modifier le serveur MCP",
         "desc": "MCP distant http / sse uniquement. Un serveur enregistré est utilisable dès maintenant dans la tâche en cours ; certains moteurs ne l'ajoutent à leur liste d'outils native qu'à l'envoi suivant ou dans une nouvelle session.",
+                "matchNotice": "Une connexion avec ce point de terminaison existe déjà ; l'enregistrement la met à jour.",
+                "createInstead": "Créer une nouvelle entrée",
         "teammateDesc": "MCP distant http / sse uniquement. Après l'enregistrement, votre coéquipier l'ajoute à ses outils et peut l'utiliser dès le prochain message de cette conversation, sans nouvelle session."
       },
       "fields": {

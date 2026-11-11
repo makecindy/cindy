@@ -8784,6 +8784,8 @@
         "createTitle": "MCP-Server hinzufügen",
         "editTitle": "MCP-Server bearbeiten",
         "desc": "Nur Remote-MCP über http / sse. Ein gespeicherter Server ist im aktuellen Task sofort aufrufbar; manche Engines übernehmen ihn erst beim nächsten Senden oder in einer neuen Sitzung in ihre native Werkzeugliste.",
+                "matchNotice": "Für diesen Endpunkt besteht bereits eine Verbindung; Speichern aktualisiert sie.",
+                "createInstead": "Stattdessen neu anlegen",
         "teammateDesc": "Nur Remote-MCP über http / sse. Nach dem Speichern fügt dein Teammitglied ihn seinen Werkzeugen hinzu und kann ihn ab der nächsten Nachricht in diesem Chat nutzen; eine neue Sitzung ist nicht nötig."
       },
       "fields": {

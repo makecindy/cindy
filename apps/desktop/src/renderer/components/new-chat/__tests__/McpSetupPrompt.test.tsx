@@ -12,7 +12,8 @@ const request: McpSetupRequest = { kind: 'mcp_setup', requestId: 'form-1', propo
 let receive: (value: unknown) => void;
 let dismiss: (value: unknown) => void;
 const api = {
-  listCustomMcpServers: vi.fn(), createCustomMcpServer: vi.fn(), refreshCustomMcpCodex: vi.fn(),
+  listCustomMcpServers: vi.fn(), createCustomMcpServer: vi.fn(), updateCustomMcpServer: vi.fn(),
+  refreshCustomMcpCodex: vi.fn(),
   resolveInteraction: vi.fn(), getPendingInteractions: vi.fn(),
 };
 const store = vi.fn();
@@ -22,6 +23,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   api.listCustomMcpServers.mockResolvedValue({ servers: [] });
   api.createCustomMcpServer.mockResolvedValue({ ok: true });
+  api.updateCustomMcpServer.mockResolvedValue({ ok: true });
   api.refreshCustomMcpCodex.mockResolvedValue({ ok: true });
   api.resolveInteraction.mockResolvedValue({ accepted: true });
   api.getPendingInteractions.mockResolvedValue([]);
@@ -47,6 +49,38 @@ it('saves through the existing Settings helper and resolves with only the server
     url: 'https://example.test/mcp', transport: 'http', headers: {} });
   expect(store).toHaveBeenCalledWith('mcp_token_custom_example', 'test-invalid-token');
   expect(JSON.stringify(api.resolveInteraction.mock.calls)).not.toContain('test-invalid-token');
+});
+
+// Re-running setup for a saved endpoint must repair it: a second `custom_example-2` entry would
+// leave the owner choosing between two identical connections.
+it('updates the existing entry with the same endpoint instead of creating a duplicate', async () => {
+  api.listCustomMcpServers.mockResolvedValue({ servers: [{
+    id: 'custom_existing', name: 'Example', url: 'https://example.test/mcp/', transport: 'http', headers: {},
+  }] });
+  render(<McpSetupPrompt request={request} />);
+  expect(await screen.findByText('settings.mcp.dialog.editTitle')).toBeTruthy();
+  const token = screen.getByLabelText('settings.mcp.fields.token');
+  fireEvent.change(token, { target: { value: 'test-invalid-token' } });
+  fireEvent.click(screen.getByRole('button', { name: 'settings.mcp.save' }));
+  await waitFor(() => expect(api.resolveInteraction).toHaveBeenCalledWith('form-1', {
+    kind: 'mcp_setup', status: 'saved', serverId: 'custom_existing',
+  }));
+  expect(api.updateCustomMcpServer).toHaveBeenCalledWith(expect.objectContaining({ id: 'custom_existing' }));
+  expect(api.createCustomMcpServer).not.toHaveBeenCalled();
+});
+
+// Same-endpoint duplicates stay possible on purpose: the owner can override the repair path.
+it('creates a second entry when the owner explicitly asks instead of repairing', async () => {
+  api.listCustomMcpServers.mockResolvedValue({ servers: [{
+    id: 'custom_existing', name: 'Example', url: 'https://example.test/mcp/', transport: 'http', headers: {},
+  }] });
+  render(<McpSetupPrompt request={request} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'settings.mcp.dialog.createInstead' }));
+  expect(await screen.findByText('settings.mcp.dialog.createTitle')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'settings.mcp.save' }));
+  await waitFor(() => expect(api.createCustomMcpServer).toHaveBeenCalledWith(
+    expect.objectContaining({ id: 'custom_example' })));
+  expect(api.updateCustomMcpServer).not.toHaveBeenCalled();
 });
 
 // Teammates get the tools in this chat on the next message, so they must not see "start a new session".

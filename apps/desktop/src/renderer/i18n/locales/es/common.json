@@ -8856,6 +8856,8 @@
         "createTitle": "Agregar servidor MCP",
         "editTitle": "Editar servidor MCP",
         "desc": "Solo MCP remoto http / sse. Un servidor guardado puede usarse desde la tarea actual de inmediato; algunos motores lo añaden a su lista nativa de herramientas en el siguiente envío o en una sesión nueva.",
+                "matchNotice": "Ya existe una conexión con este endpoint; al guardar se actualizará esa entrada.",
+                "createInstead": "Crear una nueva",
         "teammateDesc": "Solo MCP remoto http / sse. Después de guardar, tu compañero lo añade a sus herramientas y puede usarlo desde el siguiente mensaje de esta conversación, sin necesidad de una nueva sesión."
       },
       "fields": {

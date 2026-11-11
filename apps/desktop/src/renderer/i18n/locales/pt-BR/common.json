@@ -8856,6 +8856,8 @@
         "createTitle": "Adicionar servidor MCP",
         "editTitle": "Editar servidor MCP",
         "desc": "Apenas MCP remoto http / sse. Um servidor salvo pode ser chamado na tarefa atual imediatamente; alguns engines só o adicionam à lista nativa de ferramentas no próximo envio ou em uma nova sessão.",
+                "matchNotice": "Já existe uma conexão com este endpoint; salvar atualiza essa entrada.",
+                "createInstead": "Criar uma nova",
         "teammateDesc": "Apenas MCP remoto http / sse. Depois de salvar, seu colega o adiciona às ferramentas dele e pode usá-lo a partir da próxima mensagem desta conversa, sem precisar de uma nova Sessão."
       },
       "fields": {
