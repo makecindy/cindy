@@ -21,7 +21,7 @@ describe('voice input overlay retry gate', () => {
     expect(overlaySource).toContain('setStopInFlight(true);');
     expect(overlaySource).toContain('setStopInFlight(false);');
     expect(overlaySource).toContain('if (stopInFlightRef.current) return;');
-    expect(overlaySource).toContain('disabled={stopInFlight}');
+    expect(overlaySource).toContain('disabled={stopInFlight || codexRecoveryBusy || codexRecoveryPromptPending}');
     expect(overlaySource).toContain('if (!text) {\n      stateRef.current = \'done\';\n      commitUsageStats();');
   });
 
