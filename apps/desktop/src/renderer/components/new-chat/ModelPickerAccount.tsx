@@ -1,4 +1,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
+import { sessionAccountDisplay, useSessionSubscriptionAccount } from './SessionSubscriptionAccount';
 import {
   useOptionalAuthDeviceId,
   useOptionalAuthUser,
@@ -211,10 +213,25 @@ function ScopedModelPickerAccount({
   );
 }
 
-export function useModelPickerAccount(providerId: string, deviceId?: string | null) {
+export function useModelPickerAccount(providerId: string, deviceId?: string | null): ModelPickerAccount | null {
   const preview = useContext(Context);
   const selfDeviceId = useOptionalAuthDeviceId();
+  const { t } = useTranslation();
   const target = deviceId === selfDeviceId ? null : deviceId;
+  // The task's executing computer knows its native-session binding. Its answer
+  // takes precedence over picker previews, including a group's next pool pick.
+  const session = useSessionSubscriptionAccount(
+    providerId,
+    target === undefined ? preview.deviceId : target,
+  );
+  const display = preview.enabled ? sessionAccountDisplay(session, t) : null;
+  if (display) {
+    return {
+      ...(display.identity ? { identity: display.identity } : {}),
+      plan: display.plan,
+      usage: session?.state === 'bound' ? session.account.usage ?? null : display.usage,
+    };
+  }
   return (providerId === 'anthropic' || providerId === 'openai') &&
     (target === undefined || target === preview.deviceId)
     ? (preview.accounts[providerId] ?? null)
