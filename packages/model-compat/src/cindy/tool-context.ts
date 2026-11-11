@@ -191,7 +191,13 @@ export class ChatBridgeToolContext {
     }
     const exact = this.chatNamesByResponseName.get(responseToolIdentity(kind, name, namespace));
     if (exact !== undefined) return exact;
-    return clampChatToolName(namespace ? `${namespace}__${name}` : name);
+    // Only synthesise a wire name when the advertised entry has the selector's kind.
+    // Chat cannot express function vs custom, so a qualified selector naming the other kind would
+    // otherwise force that tool; leaving it unqualified is the honest outcome.
+    const fallbackName = namespace === undefined ? name : `${namespace}__${name}`;
+    const advertised = this.specsByChatName.get(fallbackName);
+    if (advertised !== undefined && advertised.kind !== selectorKind) return clampChatToolName(name);
+    return clampChatToolName(fallbackName);
   }
 
   private reserveName(preferred: string, identity: string): string {
