@@ -149,6 +149,13 @@ async function start(page, ui) {
 export default {
   name: 'setup-migration',
   entry: './setup-migration-fixture.tsx',
+  // The window host now watches sign-ins to start the get-started guide. A session already
+  // signed in at startup is not a new sign-in, so the guide stays closed in these scenes.
+  stubs: {
+    'src/renderer/contexts/AuthContext': {
+      partial: "export const useAuth = () => ({ mode: 'cloud', dataOwnerId: 'fixture', isAuthenticated: true, isInitializing: false });",
+    },
+  },
   viewport: { width: 1040, height: 760 },
   real: 'SetupMigrationDialog (computer picker, review groups, batch plugin permissions with GhostInstallConsentContent, result and one-time checklist), SetupMigrationSection, translations and themes',
   notCovered: 'Main-side snapshot, plan, plugin/skill installers, settings writes, key copy and SSH authorization (unit-tested in src/main/setup-migration and src/main/remote-ssh), the confirmation dialog on the other computer (native), device-link transport, login behavior and two real computers',
