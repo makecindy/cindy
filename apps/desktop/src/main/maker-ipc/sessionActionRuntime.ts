@@ -7,6 +7,8 @@ interface StoredSession {
   status: string;
   agentKind: string | null;
   sdkSessionId: string | null;
+  agentDeviceId?: string | null;
+  remoteHostId?: string | null;
 }
 
 /** Prepare native history without sending a synthetic user turn. The existing send
@@ -16,8 +18,13 @@ export function createSessionActionRuntime<Row extends StoredSession, Live>(deps
   load(sessionId: string): Promise<Row | undefined>;
   ownerGeneration(): number;
   resume(sessionId: string, row: Row, assertCurrent: () => void): Promise<Live>;
+  close(sessionId: string, live: Live): Promise<void>;
 }) {
-  return async (sessionId: string, action: SessionRuntimeAction): Promise<Live | null> => {
+  // Runtimes started only for a history action. The renderer's start-time
+  // preferences (personal prompt, memory switch) are not stored in the DB, so
+  // such a runtime must not stay around for the next send to reuse.
+  const restored = new Map<string, Live>();
+  const prepare = async (sessionId: string, action: SessionRuntimeAction): Promise<Live | null> => {
     const generation = deps.ownerGeneration();
     const assertCurrent = () => {
       if (deps.ownerGeneration() !== generation) {
@@ -36,6 +43,12 @@ export function createSessionActionRuntime<Row extends StoredSession, Live>(deps
       }
       if (action === 'pi-history' && row.agentKind !== 'pi') return null;
       if (action === 'compact' && row.agentKind !== 'pi' && row.agentKind !== 'codex') return null;
+      // The strict-resume marker does not travel to another computer's executor, so
+      // a missing native history there could be silently replaced by an empty one.
+      // Rewind and compact rewrite history: leave them to the computer that runs it.
+      if (action !== 'pi-history' && row.agentDeviceId && !row.remoteHostId) {
+        throwIpcError('PRECONDITION_FAILED', 'Restore this task on the computer that runs it first');
+      }
       if (!row.sdkSessionId || row.sdkSessionId === '<pending>') {
         // A previous first-turn Claude rewind deliberately detached the native
         // history. Orchestration can still rewind the remaining DB projection.
@@ -43,8 +56,21 @@ export function createSessionActionRuntime<Row extends StoredSession, Live>(deps
         throwIpcError('PRECONDITION_FAILED', 'Task has no native history to restore');
       }
       const resumed = await deps.resume(sessionId, row, assertCurrent);
+      // Tree browsing and export restore the Pi runtime as they always did; only
+      // the new rewind/compact restores are released after their action.
+      if (action !== 'pi-history') restored.set(sessionId, resumed);
       assertCurrent();
       return resumed;
     });
   };
+  /** Close a runtime this module restored, so the next send starts it with the
+   * caller's own start options. A no-op for runtimes that were already live. */
+  const release = (sessionId: string): Promise<void> =>
+    withSendToSessionLock(sessionId, async () => {
+      const session = restored.get(sessionId);
+      if (session === undefined) return;
+      restored.delete(sessionId);
+      if (deps.getLive(sessionId) === session) await deps.close(sessionId, session);
+    });
+  return Object.assign(prepare, { release });
 }

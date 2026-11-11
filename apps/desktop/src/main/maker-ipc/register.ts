@@ -4852,6 +4852,11 @@ export async function prepareSessionForHistoryAction(sessionId: string, action: 
   return sessionActionRuntime(sessionId, action);
 }
 
+/** Close a runtime that only a history action restored (see createSessionActionRuntime). */
+export async function releaseSessionAfterHistoryAction(sessionId: string) {
+  await sessionActionRuntime?.release(sessionId);
+}
+
 /**
  * Own the session input boundary while rewind stops an active turn and changes
  * history. Queued messages survive the operation but stay paused afterwards.
@@ -25232,11 +25237,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         throwIpcError('INVALID_PARAMS', 'instructions must be a string when provided');
       }
       return withSendToSessionLock(sessionId, async () => {
-        const sess = await getOrResumeSessionForHistory(sessionId, 'compact');
-        if (!sess?.capabilities.manualCompact?.supported) {
-          throwIpcError('UNSUPPORTED_CAPABILITY', 'This agent does not support manual context compaction');
+        try {
+          const sess = await getOrResumeSessionForHistory(sessionId, 'compact');
+          if (!sess?.capabilities.manualCompact?.supported) {
+            throwIpcError('UNSUPPORTED_CAPABILITY', 'This agent does not support manual context compaction');
+          }
+          return await sess.compactSession(instructions);
+        } finally {
+          await getOrResumeSessionForHistory.release(sessionId);
         }
-        return sess.compactSession(instructions);
       });
     },
   );
@@ -25288,6 +25297,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       await markOrcaRoleIfNeeded(session.id, createOpts.orcaRole);
       return session;
     },
+    close: (sessionId, live) => withRehydrateCloseSuppressed(sessionId,
+      () => maker.closeSessionIfCurrent(live, 'runtime-refresh').then(() => undefined)),
   });
   sessionActionRuntime = getOrResumeSessionForHistory;
 

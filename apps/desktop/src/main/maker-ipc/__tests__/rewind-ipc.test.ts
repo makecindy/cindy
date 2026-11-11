@@ -7,6 +7,9 @@ const mocks = vi.hoisted(() => ({
   commitRewindAtMessage: vi.fn(),
   drainPersistQueue: vi.fn(),
   prepareSessionForHistoryAction: vi.fn(),
+  releaseSessionAfterHistoryAction: vi.fn(),
+  assertTrustedAppRendererEvent: vi.fn(),
+  isDeviceLinkInvoke: vi.fn(() => false),
   withSessionInputStoppedForRewind: vi.fn(),
   ownerScope: { ownerScopeKey: 'owner-1' },
   isOwnerCurrent: vi.fn(() => true),
@@ -36,7 +39,16 @@ vi.mock('../../messagePersistBroadcaster.desktop.js', () => ({
 
 vi.mock('../register.js', () => ({
   prepareSessionForHistoryAction: mocks.prepareSessionForHistoryAction,
+  releaseSessionAfterHistoryAction: mocks.releaseSessionAfterHistoryAction,
   withSessionInputStoppedForRewind: mocks.withSessionInputStoppedForRewind,
+}));
+
+vi.mock('../../security/trustedAppRenderer.js', () => ({
+  assertTrustedAppRendererEvent: mocks.assertTrustedAppRendererEvent,
+}));
+
+vi.mock('../../device-link/invoke-context.js', () => ({
+  isDeviceLinkInvoke: mocks.isDeviceLinkInvoke,
 }));
 
 vi.mock('../../goal-host/index.js', () => ({
@@ -81,6 +93,9 @@ describe('maker rewind IPC stop-then-rewind', () => {
     mocks.isOwnerCurrent.mockReturnValue(true);
     mocks.drainPersistQueue.mockResolvedValue(undefined);
     mocks.prepareSessionForHistoryAction.mockReset().mockResolvedValue(undefined);
+    mocks.releaseSessionAfterHistoryAction.mockReset().mockResolvedValue(undefined);
+    mocks.assertTrustedAppRendererEvent.mockReset();
+    mocks.isDeviceLinkInvoke.mockReset().mockReturnValue(false);
     mocks.withSessionInputStoppedForRewind.mockImplementation(
       async (_sessionId: string, action: () => Promise<unknown>) => action(),
     );
@@ -107,6 +122,31 @@ describe('maker rewind IPC stop-then-rewind', () => {
       await expect(mocks.handlers.get(channel)!({}, 'session-1', 'message-1'))
         .resolves.toEqual({ id: 'session-1' });
       expect(mocks.prepareSessionForHistoryAction).toHaveBeenCalledWith('session-1', 'rewind');
+    },
+  );
+
+  it.each([MAKER_INVOKE.REWIND_PREVIEW, MAKER_INVOKE.REWIND_COMMIT])(
+    'rejects an untrusted page before %s can start a cold task', async (channel) => {
+      mocks.assertTrustedAppRendererEvent.mockImplementationOnce(() => { throw new Error('untrusted sender'); });
+      await expect(mocks.handlers.get(channel)!({}, 'session-1', 'message-1')).rejects.toThrow('untrusted sender');
+      expect(mocks.prepareSessionForHistoryAction).not.toHaveBeenCalled();
+    },
+  );
+
+  it('skips the page check for the separately authenticated device link', async () => {
+    mocks.isDeviceLinkInvoke.mockReturnValue(true);
+    mocks.previewRewindAtMessage.mockResolvedValueOnce({ id: 'session-1' });
+    await mocks.handlers.get(MAKER_INVOKE.REWIND_PREVIEW)!({}, 'session-1', 'message-1');
+    expect(mocks.assertTrustedAppRendererEvent).not.toHaveBeenCalled();
+  });
+
+  it.each([MAKER_INVOKE.REWIND_PREVIEW, MAKER_INVOKE.REWIND_COMMIT])(
+    'releases a restored runtime after %s, even when it fails', async (channel) => {
+      const operation = channel === MAKER_INVOKE.REWIND_PREVIEW
+        ? mocks.previewRewindAtMessage : mocks.commitRewindAtMessage;
+      operation.mockRejectedValueOnce(new Error('boom'));
+      await expect(mocks.handlers.get(channel)!({}, 'session-1', 'message-1')).rejects.toThrow('boom');
+      expect(mocks.releaseSessionAfterHistoryAction).toHaveBeenCalledWith('session-1');
     },
   );
 

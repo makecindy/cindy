@@ -15,9 +15,10 @@ function harness(overrides = {}) {
     return stored;
   });
   const load = vi.fn(async () => row as typeof row | undefined);
-  return { row, resume, load, changeOwner: () => { owner++; },
+  const close = vi.fn(async () => { live = undefined; });
+  return { row, resume, load, close, changeOwner: () => { owner++; },
     prepare: createSessionActionRuntime({ getLive: () => live, load,
-      ownerGeneration: () => owner, resume }) };
+      ownerGeneration: () => owner, resume, close }) };
 }
 
 describe('history action runtime preparation', () => {
@@ -69,5 +70,23 @@ describe('history action runtime preparation', () => {
   it('reports a missing task distinctly', async () => {
     const h = harness(); h.load.mockResolvedValueOnce(undefined);
     await expect(h.prepare('s', 'rewind')).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+  // The personal prompt / memory switch live only in the renderer, so a runtime
+  // restored for history must not be reused by the next send.
+  it('closes only the runtime it restored, once, when the action is done', async () => {
+    const h = harness();
+    await h.prepare('s', 'rewind');
+    await h.prepare.release('s');
+    await h.prepare.release('s');
+    expect(h.close).toHaveBeenCalledTimes(1);
+    const live = harness();
+    await live.prepare('s', 'pi-history');
+    await live.prepare.release('s');
+    expect(live.close).not.toHaveBeenCalled();
+  });
+  it.each(['rewind', 'compact'] as const)('refuses %s for a task whose Agent runs on another computer', async (action) => {
+    const h = harness({ agentKind: 'codex', remoteHostId: null, agentDeviceId: 'device-2' });
+    await expect(h.prepare('s', action)).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(h.resume).not.toHaveBeenCalled();
   });
 });
