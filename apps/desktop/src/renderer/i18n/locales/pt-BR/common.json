@@ -12719,47 +12719,47 @@
         "claude-code": {
           "ask": {
             "label": "Permissões padrão",
-            "description": "Permite acesso de leitura e gravação dentro do espaço de trabalho e pede confirmação antes de usar permissões superiores, acesso à rede ou caminhos fora do espaço de trabalho."
+            "description": "Você aprova as ações quando necessário."
           },
           "acceptEdits": {
             "label": "Aceitar edições automaticamente",
-            "description": "Aceita automaticamente solicitações de edição de arquivos para reduzir confirmações repetidas. Comandos ou permissões de maior risco ainda seguem a política de permissões subjacente."
+            "description": "Edições de arquivos são permitidas diretamente; você aprova outras ações quando necessário."
           },
           "auto": {
             "label": "Revisão automática",
-            "description": "Permite acesso de leitura e gravação dentro do espaço de trabalho e revisa automaticamente solicitações de elevação de permissões; ações de alto risco ainda podem ser negadas ou exigir confirmação. Isso reduz interrupções, mas pode cometer erros."
+            "description": "Um modelo de IA aprova as ações, o que pode exigir mais espera; você confirma quando necessário."
           },
           "bypassPermissions": {
             "label": "Acesso total",
-            "description": "Permite editar qualquer arquivo e executar comandos com acesso à rede sem outra confirmação. Risco máximo; use apenas para tarefas confiáveis."
+            "description": "Ações rotineiras são permitidas diretamente, incluindo arquivos fora do espaço de trabalho e comandos de rede."
           }
         },
         "codex": {
           "ask": {
             "label": "Permissões padrão",
-            "description": "Permite acesso de leitura e gravação dentro do espaço de trabalho e pede confirmação antes de usar permissões superiores, acesso à rede ou caminhos fora do espaço de trabalho."
+            "description": "Você aprova as ações quando necessário."
           },
           "auto": {
             "label": "Revisão automática",
-            "description": "Executa comandos automaticamente no ambiente isolado protegido do espaço de trabalho. Ações que ultrapassam os limites desse ambiente passam por uma revisão automática; ações de alto risco ainda podem ser negadas ou exigir confirmação."
+            "description": "Um modelo de IA aprova as ações, o que pode exigir mais espera; você confirma quando necessário."
           },
           "bypassPermissions": {
             "label": "Acesso total",
-            "description": "Permite editar qualquer arquivo e executar comandos com acesso à rede sem outra confirmação. Risco máximo; use apenas para tarefas confiáveis."
+            "description": "Ações rotineiras são permitidas diretamente, incluindo arquivos fora do espaço de trabalho e comandos de rede."
           }
         },
         "pi": {
           "ask": {
             "label": "Permissões padrão",
-            "description": "Ferramentas somente leitura são executadas diretamente; gravar arquivos, executar comandos e usar ferramentas MCP exige confirmação a cada vez."
+            "description": "Você aprova as ações quando necessário."
           },
           "auto": {
             "label": "Revisão automática",
-            "description": "Gravações dentro do espaço de trabalho e comandos seguros são executados automaticamente; gravações fora dele, comandos arriscados e ferramentas MCP ainda exigem confirmação."
+            "description": "Um modelo de IA aprova as ações, o que pode exigir mais espera; você confirma quando necessário."
           },
           "bypassPermissions": {
             "label": "Acesso total",
-            "description": "Permite editar qualquer arquivo e executar comandos com acesso à rede sem outra confirmação. Risco máximo; use apenas para tarefas confiáveis."
+            "description": "Ações rotineiras são permitidas diretamente, incluindo arquivos fora do espaço de trabalho e comandos de rede."
           }
         }
       }
