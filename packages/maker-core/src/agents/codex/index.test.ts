@@ -14,6 +14,7 @@ import { CodexForkError } from './fork-error.js';
 import { MANUAL_ABORT_RECOVERY_GRACE_MS, Session } from '../../session.js';
 import { withFastModePolicy } from '../shared/fast-mode-policy.js';
 import { AUTO_REVIEW_CONTINUATION_POLICY } from '../shared/continuation-policy.js';
+import { assembleSystemPromptSections } from '../shared/system-prompt-sections.js';
 import { Method, type TurnStartParams } from './app-server/protocol.js';
 import type { Effort } from '../../types/common.js';
 import type { AppServerHost, ThreadEventHandlers } from './app-server/host.js';
@@ -1752,7 +1753,10 @@ describe('CodexAgent oneShot dispatch guard', () => {
   it('rechecks ownership before turn/start and releases the temporary thread', async () => {
     const agent = new CodexAgent(createDeps());
     const request = vi.fn(async (method: string) => {
-      if (method === Method.ThreadStart) return { thread: { id: 'thread-before-turn-guard' } };
+      // No caller model: the app-server picks its own default and reports it back.
+      if (method === Method.ThreadStart) {
+        return { thread: { id: 'thread-before-turn-guard' }, model: 'server-default-model' };
+      }
       throw new Error(`unexpected request: ${method}`);
     });
     const release = vi.fn(async () => undefined);
@@ -1769,7 +1773,7 @@ describe('CodexAgent oneShot dispatch guard', () => {
     });
 
     const beforeDispatch = vi
-      .fn<() => Promise<boolean>>()
+      .fn<(route?: { model?: string }) => Promise<boolean>>()
       .mockResolvedValueOnce(true)
       .mockResolvedValueOnce(false);
 
@@ -1777,8 +1781,12 @@ describe('CodexAgent oneShot dispatch guard', () => {
       .rejects.toMatchObject({ name: 'OneShotError', reason: 'network' });
 
     expect(beforeDispatch).toHaveBeenCalledTimes(2);
+    // A retired hard-coded model id would fail every default one-shot, so no
+    // model is sent; the host still gets the chosen model before the prompt.
+    expect(beforeDispatch).toHaveBeenNthCalledWith(1);
+    expect(beforeDispatch).toHaveBeenNthCalledWith(2, { model: 'server-default-model' });
     expect(request).toHaveBeenCalledTimes(1);
-    expect(request).toHaveBeenCalledWith(Method.ThreadStart, expect.any(Object));
+    expect(request).toHaveBeenCalledWith(Method.ThreadStart, expect.not.objectContaining({ model: expect.anything() }));
     expect(request).not.toHaveBeenCalledWith(Method.TurnStart, expect.any(Object));
     expect(subscribeThread).toHaveBeenCalledWith('thread-before-turn-guard', expect.any(Object));
     expect(release).toHaveBeenCalledOnce();
@@ -5844,6 +5852,24 @@ describe('CodexAgent.refreshLocalModels', () => {
 });
 
 describe('CodexAgent.startSession developerInstructions', () => {
+  // Unit, real thread/start projection: selected static text stays in developer
+  // instructions, after the original prefix, without creating a user message.
+  it('appends selected task fragments to the native developer instructions', async () => {
+    const instructions: string[] = [];
+    for (const selected of [false, true]) {
+      const agent = new CodexAgent(createDeps({ systemPrompt: 'HOST FIXED PREFIX' }));
+      const host = installFakeHost(agent);
+      const handle = await agent.startSession({ sessionId: `task-fragments-${selected}`,
+        model: 'gpt-5.4', workingDir: '/repo', userPrompt: assembleSystemPromptSections('Original task instructions', selected
+          ? [{ name: 'task', order: 0, text: 'STATIC FRAGMENT' }] : []),
+      });
+      const params = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)?.[1] as { developerInstructions: string };
+      instructions.push(params.developerInstructions);
+      await handle.close();
+      await agent.dispose();
+    }
+    expect(instructions[1]).toBe(instructions[0] + '\n\nSTATIC FRAGMENT');
+  });
   it.each([
     { action: 'start', resumeSessionId: undefined, expectedProvider: 'cindy_gateway' },
     {
@@ -24725,6 +24751,21 @@ describe('CodexAgent resume preparation', () => {
 
     expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(1);
     expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadStart)).toHaveLength(0);
+  });
+
+  // History actions must not turn an unavailable native timeline into an empty
+  // task. Ordinary-send fallback is covered below; this is the strict path.
+  it.each([resumeSessionId, '<failed>'])('refuses empty history for strict resume %s', async (nativeId) => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadResume) throw exactNoRolloutError();
+      return undefined;
+    });
+    await expect(agent.startSession({ sessionId: 'strict-history', model: 'gpt-5.4',
+      workingDir: '/repo', resumeSessionId: nativeId,
+      vendorOptions: { _cindyRequireNativeResume: true },
+    })).rejects.toThrow(nativeId === '<failed>' ? 'valid Codex thread id' : 'Failed to resume Codex thread');
+    expect(host.request.mock.calls.some(([method]) => method === Method.ThreadStart)).toBe(false);
   });
 
   it('falls back to thread/start only when resume proves the thread has no rollout', async () => {

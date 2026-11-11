@@ -39,7 +39,7 @@ try {
   const relay = await startAgentNetRelay({
     notify: await createNotificationBridge(readNotificationBridgeConfig()),
     dataDir: path.resolve(data), bootstrap, mode: 'self-hosted', host: value('--host') ?? '127.0.0.1',
-    port: port('--port') ?? 0, udpHost: value('--udp-host'), udpPort: port('--udp-port'), publicUrl: value('--public-url'),
+    port: port('--port') ?? 0, udpHost: value('--udp-host'), udpPort: port('--udp-port'), stunHost: value('--stun-host'), publicUrl: value('--public-url'),
     ...(cert && key ? { tls: { cert: await readFile(cert), key: await readFile(key) } } : {}), logger,
     ...(authIssuer ? { sharing: createAgentNetSharingAuth({ issuer: authIssuer,
       jwksUrl: value('--auth-jwks-url'), region: authRegion as 'cn' | 'global',

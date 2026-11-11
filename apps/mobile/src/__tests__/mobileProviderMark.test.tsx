@@ -6,6 +6,8 @@ import {
   MobileModelIconMark,
 } from "@/session/MobileProviderMark";
 
+const themeState = vi.hoisted(() => ({ mode: "light" as "light" | "dark" }));
+
 // User request 2026-10-29. Unit: no existing test renders the real mobile provider
 // mark. The regression is source-host identity combined with theme color.
 vi.mock("react-native", () => ({
@@ -19,10 +21,13 @@ vi.mock("react-native-svg", () => ({
   default: ({ children, ...props }: any) =>
     createElement("svg", props, children),
   G: ({ children, ...props }: any) => createElement("g", props, children),
+  Defs: ({ children }: any) => createElement("defs", null, children),
+  LinearGradient: ({ children, ...props }: any) => createElement("linearGradient", props, children),
+  Stop: (props: any) => createElement("stop", props),
   Path: (props: any) => createElement("path", props),
 }));
 vi.mock("@/theme", () => ({
-  useTheme: () => ({ colors: { textSecondary: "currentColor" } }),
+  useTheme: () => ({ mode: themeState.mode, colors: { textSecondary: "currentColor" } }),
   useThemedStyles: (factory: any) => factory({ textSecondary: "currentColor" }),
 }));
 vi.mock("@/session/RemoteSourceMark", () => ({
@@ -86,4 +91,25 @@ it("preserves explicit model brands instead of overriding them with the organiza
   );
   expect(firstPath(cindy)).toBeTruthy();
   expect(firstPath(fallback)).toBe(firstPath(cindy));
+});
+
+// Unit: the real Mobile mark must switch palette and keep distinct SVG paint
+// servers when multiple providers are visible; prior tests covered monochrome only.
+it("renders independent spectrum marks and follows the active light/dark theme", () => {
+  const pair = <>
+    <MobileProviderMark name="Enterprise" providerId="byok-test" logoKind="openai-spectrum" remote />
+    <MobileModelIconMark name="Enterprise" providerId="byok-test" logoKind="openai-spectrum" />
+  </>;
+  themeState.mode = "light";
+  const light = render(pair);
+  const ids = [...light.matchAll(/<linearGradient id="([^"]+)"/g)].map(match => match[1]);
+  expect(ids).toHaveLength(2);
+  expect(new Set(ids).size).toBe(2);
+  for (const id of ids) expect(light).toContain(`fill="url(#${id})"`);
+  expect(light).toContain('data-remote="true"');
+  themeState.mode = "dark";
+  const dark = render(pair);
+  expect(dark.match(/stop-color="[^"]+"/g)).not.toEqual(light.match(/stop-color="[^"]+"/g));
+  expect(dark.match(/opacity="[^"]+"/g)).not.toEqual(light.match(/opacity="[^"]+"/g));
+  themeState.mode = "light";
 });

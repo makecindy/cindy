@@ -100,6 +100,15 @@ describe('renderOrcaLeadSystemPrompt', () => {
     );
   });
 
+  // 规则：orca-team-architecture.md「消息派发与 auto-bridge」1d；用户已批准的最小 system prompt 调整。
+  // 合批必须由宿主批次头触发，避免把单个 Worker 正文里偶然出现的 --- / 多个前缀误判成批次。
+  it('processes host-marked auto-bridge batches in one turn', () => {
+    const prompt = renderOrcaLeadSystemPrompt(null);
+    expect(prompt).toContain('When a worker message starts with [Auto-bridged batch: <n> worker reports]');
+    expect(prompt).toContain('Review every report in this turn and issue only necessary follow-ups');
+    expect(prompt).toContain('do not wait for those reports to arrive separately');
+  });
+
   it('declares create_workers while preserving batch result reporting boundaries', () => {
     const prompt = renderOrcaLeadSystemPrompt(null);
 

@@ -29,6 +29,13 @@
       "description": "O acesso total desativa a sandbox do espaço de trabalho e dispensa as aprovações de rotina. {{appName}} pode modificar ficheiros fora do espaço de trabalho e executar comandos de rede sem perguntar; as operações de alto risco integradas continuarão a exigir confirmação.",
       "confirm": "Ativar acesso total",
       "cancel": "Manter permissões atuais"
+    },
+    "description": {
+      "default": "Aprova as ações quando necessário.",
+      "acceptEdits": "As edições de ficheiros são permitidas diretamente; aprova as outras ações quando necessário.",
+      "auto": "Um modelo de IA aprova as ações, o que pode exigir mais espera; confirma quando necessário.",
+      "bypass": "As ações habituais são permitidas diretamente, incluindo ficheiros fora do espaço de trabalho e comandos de rede.",
+      "plan": "Analisa e planeia sem alterar ficheiros."
     }
   },
   "planMode": {
@@ -186,6 +193,7 @@
     "fromLead": "Mensagem do Lead",
     "fromWorkerNamed": "Mensagem do Worker «{{role}}»",
     "fromWorker": "Mensagem do Worker",
+    "fromWorkerBatch": "Relatório do sistema: {{count}} resultados de Worker",
     "emptyMessageBody": "(Mensagem vazia)"
   },
   "contextSheet": {

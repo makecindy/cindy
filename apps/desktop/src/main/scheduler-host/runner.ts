@@ -1,3 +1,4 @@
+import { throwIpcError } from '../utils/ipcValidate';
 import { beginQuietScheduledOutput, hidesScheduledTranscript, hasVisibleScheduledOutput, isQuietScheduledOutput } from './silent-output.js';
 import { untrustedJsonBlock } from '../../shared/untrustedPrompt.js';
 import { routineInstructionFromPrompt } from '../../shared/botAutonomy.js';
@@ -540,6 +541,46 @@ export class MakerScheduleRunner implements ScheduleRunner {
   /** scheduler-host/index.ts 在 startScheduler 内调一次，让 runner 反向 pause schedule */
   attachScheduler(scheduler: Scheduler): void {
     this.scheduler = scheduler;
+  }
+
+  /** Validate an explicit saved choice without switching or waking its target.
+   * Names, timing and other unrelated edits must still work while a source is offline.
+   * Legacy model-only overrides keep their existing follow-task semantics.
+   */
+  async validateModelSelection(schedule: Schedule, previous?: Schedule): Promise<void> {
+    if (schedule.executionMode === 'script' || !schedule.modelAgentKind || !schedule.model?.trim()) return;
+    const routeKeys = ['executionMode', 'targetSessionId', 'agentDeviceId', 'modelAgentDeviceId',
+      'modelAgentKind', 'model', 'providerId'] as const;
+    if (previous && routeKeys.every(key => schedule[key] === previous[key])) return;
+    const target = schedule.targetSessionId
+      ? await this.runtime.getSessionRowSnapshot(schedule.targetSessionId) : null;
+    const resumesTarget = target && (target.status === 'active' ||
+      (target.status === 'archived' && !this.runtime.isManagedScheduledTarget(target)));
+    // SSH uses its host's native catalog at dispatch, not a controller's providers.
+    if (resumesTarget && target.remoteHostId) return;
+    const agentDeviceId = schedule.modelAgentDeviceId === undefined
+      ? resumesTarget
+        ? target.agentDeviceId ?? null
+        : schedule.agentDeviceId ?? null
+      : schedule.modelAgentDeviceId || null;
+    if (!this.deps.resolveModelSelection) throw new Error('Scheduled model selection is not available');
+    try {
+      await this.deps.resolveModelSelection({
+        agentKind: schedule.modelAgentKind, agentDeviceId,
+        model: schedule.model, providerId: schedule.providerId?.trim() || null,
+        effort: (schedule.effort as Effort | undefined) ?? null,
+        fastMode: schedule.fastMode ?? false,
+      });
+    } catch (error) {
+      // Keep the original failure (including offline/permission errors) visible;
+      // missing location is not evidence that a model was removed everywhere.
+      const detail = error instanceof Error ? error.message : String(error);
+      throwIpcError('INVALID_PARAMS',
+        `Cannot validate scheduled model "${schedule.model}" from provider "${schedule.providerId ?? 'default'}" ` +
+        `on ${agentDeviceId ? `computer "${agentDeviceId}"` : 'the automation computer'}: ${detail}. ` +
+        'Select the model and its execution computer together. For the automation computer set modelAgentDeviceId=""; ' +
+        'for another computer use its agentDeviceId from schedule_list_models.');
+    }
   }
 
   /**
@@ -3566,6 +3607,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
               role: 'assistant',
               content: assistantText,
               agentMeta: {
+                turnCompleted: true,
                 origin: {
                   kind: 'scheduler',
                   scheduleId: schedule.id,

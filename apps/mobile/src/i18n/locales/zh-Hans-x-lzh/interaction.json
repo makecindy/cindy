@@ -29,6 +29,13 @@
       "description": "完全访问将关工作区沙箱，并略过常规审批。{{appName}} 可改工作区外之卷、行联网命令而不复相询；内置高险之举仍须确认。慎之。",
       "confirm": "启完全访问",
       "cancel": "守今之权柄"
+    },
+    "description": {
+      "default": "操作须批者，由君裁可。",
+      "acceptEdits": "编辑文件径许，余事按需请君裁可。",
+      "auto": "操作由 AI 模型裁可，审之或须多候；必要时仍请君确认。",
+      "bypass": "常规操作径许，可访工作区外文件、联网执行命令。",
+      "plan": "惟析事定策，不改档。"
     }
   },
   "planMode": {
@@ -186,6 +193,7 @@
     "fromLead": "Lead 之讯",
     "fromWorkerNamed": "Worker「{{role}}」之讯",
     "fromWorker": "Worker 之讯",
+    "fromWorkerBatch": "系统所报 Worker 结果凡 {{count}}",
     "emptyMessageBody": "（空讯）"
   },
   "contextSheet": {

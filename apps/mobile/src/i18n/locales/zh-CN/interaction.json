@@ -29,6 +29,13 @@
       "description": "完全访问会关闭工作区沙箱并跳过常规审批。{{appName}} 可以修改工作区外的文件、执行联网命令且不再询问；内置高风险操作仍会要求确认。",
       "confirm": "开启完全访问",
       "cancel": "保留当前权限"
+    },
+    "description": {
+      "default": "操作按需由你审批。",
+      "acceptEdits": "文件编辑直接允许，其他操作按需由你审批。",
+      "auto": "操作由 AI 模型审批，可能需要额外等待；必要时由你确认。",
+      "bypass": "常规操作直接允许，可访问工作区外文件和联网执行命令。",
+      "plan": "只分析和规划，不修改文件。"
     }
   },
   "planMode": {
@@ -186,6 +193,7 @@
     "fromLead": "来自 Lead 的消息",
     "fromWorkerNamed": "来自 Worker「{{role}}」的消息",
     "fromWorker": "来自 Worker 的消息",
+    "fromWorkerBatch": "系统回传的 {{count}} 条 Worker 结果",
     "emptyMessageBody": "（空消息）"
   },
   "contextSheet": {

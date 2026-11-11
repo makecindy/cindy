@@ -29,7 +29,7 @@ import { app } from 'electron';
 
 import { remoteInvoke } from '../device-link/index.js';
 import { tryUploadPeerAttachment } from '../device-link/filePeer.js';
-import { MAX_MEDIA_BYTES, removeRemote, uploadLocalFile } from '../device-link/mediaTransfer.js';
+import { MAX_MEDIA_BYTES, removeRemote, uploadLocalFile } from '../device-link/mediaTransfer.desktop.js';
 import { createLogger } from '../logger.js';
 import { packDirectory } from './dir-archive.js';
 import { sendParts } from '../task-migration/transferParts.js';
