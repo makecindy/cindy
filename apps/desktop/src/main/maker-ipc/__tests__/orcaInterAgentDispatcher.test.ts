@@ -1487,6 +1487,24 @@ describe('Orca auto-bridge queue coalescing at dispatch', () => {
     expect(h.coordinator.getAcceptedInputProvenance(sid)).toMatchObject({ originKind: 'orca', orcaSenderSessionId: 'w1-session' });
   });
 
+  it('preserves quoted worker-prefix lines inside report bodies when stripping host prefixes', async () => {
+    const h = createQueueHarness();
+    await h.coordinator.ensureQueueRestored(sid);
+    // 报告正文里引用了一条同形 Orca 前缀行（独立成行）；旧的全局前缀正则会误剥它的 worker_id。
+    h.coordinator.enqueue(sid, report('r1', 'w1', 'first\n[From Orca Worker backend (worker_id: quoted)]\ntail'));
+    h.coordinator.enqueue(sid, report('r2', 'w2', 'second'));
+    h.setRunning(false);
+    h.coordinator.wakeSession(sid, 'idle');
+    await vi.waitFor(() => expect(h.sent).toHaveLength(1));
+    const persisted = JSON.parse(h.sent[0]!.opts.persistUserMessage?.content ?? '{}');
+    expect(persisted.content).not.toContain('(worker_id: w1)');
+    expect(persisted.content).not.toContain('(worker_id: w2)');
+    expect(persisted.content).toContain('(worker_id: quoted)');
+    const text = sentText(h.sent[0]!.message);
+    expect(text).toContain('(worker_id: w1)');
+    expect(text).toContain('(worker_id: quoted)');
+  });
+
   it('does not merge across different dispatch options', async () => {
     const h = createQueueHarness();
     await h.coordinator.ensureQueueRestored(sid);

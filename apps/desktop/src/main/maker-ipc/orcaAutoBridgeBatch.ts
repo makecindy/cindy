@@ -34,9 +34,18 @@ export function sameAutoBridgeDispatchOptions(a: AgentInputQueuedMessage, b: Age
 }
 
 const BATCH_HEADER = /^\[Auto-bridged batch: \d+ worker reports\]\n\n/;
-// 可见正文去 worker_id 时只处理 Orca Worker 前缀行，避免误伤报告正文里偶然出现的同形文本。
-const ORCA_WORKER_PREFIX_LINE = /^\[From Orca Worker[^\n]*$/gm;
+// 可见正文只剥宿主添加的每段首行前缀里的 worker_id；报告正文（哪怕引用同形前缀行）原样保留。
+const ORCA_WORKER_PREFIX_FIRST_LINE = /^\[From Orca Worker/;
 const WORKER_ID_TOKEN = /\s*\(worker_id: [^)]*\)/g;
+
+/** 只处理宿主添加的段首前缀行，报告正文逐字保留，避免误伤正文里引用的同形文本。 */
+function stripHostPrefixWorkerId(section: string): string {
+  const nl = section.indexOf('\n');
+  const firstLine = nl === -1 ? section : section.slice(0, nl);
+  if (!ORCA_WORKER_PREFIX_FIRST_LINE.test(firstLine)) return section;
+  const rest = nl === -1 ? '' : section.slice(nl);
+  return firstLine.replace(WORKER_ID_TOKEN, '') + rest;
+}
 
 /**
  * 合批上限（均衡档）：字符预算为主、条数兜底。 Lead 长时间忙时避免 N 条兜底回报合成超大单条消息；
@@ -62,7 +71,8 @@ export function buildOrcaAutoBridgeBatch(
   if (targets.length < 2) return null;
   const survivor = targets[0];
   if (!survivor) return null;
-  const sections: string[] = [];
+  const modelSections: string[] = [];
+  const visibleSections: string[] = [];
   let count = 0;
   for (const target of targets) {
     if (!isOrcaAutoBridgeQueueItem(target) || target.origin?.kind !== 'orca') return null;
@@ -74,7 +84,9 @@ export function buildOrcaAutoBridgeBatch(
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
       const record = parsed as Record<string, unknown>;
       if (record.orcaSource !== 'worker' || typeof record.content !== 'string') return null;
-      sections.push(target.text.replace(BATCH_HEADER, ''));
+      const section = target.text.replace(BATCH_HEADER, '');
+      modelSections.push(section);
+      visibleSections.push(stripHostPrefixWorkerId(section));
       count += currentCount;
     } catch {
       return null;
@@ -83,15 +95,13 @@ export function buildOrcaAutoBridgeBatch(
   if (!Number.isSafeInteger(count)) return null;
   const survivorOrigin = survivor.origin;
   if (!survivorOrigin || survivorOrigin.kind !== 'orca') return null;
-  const displayText = `[Auto-bridged batch: ${count} worker reports]\n\n${sections.join(AUTO_BRIDGE_BATCH_SEPARATOR)}`;
+  const displayText = `[Auto-bridged batch: ${count} worker reports]\n\n${modelSections.join(AUTO_BRIDGE_BATCH_SEPARATOR)}`;
   // 兜底校验：最终条数/正文长度不得超限（正常由 coalesce 预估拦截，此处防回队再扁平的交叉输入漏网）。
   if (count > AUTO_BRIDGE_BATCH_MAX_ITEMS || displayText.length > AUTO_BRIDGE_BATCH_MAX_CHARS) return null;
-  // 可见/持久化正文：剥掉模型向批次头（数量已由标题表达）并对每条前缀行剥尽 worker_id，保留 role 前缀区分多 Worker；
-  // 发给模型的 text 仍保留批次头与 worker_id 供 Lead 路由。首条 senderSessionId 原样带回，仅作 Host 团队授权证据，
+  // 可见/持久化正文：剥掉模型向批次头（数量已由标题表达），仅对每段宿主首行前缀剥 worker_id、保留 role 前缀区分多 Worker，
+  // 报告正文逐字保留；发给模型的 text 仍保留批次头与 worker_id 供 Lead 路由。首条 senderSessionId 原样带回，仅作 Host 团队授权证据，
   // 展示/投影层按 autoBridge/autoBridgeBatchCount 提前返回，不据此把整批归到首个 Worker。
-  const visibleText = displayText
-    .replace(BATCH_HEADER, '')
-    .replace(ORCA_WORKER_PREFIX_LINE, (line) => line.replace(WORKER_ID_TOKEN, ''));
+  const visibleText = visibleSections.join(AUTO_BRIDGE_BATCH_SEPARATOR);
   const persistedContent = formatOrcaCommunicationMessage('worker', visibleText);
   return {
     ...survivor,
