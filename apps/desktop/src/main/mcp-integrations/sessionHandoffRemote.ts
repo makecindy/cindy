@@ -52,6 +52,7 @@ export type RemoteSessionHandoffErrorCode =
   | 'DELIVERY_UNKNOWN'
   | 'CREATED_NOT_DELIVERED'
   | 'WORKTREE_UNAVAILABLE'
+  | 'BUDGET_MODEL_REQUIRES_API_MODE'
   | 'PROVIDER_ROUTE_UNAVAILABLE';
 
 /**
@@ -66,6 +67,7 @@ const TARGET_REJECTIONS = new Set<string>([
   'INVALID_ARGS',
   'HOST_NOT_READY',
   'WORKTREE_UNAVAILABLE',
+  'BUDGET_MODEL_REQUIRES_API_MODE',
   'PROVIDER_ROUTE_UNAVAILABLE',
 ]);
 const AGENT_KINDS = new Set(['claude-code', 'codex', 'pi']);
@@ -178,11 +180,17 @@ export function createRemoteSessionHandoff(deps: {
       if (result.errorCode !== 'DELIVERY_UNKNOWN') releaseReceipt();
       return result;
     };
+    const capabilityProbeFailure = (code: string, message: string) => {
+      const failure = transportFailure(code, message);
+      return creation && failure.errorCode === 'DELIVERY_UNKNOWN'
+        ? { ok: false as const, errorCode: 'REMOTE_UNAVAILABLE' as const, message: 'Could not check the destination capability. No creation request was sent.' }
+        : failure;
+    };
     try {
       // Old Hosts cannot recheck queued authority. Probe before sending any content.
       const support = await deps.invoke(target.deviceId, DL_SESSION_HANDOFF_CHANNEL,
         [{ action: 'task-action-capability', sessionId: target.sessionId }], { preSend: assertCurrent });
-      if (!support.ok) return transportFailure(support.error.code, support.error.message);
+      if (!support.ok) return capabilityProbeFailure(support.error.code, support.error.message);
       const capability = support.result as { taskActionVersion?: unknown; plainRequestBody?: unknown; ordinaryCreateVersion?: unknown } | null;
       if (capability?.taskActionVersion !== 1)
         return { ok: false, errorCode: 'REMOTE_UNSUPPORTED', message: 'The other computer must support task-action authorization before a message can be sent.' };
@@ -214,11 +222,8 @@ export function createRemoteSessionHandoff(deps: {
         && ['resumed', 'already-active'].includes((response.result as { wakeKind: string }).wakeKind)) releaseReceipt();
     } catch (error) {
       if (creation && !mutationStarted) {
-        const failure = error instanceof DeviceLinkError ? transportFailure(error.code, error.message)
-          : transportFailure('IPC_ERROR', error instanceof Error ? error.message : '');
-        return failure.errorCode === 'DELIVERY_UNKNOWN'
-          ? { ok: false, errorCode: 'REMOTE_UNAVAILABLE', message: 'Could not check the destination capability. No creation request was sent.' }
-          : failure;
+        return error instanceof DeviceLinkError ? capabilityProbeFailure(error.code, error.message)
+          : capabilityProbeFailure('IPC_ERROR', error instanceof Error ? error.message : '');
       }
       // inFlight = 请求帧已发出、只是回执丢了：对端可能已执行，不能报「没有发出」。
       if (error instanceof DeviceLinkError) {
