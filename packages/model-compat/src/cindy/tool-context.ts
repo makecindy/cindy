@@ -142,7 +142,9 @@ export class ChatBridgeToolContext {
     context.addCurrentInlineTools(request.input);
     // `tool_search_output` loads definitions into the current catalog, so a later turn may force
     // one by name. Register them before the snapshot: the reserved Chat name is only known after
-    // reservation, so a predicted name could shadow or collide with a real declaration.
+    // reservation, so a predicted name could shadow or collide with a real declaration. The
+    // tool_search adapter is reserved first to keep its established position in `tools`.
+    context.addToolSearchForLoadedInput(request.input);
     context.addLoadedToolSearchTools(request.input);
     context.recordCurrentSelectors();
     context.collectHistoryTools(request.input);
@@ -390,6 +392,19 @@ export class ChatBridgeToolContext {
     this.currentSelectors.set(key, existing === undefined || existing === chatName ? chatName : null);
   }
 
+/** Reserve the tool_search adapter ahead of the definitions it carries. */
+  private addToolSearchForLoadedInput(input: ResponsesRequest['input']): void {
+    if (!Array.isArray(input)) return;
+    const boundary = indexOfCurrentTurnInlineTools(input);
+    for (let index = 0; index < input.length; index += 1) {
+      const item = input[index];
+      if (!isPlainObject(item)) continue;
+      if (item.type !== 'tool_search_call') continue;
+      if (boundary >= 0 && index < boundary) continue;
+      this.addToolSearch();
+      return;
+    }
+  }
   private addLoadedToolSearchTools(input: ResponsesRequest['input']): void {
     if (!Array.isArray(input)) return;
     const boundary = indexOfCurrentTurnInlineTools(input);
