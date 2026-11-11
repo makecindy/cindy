@@ -24,7 +24,7 @@ function fixture() {
 }
 
 /** The remote server keeps per-session state, like `Mcp-Session-Id`-bound databases. */
-function statefulFixture() {
+function statefulFixture(gate?: Promise<void>) {
   let signature = 'config-1';
   let created = 0;
   let resolveCalls = 0;
@@ -38,6 +38,12 @@ function statefulFixture() {
         sessionCounter += 1;
         return { content: [{ type: 'text' as const, text: String(sessionCounter) }] };
       });
+      if (gate) {
+        const connect = instance.connect.bind(instance);
+        (instance as unknown as { connect: typeof connect }).connect = async (
+          transport: Parameters<typeof connect>[0],
+        ) => { await gate; return connect(transport); };
+      }
       return { type: 'sdk', instance };
     } };
   });
@@ -127,6 +133,21 @@ describe('stable live MCP entry', () => {
     [undefined, false],
   ])('classifies %j as recoverable=%s', (error, expected) => {
     expect(isRecoverableMcpRejection(error)).toBe(expected);
+  });
+  it('does not join a handshake started under an older configuration', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const f = statefulFixture(gate);
+    const call = () => f.gateway(context, { action: 'call', server: 'custom_example', tool: 'increment', arguments: {} });
+    const first = call();
+    // Config changes while the first handshake is still in flight.
+    f.editConfig();
+    const second = call();
+    release();
+    await first.catch(() => undefined);
+    // The newer request must not inherit the stale session; it opens its own.
+    expect(await second).toMatchObject({ content: [{ type: 'text', text: '1' }] });
+    expect(f.created()).toBe(2);
   });
   it('does not start a cancelled call or return data after task invalidation', async () => {
     const f = fixture(); f.save();

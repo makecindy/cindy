@@ -49,6 +49,9 @@ export function createLiveMcpGateway(deps: {
   /** Handshakes in flight, so concurrent first calls share one upstream session instead of
    *  creating several and leaking the losers (the App host has a fixed connection budget). */
   const connecting = new Map<string, Promise<LiveConnection | null>>();
+  /** Latest configuration revision requested per task+server, so a handshake that finishes
+   *  after a save cannot publish itself over the newer session. */
+  const desired = new Map<string, string>();
 
   const closeConnection = (connection: LiveConnection) => {
     void connection.client.close().catch(() => {});
@@ -92,11 +95,15 @@ export function createLiveMcpGateway(deps: {
       return failure(signal?.aborted ? 'MCP_GATEWAY_CANCELLED' : 'MCP_GATEWAY_UNAVAILABLE');
     }
     // A saved edit of this server starts a new session; an edit of any other server does not.
+    desired.set(key, signature);
     if (connections.get(key)?.signature !== undefined && connections.get(key)?.signature !== signature) dropConnection(key);
     try {
       let connection = connections.get(key);
       if (!connection) {
-        let handshake = connecting.get(key);
+        // The handshake belongs to one configuration revision: a save that lands mid-handshake
+        // must not join the older one (its facade is already stale host-side).
+        const connectKey = `${key}\u0000${signature}`;
+        let handshake = connecting.get(connectKey);
         if (!handshake) {
           handshake = (async (): Promise<LiveConnection | null> => {
             const config = entry.create({ ...context, agentKind: context.agentKind as McpProviderContext['agentKind'],
@@ -113,10 +120,12 @@ export function createLiveMcpGateway(deps: {
               throw error;
             }
             const opened: LiveConnection = { signature, server: config.instance, client, lastUsed: Date.now() };
+            // A save may have landed while connecting; only the latest revision may publish.
+            if (desired.get(key) !== signature) { closeConnection(opened); return null; }
             connections.set(key, opened);
             return opened;
-          })().finally(() => { connecting.delete(key); });
-          connecting.set(key, handshake);
+          })().finally(() => { if (connecting.get(connectKey) === handshake) connecting.delete(connectKey); });
+          connecting.set(connectKey, handshake);
         }
         connection = await handshake ?? undefined;
         if (!connection) return failure('MCP_GATEWAY_UNAVAILABLE');
