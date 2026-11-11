@@ -321,6 +321,34 @@ describe('tasks using imported Codex connections', () => {
 });
 
 describe('native account assignment on the executing computer', () => {
+  // Regression: a pinned exhausted account was reported as login-or-reset even
+  // when another account was ready. Unit: exercise acquisition, not UI heuristics.
+  it.each([null, 3600])('reports the bound account limit and only its trusted reset (%s)', async delay => {
+    const now = Date.now();
+    const resetAt = delay === null ? null : Math.floor(now / 1000) + delay;
+    h.bindings.set('task:existing', { providerId: 'anthropic', accountId: 'second' });
+    h.usage.mockImplementation(async (_provider, directory) => directory === 'anthropic/second'
+      ? { claudeUsage: { updatedAt: now, fiveHour: { utilization: 100, resetsAt: resetAt }, sevenDay: null, scoped: [] } }
+      : {});
+    const error = await acquireSubscriptionAccount('anthropic', 'claude-sonnet-4-6', ['task:existing']).catch(e => e);
+    expect(error.message).toContain('[SUBSCRIPTION_ACCOUNT_LIMITED]');
+    if (resetAt) expect(error.message).toContain(`resetAtMs=${resetAt * 1000}`);
+    else expect(error.message).not.toContain('resetAtMs=');
+    expect(h.bindings.get('task:existing')?.accountId).toBe('second');
+  });
+
+  it.each(['signed-out', 'unavailable', 'removed'] as const)('distinguishes %s from exhaustion', async state => {
+    h.bindings.set('task:existing', { providerId: 'anthropic', accountId: 'second' });
+    if (state === 'removed') h.pools.anthropic!.accounts = [account('default')];
+    else h.read.mockImplementation(async (_provider, directory) => {
+      if (directory !== 'anthropic/second') return { authenticated: true };
+      if (state === 'unavailable') throw new Error('temporary CLI failure');
+      return { authenticated: false };
+    });
+    await expect(acquireSubscriptionAccount('anthropic', undefined, ['task:existing']))
+      .rejects.toThrow(state === 'signed-out' ? '[SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED]' : '[SUBSCRIPTION_ACCOUNT_UNAVAILABLE]');
+  });
+
   it('projects the task binding without selecting, reserving or unpausing an account', async () => {
     h.pools.anthropic!.accounts[0].paused = true;
     h.bindings.set('task:existing', { providerId: 'anthropic', accountId: 'default' });
@@ -1038,7 +1066,7 @@ describe('native account assignment on the executing computer', () => {
     h.pools.anthropic!.accounts.shift();
     await expect(
       acquireSubscriptionAccount('anthropic', undefined, ['native:thread-a']),
-    ).rejects.toThrow('requires login');
+    ).rejects.toThrow('[SUBSCRIPTION_ACCOUNT_UNAVAILABLE]');
   });
   it('skips exhausted accounts with the same model-specific quota policy as provider groups', async () => {
     h.usage.mockImplementation(async (_provider: string, dir: string) =>
@@ -1159,7 +1187,7 @@ describe('native account assignment on the executing computer', () => {
     const next = await acquireSubscriptionAccount('anthropic', model, ['task:new']);
     expect(next?.account.configDir).toBe('anthropic/second');
     next?.release();
-    await expect(acquireSubscriptionAccount('anthropic', model, ['native:old'])).rejects.toThrow('quota reset');
+    await expect(acquireSubscriptionAccount('anthropic', model, ['native:old'])).rejects.toThrow('[SUBSCRIPTION_ACCOUNT_LIMITED]');
     expect(h.bindings.get('native:old')?.accountId).toBe('default');
     expect(switchAgentLocation).not.toHaveBeenCalled();
   });

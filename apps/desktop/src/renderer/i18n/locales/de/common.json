@@ -8170,7 +8170,9 @@
         "mcpUi": "Interaktive Seiten in der Unterhaltung anzeigen",
         "mcpUiDomains": "Netzwerkdomains der Seiten: {{domains}}",
         "mcpAppOnly": "Nur Seite",
-        "uiPageAccess": "Seiten: {{pages}}; Domains: {{domains}}; für Seiten verfügbare Tools: {{tools}}"
+        "uiPageAccess": "Seiten: {{pages}}; Domains: {{domains}}; für Seiten verfügbare Tools: {{tools}}",
+        "uiHost": "Oberflächen und Host-Aktionen in Cindy bereitstellen",
+        "uiHostAccess": "{{subject}}: {{access}}"
       },
       "connections": {
         "confirmTitle": "Verbindungsadresse hinzufügen",
@@ -14493,6 +14495,14 @@
       "replied": "hat geantwortet",
       "toggle": "Antwort von „{{title}}“ ein- oder ausblenden",
       "openTask": "Aufgabe öffnen"
+    },
+    "subscriptionAccountError": {
+      "limited": "Das Abonnementkonto dieser Aufgabe hat sein Nutzungslimit erreicht. Warte auf die Zurücksetzung oder wähle eine andere Modellquelle. Das Konto wird nicht automatisch gewechselt.",
+      "limitedUntil": "Das Abonnementkonto dieser Aufgabe hat sein Nutzungslimit erreicht. Voraussichtliche Zurücksetzung: {{resetAt}}. Warte bis dahin oder wähle eine andere Modellquelle. Das Konto wird nicht automatisch gewechselt.",
+      "loginRequired": "Das Abonnementkonto dieser Aufgabe erfordert eine erneute Anmeldung. Melde dich auf dem Computer, der die Aufgabe ausführt, erneut an und versuche es dann noch einmal.",
+      "signingIn": "Die Anmeldung für das Abonnementkonto dieser Aufgabe läuft. Versuche es nach Abschluss der Anmeldung erneut.",
+      "unavailable": "Das dieser Aufgabe zugewiesene Abonnementkonto kann für diese Anfrage nicht verwendet werden. Prüfe das Konto in den Modellanbieter-Einstellungen auf dem ausführenden Computer oder wähle eine andere Modellquelle.",
+      "legacy": "Das dieser Aufgabe zugewiesene Abonnementkonto ist nicht verfügbar. Prüfe Anmeldung und Nutzung auf dem ausführenden Computer oder wähle eine andere Modellquelle. Das Konto wird nicht automatisch gewechselt."
     }
   },
   "ccAgent": {
@@ -19460,6 +19470,12 @@
       "failed": "Speichern fehlgeschlagen. Versuch es erneut.",
       "restore": "Standardwerte wiederherstellen"
     }
+  },
+  "pluginUi": {
+    "display": "Darstellung",
+    "original": "Original",
+    "menu": "Plugin-Ansichten und Befehle",
+    "actionFailed": "Die Plugin-Aktion konnte nicht abgeschlossen werden. Versuche es erneut."
   },
   "mcpApps": {
     "sharedTaskReadOnly": "Nur der Besitzer der Sitzung kann mit dieser Karte interagieren.",
