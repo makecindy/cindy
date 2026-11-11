@@ -320,7 +320,7 @@ export function localizeSubscriptionAccountError(
     case 'SUBSCRIPTION_ACCOUNT_UNAVAILABLE': return translate('chat.subscriptionAccountError.unavailable');
     case 'SUBSCRIPTION_ACCOUNT_LIMITED': {
       const reset = Number(/(?:^|\n)resetAtMs=(\d{1,16})(?:\n|$)/.exec(parsed.fallback)?.[1]);
-      if (Number.isSafeInteger(reset) && reset > 0 && reset <= 8.64e15) {
+      if (Number.isSafeInteger(reset) && reset > Date.now() && reset <= 8.64e15) {
         // Classical editions use the corresponding script for Intl formatting.
         const language = locale?.replace(/-x-lzh$/, '');
         const resetAt = new Intl.DateTimeFormat(language, {

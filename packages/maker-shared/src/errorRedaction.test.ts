@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   canOfferCodexHistoryRecovery,
@@ -375,7 +375,15 @@ describe('agent error envelopes shared by desktop and mobile', () => {
 // Unit regression: startup envelopes previously fell back to "reply failed".
 // The public presenter must preserve cause and trusted time across IPC wrappers.
 describe('subscription account startup guidance', () => {
+  beforeEach(() => { vi.spyOn(Date, 'now').mockReturnValue(1899999999000); });
+  afterEach(() => { vi.restoreAllMocks(); });
   const t = (key: string, options?: { resetAt: string }) => key + (options ? ` ${options.resetAt}` : '');
+  // Unit: reopening a saved error at/after reset must not present an expired
+  // timestamp as a future wait, regardless of which client renders it.
+  it.each([-1, 0])('omits a reset timestamp %i ms from now', offset => {
+    const message = `[SUBSCRIPTION_ACCOUNT_LIMITED] diagnostic\nresetAtMs=${Date.now() + offset}`;
+    expect(localizeSubscriptionAccountError(message, t, 'zh-CN')).toBe('chat.subscriptionAccountError.limited');
+  });
   it.each(['', 'LAZY_CREATE_FAILED: ', "Error invoking remote method 'send': Error: [IPC_ERROR] LAZY_CREATE_FAILED: "])(
     'keeps the limit and reset time through %s', prefix => {
       const text = localizeSubscriptionAccountError(`${prefix}[SUBSCRIPTION_ACCOUNT_LIMITED] diagnostic\nresetAtMs=1900000000000`, t, 'zh-CN');
