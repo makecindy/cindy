@@ -114,7 +114,20 @@ function isCommentLine(source: string, index: number): boolean {
 /** globals.css 只对 input / textarea / contenteditable 恢复 outline。 */
 const OUTLINE_KEEPING_TAG = /^(?:input|textarea|Input|Textarea)$/;
 
-/** 匹配所在的单个字符串字面量，以及外层 cn/clsx/twMerge(...) 调用（分行写法）。 */
+/** 从 openIndex 处的开括号起，返回配对闭括号之后的下标；没有配对时返回 -1。 */
+function closingIndex(source: string, openIndex: number, open: string, close: string): number {
+  let depth = 0;
+  for (let i = openIndex; i < source.length; i += 1) {
+    if (source[i] === open) depth += 1;
+    else if (source[i] === close && --depth === 0) return i + 1;
+  }
+  return -1;
+}
+
+/**
+ * 匹配所在的 class 区域：同一行内的字符串常量、完整的 className 属性值（引号或花括号，
+ * 允许跨行），以及外层 cn/clsx/twMerge(...) 调用（分行写法）。
+ */
 function classRegionsAround(source: string, index: number): string[] {
   const regions: string[] = [];
   const lineStart = source.lastIndexOf('\n', index) + 1;
@@ -124,16 +137,22 @@ function classRegionsAround(source: string, index: number): string[] {
     const start = lineStart + (literal.index ?? 0);
     if (start <= index && index < start + literal[0].length) regions.push(literal[0]);
   }
-  for (const call of source.slice(0, index).matchAll(/\b(?:cn|clsx|twMerge)\s*\(/g)) {
-    let depth = 0;
+  const before = source.slice(0, index);
+  for (const attribute of before.matchAll(/\bclassName\s*=\s*/g)) {
+    const at = (attribute.index ?? 0) + attribute[0].length;
+    const quote = source[at];
+    const end =
+      quote === '{'
+        ? closingIndex(source, at, '{', '}')
+        : quote === '"' || quote === "'" || quote === '`'
+          ? source.indexOf(quote, at + 1) + 1
+          : 0;
+    if (end > index) regions.push(source.slice(at, end));
+  }
+  for (const call of before.matchAll(/\b(?:cn|clsx|twMerge)\s*\(/g)) {
     const open = (call.index ?? 0) + call[0].length - 1;
-    for (let i = open; i < source.length; i += 1) {
-      if (source[i] === '(') depth += 1;
-      else if (source[i] === ')' && --depth === 0) {
-        if (i > index) regions.push(source.slice(open, i + 1));
-        break;
-      }
-    }
+    const end = closingIndex(source, open, '(', ')');
+    if (end > index) regions.push(source.slice(open, end));
   }
   return regions;
 }
@@ -248,6 +267,12 @@ describe('阴影、渐变与写法失效门禁', () => {
     expect(
       kinds("className={cn(\n  'focus-visible:outline focus-visible:outline-2',\n  'focus-visible:ring-2',\n)}"),
     ).toEqual([]);
+    // 跨行的 className 属性值是同一个字符串:焦点圈写在下一行也算兜底,没有就照样红。
+    expect(kinds('<button className="focus-visible:outline\n  focus-visible:ring-2">')).toEqual([]);
+    expect(kinds('<button className={`focus-visible:outline\n  focus-visible:ring-2`}>')).toEqual([]);
+    expect(kinds('<button className="focus-visible:outline\n  rounded-full">\n<a className="focus-visible:ring-2">')).toEqual([
+      'invisibleFocus',
+    ]);
 
     expect(
       kinds(`<button className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]">
