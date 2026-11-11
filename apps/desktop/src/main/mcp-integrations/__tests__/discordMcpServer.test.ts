@@ -96,4 +96,69 @@ describe('Discord MCP host bridge', () => {
       expect((await h.call('call_tool', { name: 'send_file', args: { path: inside } })).error).not.toBe(true); expect(h.channel.send).toHaveBeenCalledTimes(1);
     } finally { await h.close(); await fs.rm(root, { recursive: true, force: true }); }
   });
+
+  // unit: real MCP -> DiscordIM file handoff. Missing local paths previously looked like an
+  // uncertain Discord write; existing coverage only checked valid files/outside-workdir denial.
+  // The smallest failure is realpath ENOENT. Mock only FS metadata; no new disk/network resources.
+  describe('send_file local preflight', () => {
+    const workingDir = path.join(os.tmpdir(), 'cindy-discord-preflight');
+    const file = path.join(workingDir, 'answer.txt');
+    const mockMetadata = () => ({
+      realpath: vi.spyOn(fs, 'realpath').mockImplementation(async candidate => String(candidate)),
+      stat: vi.spyOn(fs, 'stat').mockResolvedValue({ isFile: () => true, size: 6 } as Awaited<ReturnType<typeof fs.stat>>),
+    });
+    afterEach(() => vi.restoreAllMocks());
+
+    it.each([
+      { boundary: 'file', code: 'ENOENT', expected: 'FILE_NOT_FOUND' },
+      { boundary: 'workingDir', code: 'ENOENT', expected: 'FILE_NOT_FOUND' },
+      { boundary: 'stat', code: 'ENOENT', expected: 'FILE_NOT_FOUND' },
+      { boundary: 'file', code: 'ENOTDIR', expected: 'FILE_NOT_FOUND' },
+      { boundary: 'file', code: 'EACCES', expected: 'FILE_ACCESS_DENIED' },
+      { boundary: 'workingDir', code: 'EPERM', expected: 'FILE_ACCESS_DENIED' },
+      { boundary: 'stat', code: 'EIO', expected: 'FILE_READ_FAILED' },
+    ])('returns $expected for $code at $boundary without sending', async ({ boundary, code, expected }) => {
+      const h = await setup('owner', workingDir);
+      const metadata = mockMetadata();
+      const error = Object.assign(new Error(`private FS details: ${file}`), { code });
+      if (boundary === 'stat') metadata.stat.mockRejectedValueOnce(error);
+      else if (boundary === 'workingDir') metadata.realpath.mockResolvedValueOnce(file).mockRejectedValueOnce(error);
+      else metadata.realpath.mockRejectedValueOnce(error);
+      try {
+        const output = await h.call('call_tool', { name: 'send_file', args: { lane: 'g/10/20/30', path: file } });
+        expect(output.error).toBe(true);
+        expect(output.body).toEqual({ ok: false, errorCode: expected });
+        expect(h.channel.send).not.toHaveBeenCalled();
+        expect(h.authorizeFile).not.toHaveBeenCalled();
+      } finally { await h.close(); }
+    });
+
+    it('keeps an upload Abort unconfirmed and calls send only once', async () => {
+      const h = await setup('owner', workingDir);
+      mockMetadata();
+      h.channel.send.mockRejectedValueOnce(Object.assign(new Error('private transport details'), { name: 'AbortError' }));
+      try {
+        const output = await h.call('call_tool', { name: 'send_file', args: { lane: 'g/10/20/30', path: file } });
+        expect(output.body).toEqual({ ok: false, errorCode: 'DISCORD_OPERATION_UNCONFIRMED' });
+        expect(h.channel.send).toHaveBeenCalledTimes(1);
+      } finally { await h.close(); }
+    });
+
+    it.each([
+      { scope: 'owner' as const, expected: 'DISCORD_CALLER_CHANGED' },
+      { scope: 'companion' as const, expected: 'DISCORD_SCOPE_ACCOUNT_CHANGED' },
+    ])('preserves the $scope identity error when FS rejects after revocation', async ({ scope, expected }) => {
+      const h = await setup(scope, workingDir);
+      const metadata = mockMetadata();
+      metadata.realpath.mockImplementationOnce(async () => {
+        if (scope === 'owner') h.revokeAccount(); else h.revokeOrigin();
+        throw Object.assign(new Error(`private FS details: ${file}`), { code: 'ENOENT' });
+      });
+      try {
+        const output = await h.call('call_tool', { name: 'send_file', args: { lane: 'g/10/20/30', path: file } });
+        expect(output.body).toEqual({ ok: false, errorCode: expected });
+        expect(h.channel.send).not.toHaveBeenCalled();
+      } finally { await h.close(); }
+    });
+  });
 });

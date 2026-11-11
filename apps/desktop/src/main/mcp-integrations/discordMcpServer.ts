@@ -112,13 +112,20 @@ export function createDiscordMcpServer(deps: DiscordMcpDeps): McpServer {
           const p = schemas.send_file.parse(args);
           if (context.remoteHostId) throw new DiscordOperationError('FILE_HOST_UNAVAILABLE');
           if (!path.isAbsolute(p.path)) throw new DiscordOperationError('FILE_PATH_NOT_ABSOLUTE');
-          const file = await fs.realpath(p.path); tools.assertCurrent();
-          const root = context.workingDir ? await fs.realpath(context.workingDir) : null; tools.assertCurrent();
+          const rejectFilePreflight = (error: unknown): never => {
+            // Rejected local I/O must also recheck the lease before classifying its error.
+            tools.assertCurrent();
+            const code = (error as NodeJS.ErrnoException | null)?.code;
+            throw new DiscordOperationError(code === 'ENOENT' || code === 'ENOTDIR' ? 'FILE_NOT_FOUND'
+              : code === 'EACCES' || code === 'EPERM' ? 'FILE_ACCESS_DENIED' : 'FILE_READ_FAILED');
+          };
+          const file = await fs.realpath(p.path).catch(rejectFilePreflight); tools.assertCurrent();
+          const root = context.workingDir ? await fs.realpath(context.workingDir).catch(rejectFilePreflight) : null; tools.assertCurrent();
           const relative = root ? path.relative(root, file) : '..';
           const outside = relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
           if (outside && ((scope && !scope.requesterIsOwner) || !await deps.authorizeFile(context, file))) throw new DiscordOperationError('FILE_ACCESS_DENIED');
           tools.assertCurrent();
-          const stat = await fs.stat(file); tools.assertCurrent();
+          const stat = await fs.stat(file).catch(rejectFilePreflight); tools.assertCurrent();
           if (!stat.isFile() || !stat.size || stat.size > 8 * 1024 * 1024) throw new DiscordOperationError('FILE_EMPTY_OR_TOO_LARGE');
           return tools.sendFile(target, file, p.name);
         }
