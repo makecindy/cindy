@@ -26,7 +26,9 @@ import { createProviderGroupRouter } from '../../provider-group/router.js';
 import type { ProviderGroupConfig } from '../../../shared/providerGroup.js';
 import { createAutomaticContinueEligibility } from '../automaticContinueEligibility.js';
 import { createBotModelSelectionCoordinator } from '../botModelSelectionCoordinator.js';
-import { acquireSendToSessionLock } from '../sendToSessionLock.js';
+import { acquireSendToSessionLock, withSendToSessionLock } from '../sendToSessionLock.js';
+import * as dbCurrent from '../../localDb/client/current.js';
+import { prepareBotPermissionDispatch, retryBotWelcomePermissionDispatch, withBotPermissionChangeForBot } from '../botPermissionDispatch.js';
 import { UsageLimitAutoResume, USAGE_LIMIT_MAX_CONSECUTIVE_RESUMES } from '../usageLimitAutoResume.js';
 import { MCP_APP_MESSAGE_CLIENT_PREFIX, MCP_APP_MESSAGE_GUARD } from '../../mcp-apps/message.js';
 import { runSchedulerQueuedPreparation } from '../schedulerQueuedPreparation.js';
@@ -770,6 +772,58 @@ describe('queued welcome dispatch receipts', () => {
       h.coordinator.enqueue('welcome-session', makeItem(id, `${UI_ACTION_TRIGGER_PREFIX}Say hello.`, { toolsDisabled: true })));
     return { h, receipts, dispatch };
   }
+
+  // #10021, unit: persistence is not welcome acceptance. A host permission
+  // refusal must leave the same coordinator item/receipt pending until recovery;
+  // Stop during that wait must cancel it without a provider call.
+  it.each(['recover', 'stop'] as const)('keeps the welcome receipt correct when permissions race: %s', async action => {
+    const { h, receipts, dispatch } = setup();
+    const owner = { client: { query: async () => [{ botId: 'bot-1', mode: 'ask' }] } };
+    const snapshot = vi.spyOn(dbCurrent, 'getCurrentDbClientSnapshot').mockReturnValue(owner as never);
+    const writerGate = deferred<void>();
+    const recovering = deferred<void>();
+    let change: Promise<void> | undefined;
+    let attempts = 0;
+    const providerSend = vi.fn();
+    const inputIds: string[] = [];
+    const runtime = { id: 'welcome-session', stablePermissionModeState: { mode: 'ask' } } as unknown as Session;
+    h.beforeDispatchUserTurn.mockImplementation(async () => {
+      if (attempts === 1) change = withBotPermissionChangeForBot('bot-1', () => writerGate.promise);
+    });
+    h.sendToAgent.mockImplementation(async (sid, message, _create, opts) =>
+      retryBotWelcomePermissionDispatch(sid, opts.signal, () => withSendToSessionLock(sid, async () => {
+        attempts++;
+        inputIds.push(opts.persistUserMessage!.clientId);
+        const guard = await prepareBotPermissionDispatch(runtime);
+        await persistQueuedUserMessage(sid, opts);
+        guard();
+        providerSend(message, opts);
+        return sendSuccess();
+      }), () => { recovering.resolve(); return receipts.has(sid, opts.persistUserMessage!.clientId); }, opts.onUndispatchedRetry));
+    const settled = vi.fn();
+    const result = dispatch('welcome').then(value => { settled(value); return value; });
+    try {
+      await recovering.promise;
+      expect(providerSend).not.toHaveBeenCalled();
+      expect(settled).not.toHaveBeenCalled();
+      expect(h.coordinator.getProjection('welcome-session').error).toBeNull();
+      if (action === 'stop') h.coordinator.stop('welcome-session');
+      writerGate.resolve();
+      await change;
+      await expect(result).resolves.toBe(action === 'recover');
+      expect(settled).toHaveBeenCalledOnce();
+      if (action === 'recover') {
+        expect(providerSend).toHaveBeenCalledExactlyOnceWith({ type: 'user', content: 'Say hello.' }, expect.objectContaining({ toolsDisabled: true }));
+        expect(inputIds).toEqual(['welcome', 'welcome']);
+        expect(h.onRejectedUserTurn).not.toHaveBeenCalled();
+        expect(h.onUndispatchedUserTurn).not.toHaveBeenCalled();
+        expect(h.coordinator.getProjection('welcome-session')).toMatchObject({ error: null, recovery: null, pendingQueue: [] });
+      } else {
+        expect(providerSend).not.toHaveBeenCalled();
+        expect(attempts).toBe(1);
+      }
+    } finally { writerGate.resolve(); await change; snapshot.mockRestore(); }
+  });
 
   it('does not acknowledge enqueue or persistence before vendor acceptance', async () => {
     const { h, dispatch } = setup();

@@ -219,6 +219,8 @@ function hasRetryableQueuedContent(item: AgentInputQueuedMessage): boolean {
 }
 
 export interface AgentInputSendOpts {
+  /** Host-proven non-dispatch: retain this input while preparation is retried. */
+  onUndispatchedRetry?: () => void;
   readonly [ASYNC_QUESTION_ANSWER]?: true;
   readonly [SUPERSEDE_ASYNC_QUESTIONS]?: true;
   /** Main-only authorization recheck after async steer preparation, before provider dispatch. */
@@ -5428,6 +5430,13 @@ export class AgentInputCoordinator {
         throwOnStartFailure: true,
         onVendorTurnReserved: (generation) =>
           this.captureReservedVendorGeneration(sessionId, active, generation),
+        onUndispatchedRetry: () => {
+          if (!this.isActiveTurnCurrent(sessionId, active)) return;
+          // The old provider reservation has ended without dispatch. Stop must
+          // cancel this preparation even though persistence/hooks already ran.
+          active.dispatchLifecycle = 'awaiting-dispatch-hooks';
+          active.vendorTurnGeneration = null;
+        },
         ...(head.autoResume && typeof head.autoResumeInfo?.sessionTotal === 'number'
           ? { turnAttemptToken: head.autoResumeInfo.sessionTotal }
           : {}),

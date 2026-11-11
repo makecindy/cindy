@@ -717,7 +717,7 @@ import { restartBotRuntime } from './botRuntimeRestart.js';
 import { registerBotLifecycleHandlers } from './botLifecycleService.js';
 import { isSessionPermissionMode, persistPermissionModeWithoutRuntime } from './sessionPermissionPersistence.js';
 import { withSessionPermissionChange } from './sessionPermissionChange.js';
-import { withBotPermissionChange } from './botPermissionDispatch.js';
+import { retryBotWelcomePermissionDispatch, withBotPermissionChange } from './botPermissionDispatch.js';
 import {
   createBotCompactRuntimeRefreshCoordinator,
   prepareBotCapabilityEpochBeforeSend,
@@ -20005,7 +20005,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   const inputCoordinator: AgentInputCoordinator = new AgentInputCoordinator({
     sendToAgent: async (sessionId, message, createOpts, sendOpts) => {
       try {
-        const result = await sendToAgentAccepted(sessionId, message, createOpts, sendOpts);
+        const send = () => sendToAgentAccepted(sessionId, message, createOpts, sendOpts);
+        // Welcome-only: ordinary/user/plugin requests retain their existing failure
+        // semantics. Selected runtime plugins can have preparation side effects.
+        const noRuntimePlugins = () => !Object.values(readRuntimePluginSettings(sessionId) ?? {})
+          .some(targets => targets?.length);
+        const clientId = sendOpts.persistUserMessage?.clientId;
+        const canRecoverWelcome = () => !!clientId && welcomeDispatchReceipts.has(sessionId, clientId) && noRuntimePlugins();
+        const recoverWelcome = sendOpts.toolsDisabled === true && canRecoverWelcome();
+        const result = recoverWelcome
+          ? await retryBotWelcomePermissionDispatch(sessionId, sendOpts.signal, send, canRecoverWelcome, sendOpts.onUndispatchedRetry)
+          : await send();
         await orcaInterAgentDispatcher.settleQueuedOrcaInterAgentAcceptedCallback(
           sessionId,
           sendOpts,
