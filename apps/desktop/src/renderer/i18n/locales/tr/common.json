@@ -8179,7 +8179,9 @@
         "subscribeStartTurn": "Seçilen görevlerde her yanıttan önce model seçebilir",
         "subscribeStartTurnDetail": "Yalnızca bu eklentiyi seçtiğiniz görevler geçerli mesajı onunla paylaşır. Bağlı bir model, akıl yürütme yoğunluğu ve Hızlı mod seçebilir. Hatalar o görevin ayarına uyar; sizin adınıza işlem onaylayamaz.",
         "subscribeModelRequest": "Seçilen görevlerde her model isteğini işleyebilir",
-        "subscribeModelRequestDetail": "Yalnızca bu eklentiyi seçtiğiniz görevler model isteklerini onunla paylaşır. Modelleri, parametreleri ve istek içeriğini ayarlayabilir. Şu anda yalnızca yerel Pi için desteklenir; hatalar görevin ayarına uyar. Bağlantı kimlik bilgileri dahil edilmez."
+        "subscribeModelRequestDetail": "Yalnızca bu eklentiyi seçtiğiniz görevler model isteklerini onunla paylaşır. Modelleri, parametreleri ve istek içeriğini ayarlayabilir. Şu anda yalnızca yerel Pi için desteklenir; hatalar görevin ayarına uyar. Bağlantı kimlik bilgileri dahil edilmez.",
+        "uiHost": "Cindy içinde arayüz ve Host eylemleri sağlama",
+        "uiHostAccess": "{{subject}}: {{access}}"
       },
       "connections": {
         "confirmTitle": "Bağlantı adresi ekle",
@@ -14510,6 +14512,14 @@
       "replied": "yanıtladı",
       "toggle": "“{{title}}” görevinden gelen yanıtı göster veya gizle",
       "openTask": "Görevi aç"
+    },
+    "subscriptionAccountError": {
+      "limited": "Bu görevin kullandığı abonelik hesabı kullanım sınırına ulaştı. Sınırın sıfırlanmasını bekleyin veya başka bir model kaynağı seçin. Bu görev atandığı hesapla kalır.",
+      "limitedUntil": "Bu görevin kullandığı abonelik hesabı kullanım sınırına ulaştı. Beklenen sıfırlama zamanı: {{resetAt}}. O zamana kadar bekleyin veya başka bir model kaynağı seçin. Bu görev atandığı hesapla kalır.",
+      "loginRequired": "Bu görevin kullandığı abonelik hesabı oturum açmayı gerektiriyor. Görevi çalıştıran bilgisayarda yeniden oturum açın, ardından tekrar deneyin.",
+      "signingIn": "Bu görevin kullandığı abonelik hesabında oturum açılıyor. Oturum açma işlemi tamamlandıktan sonra tekrar deneyin.",
+      "unavailable": "Bu göreve atanan abonelik hesabı bu istek için kullanılamıyor. Görevi çalıştıran bilgisayardaki model sağlayıcı ayarlarından hesabı kontrol edin veya başka bir model kaynağı seçin.",
+      "legacy": "Bu göreve atanan abonelik hesabı kullanılamıyor. Görevi çalıştıran bilgisayardaki oturum açma ve kullanım durumunu kontrol edin veya başka bir model kaynağı seçin. Bu görev otomatik olarak hesap değiştirmez."
     }
   },
   "ccAgent": {
@@ -20061,5 +20071,11 @@
     "description": "Bu görev için eklenti seçin. Değişiklikler bir sonraki mesajınızdan itibaren geçerli olur.",
     "unsupported": "İstek başına işleme yalnızca yerel Pi için desteklenir. Bu görevin motoru bunu desteklemiyor.",
     "failed": "Bu ayarlar yüklenemedi veya kaydedilemedi. Yeniden denemek için bu paneli tekrar açın."
+  },
+  "pluginUi": {
+    "display": "Görünüm",
+    "original": "Orijinal",
+    "menu": "Eklenti görünümleri ve komutları",
+    "actionFailed": "Bu eklenti eylemi tamamlanamadı. Tekrar deneyin."
   }
 }

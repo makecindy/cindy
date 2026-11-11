@@ -189,5 +189,13 @@
     "working": "Çalışıyor…",
     "worked": "{{duration}} çalıştı",
     "workDetails": "Çalışma ayrıntıları"
+  },
+  "subscriptionAccountError": {
+    "limited": "Bu görevin kullandığı abonelik hesabı kullanım sınırına ulaştı. Sınırın sıfırlanmasını bekleyin veya başka bir model kaynağı seçin. Bu görev atandığı hesapla kalır.",
+    "limitedUntil": "Bu görevin kullandığı abonelik hesabı kullanım sınırına ulaştı. Beklenen sıfırlama zamanı: {{resetAt}}. O zamana kadar bekleyin veya başka bir model kaynağı seçin. Bu görev atandığı hesapla kalır.",
+    "loginRequired": "Bu görevin kullandığı abonelik hesabı oturum açmayı gerektiriyor. Görevi çalıştıran bilgisayarda yeniden oturum açın, ardından tekrar deneyin.",
+    "signingIn": "Bu görevin kullandığı abonelik hesabında oturum açılıyor. Oturum açma işlemi tamamlandıktan sonra tekrar deneyin.",
+    "unavailable": "Bu göreve atanan abonelik hesabı bu istek için kullanılamıyor. Görevi çalıştıran bilgisayardaki model sağlayıcı ayarlarından hesabı kontrol edin veya başka bir model kaynağı seçin.",
+    "legacy": "Bu göreve atanan abonelik hesabı kullanılamıyor. Görevi çalıştıran bilgisayardaki oturum açma ve kullanım durumunu kontrol edin veya başka bir model kaynağı seçin. Bu görev otomatik olarak hesap değiştirmez."
   }
 }
