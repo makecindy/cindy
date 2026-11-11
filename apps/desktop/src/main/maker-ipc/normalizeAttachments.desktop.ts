@@ -7,7 +7,7 @@ import * as cindyMediaBlobStore from '../cindy-media/blobStore.desktop.js';
 import * as cindyMediaLedger from '../cindy-media/ledger.js';
 import { ingestMedia } from '../cindy-media/ingest.js';
 import { isRemoteAttachmentRef, parseRemoteAttachmentRef, materializeRemoteAttachment } from '../device-link/remoteAttachment.js';
-import { removeRemote } from '../device-link/mediaTransfer.js';
+import { removeRemote } from '../device-link/mediaTransfer.desktop.js';
 import { createAttachmentNormalizer } from './normalizeAttachments.js';
 export type { MaterializedAttachmentPart } from './normalizeAttachments.js';
 

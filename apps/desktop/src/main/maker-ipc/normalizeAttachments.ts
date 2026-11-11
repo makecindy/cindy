@@ -47,7 +47,7 @@ export interface AttachmentNormalizerIO {
   cindyMediaLedger: Pick<typeof import('../cindy-media/ledger.js'), 'removeRefById' | 'deleteZeroRefBlobRecord'>;
   ingestMedia: ReturnType<typeof import('../cindy-media/ingestCore.js').createMediaIngest>['ingestMedia'];
   materializeRemoteAttachment: typeof import('../device-link/remoteAttachment.js').materializeRemoteAttachment;
-  removeRemote: typeof import('../device-link/mediaTransfer.js').removeRemote;
+  removeRemote: ReturnType<typeof import('../device-link/mediaTransfer.js').createMediaTransfer>['removeRemote'];
 }
 
 export interface AttachmentNormalizerPorts extends AttachmentNormalizerIO {

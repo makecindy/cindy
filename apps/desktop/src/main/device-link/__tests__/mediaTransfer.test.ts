@@ -68,7 +68,7 @@ import {
   openMediaStream,
   removeRemote,
   __testing,
-} from '../mediaTransfer.js';
+} from '../mediaTransfer.desktop.js';
 import { setSelfHostedRelaySource } from '../selfHostedRelayRouting.js';
 import { installAgentNetMediaBackend, type AgentNetMediaBackend } from '../agentNetMediaRouting.js';
 

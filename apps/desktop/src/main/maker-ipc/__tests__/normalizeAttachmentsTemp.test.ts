@@ -22,7 +22,7 @@ vi.mock('../../cindy-media/ledger.js', () => ({
   deleteZeroRefBlobRecord: vi.fn(),
 }));
 vi.mock('../../cindy-media/ingest.js', () => ({ ingestMedia: vi.fn() }));
-vi.mock('../../device-link/mediaTransfer.js', () => ({
+vi.mock('../../device-link/mediaTransfer.desktop.js', () => ({
   downloadToFile: vi.fn(),
   removeRemote: vi.fn(),
 }));
@@ -43,7 +43,7 @@ import {
 import * as imageCacheStore from '../../imageCacheStore.desktop.js';
 import * as cindyMediaBlobStore from '../../cindy-media/blobStore.desktop.js';
 import { ingestMedia } from '../../cindy-media/ingest.js';
-import { downloadToFile, removeRemote } from '../../device-link/mediaTransfer.js';
+import { downloadToFile, removeRemote } from '../../device-link/mediaTransfer.desktop.js';
 import { buildAttachmentOssRef } from '../../../shared/attachmentOssRef.js';
 import { configureMailAttachmentHost, prepareMailAttachmentSelection } from '../../cindy-brain/mailAttachmentUpload.js';
 import { createAttachmentNormalizer, type AttachmentNormalizerIO } from '../normalizeAttachments.js';

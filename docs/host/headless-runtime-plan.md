@@ -992,3 +992,34 @@ Orca Worker 在 `3eb486ea64` 补跑五个隔离场景：导入前/后换号、�
 完整关闭失败时暂存文件有意保留：`executor.close()` 可能在排空回复写入时就抛错，尚未
 调用 Maker 关闭运行时，因此不能无条件在 finally 删除仍可能被模型使用的文件。
 正常关闭仍即时清理；异常残留由进程退出后的下一次孤儿扫描处理。
+
+### 远程媒体传输的共用准备（2026-11-11，Host 远程附件尚未开放）
+
+`mediaTransfer.ts` 主体留在原路径，改为 `createMediaTransfer` 工厂；桌面经唯一的
+`mediaTransfer.desktop.ts` 实例接回原网络与 API。下载和备用上传仍使用 Electron
+`net.fetch`，主上传仍使用原生 fetch；网络失败切换、按目标缓存传输偏好、共享任务走
+官方媒体接口、自建中转路由及完整性检查均未改。Host 未来装配须接自身出站代理，不能
+把原桌面网络语义直接替换为无代理直连。当前仍拒绝 OSS/Peer 附件，不因能加载此工厂
+就视为远程收件可用；账号绑定和 Device Link API 的中转选择仍是接线前置。
+
+静态核对：17 个原有函数体除网络端口读取外相同；调用方和原有测试只修改导入路径，
+测试断言未改。主进程共有 5,709 个模块的相对顺序完全一致，只新增桌面装配；唯一直接
+在模块顶层读取新导出的归一化器装配不在传输装配的依赖闭包里，没有形成初始化循环。
+共用传输静态闭包 104 个模块，Electron、桌面装配及相应动态引用为 0。
+日志 `/tmp/cindy-media-transfer-{body-audit,initialization-audit,order-diff,core-closure}.log`。
+
+新增测试价值（unit，合入现有 Host `boundary.test.mjs`）：实际在 Node 加载工厂并下载到
+隔离目录，断言字节校验通过后发布文件；同长度错误哈希不得替换已存在文件，也不得留下
+半成品。它保护架构约定 §5 的 Node 运行边界，已有桌面测试模拟 Electron，不能发现
+误接桌面依赖导致 Node 加载失败；最小输入是一份文件和一份同长度损坏响应。
+
+门禁：桌面相关 17 文件 554 项通过（21.61 秒）；Host 226 项通过（5.22 秒）；共享客户端
+60 文件 1,254 项、自建中转 4 文件 50 项通过，隔离真实中转与生产客户端的加入、签名通信
+和重连互通通过。传输/API 的方法、请求体、凭证与路由选择没有变化，自建中转无需新增
+服务端适配；媒体接口和上传栈切换由原有 77 项传输测试覆盖。日志
+`/tmp/cindy-media-transfer-{desktop-callers,host-tests,client-tests,relay-tests,relay-interop}.log`。
+桌面与 Host 类型检查通过，日志 `/tmp/cindy-media-transfer-{desktop,host}-types-final.log`；
+文档合同和测试卫生检查通过，日志 `/tmp/cindy-media-transfer-{docs,hygiene}.log`。
+
+没有重启正式应用，也未做真实桌面附件、手机上传、真实账号/模型、打包版或 Windows 实测；
+静态加载与隔离互通结果不能替代这些验收。本检查点仍仅本地准备，未推送或开 PR。
