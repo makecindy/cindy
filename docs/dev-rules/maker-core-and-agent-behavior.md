@@ -894,6 +894,24 @@ event loop（`AsyncQueue`）与 translator 是**每事件／每 token 都过一�
 
 ## 4. system prompt 改动门禁
 
+### 共用规则与引擎补充
+
+Desktop 的产品共用正文在 `apps/desktop/src/main/maker-host/host-system-prompt.md`，
+包括面向用户的计划写法，三种引擎都加载。引擎补充只承载实际工具调用、Skill 清单标注
+差异或原生提示词缺口；不要为相同产品规则维护多份文本。`claude-system-prompt.md` 与
+`codex-system-prompt.md` 当前留空，保留加载入口；`pi-system-prompt.md` 保留语言、文件工具
+和 MCP 网关调用说明。Skill 来源优先级仍仅注入 Claude/Codex；Pi 的精简回答协议仍单独维护。
+
+这些内容均追加到引擎原生提示词，不替换原生规则。回归入口为 `runtimeConfigs.test.ts`、
+`piRosterAssembly.test.ts` 与 Headless 的 `prompt-parity.test.ts`。
+
+提交与 PR 的 Cindy 署名约定由 GitHub 插件的 PR Skill 按需提供，不再作为所有任务的常驻
+规则；未加载该 Skill 的独立提交不保证带 Cindy 署名。Cindy 更新步骤由 `cindy_helper`
+工具目录、`app_update` 工具说明与回执提供，普通任务通过共用的工具发现入口查找。
+不要为了特定工作流的操作细节重新扩大 system prompt。
+
+### 修改确认与验证
+
 **任何人都不得擅自修改 Cindy 的 system prompt；需要改动必须先与仓库维护者讨论
 确认后才能动手。** 未经确认的 system prompt 改动一律不许提 PR 或直推。
 
