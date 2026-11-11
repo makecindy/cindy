@@ -85,14 +85,23 @@ export const appearanceSettings = defineSettings({
       'settings.appearance.wallpaper.desktopVisibilityHint',
       'settings.appearance.wallpaper.desktopBlurLabel',
       'settings.appearance.wallpaper.desktopBlurHint',
-      'settings.appearance.wallpaper.sidebarVisibilityLabel',
-      'settings.appearance.wallpaper.sidebarVisibilityHint',
-
     ],
     options: [
       { value: 'static', labelKey: 'settings.appearance.wallpaper.motionStatic', isVisible: ({ wallpaperMotionAvailable }) => wallpaperMotionAvailable === true },
       { value: 'dynamic', labelKey: 'settings.appearance.wallpaper.motionDynamic', isVisible: ({ wallpaperMotionAvailable }) => wallpaperMotionAvailable === true },
     ],
+  },
+  sidebarVisibility: {
+    id: 'settings.appearance.wallpaper.sidebarVisibility',
+    fallbackTargetId: 'settings-search-target-appearance-wallpaper',
+    tab: 'appearance',
+    targetId: 'settings-search-settings-appearance-wallpaper',
+    titleKey: 'settings.appearance.wallpaper.sidebarVisibilityLabel',
+    sectionKey: 'settings.appearance.wallpaper.title',
+    descriptionKey: 'settings.appearance.wallpaper.sidebarVisibilityHint',
+    // The page only mounts this row for the CINDY theme family with a wallpaper
+    // selected; search must not offer a hit that lands on a missing control.
+    isVisible: ({ sidebarTransparencyAvailable }) => sidebarTransparencyAvailable === true,
   },
   modeLabel: {
     id: 'settings.appearance.modeLabel',

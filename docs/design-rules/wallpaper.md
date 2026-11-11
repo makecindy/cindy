@@ -89,7 +89,19 @@ macOS passes the numeric radius to the native window backdrop. See
 Text and controls are never faded.
 The left task sidebar retains its own frosted material and readable tint floor,
 even when the background blur is zero (user decision, 2026-11-08). The two existing
-sliders still control the background; do not add a separate sidebar preference.
+sliders still control the background.
+
+An independent sidebar preference was added afterwards (user request #9859 / #9635,
+2026-11-11), superseding the earlier “do not add a separate sidebar preference” ruling.
+`sidebarVisibility` (0–1, default `null`) drives `--sidebar-surface-alpha = 1 − value`
+on top of the unchanged `--surface-translucent-sidebar` tint, so 0% is a fully opaque
+sidebar and 100% shows the wallpaper through it. Scope, enforced by mounting the row
+only when it can take effect: the CINDY theme family, and a wallpaper selected — the
+tinted rule it overrides only applies to `[data-wallpaper-active='true']` under
+`cindy-light` / `cindy-dark`. Without a wallpaper the sidebar keeps its own semantic
+tint; other theme families paint their own opaque chrome. `null` writes no variable
+and leaves the tint-floor formula above in charge, which is also the value the slider
+displays until the user commits an explicit one.
 For a desktop background on macOS, a non-interactive native effect view covers
 only the sidebar's currently visible width. Its geometry is local to each window,
 follows collapse/rail/peek animation and UI zoom, and disappears when hidden or

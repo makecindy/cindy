@@ -16,6 +16,8 @@ export interface SettingsSearchContext extends ImBotIdentity {
   };
   /** Selector visibility only; never expose the user's custom media URL to search. */
   wallpaperMotionAvailable?: boolean;
+  /** The sidebar transparency row is CINDY-theme only and needs a wallpaper. */
+  sidebarTransparencyAvailable?: boolean;
 }
 
 export interface SettingsSearchEntry {

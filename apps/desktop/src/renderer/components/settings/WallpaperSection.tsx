@@ -458,7 +458,7 @@ export function WallpaperSection() {
                 <span className="shrink-0 text-12 text-[var(--settings-section-sublabel)]">
                   {t('settings.appearance.wallpaper.sidebarVisibilityLabel')}
                 </span>
-                <Slider data-setting-id={appearanceSettings.wallpaperCustomChoose.id}
+                <Slider data-setting-id={appearanceSettings.sidebarVisibility.id}
                   min={APPEARANCE_LIMITS.sidebarVisibility.min}
                   max={APPEARANCE_LIMITS.sidebarVisibility.max}
                   step={APPEARANCE_LIMITS.sidebarVisibility.step}
