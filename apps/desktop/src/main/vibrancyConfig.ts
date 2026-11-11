@@ -127,7 +127,10 @@ export function resolveVibrancyConfig(
       const backgroundMaterial = resolveBackdropMaterial();
       return {
         vibrancy: null,
-        // Acrylic 的原生 backing 直接带侧栏染色，左栏稳态不再重复叠 CSS tint。
+        // 透明窗只在 macOS 创建，这里的 backing 只是创建期底色：窗口不透明时
+        // 它的 alpha 不参与合成，侧栏的 85% 语义染色由 CSS
+        // （aside.bg-sidebar > .sidebar-frost）叠在 Acrylic 上，不要再把它清成透明
+        // （#9623 / #9911）。
         // live resize 全程保持同一材质；连续尺寸变化交给 Renderer 的 CSS 布局处理。
         backgroundColor: resolveWindowsBackdropColor(backgroundMaterial, isDark),
         backgroundMaterial,
