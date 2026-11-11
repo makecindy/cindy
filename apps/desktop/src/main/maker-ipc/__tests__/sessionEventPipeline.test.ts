@@ -1737,7 +1737,7 @@ describe('provider turn observer on real Session.send', () => {
       expect(h.handle.send).not.toHaveBeenCalled();
       gate.resolve();
       await sending;
-      expect(ready).toHaveBeenCalledWith({ providerId: 'cindy-local-llamacpp', onlyIfStopped: true });
+      expect(ready).toHaveBeenCalledWith({ providerId: 'cindy-local-llamacpp', onlyIfStopped: true, signal: expect.any(AbortSignal) });
       expect(h.handle.send).toHaveBeenCalledOnce();
       h.emit(event('done', {}));
       ready.mockRejectedValue(new Error('NOT_INSTALLED'));
@@ -1745,6 +1745,61 @@ describe('provider turn observer on real Session.send', () => {
       expect(h.handle.send).toHaveBeenCalledOnce();
     } finally {
       gate.resolve();
+      dispose();
+      await h.dispose();
+    }
+  });
+
+  // PR #9420: a cold Ollama restore must release the send reservation on Stop.
+  // Unit tier, real Session + observer: previous readiness coverage only settled the service.
+  it.each(['stop', 'pending', 'external'] as const)('cancels Ollama readiness via %s and permits another send', async (cancel) => {
+    const h = harness();
+    h.handle.abort = vi.fn(async () => undefined);
+    const deps = observerDeps();
+    const entered = deferred();
+    const release = deferred();
+    const external = new AbortController();
+    const beforeProviderStart = vi.fn();
+    const onAccepted = vi.fn();
+    let readinessSignal: AbortSignal | undefined;
+    effects.fn('getSessionProvider').mockReturnValue('cindy-local-ollama');
+    const ready = effects.fn('ensureManagedOllamaReadyForSession').mockImplementationOnce(
+      async (opts: { signal?: AbortSignal }) => {
+        readinessSignal = opts.signal;
+        entered.resolve();
+        await new Promise<void>((resolve, reject) => {
+          release.promise.then(resolve);
+          opts.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+        });
+      },
+    );
+    const phases: string[] = [];
+    const unsubscribe = onChannelTurn((_session, phase) => { phases.push(phase); });
+    const dispose = installSessionTurnObserver(deps, h.session);
+    const sending = h.session.send('cold start', { signal: external.signal, beforeProviderStart, onAccepted });
+    try {
+      await entered.promise;
+      expect(readinessSignal).toBeInstanceOf(AbortSignal);
+      if (cancel === 'stop') await h.session.abort();
+      else if (cancel === 'pending') expect(h.session.cancelPendingSend()).toBe(true);
+      else external.abort();
+      await expect(sending).resolves.toEqual({ accepted: false, reason: 'cancelled-before-dispatch' });
+      expect(readinessSignal?.aborted).toBe(true);
+      expect(h.handle.send).not.toHaveBeenCalled();
+      expect(beforeProviderStart).not.toHaveBeenCalled();
+      expect(onAccepted).not.toHaveBeenCalled();
+      expect(deps.sessionTurnLeaseTracker.markTurnStarted).not.toHaveBeenCalled();
+      expect(phases).toEqual([]);
+      expect(h.session.isTurnRunning()).toBe(false);
+      await expect(h.session.send('retry')).resolves.toEqual({ accepted: true });
+      expect(ready).toHaveBeenCalledTimes(2);
+      expect(h.handle.send).toHaveBeenCalledOnce();
+      expect(deps.sessionTurnLeaseTracker.markTurnStarted).toHaveBeenCalledOnce();
+      expect(phases).toEqual(['starting']);
+    } finally {
+      release.resolve();
+      await sending.catch(() => undefined);
+      unsubscribe();
       dispose();
       await h.dispose();
     }
