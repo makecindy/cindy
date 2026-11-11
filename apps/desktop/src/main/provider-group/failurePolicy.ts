@@ -86,7 +86,12 @@ export class ProviderGroupUsageLimitError extends Error {
   }
 }
 
-export function providerGroupUnavailableError(pick: { usageLimit?: ProviderGroupUsageLimit }): Error {
+/** 组里能接的电脑都达到并发上限(2026-11-11 起满了不再分，渲染端按 chat.remoteError 给文案)。 */
+export const PROVIDER_GROUP_FULL_ERROR =
+  '[REMOTE_AGENT_GROUP_FULL] every computer in the provider group that can run this task has reached its concurrency limit';
+
+export function providerGroupUnavailableError(pick: { usageLimit?: ProviderGroupUsageLimit; full?: true }): Error {
+  if (pick.full) return new Error(PROVIDER_GROUP_FULL_ERROR);
   return pick.usageLimit ? new ProviderGroupUsageLimitError(pick.usageLimit) : new Error(PROVIDER_GROUP_UNAVAILABLE_ERROR);
 }
 
