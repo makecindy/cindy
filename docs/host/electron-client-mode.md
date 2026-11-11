@@ -85,9 +85,16 @@ Host 直接复用 Desktop 的 `GhostManager`（同一实现），只注入 owner
 ## 明确未迁移（客户端模式下会显式失败）
 
 `maker:send`、`maker:list-active`、中断/告警、MCP、插件执行、scheduler、device-link、
-Orca 协同、记忆与文件工具等仍由 Desktop 内 Runtime 提供；客户端模式下调用这些通道会
-返回 `UNSUPPORTED_CAPABILITY: cindy-host owns this profile; this channel is not proxied yet`，
-不会静默回落到第二套 Runtime。
+Orca 协同、记忆与文件工具等仍由 Desktop 内 Runtime 提供，不会静默回落到第二套 Runtime。
+客户端模式下没有处理者的 `maker:*` 通道返回
+`UNSUPPORTED_CAPABILITY: Capability <通道> is not supported in host client mode`；其它前缀的
+未接通道保持 Electron 原错误（`No handler registered`）。两类都会计数，每个通道首次出现时
+记一行日志，退出时打印调用最多的 30 个。全量清单与真实使用排行见
+[channel-coverage.md](channel-coverage.md)。
+
+2026-11-12 之前，兜底只改写了 `_invokeHandlers.get()`，而 Electron 在 invoke 时先查
+`has()`，所以 `maker:*` 实际上也只回 `No handler registered`；现已一并应答 `has()`，
+并且不影响桌面之后注册的 `maker:*` 通道。
 
 在把这些通道全部改为 Host API 之前，「Electron 不参与 Runtime」不视为达成。
 

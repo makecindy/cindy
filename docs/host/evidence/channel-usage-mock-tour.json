@@ -1,0 +1,1779 @@
+{
+  "source": "UI fixture tour (pnpm restart:desktop:remote -- --mock --isolated=host-usage + apps/desktop/scripts/host-client-usage-tour.mjs)",
+  "mode": "embedded",
+  "startedAt": "2026-11-11T12:42:08.671Z",
+  "updatedAt": "2026-11-11T12:44:14.198Z",
+  "channels": {
+    "accessibility-support:get-sync": {
+      "kind": "event",
+      "count": 2,
+      "handled": 2,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "agent-island:get-display-options": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "agent-island:get-live-activity-support": {
+      "kind": "invoke",
+      "count": 2,
+      "handled": 2,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "agent-island:set-companion-chats": {
+      "kind": "invoke",
+      "count": 2,
+      "handled": 2,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "agent-island:set-display-target": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "agent-island:set-enabled": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "agent-island:set-live-activity": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "agent-island:set-mascot-skin": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "agent-island:set-remote-sessions": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "agent-island:set-sound-settings": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "agent-island:set-subtle-reminders": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "agent-island:set-visible-session": {
+      "kind": "invoke",
+      "count": 69,
+      "handled": 69,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "analytics:settings-get": {
+      "kind": "invoke",
+      "count": 2,
+      "handled": 2,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "app-locale:get-preferred-system-locale-sync": {
+      "kind": "event",
+      "count": 3,
+      "handled": 3,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "app-locale:set-classical-style": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "app-menu:set-locale": {
+      "kind": "invoke",
+      "count": 3,
+      "handled": 3,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "app-shortcuts:get": {
+      "kind": "event",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "app:get-arm64-translation": {
+      "kind": "invoke",
+      "count": 2,
+      "handled": 2,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "app:get-cindy-make-state": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "app:ready-for-bot": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "appearance-settings:get": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "appearance-settings:get-sync": {
+      "kind": "event",
+      "count": 3,
+      "handled": 3,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "auth:has-persisted-session-hint-sync": {
+      "kind": "event",
+      "count": 4,
+      "handled": 4,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "auth:initialize": {
+      "kind": "invoke",
+      "count": 2,
+      "handled": 2,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "away-guard:get-state": {
+      "kind": "invoke",
+      "count": 2,
+      "handled": 2,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "binding:list-attached": {
+      "kind": "invoke",
+      "count": 4,
+      "handled": 4,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "binding:resolve-session": {
+      "kind": "invoke",
+      "count": 14,
+      "handled": 14,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "browser-backend:get-health": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "browser-backend:get-state": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "cc:set-debug-net": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "check-environment": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "cindy-media:storage-stats": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "client-endpoints:get-sync": {
+      "kind": "event",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "companion-import": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "crash-diagnosis:get": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "database-size-warning:get-settings": {
+      "kind": "invoke",
+      "count": 3,
+      "handled": 3,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "database-size-warning:get-status": {
+      "kind": "invoke",
+      "count": 2,
+      "handled": 2,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "database-size-warning:measure": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "deep-link:take-pending": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "desktop:cc-prefs-changed": {
+      "kind": "event",
+      "count": 5,
+      "handled": 5,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "device-link:get-state": {
+      "kind": "invoke",
+      "count": 19,
+      "handled": 19,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "device-link:list-devices": {
+      "kind": "invoke",
+      "count": 33,
+      "handled": 33,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "dialogue-workspace:get": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "dingtalkBot:get-state": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "discordBot:get-status": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "feishuBot:get-state": {
+      "kind": "invoke",
+      "count": 2,
+      "handled": 2,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "fs:resolve-path-batch": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "get-app-display-version-info": {
+      "kind": "event",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "get-app-version": {
+      "kind": "event",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "get-fullscreen-state": {
+      "kind": "invoke",
+      "count": 10,
+      "handled": 10,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "get-os-release": {
+      "kind": "event",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "ghosts:card:list-by-session": {
+      "kind": "invoke",
+      "count": 13,
+      "handled": 13,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "ghosts:list": {
+      "kind": "event",
+      "count": 5,
+      "handled": 5,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "ghosts:models:list": {
+      "kind": "invoke",
+      "count": 4,
+      "handled": 4,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "ghosts:recent-usage": {
+      "kind": "event",
+      "count": 2,
+      "handled": 2,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "ghosts:recommendations": {
+      "kind": "event",
+      "count": 8,
+      "handled": 8,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "ghosts:session-focused": {
+      "kind": "event",
+      "count": 31,
+      "handled": 31,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "ghosts:take-pending-install": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "ghosts:ui-prompts": {
+      "kind": "invoke",
+      "count": 18,
+      "handled": 18,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "ghosts:unread": {
+      "kind": "event",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "git-context:find-linked-worktree": {
+      "kind": "invoke",
+      "count": 15,
+      "handled": 15,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "git-context:get-for-session": {
+      "kind": "invoke",
+      "count": 16,
+      "handled": 16,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "git-context:pr-refs:list": {
+      "kind": "invoke",
+      "count": 13,
+      "handled": 13,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "git-context:pr-refs:list-all": {
+      "kind": "invoke",
+      "count": 4,
+      "handled": 4,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "host-client:observe": {
+      "kind": "event",
+      "count": 2,
+      "handled": 0,
+      "missing": 2,
+      "unsupported": 0
+    },
+    "layout:get": {
+      "kind": "event",
+      "count": 3,
+      "handled": 3,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "learn:list-runs": {
+      "kind": "invoke",
+      "count": 19,
+      "handled": 19,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "legacy-migration:get-state": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "local-agent:connections": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "local-agent:developer-connection": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "local-db:bots:list": {
+      "kind": "invoke",
+      "count": 3,
+      "handled": 3,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "local-db:bots:model-chain-settings-get": {
+      "kind": "invoke",
+      "count": 4,
+      "handled": 4,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "local-db:bots:read-state:get": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "local-db:bots:read-state:update": {
+      "kind": "invoke",
+      "count": 4,
+      "handled": 4,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "local-db:bots:workbench:follow-scopes": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "local-db:ensure-ready": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "local-db:maintenance:last-result": {
+      "kind": "invoke",
+      "count": 2,
+      "handled": 2,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "local-db:maintenance:startup-progress": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "local-db:messages:estimatedSessionValue": {
+      "kind": "invoke",
+      "count": 14,
+      "handled": 14,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "local-db:messages:list": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "local-db:messages:view": {
+      "kind": "invoke",
+      "count": 15,
+      "handled": 15,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "local-db:project-aliases:list": {
+      "kind": "invoke",
+      "count": 15,
+      "handled": 15,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "local-db:recent-workdirs:list": {
+      "kind": "invoke",
+      "count": 3,
+      "handled": 3,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "local-db:right-sidebar-tabs:list": {
+      "kind": "invoke",
+      "count": 13,
+      "handled": 13,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "local-db:session-import:scan": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "local-db:session-import:status": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "local-db:sessions:create": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "local-db:sessions:error-tail-pending": {
+      "kind": "invoke",
+      "count": 37,
+      "handled": 37,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "local-db:sessions:get": {
+      "kind": "invoke",
+      "count": 30,
+      "handled": 30,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "local-db:sessions:interrupted-pending": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "local-db:sessions:interrupted-resume-candidates": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "local-db:sessions:list": {
+      "kind": "invoke",
+      "count": 12,
+      "handled": 12,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "local-db:sessions:set-pinned-card-summaries": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "local-db:subagent-runs:list": {
+      "kind": "invoke",
+      "count": 28,
+      "handled": 28,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "local-themes:list": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "local-themes:list-sync": {
+      "kind": "event",
+      "count": 3,
+      "handled": 3,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "log-upload:settings-get": {
+      "kind": "invoke",
+      "count": 2,
+      "handled": 2,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "login-item:get": {
+      "kind": "invoke",
+      "count": 2,
+      "handled": 2,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:agent-resource-settings:get": {
+      "kind": "invoke",
+      "count": 2,
+      "handled": 2,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:agent:binary-version": {
+      "kind": "invoke",
+      "count": 3,
+      "handled": 3,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:agent:pi-kernel-state": {
+      "kind": "invoke",
+      "count": 2,
+      "handled": 2,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:agent:status": {
+      "kind": "invoke",
+      "count": 13,
+      "handled": 13,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:android:get-config": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:auth:get-state": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:auto-title": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:auxiliary-model-settings:get": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:bot-group:list": {
+      "kind": "invoke",
+      "count": 8,
+      "handled": 8,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:bot-group:outbox-command": {
+      "kind": "invoke",
+      "count": 20,
+      "handled": 20,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:bot-read-state": {
+      "kind": "invoke",
+      "count": 3,
+      "handled": 3,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:browser:status": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:chat-embedding:get": {
+      "kind": "invoke",
+      "count": 2,
+      "handled": 2,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:chat:display-cache": {
+      "kind": "invoke",
+      "count": 2,
+      "handled": 2,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:claude-oauth:status": {
+      "kind": "invoke",
+      "count": 7,
+      "handled": 7,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:claude-session-route:get": {
+      "kind": "invoke",
+      "count": 8,
+      "handled": 8,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:codex-runtime-route:get": {
+      "kind": "invoke",
+      "count": 5,
+      "handled": 5,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:collaboration-settings:get": {
+      "kind": "invoke",
+      "count": 2,
+      "handled": 2,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:companion-cloud:state": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:computer:check-update": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:computer:status": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:get-capabilities": {
+      "kind": "invoke",
+      "count": 21,
+      "handled": 21,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:get-context-window-bounds": {
+      "kind": "invoke",
+      "count": 16,
+      "handled": 16,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:get-pending-interactions": {
+      "kind": "invoke",
+      "count": 28,
+      "handled": 28,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:get-session-agent-switch-intent": {
+      "kind": "invoke",
+      "count": 15,
+      "handled": 15,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:git-safety:get": {
+      "kind": "invoke",
+      "count": 3,
+      "handled": 3,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:goal:get-status": {
+      "kind": "invoke",
+      "count": 14,
+      "handled": 14,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:im-default-settings:get": {
+      "kind": "invoke",
+      "count": 6,
+      "handled": 6,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:input:enqueue": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:input:get-projection": {
+      "kind": "invoke",
+      "count": 14,
+      "handled": 14,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:issues:list-mine": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:issues:snapshot-mine": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:list-active": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:list-agent-commands": {
+      "kind": "invoke",
+      "count": 45,
+      "handled": 45,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:list-agent-skills": {
+      "kind": "invoke",
+      "count": 31,
+      "handled": 31,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:list-available-agents": {
+      "kind": "invoke",
+      "count": 9,
+      "handled": 9,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:list-desktop-commands": {
+      "kind": "invoke",
+      "count": 45,
+      "handled": 45,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:lsp-mode:get": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:mcp:custom:list": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:mcp:duplicates:list": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:memory:get": {
+      "kind": "invoke",
+      "count": 3,
+      "handled": 3,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:memory:get-settings": {
+      "kind": "invoke",
+      "count": 2,
+      "handled": 2,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:memory:get-settings-state": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:model-context-limit:get": {
+      "kind": "invoke",
+      "count": 18,
+      "handled": 18,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:model-visibility:sync": {
+      "kind": "invoke",
+      "count": 9,
+      "handled": 9,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:pi-packages:list": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:plugins:get-state": {
+      "kind": "invoke",
+      "count": 19,
+      "handled": 19,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:plugins:list": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:project-automation:pending-imports": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:provider:list": {
+      "kind": "invoke",
+      "count": 26,
+      "handled": 26,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:provider:local-cli-scan": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:provider:models-auto-refresh": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:provider:order:set": {
+      "kind": "invoke",
+      "count": 2,
+      "handled": 2,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:remote-ssh:cc-mgr-list-pending-upgrades": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:remote-ssh:list": {
+      "kind": "invoke",
+      "count": 7,
+      "handled": 7,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:rsb-window:get-state": {
+      "kind": "invoke",
+      "count": 44,
+      "handled": 44,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:rsb-window:set-context": {
+      "kind": "event",
+      "count": 17,
+      "handled": 17,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:schedule:get-runtime-state": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:schedule:list": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:schedule:list-runs": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:schedule:list-sidebar-index-runs": {
+      "kind": "invoke",
+      "count": 2,
+      "handled": 2,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:schedule:webhook-receiver": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:session-background-activity": {
+      "kind": "invoke",
+      "count": 14,
+      "handled": 14,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:session-background-activity:list": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:session-background-tasks:list": {
+      "kind": "invoke",
+      "count": 27,
+      "handled": 27,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:session-background-work:list": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:session:commit-provisional": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:session:prewarm": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:side-chat:list:v1": {
+      "kind": "invoke",
+      "count": 15,
+      "handled": 15,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:sidebar-tab-window:get-state": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:silent-encrypted-retry:get": {
+      "kind": "invoke",
+      "count": 4,
+      "handled": 4,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:subagent-model-settings:get": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:subscription-accounts": {
+      "kind": "invoke",
+      "count": 5,
+      "handled": 5,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:sync-new-maker-draft": {
+      "kind": "event",
+      "count": 5,
+      "handled": 5,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:sync-provider-model-memory": {
+      "kind": "event",
+      "count": 1,
+      "handled": 0,
+      "missing": 1,
+      "unsupported": 0
+    },
+    "maker:sync-worker-creation-prefs": {
+      "kind": "event",
+      "count": 6,
+      "handled": 3,
+      "missing": 3,
+      "unsupported": 0
+    },
+    "maker:turn-change-sets:list": {
+      "kind": "invoke",
+      "count": 14,
+      "handled": 14,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:usage:account": {
+      "kind": "invoke",
+      "count": 7,
+      "handled": 7,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:usage:claude-subscription": {
+      "kind": "invoke",
+      "count": 7,
+      "handled": 7,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:usage:codex-rate-limits": {
+      "kind": "invoke",
+      "count": 5,
+      "handled": 5,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:usage:history": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:usage:model-pricing-v2": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:usage:reference-model-pricing": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "maker:vision-bridge-settings:get": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "menubar:get-state": {
+      "kind": "invoke",
+      "count": 2,
+      "handled": 2,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "model-access:get-status": {
+      "kind": "invoke",
+      "count": 10,
+      "handled": 10,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "model-favorites:host-ready": {
+      "kind": "event",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "notification:clear-session-attention": {
+      "kind": "invoke",
+      "count": 24,
+      "handled": 24,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "notification:set-app-attention-count": {
+      "kind": "invoke",
+      "count": 24,
+      "handled": 24,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "notification:set-desktop-enabled": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "performance-trace:command": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "plugin-market:consume-removal-notice": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "plugin-market:lookup": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "plugin-market:recommendations": {
+      "kind": "invoke",
+      "count": 2,
+      "handled": 2,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "plugin-market:snapshot": {
+      "kind": "invoke",
+      "count": 4,
+      "handled": 4,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "process-monitor:subscribe": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "process-monitor:unsubscribe": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "projects-root:get": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "provider-group:command": {
+      "kind": "invoke",
+      "count": 15,
+      "handled": 15,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "provider-share:command": {
+      "kind": "invoke",
+      "count": 4,
+      "handled": 4,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "region-screenshot:compose-take": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "release-notes:fetch": {
+      "kind": "invoke",
+      "count": 2,
+      "handled": 2,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "remote-desktop:state": {
+      "kind": "invoke",
+      "count": 95,
+      "handled": 95,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "renderer:log": {
+      "kind": "event",
+      "count": 77,
+      "handled": 77,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "resource-usage-window:presentation-ready": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "resource-usage-window:renderer-ready": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "rsb-browser-bridge:snapshot": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "safe-storage-read": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "self-hosted-relay:command": {
+      "kind": "invoke",
+      "count": 3,
+      "handled": 3,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "setup-migration:host-ready": {
+      "kind": "event",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "setup-migration:state": {
+      "kind": "invoke",
+      "count": 2,
+      "handled": 2,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "sidebar-settings:claim-renderer-legacy-owner-sync": {
+      "kind": "event",
+      "count": 8,
+      "handled": 8,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "sidebar-settings:get-project-order": {
+      "kind": "invoke",
+      "count": 8,
+      "handled": 8,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "sidebar-settings:load-snapshot-sync": {
+      "kind": "event",
+      "count": 21,
+      "handled": 21,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "sidebar-tab-window:get-assignment": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "sidebar-tab-window:renderer-ready": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "skillhub:list-categories": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "skillhub:list-market": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "skillhub:scan": {
+      "kind": "invoke",
+      "count": 2,
+      "handled": 2,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "telegramBot:get-status": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "terminal:get-default-shell-pref": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "terminal:list-available-shells": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "theme:apply-vibrancy": {
+      "kind": "event",
+      "count": 6,
+      "handled": 6,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "theme:set-sidebar-width": {
+      "kind": "event",
+      "count": 3,
+      "handled": 3,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "update-auto-settings-get": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "update-channel-settings-get": {
+      "kind": "invoke",
+      "count": 4,
+      "handled": 4,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "update-get-status": {
+      "kind": "invoke",
+      "count": 9,
+      "handled": 9,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "update-set-relaunch-theme": {
+      "kind": "event",
+      "count": 3,
+      "handled": 3,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "voice-conversation:call-publish": {
+      "kind": "event",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "voice-conversation:call-status": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "voice-input:benchmark-fixture-audio": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "voice-input:cancel": {
+      "kind": "invoke",
+      "count": 5,
+      "handled": 5,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "voice-input:consume-shortcut-recovery-failure": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "voice-input:data:get": {
+      "kind": "event",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "voice-input:get-microphone-permission-cached": {
+      "kind": "event",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "voice-input:get-system-permissions": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "voice-input:get-system-permissions-cached": {
+      "kind": "event",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "voice-input:global-shortcut:set": {
+      "kind": "invoke",
+      "count": 14,
+      "handled": 14,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "voice-input:history:get": {
+      "kind": "event",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "voice-input:model-selection:get": {
+      "kind": "invoke",
+      "count": 2,
+      "handled": 2,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "voice-input:prewarm": {
+      "kind": "invoke",
+      "count": 6,
+      "handled": 6,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "voice-input:speaker:get-status": {
+      "kind": "invoke",
+      "count": 2,
+      "handled": 2,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "wechatBot:get-channel-settings": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "wechatBot:get-state": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "wecomBot:get-status": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "wecomGroupNotification:get-state": {
+      "kind": "invoke",
+      "count": 2,
+      "handled": 2,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "worklouder-codex:get-state": {
+      "kind": "invoke",
+      "count": 2,
+      "handled": 2,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "worklouder-codex:probe": {
+      "kind": "invoke",
+      "count": 2,
+      "handled": 2,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "worklouder-codex:publish-tasks": {
+      "kind": "invoke",
+      "count": 6,
+      "handled": 6,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "worktree-recycle:list": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "worktree:get-for-session": {
+      "kind": "invoke",
+      "count": 2,
+      "handled": 2,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "worktree:list-all": {
+      "kind": "invoke",
+      "count": 1,
+      "handled": 1,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "worktree:restore-status": {
+      "kind": "invoke",
+      "count": 14,
+      "handled": 14,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "xbox-gamepad:get-state": {
+      "kind": "invoke",
+      "count": 4,
+      "handled": 4,
+      "missing": 0,
+      "unsupported": 0
+    },
+    "xbox-gamepad:probe": {
+      "kind": "invoke",
+      "count": 4,
+      "handled": 4,
+      "missing": 0,
+      "unsupported": 0
+    }
+  }
+}

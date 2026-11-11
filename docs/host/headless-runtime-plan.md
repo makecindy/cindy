@@ -1133,3 +1133,53 @@ CI 的三类测试位置问题同时修正：模型对账/手机说明 guard 指
 `/tmp/cindy-9963-r1-host-types.log`、`/tmp/cindy-9963-r1-desktop-types-final.log`、
 `/tmp/cindy-9963-r1-hygiene.log`。插件授权单文件运行 5.64 秒（24 项，执行 77 毫秒）；
 没有增加测试基线额度，也没有新增源码文本断言。
+
+## 第 0 批：通道覆盖度量（2026-11-12）
+
+后续各批按真实使用排序，不靠估计。两份结果都由脚本生成：
+
+- **全量清单** [`channel-coverage.md`](channel-coverage.md)，由
+  `node scripts/host-channel-coverage.mjs` 生成。用 TypeScript 类型检查器解析桌面主进程
+  每个 `ipcMain.handle/on` 及包装函数的通道名（字面量、常量对象、模板字符串、
+  `as const` 循环、`Object.entries` 处理器表、透传参数的包装函数），0 处未解析。
+  主进程共 **1454** 个通道：已在合同里 61、客户端模式自有 2、只属于窗口 362、
+  **应由 Host 提供但还没接 1029**。“只属于窗口”的判定规则写在脚本的 `WINDOW_RULES`
+  里（窗口外壳与多窗口、原生对话框/剪贴板/系统外壳与通知、本机截屏录屏与远程桌面、
+  由窗口执行的图形能力、本机输入设备与语音、桌面安装包自身的更新与诊断），规则是可审的
+  判断，不是事实；改规则就重新生成。
+- **真实使用排行**：`--mock` 界面夹具（隔离沙箱 `host-usage`，免登录本地数据）里用
+  `apps/desktop/scripts/host-client-usage-tour.mjs` 走一遍 24 个夹具任务、20 个设置页、
+  10 个主页面并新建任务发送一次，主进程按 `CINDY_IPC_USAGE_FILE` 计数（仅源码运行）。
+  报告存为 [`evidence/channel-usage-mock-tour.json`](evidence/channel-usage-mock-tour.json)，
+  清单脚本默认读它排序。这一轮共调用 **253** 个通道（1604 次）：合同 30、客户端 1、
+  窗口 72、**Host 还没接的 150 个（730 次）**。按模块：maker-ipc 302 次，插件 65、
+  bootstrap 63、设备互联 59、git 上下文 48、IM 绑定 31、侧栏设置 29、localDb 23。
+
+**离“桌面窗口作为客户端能日常使用”的距离**：按夹具巡检至少还差 150 个通道；这是下限，
+巡检没有覆盖真实模型回合、附件、新建自动化、Orca、伙伴与 IM、远程执行，这些路径的通道
+只会再增加。全量上限是 1029 个。
+
+**为什么排行用普通模式而不是客户端模式**：Host 只有云端账号一种登录态，没有桌面的
+免账号本地模式；隔离 profile 里没有真实账号，窗口以客户端模式启动后停在登录页，而真实
+登录会动到钥匙串凭证。所以客户端模式只实测了启动与登录页：隔离 Host（新沙箱
+`host-client`）+ 客户端模式开发窗口，页面落在 `#/login`，唯一一次未接调用
+`maker:remote-ssh:cc-mgr-list-pending-upgrades` 返回 `UNSUPPORTED_CAPABILITY` 并计入报告，
+之后桌面再注册 `maker:*` 通道没有出现“重复注册”错误。两种模式的渲染层相同，未接通道在
+客户端模式下没有处理者，所以普通模式的调用集合就是客户端模式会落空的集合。
+
+**修掉的客户端模式缺陷**：Electron 42 在 invoke 时先查 `_invokeHandlers.has(channel)`，
+查不到直接回“No handler registered”，根本不会走到 `get()`。原兜底只改写了 `get()`，
+单测直接调 `get()` 所以一直是绿的，实际客户端模式下未接的 `maker:*` 从来没有返回过
+`UNSUPPORTED_CAPABILITY`（隔离 Electron 42.11.12 探针复现）。现在同时应答 `has()`，
+并用注册守卫区分“invoke 查询”和“`handle()` 注册前的查询”，否则后注册的 `maker:*`
+通道会被误判为重复注册而中断后续注册。真实 Electron 探针与实机客户端窗口都已验证。
+非 `maker:*` 的未接通道仍保持 Electron 原错误，只计数。
+
+**巡检顺带发现**（普通模式也存在，未在本批修改）：`maker:sync-worker-creation-prefs`
+（6 次里 3 次）与 `maker:sync-provider-model-memory`（1 次）在主进程注册监听之前就由渲染层
+发出，这几次同步被丢弃；`host-client:observe` 只在客户端模式有监听，普通模式发出属预期。
+
+重新测量：`CINDY_IPC_USAGE_FILE=<文件> XDT_CDP_PORT=9333 pnpm restart:desktop:remote --
+--mock --isolated=host-usage`，再跑巡检脚本（`--cdp=… --profile=<沙箱目录>`，只接受开发
+实例登记为隔离沙箱的进程），把报告覆盖到 `evidence/channel-usage-mock-tour.json` 后重新
+生成清单。restart 脚本为此转发 `CINDY_IPC_USAGE_FILE` 与 `CINDY_HOST_API` 两个变量。
