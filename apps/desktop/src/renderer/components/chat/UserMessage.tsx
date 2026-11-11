@@ -1357,6 +1357,7 @@ export function UserMessage({
         'flex w-full',
         orcaCommunication || hookSource || botLetter ? 'justify-start' : 'justify-end',
         bubbleActions && 'group/message',
+        simplifiedBotConversation && 'chat-bubble-layout',
         // 与伙伴回复的气泡对齐：头像 28px + 间距 10px。
         botLetter && 'group/letter pl-[38px]',
       )}
