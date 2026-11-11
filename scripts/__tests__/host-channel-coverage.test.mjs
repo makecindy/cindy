@@ -29,6 +29,23 @@ test('ownership: B and C rules are final, A rules can turn into C through window
   assert.deepEqual(Object.values(pick(classify({ channel: 'odd:thing', file: main('odd.ts'), gui: ['shell'] }, contract))), ['C', 'dependency']);
 });
 
+test('sync channels are window-local for settings and account hints, but still Host work for other backend state', () => {
+  assert.equal(owner({ channel: 'layout:get', kind: 'event', file: main('layout/ipc.ts'), sync: true }), 'W');
+  assert.equal(owner({ channel: 'auth:has-persisted-session-hint-sync', kind: 'event', file: main('bootstrap-electron.ts'), sync: true }), 'W');
+  assert.equal(owner({ channel: 'sidebar-settings:get-project-order', file: main('projectOrderStore.ts') }), 'W');
+  const plugin = classify({ channel: 'ghosts:unread', kind: 'event', file: main('cindy-brain/index.ts'), sync: true, gui: [] }, contract);
+  assert.equal(plugin.category, 'A');
+  assert.match(plugin.reason, /预取/);
+  // A window-only sync read stays B.
+  assert.equal(owner({ channel: 'voice-input:history:get', kind: 'event', file: main('voice-input/index.ts'), sync: true }), 'B');
+});
+
+test('relaunch blocking checks are Host-owned runtime state, the updater itself stays in the window', () => {
+  assert.equal(owner({ channel: 'update-relaunch:blocking-summary', file: main('relaunchBusyActivityIpc.ts'), gui: [] }), 'A');
+  assert.equal(owner({ channel: 'update-relaunch', file: main('updateService.ts') }), 'B');
+  assert.equal(owner({ channel: 'update-check-now', file: main('updateService.ts') }), 'B');
+});
+
 function pick({ category, basis }) {
   return { category, basis };
 }

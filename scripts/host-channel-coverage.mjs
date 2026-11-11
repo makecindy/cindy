@@ -87,8 +87,8 @@ export const OWNERSHIP_RULES = [
   {
     owner: 'B',
     reason: '桌面安装包自身：更新、版本、日志与诊断',
-    channel: /^(update-|get-app-version|get-app-display-version-info|get-os-release|release-notes:|app:get-arm64-translation|app:open-logs-dir|crash-diagnosis|log-upload|performance-trace|renderer:log|dev:|cc:set-debug-net|deep-link:)/,
-    module: /^(updateService|relaunchBusyActivityIpc|crash-diagnosis|log-upload|performance-trace)\b/,
+    channel: /^(update-(?!relaunch:)|get-app-version|get-app-display-version-info|get-os-release|release-notes:|app:get-arm64-translation|app:open-logs-dir|crash-diagnosis|log-upload|performance-trace|renderer:log|dev:|cc:set-debug-net|deep-link:)/,
+    module: /^(updateService|crash-diagnosis|log-upload|performance-trace)\b/,
   },
   {
     owner: 'C',
@@ -116,6 +116,16 @@ export const OWNERSHIP_RULES = [
     reason: '运行时发起、窗口收集用户输入（安全输入交接）',
     channel: /^input-handoff:/,
   },
+  {
+    owner: 'W',
+    reason: '窗口本地设置：窗口直接读写同一份 profile 文件，不经 Host',
+    channel: /^sidebar-settings:/,
+  },
+  {
+    owner: 'A',
+    reason: '重启会打断哪些任务：客户端模式下由 Host 与交接合同回答（归升级与交接流程）',
+    channel: /^update-relaunch:/,
+  },
   { owner: 'A', reason: '任务、消息与输入队列', channel: /^(local-db:(sessions|messages|history|session-share|session-import|right-sidebar-tabs|recent-workdirs|subagent-runs|conversations|task-tags|project-aliases|ensure-ready|maintenance)|maker:(session|input|send|steer|create-session|close-session|abort-session|fork|rewind|compact|message|get-session|navigate-session|side-chat|goal|turn-change|persist-turn|working-status|any-session|export-session|generate-title|regenerate-title|auto-title|predict-prompt|switch-session-agent|write-plan-file|images|list-desktop-commands|execute-desktop-command|get-context|set-))/ },
   { owner: 'A', reason: '自动化', channel: /^maker:schedule/ },
   { owner: 'A', reason: 'Orca', channel: /^(maker:(orca|worker|team|mark-orca|sync-worker)|local-db:orca)/ },
@@ -130,6 +140,9 @@ export const OWNERSHIP_RULES = [
   { owner: 'A', reason: '设置与偏好', channel: /^(sidebar-settings|app-shortcuts|appearance-settings|layout:|analytics|database-size-warning|app-preferences|local-themes|profile:|projects-root|maker:[a-z-]*settings)/ },
   { owner: 'A', reason: 'Cindy Make', channel: /^app:(.*cindy-make|cindy-versions)/ },
 ];
+
+/** A-rule domains whose synchronous reads the window serves from the shared profile files. */
+export const SYNC_LOCAL_DOMAINS = new Set(['设置与偏好', '账号与凭据']);
 
 /** Electron exports that only a window process can use. */
 export const GUI_EXPORTS = new Set([
@@ -448,6 +461,30 @@ export function collectInventory() {
     visitBody(fn.body);
     return found;
   };
+  /** True when a handler answers synchronously (assigns `<event>.returnValue`). */
+  const syncMemo = new Map();
+  const assignsReturnValue = (fn) => {
+    if (syncMemo.has(fn)) return syncMemo.get(fn);
+    let found = false;
+    const visit = (node) => {
+      if (found) return;
+      if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken
+        && ts.isPropertyAccessExpression(node.left) && node.left.name.text === 'returnValue') found = true;
+      else ts.forEachChild(node, visit);
+    };
+    visit(fn.body);
+    syncMemo.set(fn, found);
+    return found;
+  };
+  const handlerSync = (site) => {
+    const call = site.parent;
+    if (!call || !ts.isCallExpression(call)) return false;
+    return call.arguments.some((arg) => {
+      if (arg === site) return false;
+      const fn = functionBody(arg);
+      return Boolean(fn && assignsReturnValue(fn));
+    });
+  };
   /** Window APIs used by the handler arguments of the call that registers `site`. */
   const handlerGui = (site) => {
     const call = site.parent;
@@ -483,9 +520,11 @@ export function collectInventory() {
               continue;
             }
             const gui = handlerGui(site);
+            const sync = kind === 'event' && handlerSync(site);
             for (const channel of values) {
               registrations.push({
                 gui,
+                sync,
                 channel,
                 kind,
                 file: at.file,
@@ -578,6 +617,18 @@ export function classify(registration, contract) {
   if (registration.perWebContents) return { category: 'B', reason: '单个窗口内的插件页面 IPC（webContents.ipc）', basis: 'rule' };
   const module = owningFile(registration).replace(MAIN_PREFIX, '');
   const rule = OWNERSHIP_RULES.find((r) => r.channel?.test(registration.channel) || r.module?.test(module));
+  if (rule?.owner === 'B') return { category: 'B', reason: rule.reason, basis: 'rule' };
+  if (registration.sync) {
+    // A synchronous read cannot wait for HTTP. Settings and account hints are read
+    // from the same profile files by the window; other backend state still needs
+    // the Host, prefetched and replayed locally the way ghosts:list already is.
+    if (!rule || SYNC_LOCAL_DOMAINS.has(rule.reason)) {
+      return { category: 'W', reason: '同步通道（event.returnValue）：转发给 Host 只会阻塞主进程，由窗口本地读同一份 profile', basis: 'dependency' };
+    }
+    if (rule.owner === 'A') {
+      return { category: 'A', reason: `${rule.reason}；同步通道，需 Host 预取并随事件刷新、窗口本地回放（同 ghosts:list）`, basis: 'rule', sync: true };
+    }
+  }
   if (rule && rule.owner !== 'A') return { category: rule.owner, reason: rule.reason, basis: 'rule' };
   const gui = registration.gui ?? [];
   const domain = rule?.reason ?? '未登记前缀';
@@ -592,7 +643,10 @@ export function moduleGroup(file) {
   return parts.length > 1 ? parts[0] : inner.replace(/\.tsx?$/, '');
 }
 
-const CATEGORIES = ['contract', 'client', 'A', 'B', 'C'];
+const CATEGORIES = ['contract', 'client', 'A', 'B', 'W', 'C'];
+const WINDOW_CATEGORIES = new Set(['B', 'W']);
+/** Location for the doc: file only, so the doc does not go stale with every edit (lines stay in --json). */
+const fileOnly = (site) => site.replace(MAIN_PREFIX, '').replace(/:\d+$/, '');
 
 const unservedCount = (entry) => entry.missing + entry.unsupported;
 
@@ -677,7 +731,7 @@ export function summarize({ registrations, unresolved, adapters = [], contract }
   }
   const rows = [...channels.values()].sort((a, b) => a.group.localeCompare(b.group) || a.channel.localeCompare(b.channel));
   const totals = Object.fromEntries(CATEGORIES.map((category) => [category, 0]));
-  const basis = { 'A:rule': 0, 'A:default': 0, 'C:rule': 0, 'C:dependency': 0 };
+  const basis = { 'A:rule': 0, 'A:default': 0, 'W:rule': 0, 'W:dependency': 0, 'C:rule': 0, 'C:dependency': 0 };
   for (const row of rows) {
     totals[row.category] += 1;
     if (`${row.category}:${row.basis}` in basis) basis[`${row.category}:${row.basis}`] += 1;
@@ -685,7 +739,7 @@ export function summarize({ registrations, unresolved, adapters = [], contract }
   const missingContract = [...contract].filter((channel) => !rows.some((row) => row.channel === channel)).sort();
   const groups = new Map();
   for (const row of rows) {
-    const group = groups.get(row.group) ?? { group: row.group, contract: 0, client: 0, A: 0, B: 0, C: 0, total: 0 };
+    const group = groups.get(row.group) ?? { group: row.group, contract: 0, client: 0, A: 0, B: 0, W: 0, C: 0, total: 0 };
     group[row.category] += 1;
     group.total += 1;
     groups.set(row.group, group);
@@ -704,11 +758,17 @@ export function summarize({ registrations, unresolved, adapters = [], contract }
   }
   for (const row of rows) {
     row.used = counts.get(row.channel) ?? 0;
-    if (row.category === 'B') row.clientBehavior = clientBehavior(row, clientUsage, usage);
+    if (WINDOW_CATEGORIES.has(row.category)) row.clientBehavior = clientBehavior(row, clientUsage, usage);
   }
+  const windowRows = rows.filter((row) => WINDOW_CATEGORIES.has(row.category));
+  const windowStatus = {
+    registered: windowRows.filter((row) => row.clientBehavior === 'local').length,
+    unregistered: windowRows.filter((row) => ['unsupported', 'no-handler', 'dropped'].includes(row.clientBehavior)).length,
+    other: windowRows.filter((row) => !['local', 'unsupported', 'no-handler', 'dropped'].includes(row.clientBehavior)).length,
+  };
   const ranking = usage ? rankUsage(rows, usage, ['A']) : null;
   return {
-    rows, totals, basis, usedTotals, ranking,
+    rows, totals, basis, usedTotals, ranking, windowStatus,
     groups: [...groups.values()].sort((a, b) => b.A - a.A || a.group.localeCompare(b.group)),
     unresolved, adapters, missingContract,
   };
@@ -725,12 +785,12 @@ function gitHead() {
 const code = (text) => `\`${String(text).replace(/`/g, "'").replace(/\|/g, '\\|')}\``;
 
 export function renderMarkdown(summary, { usageSource, clientSource } = {}) {
-  const { rows, totals, basis, groups, unresolved, adapters, missingContract, ranking, usedTotals } = summary;
+  const { rows, totals, basis, groups, unresolved, adapters, missingContract, ranking, usedTotals, windowStatus } = summary;
   const lines = [];
   const push = (...items) => lines.push(...items);
   push('# Host 通道覆盖清单（脚本生成）', '');
-  push('> 由 `node scripts/host-channel-coverage.mjs` 生成，不要手工修改。');
-  push(`> 源码提交：\`${gitHead()}\`。归属规则见下方「归属规则」，正本在脚本的 \`OWNERSHIP_RULES\`。`, '');
+  push('> 由 `node scripts/host-channel-coverage.mjs` 生成，不要手工修改；行号只在 `--json` 输出里。');
+  push(`> 生成时的源码提交：\`${gitHead()}\`。归属规则见下方「归属规则」，正本在脚本的 \`OWNERSHIP_RULES\`。`, '');
   push('统计对象是桌面主进程（`apps/desktop/src/main`，不含测试）里所有 `ipcMain.handle/on`');
   push('及其包装函数注册的通道；同名通道按 invoke / event 各计一次。', '');
   push('| 分类 | 含义 | 通道数 |', '|---|---|---:|');
@@ -738,18 +798,24 @@ export function renderMarkdown(summary, { usageSource, clientSource } = {}) {
   push(`| client | 客户端模式自己的通道（连接状态、重连） | ${totals.client} |`);
   push(`| **A** | 必须由后台处理：读写后台持有的数据或运行状态 | ${totals.A} |`);
   push(`| **B** | 永久留在窗口：只能在 Electron／图形界面里做 | ${totals.B} |`);
+  push(`| **W** | 窗口本地设置（含全部同步通道）：窗口直接读写同一份 profile，不经 Host | ${totals.W} |`);
   push(`| **C** | 待定，见各条原因 | ${totals.C} |`);
   push(`| 合计 | | ${rows.length} |`, '');
+  push('**三个数**（窗口类 = B + W）：');
+  push(`- 窗口类且客户端模式下已注册：**${windowStatus.registered}**`);
+  push(`- 窗口类但客户端模式下未注册（今天被拒或无人监听）：**${windowStatus.unregistered}**；另有 ${windowStatus.other} 个无法从快照判断（见下文）`);
+  push(`- 真正要 Host 接的（A）：**${totals.A}**；C 的 ${totals.C} 个定归属后再计入`, '');
   push(`判定依据：A 类 ${basis['A:rule']} 条按规则、${basis['A:default']} 条按默认（未登记前缀且处理函数没用窗口 API）；`
+    + `W 类 ${basis['W:rule']} 条按规则、${basis['W:dependency']} 条按同步通道判定；`
     + `C 类 ${basis['C:rule']} 条按规则、${basis['C:dependency']} 条按依赖（后台领域或未登记前缀，但处理函数用到窗口 API）。`, '');
   if (unresolved.length) {
     push(`未能静态解析通道名的注册点 ${unresolved.length} 处（不计入上表）：`, '');
-    for (const entry of unresolved) push(`- \`${entry.file}:${entry.line}\` — ${code(entry.expression)}`);
+    for (const entry of unresolved) push(`- \`${fileOnly(entry.file)}\` — ${code(entry.expression)}`);
     push('');
   }
   if (adapters.length) {
     push(`转发适配器 ${adapters.length} 处（把通道原样转给另一个注册表，通道已在调用处计入）：`);
-    push(adapters.map((entry) => `\`${entry.file}:${entry.line}\``).join('、'), '');
+    push([...new Set(adapters.map((entry) => `\`${fileOnly(entry.file)}\``))].join('、'), '');
   }
   if (missingContract.length) {
     push(`合同里有、但桌面主进程没有注册的通道 ${missingContract.length} 个（Host 独有或桌面已改名）：`, '');
@@ -757,9 +823,11 @@ export function renderMarkdown(summary, { usageSource, clientSource } = {}) {
   }
 
   push('## 归属规则', '');
-  push('按顺序匹配，先中先得；通道名或注册模块（`apps/desktop/src/main` 下的路径）命中即算。B、C 规则直接定类；');
-  push('A 规则只标出领域，处理函数（及其调用的两层桌面源码函数）若用到下面的窗口 API 则改判 C；');
-  push('没有命中任何规则的通道：用到窗口 API 判 C，否则判 A。', '');
+  push('按顺序匹配，先中先得；通道名或注册模块（`apps/desktop/src/main` 下的路径）命中即算。B 规则直接定类；');
+  push('其后，处理函数给 `event.returnValue` 赋值的同步通道不能走异步 HTTP：属于设置、账号提示或未登记前缀的判 W（窗口本地读 profile）；');
+  push(`属于其它后台领域的仍判 A，并注明需 Host 预取、窗口本地回放（同 \`ghosts:list\`）。本地读取的领域：${[...SYNC_LOCAL_DOMAINS].join('、')}。`);
+  push('W、C 规则直接定类；A 规则只标出领域，处理函数（及其调用的两层桌面源码函数，不含被调函数里的嵌套回调）');
+  push('若用到下面的窗口 API 则改判 C；没有命中任何规则的通道：用到窗口 API 判 C，否则判 A。', '');
   push('| 归属 | 原因 | 通道名 | 注册模块 |', '|---|---|---|---|');
   for (const rule of OWNERSHIP_RULES) {
     push(`| ${rule.owner} | ${rule.reason} | ${rule.channel ? code(rule.channel.source) : '—'} | ${rule.module ? code(rule.module.source) : '—'} |`);
@@ -774,7 +842,7 @@ export function renderMarkdown(summary, { usageSource, clientSource } = {}) {
     push('## A 类：实际调用排行', '');
     push(`来源：${usageSource ?? '调用计数报告'}。`);
     push(`这次共调用 ${usedTotals.total} 个通道（${usedTotals.calls} 次）：contract ${usedTotals.contract}、client ${usedTotals.client}、`
-      + `**A ${usedTotals.A + usedTotals.unregistered}**（${usedTotals.aCalls} 次，含清单外 ${usedTotals.unregistered}）、B ${usedTotals.B}、C ${usedTotals.C}。`, '');
+      + `**A ${usedTotals.A + usedTotals.unregistered}**（${usedTotals.aCalls} 次，含清单外 ${usedTotals.unregistered}）、B ${usedTotals.B}、W ${usedTotals.W}、C ${usedTotals.C}。`, '');
     push('| # | 通道 | 调用次数 | 领域 | 模块 |', '|---:|---|---:|---|---|');
     ranking.forEach((entry, index) => push(`| ${index + 1} | ${code(entry.channel)} | ${entry.count} | ${entry.reason} | ${entry.group} |`));
     push('');
@@ -782,33 +850,38 @@ export function renderMarkdown(summary, { usageSource, clientSource } = {}) {
 
   const cRows = rows.filter((row) => row.category === 'C').sort((a, b) => b.used - a.used || a.channel.localeCompare(b.channel));
   push(`## C 类全量（${cRows.length}）`, '');
-  push('| 通道 | 类型 | 原因 | 调用次数 | 注册位置 |', '|---|---|---|---:|---|');
-  for (const row of cRows) push(`| ${code(row.channel)} | ${row.kind} | ${row.reason} | ${row.used} | \`${row.sites[0].replace(MAIN_PREFIX, '')}\` |`);
+  push('| 通道 | 类型 | 原因 | 调用次数 | 注册文件 |', '|---|---|---|---:|---|');
+  for (const row of cRows) push(`| ${code(row.channel)} | ${row.kind} | ${row.reason} | ${row.used} | \`${fileOnly(row.sites[0])}\` |`);
   push('');
 
-  const bRows = rows.filter((row) => row.category === 'B');
+  const windowRows = rows.filter((row) => WINDOW_CATEGORIES.has(row.category));
   const behaviorCounts = {};
-  for (const row of bRows) behaviorCounts[row.clientBehavior] = (behaviorCounts[row.clientBehavior] ?? 0) + 1;
-  push('## B 类在客户端模式下的实际行为', '');
+  for (const row of windowRows) behaviorCounts[row.clientBehavior] = (behaviorCounts[row.clientBehavior] ?? 0) + 1;
+  push('## 窗口类（B + W）在客户端模式下的实际行为', '');
   push(`来源：${clientSource ?? '没有客户端模式快照'}；对照 ${usageSource ?? '没有普通模式快照'}。`);
-  push('两份快照都是报告写入时主进程已注册的处理者；客户端快照里没有、普通模式快照里有，就是该在窗口本地处理却被拒的通道。', '');
+  push('两份快照都是报告写入时主进程已注册的处理者；客户端快照里没有、普通模式快照里有，就是该在窗口本地处理却没有注册的通道。');
+  push('客户端快照取在登录页（Host 没有免账号模式），登录后才注册的处理者不在其中。', '');
   push('| 行为 | 通道数 |', '|---|---:|');
   for (const [key, label] of Object.entries(CLIENT_BEHAVIOR_LABELS)) if (behaviorCounts[key]) push(`| ${label} | ${behaviorCounts[key]} |`);
   push('');
-  const rejected = bRows.filter((row) => ['unsupported', 'no-handler', 'dropped'].includes(row.clientBehavior))
+  const rejected = windowRows.filter((row) => ['unsupported', 'no-handler', 'dropped'].includes(row.clientBehavior))
     .sort((a, b) => b.used - a.used || a.channel.localeCompare(b.channel));
   if (rejected.length) {
-    push(`### 被误拒的 B 类（${rejected.length}）`, '');
-    push('| 通道 | 类型 | 客户端模式下 | 调用次数 | 原因 | 注册位置 |', '|---|---|---|---:|---|---|');
+    push(`### 窗口类但客户端模式下未注册（${rejected.length}，尚未实现）`, '');
+    push('| 通道 | 类型 | 归属 | 客户端模式下 | 调用次数 | 注册文件 |', '|---|---|---|---|---:|---|');
     for (const row of rejected) {
-      push(`| ${code(row.channel)} | ${row.kind} | ${CLIENT_BEHAVIOR_LABELS[row.clientBehavior]} | ${row.used} | ${row.reason} | \`${row.sites[0].replace(MAIN_PREFIX, '')}\` |`);
+      push(`| ${code(row.channel)} | ${row.kind} | ${row.category}（${row.reason}） | ${CLIENT_BEHAVIOR_LABELS[row.clientBehavior]} | ${row.used} | \`${fileOnly(row.sites[0])}\` |`);
     }
     push('');
   }
+  const unclear = windowRows.filter((row) => !['local', 'unsupported', 'no-handler', 'dropped'].includes(row.clientBehavior));
+  if (unclear.length) {
+    push(`快照无法判断的窗口类通道（${unclear.length}）：${unclear.map((row) => `${code(row.channel)}（${CLIENT_BEHAVIOR_LABELS[row.clientBehavior]}）`).join('、')}`, '');
+  }
 
   push('## 按注册模块', '');
-  push('| 模块 | 已代理 | A | B | C | 合计 |', '|---|---:|---:|---:|---:|---:|');
-  for (const group of groups) push(`| ${group.group} | ${group.contract + group.client} | ${group.A} | ${group.B} | ${group.C} | ${group.total} |`);
+  push('| 模块 | 已代理 | A | B | W | C | 合计 |', '|---|---:|---:|---:|---:|---:|---:|');
+  for (const group of groups) push(`| ${group.group} | ${group.contract + group.client} | ${group.A} | ${group.B} | ${group.W} | ${group.C} | ${group.total} |`);
   push('');
 
   push('## 全部通道', '');
@@ -816,11 +889,12 @@ export function renderMarkdown(summary, { usageSource, clientSource } = {}) {
   rows.forEach((row, index) => {
     if (row.group !== currentGroup) {
       currentGroup = row.group;
-      push(`### ${currentGroup}`, '', '| 通道 | 类型 | 归属 | 调用次数 | 注册位置 |', '|---|---|---|---:|---|');
+      push(`### ${currentGroup}`, '', '| 通道 | 类型 | 归属 | 调用次数 | 注册文件 |', '|---|---|---|---:|---|');
     }
     const category = row.reason ? `${row.category}（${row.reason}）` : row.category;
-    const more = row.sites.length > 1 ? ` 等 ${row.sites.length} 处` : '';
-    push(`| ${code(row.channel)} | ${row.kind} | ${category} | ${row.used} | \`${row.sites[0].replace(MAIN_PREFIX, '')}\`${more} |`);
+    const files = [...new Set(row.sites.map(fileOnly))];
+    const more = files.length > 1 ? ` 等 ${files.length} 个文件` : '';
+    push(`| ${code(row.channel)} | ${row.kind} | ${category} | ${row.used} | \`${files[0]}\`${more} |`);
     if (rows[index + 1]?.group !== currentGroup) push('');
   });
   return `${lines.join('\n').trimEnd()}\n`;
@@ -848,5 +922,5 @@ if (isMain) {
   if (flag('--stdout')) process.stdout.write(markdown);
   else fs.writeFileSync(path.join(repoRoot, DOC_REL_PATH), markdown);
   const { totals } = summary;
-  console.error(`[host-channel-coverage] ${summary.rows.length} channels: contract=${totals.contract} client=${totals.client} A=${totals.A} B=${totals.B} C=${totals.C} unresolved=${summary.unresolved.length} (${Date.now() - started}ms)`);
+  console.error(`[host-channel-coverage] ${summary.rows.length} channels: contract=${totals.contract} client=${totals.client} A=${totals.A} B=${totals.B} W=${totals.W} C=${totals.C} unresolved=${summary.unresolved.length} (${Date.now() - started}ms)`);
 }
