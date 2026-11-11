@@ -1,7 +1,7 @@
 # Host 通道覆盖清单（脚本生成）
 
 > 由 `node scripts/host-channel-coverage.mjs` 生成，不要手工修改；行号只在 `--json` 输出里。
-> 生成时的源码提交：`1041669c7a`。归属规则见下方「归属规则」，正本在脚本的 `OWNERSHIP_RULES`。
+> 生成时的源码提交：`13ad706f87`。归属规则见下方「归属规则」，正本在脚本的 `OWNERSHIP_RULES`。
 
 统计对象是桌面主进程（`apps/desktop/src/main`，不含测试）里所有 `ipcMain.handle/on`
 及其包装函数注册的通道；注册、调用次数和排行均按 `(kind, channel)` 区分。
@@ -60,7 +60,7 @@
 | B | 图形能力，由窗口替 Agent 执行（平台 RPC） | `^(maker:computer\|maker:browser\|browser-backend\|rsb-browser-bridge\|rsb-native-popup)` | `^(rsb-browser-bridge)\b` |
 | B | 本机输入设备与语音 | `^(voice-input\|voice-conversation\|xbox-gamepad\|worklouder-codex\|codex-micro-guard\|app-shortcuts:set-recording)` | `^(voice-input\|voice-conversation\|xbox-gamepad\|worklouder-codex)\b` |
 | B | 桌面安装包自身：更新、版本、日志与诊断 | `^(update-(?!relaunch:)\|get-app-version\|get-app-display-version-info\|get-os-release\|release-notes:\|app:get-arm64-translation\|app:open-logs-dir\|crash-diagnosis\|log-upload\|performance-trace\|renderer:log\|dev:\|cc:set-debug-net\|deep-link:)` | `^(updateService\|crash-diagnosis\|log-upload\|performance-trace)\b` |
-| C-专项设计（安全边界） | 安全边界待专项设计：主人填写的值只交给宿主执行（input-handoff），远程控制派发；方案出来前不动 | `^(input-handoff:\|device-link:invoke$)` | — |
+| C-专项设计（安全边界） | 安全边界待专项设计：用户填写的值只交给宿主执行（input-handoff），远程控制派发；方案出来前不动 | `^(input-handoff:\|device-link:invoke$)` | — |
 | C-后台 | 终端 PTY：换窗口时不能断，网页和手机也要用（优先级低，放后面批次） | `^terminal:` | — |
 | C-后台 | 任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时 | `^(maker:file-browser\|maker:chat-file\|maker:chat-folder\|maker:html-preview\|maker:search:\|file-browser:remote-op$)` | — |
 | C-窗口本地 | 用户在本窗口选择或拖入的本机文件、本机进程监视：窗口直接处理，客户端模式下照常注册 | `^(fs:\|read-file-bytes\|read-file-for-attachment\|peek-file-header\|text-file:\|file:thumbnail\|process-monitor:subscribe$)` | `^fsBrowse\b` |
@@ -282,7 +282,7 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `cindy-media:legacy-images-open-dir` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 在访达／资源管理器或系统浏览器里打开后台持有的内容 | 0 | `bootstrap-electron.ts` |
 | `create-project-from-task:chooseParent` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | 0 | `bootstrap-electron.ts` |
 | `device-link:confirm-skill-mutation` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 设备互联与远程执行，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog；窗口做界面动作，数据那一半调 Host | 0 | `device-link/ipc.ts` |
-| `device-link:invoke` | invoke | C-专项设计（安全边界） | 安全边界待专项设计：主人填写的值只交给宿主执行（input-handoff），远程控制派发；方案出来前不动 | 0 | `device-link/ipc.ts` |
+| `device-link:invoke` | invoke | C-专项设计（安全边界） | 安全边界待专项设计：用户填写的值只交给宿主执行（input-handoff），远程控制派发；方案出来前不动 | 0 | `device-link/ipc.ts` |
 | `device-link:pick-plugin-package` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | 0 | `device-link/ipc.ts` |
 | `dialogue-workspace:choose` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | 0 | `bootstrap-electron.ts` |
 | `file-browser:remote-op` | invoke | C-后台 | 任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时 | 0 | `file-browser/device-op.ts` |
@@ -298,9 +298,9 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `ghosts:library-reattach-legacy` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 插件、技能与 MCP，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog；窗口做界面动作，数据那一半调 Host | 0 | `cindy-brain/index.ts` |
 | `ghosts:pick-file` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | 0 | `cindy-brain/index.ts` |
 | `git-review:open-file` | invoke | C-两段式（窗口做界面动作，数据调 Host） | git 与工作树，但处理函数用到窗口 API：shell；窗口做界面动作，数据那一半调 Host | 0 | `git-review/ipc.ts` |
-| `input-handoff:picture` | invoke | C-专项设计（安全边界） | 安全边界待专项设计：主人填写的值只交给宿主执行（input-handoff），远程控制派发；方案出来前不动 | 0 | `maker-ipc/register.ts` |
-| `input-handoff:raise` | invoke | C-专项设计（安全边界） | 安全边界待专项设计：主人填写的值只交给宿主执行（input-handoff），远程控制派发；方案出来前不动 | 0 | `maker-ipc/register.ts` |
-| `input-handoff:submit` | invoke | C-专项设计（安全边界） | 安全边界待专项设计：主人填写的值只交给宿主执行（input-handoff），远程控制派发；方案出来前不动 | 0 | `maker-ipc/register.ts` |
+| `input-handoff:picture` | invoke | C-专项设计（安全边界） | 安全边界待专项设计：用户填写的值只交给宿主执行（input-handoff），远程控制派发；方案出来前不动 | 0 | `maker-ipc/register.ts` |
+| `input-handoff:raise` | invoke | C-专项设计（安全边界） | 安全边界待专项设计：用户填写的值只交给宿主执行（input-handoff），远程控制派发；方案出来前不动 | 0 | `maker-ipc/register.ts` |
+| `input-handoff:submit` | invoke | C-专项设计（安全边界） | 安全边界待专项设计：用户填写的值只交给宿主执行（input-handoff），远程控制派发；方案出来前不动 | 0 | `maker-ipc/register.ts` |
 | `local-db:bots:choose-avatar` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | 0 | `localDb/ipc/bots.ts` |
 | `local-db:bots:choose-avatar-source` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | 0 | `localDb/ipc/bots.ts` |
 | `local-db:maintenance:choose-backup-directory` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | 0 | `bootstrap-electron.ts` |
@@ -897,7 +897,7 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `device-link:disconnect-all` | invoke | A（设备互联与远程执行） | 0 | `device-link/ipc.ts` |
 | `device-link:get-peer-links` | invoke | A（设备互联与远程执行） | 0 | `device-link/ipc.ts` |
 | `device-link:get-state` | invoke | A（设备互联与远程执行） | 20 | `device-link/ipc.ts` |
-| `device-link:invoke` | invoke | C-专项设计（安全边界）（安全边界待专项设计：主人填写的值只交给宿主执行（input-handoff），远程控制派发；方案出来前不动） | 0 | `device-link/ipc.ts` |
+| `device-link:invoke` | invoke | C-专项设计（安全边界）（安全边界待专项设计：用户填写的值只交给宿主执行（input-handoff），远程控制派发；方案出来前不动） | 0 | `device-link/ipc.ts` |
 | `device-link:list-devices` | invoke | A（设备互联与远程执行） | 33 | `device-link/ipc.ts` |
 | `device-link:mirror-cache:clear` | invoke | A（设备互联与远程执行） | 0 | `device-link/ipc.ts` |
 | `device-link:mirror-cache:messages:get` | invoke | A（设备互联与远程执行） | 0 | `device-link/ipc.ts` |
@@ -1320,9 +1320,9 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 |---|---|---|---:|---|
 | `ghosts:background-tasks:list` | invoke | A（插件、技能与 MCP） | 0 | `maker-ipc/register.ts` |
 | `ghosts:background-tasks:reveal` | invoke | C-两段式（窗口做界面动作，数据调 Host）（在访达／资源管理器或系统浏览器里打开后台持有的内容） | 0 | `maker-ipc/register.ts` |
-| `input-handoff:picture` | invoke | C-专项设计（安全边界）（安全边界待专项设计：主人填写的值只交给宿主执行（input-handoff），远程控制派发；方案出来前不动） | 0 | `maker-ipc/register.ts` |
-| `input-handoff:raise` | invoke | C-专项设计（安全边界）（安全边界待专项设计：主人填写的值只交给宿主执行（input-handoff），远程控制派发；方案出来前不动） | 0 | `maker-ipc/register.ts` |
-| `input-handoff:submit` | invoke | C-专项设计（安全边界）（安全边界待专项设计：主人填写的值只交给宿主执行（input-handoff），远程控制派发；方案出来前不动） | 0 | `maker-ipc/register.ts` |
+| `input-handoff:picture` | invoke | C-专项设计（安全边界）（安全边界待专项设计：用户填写的值只交给宿主执行（input-handoff），远程控制派发；方案出来前不动） | 0 | `maker-ipc/register.ts` |
+| `input-handoff:raise` | invoke | C-专项设计（安全边界）（安全边界待专项设计：用户填写的值只交给宿主执行（input-handoff），远程控制派发；方案出来前不动） | 0 | `maker-ipc/register.ts` |
+| `input-handoff:submit` | invoke | C-专项设计（安全边界）（安全边界待专项设计：用户填写的值只交给宿主执行（input-handoff），远程控制派发；方案出来前不动） | 0 | `maker-ipc/register.ts` |
 | `local-db:bots:read-state:get` | invoke | A（伙伴与 IM） | 1 | `maker-ipc/botReadStateIpc.ts` |
 | `local-db:bots:read-state:update` | invoke | A（伙伴与 IM） | 6 | `maker-ipc/botReadStateIpc.ts` |
 | `maker:abort-session` | invoke | A（任务、消息与输入队列） | 0 | `maker-ipc/register.ts` |
