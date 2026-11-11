@@ -146,10 +146,16 @@ mod tests {
 pub fn locked() -> Option<bool> {
     use windows_sys::Win32::System::RemoteDesktop::*;
     unsafe {
-        let mut data = std::ptr::null_mut();
-        let mut size = 0;
+        // These are out-only slots: Windows initializes both on success.
+        // Do not model the returned allocation as an initially-null pointer.
+        // https://learn.microsoft.com/windows/win32/api/wtsapi32/nf-wtsapi32-wtsquerysessioninformationw
+        let mut data = std::mem::MaybeUninit::<*mut u16>::uninit();
+        let mut size = std::mem::MaybeUninit::<u32>::uninit();
         if WTSQuerySessionInformationW(std::ptr::null_mut(), u32::MAX, WTSSessionInfoEx,
-                                      &mut data, &mut size) == 0 { return None; }
+                                      data.as_mut_ptr(), size.as_mut_ptr()) == 0 { return None; }
+        // SAFETY: the successful API call wrote its documented output slots.
+        let data = data.assume_init();
+        let size = size.assume_init();
         let result = if !data.is_null() && size as usize >= std::mem::size_of::<WTSINFOEXW>() {
             let info = std::ptr::read_unaligned(data as *const WTSINFOEXW);
             if info.Level == 1 {
