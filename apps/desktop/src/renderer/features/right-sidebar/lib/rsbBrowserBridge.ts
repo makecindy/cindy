@@ -284,7 +284,7 @@ export function initRsbBrowserBridge(): () => void {
         // afterCount===0 不代表会话真的没有 tab 了,不应折叠侧边栏。
         const afterBucket = getBucket(sessionId);
         if (beforeCount > 0 && afterBucket.hydrated && afterBucket.tabs.length === 0) {
-          requestRightSidebarVisibility('close', { sessionId });
+          requestRightSidebarVisibility('close', { sessionId, userInitiated: false });
         }
         return;
       }
@@ -553,7 +553,7 @@ async function handleTabOpRequest(
       // detach/reattach 竞态防护:同 guest-close 路径,需确认 bucket 仍由本 renderer 持有。
       const afterBucket = getBucket(req.sessionId);
       if (beforeCount > 0 && afterBucket.hydrated && afterBucket.tabs.length === 0) {
-        requestRightSidebarVisibility('close', { sessionId: req.sessionId });
+        requestRightSidebarVisibility('close', { sessionId: req.sessionId, userInitiated: false });
       }
       result = { reqId, ok: true, tabId: req.tabId };
     }

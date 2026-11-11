@@ -3,35 +3,47 @@
  * this channel; minimal failures are an untrusted frame or a non-finite width.
  */
 import { beforeEach, expect, it, vi } from 'vitest';
-const mocks = vi.hoisted(() => ({ handle: vi.fn(), guard: vi.fn(), from: vi.fn(), update: vi.fn(), appOn: vi.fn(), trusted: vi.fn(), windows: vi.fn(() => []) }));
+const mocks = vi.hoisted(() => ({ handle: vi.fn(), guard: vi.fn(), from: vi.fn(), update: vi.fn(), settle: vi.fn(), appOn: vi.fn(), trusted: vi.fn(), windows: vi.fn(() => []) }));
 vi.mock('electron', () => ({ ipcMain: { handle: mocks.handle },
   BrowserWindow: { fromWebContents: mocks.from, getAllWindows: mocks.windows },
   app: { on: mocks.appOn },
   screen: { getDisplayMatching: () => ({ workArea: {} }) },
 }));
 vi.mock('../security/trustedAppRenderer', () => ({ assertTrustedAppRendererEvent: mocks.guard, isTrustedAppRendererWindow: mocks.trusted }));
-vi.mock('../sidebarWindowExpansion', () => ({ sidebarWindowExpansion: { update: mocks.update } }));
+vi.mock('../sidebarWindowExpansion', () => ({ sidebarWindowExpansion: { update: mocks.update, settle: mocks.settle } }));
 import { registerSidebarWindowExpansionIpc } from '../sidebarWindowExpansionIpc';
 beforeEach(() => { vi.resetAllMocks(); mocks.windows.mockReturnValue([]); registerSidebarWindowExpansionIpc(); });
 it('rejects untrusted frames before touching a window', () => {
   mocks.guard.mockImplementation(() => { throw new Error('untrusted'); });
-  expect(() => mocks.handle.mock.calls[0][1]({}, 400)).toThrow('untrusted');
+  expect(() => mocks.handle.mock.calls.find((call) => call[0] === 'window-sidebar-expansion')![1]({}, 400)).toThrow('untrusted');
   expect(mocks.from).not.toHaveBeenCalled();
 });
 it.each([NaN, Infinity, -1, 16001, '400', null])('rejects invalid width %s', (width) => {
-  expect(() => mocks.handle.mock.calls[0][1]({}, width)).toThrow();
+  expect(() => mocks.handle.mock.calls.find((call) => call[0] === 'window-sidebar-expansion')![1]({}, width)).toThrow();
   expect(mocks.from).not.toHaveBeenCalled();
+});
+it('settles only the sending window when navigation hides the sidebar', () => {
+  const settleHandler = mocks.handle.mock.calls.find((call) => call[0] === 'window-sidebar-settle')![1];
+  const sender = {};
+  const win = { isDestroyed: () => false };
+  mocks.from.mockReturnValue(win);
+  settleHandler({ sender });
+  expect(mocks.from).toHaveBeenCalledWith(sender);
+  expect(mocks.settle).toHaveBeenCalledWith(win);
+  mocks.guard.mockImplementation(() => { throw new Error('untrusted'); });
+  expect(() => settleHandler({ sender })).toThrow('untrusted');
+  expect(mocks.settle).toHaveBeenCalledTimes(1);
 });
 it('uses only the sending window', () => {
   const sender = {};
   const win = { isDestroyed: () => false, getBounds: () => ({}), webContents: { getZoomFactor: () => 1 } };
   mocks.from.mockReturnValue(win);
-  mocks.handle.mock.calls[0][1]({ sender }, 400);
+  mocks.handle.mock.calls.find((call) => call[0] === 'window-sidebar-expansion')![1]({ sender }, 400);
   expect(mocks.from).toHaveBeenCalledWith(sender);
   expect(mocks.update).toHaveBeenCalledWith(win, 400, {}, expect.anything());
 });
 it('validates restoration and shrink inputs before accessing native windows', () => {
-  const handle = mocks.handle.mock.calls[0][1];
+  const handle = mocks.handle.mock.calls.find((call) => call[0] === 'window-sidebar-expansion')![1];
   for (const invalid of [NaN, Infinity, -1, 16001, '300', null]) {
     expect(() => handle({}, 0, invalid)).toThrow();
   }
@@ -47,7 +59,7 @@ it('converts CSS pixels to native pixels at the IPC boundary under page zoom', (
   const win = { isDestroyed: () => false, getBounds: () => ({}), webContents: { getZoomFactor: () => 2 } };
   mocks.from.mockReturnValue(win);
   mocks.update.mockReturnValue(400);
-  expect(mocks.handle.mock.calls[0][1]({}, 200, 100)).toBe(200);
+  expect(mocks.handle.mock.calls.find((call) => call[0] === 'window-sidebar-expansion')![1]({}, 200, 100)).toBe(200);
   expect(mocks.update).toHaveBeenCalledWith(win, 400, {}, expect.anything());
 });
 
