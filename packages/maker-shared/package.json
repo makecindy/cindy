@@ -15,6 +15,7 @@
     "./agent-task": "./src/agentTask.ts",
     "./bot-template-preset": "./src/botTemplatePreset.ts",
     "./branding": "./src/branding.ts",
+    "./teammate-project": "./src/teammateProject.ts",
     "./classical-reply": "./src/classicalReply.ts",
     "./brand-identity": "./src/brandIdentity.ts",
     "./chat-quotes": "./src/chatQuotes.ts",
@@ -67,6 +68,7 @@
     "./message-source": "./src/messageSource.ts",
     "./message-window": "./src/messageWindow.ts",
     "./orca-team": "./src/orcaTeam.ts",
+    "./orca-queue": "./src/orcaQueue.ts",
     "./mobile-home": "./src/mobileHome.ts",
     "./tool-process-media": "./src/toolProcessMedia.ts",
     "./payload-summary": "./src/payloadSummary.ts",
@@ -121,9 +123,10 @@
     "./remote-desktop-viewer": "./src/remote-desktop/viewerRuntime.js",
     "./remote-desktop-mobile": "./src/remote-desktop/mobileHtml.ts",
     "./remote-desktop-scripts": "./src/remote-desktop/viewerScripts.ts",
-    "./teammate-todo": "./src/teammateTodo.ts",
     "./teammate-status": "./src/teammateStatus.ts",
-    "./host-channel-contract": "./src/hostChannelContract.ts"
+    "./host-channel-contract": "./src/hostChannelContract.ts",
+    "./host-event-stream": "./src/hostEventStream.ts",
+    "./subscription-selection": "./src/subscriptionSelection.ts"
   },
   "scripts": {
     "build": "tsc --noEmit",

@@ -197,6 +197,7 @@ export const RightSidebar = forwardRef<RightSidebarHandle, RightSidebarProps>(fu
       aria-label={t('rightSidebar.ariaLabel')}
       // PanelDragController(拖面板换位,B3 转正)的手势识别根:值标明面板身份。
       data-panel-drag-root="right-tabs"
+      data-plugin-ui-element="tools"
       // 折叠态标记:引擎分割线的 CSS 据此隐藏邻接缝(globals.css .layout-divider-*),
       // 收起到 0 宽时不在窗口边缘留孤线。
       data-pane-collapsed={visibleCollapsed ? '' : undefined}

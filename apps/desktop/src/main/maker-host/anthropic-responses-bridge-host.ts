@@ -47,11 +47,11 @@ import { createResponsesHandler, type BridgeProviderConfig, type ResponsesBridge
 
 import { createMakerLogger } from './logger-adapter.js';
 import { getActiveCatalog } from './active-catalog.js';
-import { outboundFetch } from './outbound-fetch.js';
-import { getGrokAccessToken, peekGrokAccessToken } from './grok-oauth-login.js';
+import { outboundFetch } from './outbound-fetch.desktop.js';
+import { getGrokAccessToken, peekGrokAccessToken } from './grok-oauth-login.desktop.js';
 import { invalidateXaiBridgeAuth } from './xai-auth-invalidation-host.js';
 import { chatgptAccountIdFromTokens, desktopCodexAuthAdapter } from './auth-adapters.js';
-import { codexAccountHome, codexAccountState, invalidateCodexAccount, isOpenAiSubscriptionProviderId } from './codex-account-auth.js';
+import { codexAccountHome, codexAccountState, invalidateCodexAccount, isOpenAiSubscriptionProviderId } from './codex-account-auth.desktop.js';
 import {
   bearerAccessTokenFromHeaders,
   createChatgptBridgeAuthInvalidator,

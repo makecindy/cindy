@@ -10,7 +10,7 @@
 完成后保持激活，不重新归档。**持续会话**（`persistentSession`）同样恢复原任务，不会仅因归档另建替代任务。
 归档那一刻本身不改动自动化；归档或取消归档都不会重新启用已暂停的自动化。
 要停止后续运行，应使用自动化自己的暂停入口，而不是归档目标任务。
-删除或丢失目标、伙伴例行任务及协作托管任务继续遵循原有生命周期，不适用普通任务恢复规则。
+删除或丢失目标、伙伴例行任务（V1，2026-11-08 起已改为伙伴项目的普通自动化）及协作托管任务继续遵循原有生命周期，不适用普通任务恢复规则。
 
 实现入口：`apps/desktop/src/main/scheduler-host/restore-target.ts`、`runner.ts`、`script-runner.ts`；
 回归用例见同目录 `__tests__/runnerSendOutcome.test.ts`、`runnerModelSelection.test.ts`、`scriptRunner.test.ts`。

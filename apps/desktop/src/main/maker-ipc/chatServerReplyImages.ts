@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { RichAnswerStream, splitRichAnswer, richString } from '@cindy/maker-shared/rich-answer';
 import { BOT_GROUP_ATTACHMENTS_MAX } from '../../shared/botGroupChat.js';
-import { parseBlobUrl, resolveSafe } from '../cindy-media/blobStore.js';
+import { parseBlobUrl, resolveSafe } from '../cindy-media/blobStore.desktop.js';
 import { sessionCanRead } from '../cindy-media/ledger.js';
 import { materializeTaskImageTextResult } from '../cindy-media/taskImageDelivery.js';
 import { sniffMediaMime } from '../cindy-media/sniffMediaMime.js';

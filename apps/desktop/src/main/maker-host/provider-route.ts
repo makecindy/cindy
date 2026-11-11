@@ -1027,6 +1027,16 @@ async function connectedDefaultProviderForModel(
   return provider ? { kind: 'provider', provider } : { kind: 'none' };
 }
 
+/** Account bootstrap and the implicit bridge must resolve the same connected source. */
+export async function resolveConnectedDefaultProviderIdForModel(
+  modelId: string,
+  agent: AgentKind,
+): Promise<string | null> {
+  const source = await connectedDefaultProviderForModel(modelId.replace(/\[1m\]$/, ''), agent);
+  if (source.kind === 'ambiguous') throw new Error('Model source is ambiguous; select a provider');
+  return source.kind === 'provider' ? source.provider.id : null;
+}
+
 /**
  * 隐式 bridge 的 wire 判定口径:目录条目未显式声明 wireProtocol 时按 agent 原生缺省
  * 推断(claude-code=anthropic-messages,codex=openai-responses;与 resolveVisionBackendRoute

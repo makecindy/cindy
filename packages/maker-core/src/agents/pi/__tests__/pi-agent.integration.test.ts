@@ -31,8 +31,8 @@ import { PiAgent } from '../index.js';
 import { ANSWER_DELIVERY_PROMPT, PI_ANSWER_DELIVERY_PROMPT } from '@cindy/maker-shared/rich-answer-guide';
 import { PiRpcProcess } from '../rpc-client.js';
 import * as sessionJsonlScan from '../session-jsonl-scan.js';
-import { providerCatalogForPi, BUNDLED_CATALOG } from '@cindy/model-providers';
-import { TurnPermissionPolicyUnsupportedError, type AgentDeps, type AgentSessionHandle } from '../../base-agent.js';
+import { providerCatalogForPi, providerModelGenerationRecord, providerPresetModelRecord, BUNDLED_CATALOG } from '@cindy/model-providers';
+import { assembleSystemPromptSections, MODEL_REQUEST_CONTROL, TASK_SYSTEM_PROMPT, TurnPermissionPolicyUnsupportedError, type AgentDeps, type AgentSessionHandle } from '../../base-agent.js';
 import type { AgentEvent } from '../../../types/events.js';
 import type { Logger } from '../../../interfaces/logger.js';
 
@@ -104,7 +104,7 @@ function sse(events: Array<{ event: string; data: unknown }>): string {
 }
 
 /** 最小合法的 Anthropic Messages SSE 流:一段 text + usage。 */
-function anthropicStreamBody(text: string): string {
+function anthropicStreamBody(text: string, model = 'pi-test-model'): string {
   return sse([
     {
       event: 'message_start',
@@ -114,7 +114,7 @@ function anthropicStreamBody(text: string): string {
           id: 'msg_test_1',
           type: 'message',
           role: 'assistant',
-          model: 'pi-test-model',
+          model,
           content: [],
           stop_reason: null,
           usage: { input_tokens: 42, output_tokens: 0 },
@@ -440,6 +440,190 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       resolvePiGatewayModelApi: () => 'anthropic-messages',
     };
   }
+
+  // Runtime control contract, integration: tool continuations must route again;
+  // payload changes reach HTTP, and a later unselected send preserves the baseline.
+  it('routes and transforms each selected model request across a real tool continuation', { timeout: 30_000 }, async () => {
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-request-control-'));
+    const fixtureFile = path.join(workingDir, 'fixture.txt');
+    writeFileSync(fixtureFile, 'fixture');
+    const before = seenRequests.length;
+    let handle: AgentSessionHandle | undefined;
+    let selections = 0;
+    let payloads = 0;
+    try {
+      scriptedResponses.push(anthropicToolUseBody('read', { path: fixtureFile }), anthropicStreamBody('controlled', 'pi-test-small-model'));
+      handle = await new PiAgent(buildDeps()).startSession({ sessionId: 'request-control', workingDir,
+        model: 'pi-test-model', permissionMode: 'bypassPermissions' });
+      const send = async (selected: boolean) => {
+        const done = (async () => { for await (const event of handle!.events()) {
+          if (event.type === 'error') throw new Error(JSON.stringify(event.data));
+          if (event.type === 'done') return event;
+        } })();
+        await handle!.send({ type: 'user', content: 'Read fixture.txt and reply.' }, selected ? {
+          [MODEL_REQUEST_CONTROL]: async input => {
+            if (input.phase === 'select') {
+              selections++;
+              return { route: { providerId: 'xd', model: selections === 1 ? 'pi-test-model' : 'pi-test-small-model' } };
+            }
+            payloads++;
+            return { request: { ...input.request, max_tokens: 1234,
+              messages: [...input.request!.messages as unknown[], { role: 'user', content: 'Plugin reference material' }] } };
+          },
+        } : undefined);
+        expect((await done)?.data).toMatchObject({ status: 'completed' });
+      };
+      await send(true);
+      expect(selections).toBe(2);
+      expect(payloads).toBe(2);
+      await send(false);
+      const bodies = seenRequests.slice(before).map(row => JSON.parse(row.body));
+      expect(bodies.map(body => body.model)).toEqual(['pi-test-model', 'pi-test-small-model', 'pi-test-model']);
+      expect(JSON.stringify(bodies[1].messages)).toContain('"type":"tool_result"');
+      expect(bodies.map(body => body.system)).toEqual([bodies[0].system, bodies[0].system, bodies[0].system]);
+      expect(bodies.map(body => body.tools)).toEqual([bodies[0].tools, bodies[0].tools, bodies[0].tools]);
+      expect(bodies.slice(0, 2).every(body => body.max_tokens === 1234 &&
+        body.messages.at(-1).content === 'Plugin reference material')).toBe(true);
+      expect(bodies[2].max_tokens).not.toBe(1234);
+      expect(selections).toBe(2);
+      expect(JSON.stringify(bodies)).not.toContain('CINDY_MODEL_REQUEST');
+    } finally {
+      await handle?.close();
+      scriptedResponses.length = 0;
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
+
+  // Review regression, integration: a selected task must preserve later effort
+  // changes and thinking-off, including the first send after deselection. The
+  // existing routing case only used a non-reasoning model with unchanged effort.
+  it('preserves current thinking preferences across selected and unselected requests', { timeout: 30_000 }, async () => {
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-control-thinking-'));
+    const deps = buildDeps();
+    const model = 'deepseek/deepseek-v4-flash';
+    deps.capabilityAdditions = { availableModels: [{ id: model, displayName: 'Thinking fixture',
+      contextWindow: 200_000, efforts: ['low', 'high'], defaultEffort: 'high' }] };
+    deps.resolvePiGatewayModelApi = () => 'openai-completions';
+    deps.resolvePiGatewayModelSpec = () => ({ api: 'openai-completions',
+      compat: { thinkingFormat: 'deepseek', maxTokensField: 'max_tokens' },
+      thinkingLevelMap: { low: 'low', high: 'high' } });
+    let handle: AgentSessionHandle | undefined;
+    const before = seenRequests.length;
+    try {
+      handle = await new PiAgent(deps).startSession({ sessionId: 'control-thinking', workingDir,
+        model, providerId: 'xd', effort: 'high', permissionMode: 'bypassPermissions' });
+      const send = async (selected: boolean) => {
+        const done = (async () => { for await (const event of handle!.events()) {
+          if (event.type === 'error') throw new Error(JSON.stringify(event.data));
+          if (event.type === 'done') return event;
+        } })();
+        await handle!.send({ type: 'user', content: 'Reply briefly.' }, selected
+          ? { [MODEL_REQUEST_CONTROL]: async () => ({}) } : undefined);
+        expect((await done)?.data).toMatchObject({ status: 'completed' });
+      };
+      await send(true);
+      await handle.setEffort!('low');
+      await send(true);
+      await handle.setThinkingEnabled!(false);
+      await send(true);
+      await send(false);
+      const bodies = seenRequests.slice(before).map(row => JSON.parse(row.body));
+      expect(bodies).toHaveLength(4);
+      expect(bodies.slice(0, 2).map(body => body.reasoning_effort)).toEqual(['high', 'low']);
+      expect(bodies.slice(2).map(body => body.thinking?.type)).toEqual(['disabled', 'disabled']);
+    } finally {
+      await handle?.close();
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
+
+  // Review regression, integration: valid large history exceeds the outbound
+  // JSONL frame limit. The host must receive a bounded failure and settle using
+  // task policy; the former small-body fixture could not observe the lost frame.
+  it('handles oversized selected request bodies without waiting on a discarded RPC frame', { timeout: 30_000 }, async () => {
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-control-large-'));
+    const deps = buildDeps();
+    deps.capabilityAdditions = { availableModels: [{ id: 'pi-test-model', displayName: 'Large fixture',
+      contextWindow: 20_000_000, efforts: [], defaultEffort: null }] };
+    let handle: AgentSessionHandle | undefined;
+    const before = seenRequests.length;
+    const payloads: unknown[] = [];
+    try {
+      handle = await new PiAgent(deps).startSession({ sessionId: 'control-large', workingDir,
+        model: 'pi-test-model', permissionMode: 'bypassPermissions' });
+      const done = (async () => { for await (const event of handle!.events()) {
+        if (event.type === 'error') throw new Error(JSON.stringify(event.data));
+        if (event.type === 'done') return event;
+      } })();
+      await handle.send({ type: 'user', content: 'x'.repeat(17 * 1024 * 1024) }, {
+        [MODEL_REQUEST_CONTROL]: async input => {
+          if (input.phase === 'payload') payloads.push(input);
+          return {};
+        },
+      });
+      expect((await done)?.data).toMatchObject({ status: 'completed' });
+      expect(payloads).toEqual([expect.objectContaining({ phase: 'payload', failure: 'request-too-large' })]);
+      expect(JSON.stringify(payloads).length).toBeLessThan(1024);
+      expect(seenRequests.slice(before)).toHaveLength(1);
+    } finally {
+      await handle?.close();
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
+
+  // Runtime skip, integration: cancel native dispatch rather than emitting a
+  // successful answer or a retryable provider error. The gateway sees no HTTP.
+  it('settles a selected request skip as cancelled without dispatching HTTP', { timeout: 30_000 }, async () => {
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-request-skip-'));
+    const before = seenRequests.length;
+    let handle: AgentSessionHandle | undefined;
+    try {
+      handle = await new PiAgent(buildDeps()).startSession({ sessionId: 'request-skip', workingDir,
+        model: 'pi-test-model', permissionMode: 'bypassPermissions' });
+      const events: AgentEvent[] = [];
+      const done = (async () => { for await (const event of handle!.events()) {
+        events.push(event);
+        if (event.type === 'done') return event;
+      } })();
+      await handle.send({ type: 'user', content: 'Skip this reply.' }, { [MODEL_REQUEST_CONTROL]: async () => ({ skip: true }) });
+      expect((await done)?.data).toMatchObject({ status: 'cancelled' });
+      expect(events.filter(event => event.type === 'error')).toHaveLength(0);
+      expect(seenRequests.length).toBe(before);
+    } finally {
+      await handle?.close();
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
+
+  // Integration: the native before_agent_start tail preserves the exact prefix.
+  // A near-budget fragment also exercises file handoff instead of inline argv/env.
+  it('appends selected static fragments to the actual system request with the fixed prefix intact', { timeout: 30_000 }, async () => {
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-static-prompt-'));
+    const systems: string[] = [];
+    const early = 'EARLY {{literal}} FRAGMENT ' + 'x'.repeat(32_000);
+    try {
+      for (const selected of [false, true]) {
+        const taskPrompt = assembleSystemPromptSections('', selected
+          ? [{ name: 'late', order: 20, text: 'LATE FRAGMENT' }, { name: 'early', order: 10, text: early }] : []);
+        const handle = await new PiAgent(buildDeps()).startSession({ sessionId: `static-prompt-${selected}`, workingDir,
+          model: 'pi-test-model', permissionMode: 'bypassPermissions', userPrompt: 'Original task instructions',
+          ...(taskPrompt ? { [TASK_SYSTEM_PROMPT]: taskPrompt } : {}) });
+        const before = seenRequests.length;
+        try {
+          const done = (async () => { for await (const event of handle.events()) {
+            if (event.type === 'error') throw new Error(JSON.stringify(event.data));
+            if (event.type === 'done') return;
+          } })();
+          await handle.send({ type: 'user', content: 'Reply briefly.' });
+          await done;
+          const body = JSON.parse(seenRequests[before].body);
+          systems.push(typeof body.system === 'string' ? body.system : body.system.map((block: { text: string }) => block.text).join('\n\n'));
+          expect(JSON.stringify(body.messages)).not.toContain('EARLY {{literal}} FRAGMENT');
+        } finally { await handle.close(); }
+      }
+      expect(systems[1]).toBe(systems[0] + '\n\n' + early + '\n\nLATE FRAGMENT');
+    } finally { rmSync(workingDir, { recursive: true, force: true }); }
+  });
 
   // #8887, integration: the real runtime generates the retry lifecycle after
   // a completed tool request, a real HTTP 502 and successful recovery.
@@ -2236,6 +2420,74 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       await handle?.close();
     }
   }
+
+  // #9630, integration: catalog inheritance -> models.json -> real Pi HTTP.
+  // Existing effort coverage used Gateway Chat, not native Anthropic relays.
+  // Pi 1.5.0 fixes the cached top-level effort at low (upstream #10063), not
+  // high, to respect organization caps. The per-reply markers are authoritative:
+  // medium -> low -> high must preserve history, not rewrite it at the new level.
+  it.each([
+    ['claude-opus-5', 'relay'],
+    ['claude-opus-5-5', 'relay'],
+    ['claude-fable-5-1', 'relay'],
+    ['claude-fable-5-2', 'relay'],
+    ['claude-sonnet-5-5', 'relay'],
+    ['claude-opus-5', 'preset-relay'],
+    ['claude-opus-5-5', 'preset-relay'],
+    ['claude-opus-5-5', 'official'],
+    ['claude-opus-5-5', 'explicit'],
+  ] as const)('Anthropic effort boundary: %s (%s)', { timeout: 30_000 }, async (id, source) => {
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-anthropic-effort-'));
+    const upstream = source === 'official' ? 'https://api.anthropic.com' : endpoint;
+    const preset = source === 'preset-relay' ? 'anthropic-api' : undefined;
+    const row = (preset ? providerPresetModelRecord(preset, id, 'anthropic-messages', upstream) : undefined)
+      ?? providerModelGenerationRecord(id, upstream, 'anthropic-messages', preset)!;
+    const deps = buildDeps();
+    deps.resolvePiNativeProviders = async () => ({
+      providers: [{ id: 'effort-relay', name: 'Effort fixture', baseUrl: endpoint,
+        ...(preset ? { adapterProvider: 'anthropic' } : {}),
+        api: 'anthropic-messages', apiKeyEnvVar: 'CINDY_TEST_EFFORT_KEY',
+        models: [{ id, reasoning: row.reasoning, contextWindow: row.contextWindow,
+          maxTokens: row.maxOutput, thinkingLevelMap: row.execution.pi.thinkingLevelMap,
+          compat: { ...row.execution.pi.compat,
+            ...(source === 'explicit' ? { supportsMidConvoEffort: true } : {}) },
+        }],
+      }],
+      env: { CINDY_TEST_EFFORT_KEY: 'fixture-only-key' },
+    });
+    let handle: AgentSessionHandle | undefined;
+    try {
+      handle = await new PiAgent(deps).startSession({ sessionId: `effort-${source}-${id}`,
+        workingDir, model: id, providerId: 'effort-relay', effort: 'medium' });
+      const expectedEfforts: string[] = [];
+      for (const effort of ['medium', 'low', 'high'] as const) {
+        expectedEfforts.push(effort);
+        await handle.setEffort!(effort);
+        const before = seenRequests.length;
+        const done = (async () => {
+          for await (const event of handle!.events()) if (event.type === 'done') return event;
+        })();
+        await handle.send({ type: 'user', content: `Reply at ${effort} effort.` });
+        expect((await done)?.data).toMatchObject({ status: 'completed' });
+        const requests = seenRequests.slice(before);
+        expect(requests).toHaveLength(1);
+        expect(new URL(requests[0]!.url, endpoint).pathname).toBe('/v1/messages');
+        const body = JSON.parse(requests[0]!.body);
+        const messageScoped = source === 'official' || source === 'explicit';
+        expect(body.output_config.effort).toBe(messageScoped ? 'low' : effort);
+        const effortMessages = body.messages.filter((message: { role: string; output_config?: unknown }) =>
+          message.role === 'system' && message.output_config);
+        if (messageScoped) {
+          expect(effortMessages.map((message: { output_config: { effort: string } }) =>
+            message.output_config.effort)).toEqual(expectedEfforts);
+          expect(body.messages.at(-1)).toMatchObject({ role: 'system', output_config: { effort } });
+        } else expect(effortMessages).toEqual([]);
+      }
+    } finally {
+      await handle?.close();
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
 
   // Integration: the real Pi request builder must preserve declared low and
   // upstream remaps, while an unavailable low must follow the catalog default.

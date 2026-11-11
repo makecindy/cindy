@@ -1,3 +1,4 @@
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
 import { formatQuoteForSend } from '../../../src/renderer/lib/chatQuotes';
 import { useState, type ComponentProps } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -143,14 +144,14 @@ function Fixture({ kind }: { kind: string }) {
         </div>
         <div className="flex flex-col gap-3.5">
           {kind === 'delivered' && (
-            <UserMessage
+            <UserMessage pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
               workingDir="/fixture"
               content="先核对手机版的消息排队逻辑。"
               createdAt="2026-11-08T00:00:00Z"
             />
           )}
           {queue.map((entry, index) => (
-            <PendingQueueBubble
+            <PendingQueueBubble pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
               key={entry.clientId}
               entry={entry}
               index={index}

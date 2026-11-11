@@ -89,6 +89,10 @@ export function createChatMessageNotifications<M extends ChatNotificationMessage
         const presentation = await deps.present(groupId, message);
         if (!current()) return;
         if (!stillCurrent()) throw new Error('CHAT_NOTIFICATION_CHANGED');
+        // A second flush can pass the pre-await handled check for the same id
+        // while this presentation is still loading. Claim it with no await
+        // between the recheck and notify, so both flushes cannot toast.
+        if (handled.has(id)) continue;
         deps.notify({ ...presentation, groupId, groupName: snapshot.room.name, messageId: message.id,
           ...(message.threadRootId ? { threadRootId: message.threadRootId } : {}) }, stillCurrent);
         remember(id);

@@ -21,7 +21,7 @@ vi.mock('../logger.js', () => ({
 vi.mock('../localDb/ipc/messages.js', () => ({
   patchMessageAgentMeta: vi.fn(async () => true),
 }));
-vi.mock('../messagePersistBroadcaster.js', () => ({
+vi.mock('../messagePersistBroadcaster.desktop.js', () => ({
   enqueueDurableWrite: vi.fn((_label: string, fn: () => unknown) => Promise.resolve(fn())),
 }));
 

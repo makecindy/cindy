@@ -11,6 +11,7 @@ import { HomeRosterStoreProvider } from '@/session/HomeRosterContext';
 import { PluginPromptReadsProvider } from '@/plugins/PluginPromptReadsContext';
 import { AndroidUpdateSheet } from '@/update/AndroidUpdateSheet';
 import { PeerFileTransport } from '@/device-link/peerFileTransport';
+import { noteRootCommitted } from '@/debug/jsErrorGuard';
 import { startLocalDiagnostics } from '@/debug/localDiagnostics';
 import { MobileOutboxBridge } from '@/session/MobileOutboxBridge';
 import { RemoteHistoryPrefetchBridge } from '@/session/RemoteHistoryPrefetchBridge';
@@ -31,6 +32,7 @@ import { useTranslation } from 'react-i18next';
 import { Alert, AppState, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { Text } from '@/components/AppText';
 import { ConnectionNoticeProvider } from '@/components/ConnectionNoticeOverlay';
+import { RootErrorBoundary } from '@/components/RootErrorBoundary';
 import { fontWeight, lineHeight, radius, spacing, typeScale, useThemedStyles, type ThemeColors } from '@/theme';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AdaptiveWindowProvider } from '@/platform/AdaptiveWindow';
@@ -425,7 +427,13 @@ function RootAfterUpdateChannel({ channel }: { channel: UpdateChannel }) {
         <AgentActivityBridge />
         {/* 掌机模式:手柄语音键 / 焦点导航 / 副屏(仅含 cindy-handheld 的 Android 原生包,不渲染 UI) */}
         <HandheldModeBridge />
-        <NavigationGate />
+        {/* 渲染兜底:启动稳定后,页面树里任何一处渲染报错都落到这里,显示可重新加载的错误页而不是
+            让 App 退出。只包页面树、留在 AuthProvider / DeviceLinkProvider 里面:重新加载只重挂页面,
+            不会重建登录与设备连接——重建 AuthProvider 会让可能仍在途的令牌刷新与新实例的刷新
+            各用同一个会轮换的令牌,被服务端拒绝时会清掉登录状态(登出)。 */}
+        <RootErrorBoundary fallback={renderErrorFallback}>
+          <NavigationGate />
+        </RootErrorBoundary>
       </DeviceLinkProvider>
     </AuthProvider>
   );
@@ -446,6 +454,11 @@ function RootAfterEndpoints() {
 
 function RootLayout() {
   useEffect(() => startLocalDiagnostics(), []);
+  // JS 报错兜底的启动窗口从根布局首次提交起算(见 jsErrorGuard):窗口内报错照旧致命,
+  // 留给热更新的错误恢复回滚;窗口之后才显示错误页 / 继续运行。
+  useEffect(() => {
+    noteRootCommitted();
+  }, []);
   // Dev-only:注册开发者菜单的"清缓存 + reload"项(内部 __DEV__ gate,生产为 no-op)。
   useEffect(() => {
     registerDevCacheMenu();
@@ -477,7 +490,7 @@ function RootLayout() {
     // 白底体系(PR4a):错误屏包 MobileLoginHandoffStage(品牌显示),阻断内容层
     // 透明置于其上——阻断语义不变:没有"跳过 / 稍后再说",只有重试。
     body = (
-      <MobileLoginHandoffStage>
+      <MobileLoginHandoffStage staticBrand>
         <StartupGateBlockedContent
           title={loginText('endpointGateTitle')}
           subtitle={loginText('endpointGateSubtitle').replace(
@@ -501,7 +514,7 @@ function RootLayout() {
     // 业务树整体不挂载,含 AuthProvider / DeviceLinkProvider / 预创建 worktree 恢复桥:
     // 强更期间不该发起任何 Device Link 调用;恢复账本是持久化的,阻断解除后下次启动照常补偿。
     body = (
-      <MobileLoginHandoffStage>
+      <MobileLoginHandoffStage staticBrand>
         <ForcedUpdateGateContent target={forcedUpdate} />
       </MobileLoginHandoffStage>
     );
@@ -537,6 +550,23 @@ function RootLayout() {
       </SafeAreaProvider>
       </OutsideTapProvider>
     </GestureHandlerRootView>
+  );
+}
+
+/**
+ * 渲染兜底页:与启动闸门同一套阻断内容层(标题 / 说明 / 唯一动作),唯一动作是重新加载——
+ * 丢弃出错的页面树并重新挂载它。
+ */
+function renderErrorFallback(retry: () => void): ReactElement {
+  return (
+    <MobileLoginHandoffStage staticBrand>
+      <StartupGateBlockedContent
+        title={loginText('renderErrorTitle')}
+        subtitle={loginText('renderErrorSubtitle')}
+        actionLabel={loginText('renderErrorAction')}
+        onAction={retry}
+      />
+    </MobileLoginHandoffStage>
   );
 }
 

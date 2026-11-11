@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { botGroupActionErrorText } from '../session/botGroupCopy';
 
 describe('group send results', () => {
+  // Unit: stop-specific server outcomes must explain the actual refusal (same contract as PC).
+  it.each([['STOP_OWNERSHIP_UNKNOWN', 'stopOwnershipUnknown'], ['NOTHING_TO_STOP', 'nothingToStop'], ['ROLE_REQUIRED', 'permissionDenied']])('explains %s without private diagnostics', (code, key) => {
+    expect(botGroupActionErrorText(key => key, new Error(code + ': private /path'), 'fallback')).toBe('groupChat.errors.' + key);
+  });
   it('does not call a transport timeout a failed send or expose raw errors', () => {
     const t = (key: string) => key;
     expect(botGroupActionErrorText(t, Object.assign(new Error('INVOKE_TIMEOUT'), { code: 'INVOKE_TIMEOUT' }), 'groupChat.composer.sendFailed'))

@@ -1,3 +1,4 @@
+import { createHostService } from './service.mjs';
 /**
  * Loopback HTTP API for the host.
  *
@@ -11,7 +12,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { isAuthorized } from './api-token.mjs';
+import { clientErrorMessage } from './client-error.mjs';
 import { createWebAuth, isLoopbackRequest, CONNECT_PAGE, CONNECT_SCRIPT } from './web-auth.mjs';
+import { buildWebShim } from './web-client-build.mjs';
 
 const JSON_HEADERS = { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' };
 
@@ -76,13 +79,70 @@ function serveWebApp(request, response, deps, urlPath) {
 
 export function createHostServer(input) {
   const deps = { ...input, webAuth: input.webAuth ?? createWebAuth() };
-  return createServer(async (request, response) => {
+  const service = input.service ?? createHostService(deps);
+  // One compilation per Host, shared by concurrent page loads. A failed build
+  // may be retried after its source/dependency is repaired.
+  let shimBuild;
+  let stopping = false;
+  let ownerPaused = false;
+  let activeRequests = 0;
+  const drainWaiters = new Set();
+  const ownerRequests = new Set();
+  let logoutFlight;
+  let authDrain;
+  const cancelPendingAuth = () => authDrain ??= Promise.resolve().then(() => deps.cancelPendingAuth?.());
+  const unsubscribeSessions = deps.webAuth.onSessionRevoke?.(caller => deps.releaseAuthCaller?.(caller));
+  const logout = () => {
+    if (logoutFlight) return logoutFlight;
+    // Revoke browser streams immediately and drain existing database callers
+    // before the owner runtime closes. Concurrent sign-out clicks share a result.
+    deps.webAuth.clear();
+    logoutFlight = cancelPendingAuth().then(() => Promise.all([...ownerRequests])).then(() => deps.logout())
+      .finally(() => { logoutFlight = undefined; });
+    return logoutFlight;
+  };
+  const server = createServer(async (request, response) => {
+    if (stopping) { send(response, 503, { error: 'host_stopping' }, { connection: 'close' }); return; }
+    activeRequests++;
+    let finishOwnerRequest;
     try {
       const url = new URL(request.url ?? '/', 'http://127.0.0.1');
       response.setHeader('referrer-policy', 'no-referrer');
       response.setHeader('x-content-type-options', 'nosniff');
       response.setHeader('x-frame-options', 'DENY');
       if (!isLoopbackRequest(request)) { send(response, 403, { error: 'origin_not_allowed' }); return; }
+      const ownerRequest = (url.pathname.startsWith('/api/') && !url.pathname.startsWith('/api/auth/') && url.pathname !== '/api/me')
+        || ['/control/remote', '/events', '/chat', '/sessions', '/plugins'].includes(url.pathname) || url.pathname.startsWith('/sessions/');
+      if (ownerRequest) {
+        if (ownerPaused || logoutFlight || deps.isOwnerReady?.() === false) {
+          send(response, 409, { error: 'owner_runtime_unavailable' }); return;
+        }
+        const completion = new Promise(resolve => { finishOwnerRequest = resolve; });
+        ownerRequests.add(completion);
+        finishOwnerRequest = (() => { const complete = finishOwnerRequest;
+          return () => { ownerRequests.delete(completion); complete(); }; })();
+      }
+      if (request.method === 'POST' && url.pathname === '/control/remote') {
+        if (!isAuthorized(request.headers.authorization, deps.token)) { send(response, 401, { error: 'unauthorized' }); return; }
+        const body = await readJson(request);
+        if (body.instanceId !== deps.instanceId || !deps.instanceId) { send(response, 409, { error: 'host_instance_changed' }); return; }
+        if (!deps.remoteControl || logoutFlight || deps.isOwnerReady?.() === false) { send(response, 409, { error: 'owner_runtime_unavailable' }); return; }
+        send(response, 200, await deps.remoteControl(body.action, body));
+        return;
+      }
+      if (request.method === 'POST' && url.pathname === '/control/stop') {
+        if (!isAuthorized(request.headers.authorization, deps.token)) { send(response, 401, { error: 'unauthorized' }); return; }
+        const body = await readJson(request);
+        if (!deps.instanceId || body.instanceId !== deps.instanceId || typeof deps.requestStop !== 'function') {
+          send(response, 409, { error: 'host_instance_changed' }); return;
+        }
+        response.once('finish', () => deps.requestStop());
+        send(response, 202, { stopping: true });
+        return;
+      }
+      if ((ownerPaused || logoutFlight) && ['/web/pair', '/web/session'].includes(url.pathname)) {
+        send(response, 409, { error: 'owner_runtime_unavailable' }); return;
+      }
       if (request.method === 'POST' && url.pathname === '/web/pair') {
         if (!isAuthorized(request.headers.authorization, deps.token)) { send(response, 401, { error: 'unauthorized' }); return; }
         send(response, 200, { code: deps.webAuth.pair() });
@@ -90,6 +150,8 @@ export function createHostServer(input) {
       }
       if (request.method === 'POST' && url.pathname === '/web/session') {
         const body = await readJson(request);
+        // Logout can begin while a request body is arriving.
+        if (ownerPaused || logoutFlight) { send(response, 409, { error: 'owner_runtime_unavailable' }); return; }
         const session = deps.webAuth.exchange(body.code);
         if (!session) { send(response, 401, { error: 'pairing_expired' }); return; }
         send(response, 200, { connected: true }, { 'set-cookie': `cindy_host_web=${session}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200` });
@@ -113,8 +175,12 @@ export function createHostServer(input) {
             send(response, 404, { error: 'shim_missing' });
             return;
           }
+          shimBuild ??= (deps.shimPrebuilt
+            ? fs.promises.readFile(deps.shimPath, 'utf8')
+            : buildWebShim(deps.shimPath)).catch(error => { shimBuild = undefined; throw error; });
+          const shim = await shimBuild;
           response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' });
-          response.end(fs.readFileSync(deps.shimPath));
+          response.end(request.method === 'HEAD' ? undefined : shim);
           return;
         }
         serveWebApp(request, response, { ...deps, webDir: webRoot }, url.pathname);
@@ -123,194 +189,18 @@ export function createHostServer(input) {
 
       if (request.method === 'POST' && url.pathname.startsWith('/api/')) {
         if (!isWebAuthorized(request, deps)) {
-          send(response, 401, { error: 'unauthorized' });
-          return;
+          send(response, 401, { error: 'unauthorized' }); return;
         }
         const body = await readJson(request);
-        if (url.pathname === '/api/runtime/sessions') {
-          send(response, 200, deps.listRunningSessions(body.options));
-          return;
-        }
         if (url.pathname === '/api/auth/logout') {
-          const result = await deps.logout();
-          deps.webAuth.clear();
+          const result = await logout();
           send(response, 200, result, { 'set-cookie': 'cindy_host_web=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0' });
           return;
         }
-        // Settings the browser client renders: read from, and written to, the
-        // Desktop's own files so both clients show one copy of the account.
-        if (url.pathname === '/api/profile') { send(response, 200, await deps.profile()); return; }
-        if (url.pathname === '/api/settings/appearance/set') {
-          send(response, 200, await deps.settings.setAppearance(body.patch ?? body));
-          return;
-        }
-        if (url.pathname === '/api/settings/appearance/reset') {
-          send(response, 200, await deps.settings.resetAppearance());
-          return;
-        }
-        if (url.pathname === '/api/settings/layout/set') {
-          send(response, 200, await deps.settings.setLayout(body.layout ?? body));
-          return;
-        }
-        if (url.pathname === '/api/settings/layout/reset') {
-          send(response, 200, await deps.settings.resetLayout());
-          return;
-        }
-        if (url.pathname === '/api/settings/sidebar/set') {
-          send(response, 200, await deps.settings.setSidebar(body.value ?? body));
-          return;
-        }
-        if (url.pathname === '/api/settings/shortcuts/set') {
-          send(response, 200, await deps.settings.setShortcuts(body.overrides ?? body ?? {}));
-          return;
-        }
-        if (url.pathname === '/api/me') { send(response, 200, await deps.me()); return; }
-        if (url.pathname === '/api/auth/state') {
-          send(response, 200, await (deps.getAuthState ? deps.getAuthState() : deps.me()));
-          return;
-        }
-        if (url.pathname === '/api/auth/refresh') {
-          send(response, 200, await (deps.refreshAuth ? deps.refreshAuth() : { ok: true }));
-          return;
-        }
-        // The preload contract for `localDb.sessions.list()` is a bare array.
-        if (url.pathname === '/api/sessions/list') { send(response, 200, await deps.listSessions(body)); return; }
-        if (url.pathname === '/api/project-aliases/list') { send(response, 200, await deps.listProjectAliases()); return; }
-        if (url.pathname === '/api/project-aliases/set') {
-          send(response, 200, await deps.setProjectAlias(body));
-          return;
-        }
-        if (url.pathname === '/api/project-aliases/delete') {
-          send(response, 200, await deps.deleteProjectAlias(body));
-          return;
-        }
-        if (url.pathname === '/api/recent-workdirs/list') { send(response, 200, await deps.listRecentWorkdirs()); return; }
-        if (url.pathname === '/api/sessions/create') { send(response, 201, await deps.createSession(body)); return; }
-        if (url.pathname === '/api/sessions/update') { send(response, 200, await deps.updateSession(String(body.sessionId ?? ''), body.patch ?? {})); return; }
-        if (url.pathname === '/api/sessions/switch-agent') {
-          send(response, 200, await deps.switchSessionAgent(
-            String(body.sessionId ?? ''),
-            String(body.targetAgentKind ?? ''),
-            String(body.model ?? ''),
-            body.providerId ?? null,
-            body.effort,
-            body.fastMode,
-          ));
-          return;
-        }
-        if (url.pathname === '/api/sessions/agent-switch-intent') {
-          send(response, 200, deps.getSessionAgentSwitchIntent(String(body.sessionId ?? '')));
-          return;
-        }
-        if (url.pathname === '/api/sessions/auto-title') {
-          send(response, 200, await deps.autoTitle(body));
-          return;
-        }
-        if (url.pathname === '/api/sessions/delete') { send(response, 200, await deps.deleteSession(String(body.sessionId ?? ''))); return; }
-        if (url.pathname === '/api/sessions/get') { send(response, 200, await deps.getSession(String(body.sessionId ?? ''))); return; }
-        if (url.pathname === '/api/sessions/discard') { send(response, 200, await deps.discardProvisionalSession(String(body.sessionId ?? ''))); return; }
-        if (url.pathname === '/api/sessions/interrupted-pending') { send(response, 200, await deps.interruptedPending()); return; }
-        if (url.pathname === '/api/sessions/error-tail-pending') { send(response, 200, await deps.errorTailPending()); return; }
-        if (url.pathname === '/api/sessions/interrupted-candidates') { send(response, 200, await deps.interruptedCandidates()); return; }
-        if (url.pathname === '/api/sessions/commit') { send(response, 200, await deps.commitProvisionalSession(String(body.sessionId ?? ''))); return; }
-        if (url.pathname === '/api/sessions/messages') {
-          send(response, 200, { messages: await deps.history(String(body.sessionId ?? ''), Number(body.limit ?? 200)) });
-          return;
-        }
-        if (url.pathname === '/api/messages/estimated-value') {
-          send(response, 200, await deps.estimatedSessionValue(String(body.sessionId ?? '')));
-          return;
-        }
-        if (url.pathname === '/api/messages/history-view') {
-          send(response, 200, await deps.historyView(String(body.sessionId ?? ''), body.before ?? null));
-          return;
-        }
-        if (url.pathname === '/api/messages/work-details') {
-          send(response, 200, await deps.workDetails(String(body.sessionId ?? ''), body.ref, body.after ?? null));
-          return;
-        }
-        if (url.pathname === '/api/messages/create') {
-          send(response, 201, await deps.createMessage(String(body.sessionId ?? ''), body.message ?? {}));
-          return;
-        }
-        // The preload contract for `localDb.messages.list()` is a bare array.
-        if (url.pathname === '/api/messages/list') {
-          send(response, 200, await (deps.messagesList ? deps.messagesList(String(body.sessionId ?? ''), Number(body.limit ?? 200), body.before ?? null) : deps.history(String(body.sessionId ?? ''), Number(body.limit ?? 200))));
-          return;
-        }
-        if (url.pathname === '/api/turn-change-sets/list') { send(response, 200, await deps.turnChangeSets(String(body.sessionId ?? ''))); return; }
-        if (url.pathname === '/api/ghosts') { send(response, 200, await deps.ghosts()); return; }
-        if (url.pathname === '/api/plugins/list') { send(response, 200, deps.listPlugins()); return; }
-        if (url.pathname === '/api/providers') { send(response, 200, await deps.providers()); return; }
-        if (url.pathname === '/api/model-visibility/claim') { send(response, 200, deps.modelVisibilityClaim()); return; }
-        if (url.pathname === '/api/model-access') { send(response, 200, deps.modelAccess()); return; }
-        if (url.pathname === '/api/usage/model-pricing') { send(response, 200, await deps.modelPricing()); return; }
-        if (url.pathname === '/api/usage/reference-model-pricing') { send(response, 200, deps.referenceModelPricing()); return; }
-        if (url.pathname === '/api/agents') { send(response, 200, deps.agents()); return; }
-        if (url.pathname === '/api/interactions/pending') { send(response, 200, deps.interactions.pending(String(body.sessionId ?? ''))); return; }
-        if (url.pathname === '/api/interactions/respond') {
-          const accepted = deps.interactions.respond(
-            body.sessionId ? String(body.sessionId) : null, String(body.requestId ?? ''), body.decision,
-          );
-          send(response, accepted ? 200 : 404, { ok: accepted, accepted });
-          return;
-        }
-        if (url.pathname === '/api/input/projection') { send(response, 200, deps.input.projection(String(body.sessionId ?? ''))); return; }
-        if (url.pathname === '/api/input/enqueue') {
-          send(response, 200, await deps.input.enqueue(String(body.sessionId ?? ''), body.item ?? {}));
-          return;
-        }
-        if (url.pathname === '/api/input/stop') { send(response, 200, await deps.input.stop(String(body.sessionId ?? ''))); return; }
-        if (url.pathname === '/api/input/steer') {
-          send(response, 200, { ok: await deps.input.steer(String(body.sessionId ?? ''), body.item ?? {}) });
-          return;
-        }
-        if (url.pathname === '/api/input/remove') {
-          send(response, 200, await deps.input.remove(String(body.sessionId ?? ''), String(body.clientId ?? '')));
-          return;
-        }
-        if (url.pathname === '/api/input/update-content') {
-          send(response, 200, await deps.input.updateContent(String(body.sessionId ?? ''), String(body.clientId ?? ''), body.item ?? {}));
-          return;
-        }
-        if (url.pathname === '/api/input/update-text') {
-          send(response, 200, await deps.input.updateText(String(body.sessionId ?? ''), String(body.clientId ?? ''), body.newText));
-          return;
-        }
-        if (url.pathname === '/api/input/move') {
-          send(response, 200, await deps.input.move(String(body.sessionId ?? ''), String(body.clientId ?? ''), Number(body.targetIndex ?? 0)));
-          return;
-        }
-        if (url.pathname === '/api/input/set-expanded') {
-          send(response, 200, await deps.input.setExpanded(String(body.sessionId ?? ''), Boolean(body.expanded)));
-          return;
-        }
-        if (url.pathname === '/api/input/set-interaction-lock') {
-          send(response, 200, await deps.input.setInteractionLock(String(body.sessionId ?? ''), String(body.lockId ?? ''), Boolean(body.locked)));
-          return;
-        }
-        if (url.pathname === '/api/input/set-edit-lock') {
-          send(response, 200, await deps.input.setEditLock(String(body.sessionId ?? ''), String(body.clientId ?? ''), Boolean(body.locked)));
-          return;
-        }
-        if (url.pathname === '/api/input/clear-session') {
-          send(response, 200, await deps.input.clearSession(String(body.sessionId ?? '')));
-          return;
-        }
-        if (url.pathname === '/api/input/resume') { send(response, 200, await deps.input.resume(String(body.sessionId ?? ''))); return; }
-        if (url.pathname === '/api/agent-commands') { send(response, 200, await deps.agentCommands(body)); return; }
-        if (url.pathname === '/api/agent-skills') { send(response, 200, await deps.agentSkills(body)); return; }
-        if (url.pathname === '/api/capabilities') {
-          try {
-            send(response, 200, await deps.capabilities(String(body.agentKind ?? '')));
-          } catch (error) {
-            const agentKind = String(body.agentKind ?? '');
-            const message = error instanceof Error ? error.message : String(error);
-            send(response, 404, { error: 'agent_not_registered', message: agentKind === 'pi' ? "Agent 'pi' is not registered" : message });
-          }
-          return;
-        }
-        send(response, 404, { error: 'not_found' });
+        const caller = deps.webAuth.caller?.(request.headers.cookie)
+          ?? (isAuthorized(request.headers.authorization, deps.token) ? `local-api:${deps.instanceId}` : null);
+        const result = await service(url.pathname, body, { caller });
+        send(response, result.status, result.body);
         return;
       }
 
@@ -320,11 +210,13 @@ export function createHostServer(input) {
           return;
         }
         request.socket?.setNoDelay(true);
+        const versioned = url.searchParams.get('protocol') === '2';
         response.writeHead(200, {
           'content-type': 'text/event-stream; charset=utf-8',
           'cache-control': 'no-store, no-transform',
           'x-accel-buffering': 'no',
           connection: 'keep-alive',
+          ...(versioned ? { 'x-cindy-event-protocol': '2' } : {}),
         });
         response.write(': connected\n\n');
         response.flush?.();
@@ -332,7 +224,13 @@ export function createHostServer(input) {
         const sinceHeader = request.headers['last-event-id'];
         const sinceQuery = url.searchParams.get('since') ?? url.searchParams.get('lastEventId') ?? url.searchParams.get('after');
         const sinceVal = sinceHeader ?? sinceQuery;
-        if (sinceVal !== null && sinceVal !== undefined && sinceVal !== '') {
+        if (versioned) {
+          const replay = deps.events.replay({ since: sinceVal, runtime: url.searchParams.get('runtime') });
+          const { events, ...cursor } = replay;
+          response.write(`data: ${JSON.stringify({ type: 'host_stream', phase: 'start', ...cursor })}\n\n`);
+          for (const item of events) response.write(`id: ${item.seq}\ndata: ${JSON.stringify(item)}\n\n`);
+          response.write(`data: ${JSON.stringify({ type: 'host_stream', phase: 'ready', ...cursor })}\n\n`);
+        } else if (sinceVal !== null && sinceVal !== undefined && sinceVal !== '') {
           const sinceSeq = parseInt(sinceVal, 10);
           if (!Number.isNaN(sinceSeq) && typeof deps.events.getEventsSince === 'function') {
             const missed = deps.events.getEventsSince(sinceSeq);
@@ -405,8 +303,7 @@ export function createHostServer(input) {
           return;
         }
         if (url.pathname === '/logout') {
-          const result = await deps.logout();
-          deps.webAuth.clear();
+          const result = await logout();
           send(response, 200, result);
           return;
         }
@@ -420,9 +317,31 @@ export function createHostServer(input) {
         response.end();
         return;
       }
-      send(response, 500, { error: 'internal_error', message: error instanceof Error ? error.message : String(error) });
+      send(response, 500, { error: 'internal_error', message: clientErrorMessage(error) });
+    } finally {
+      finishOwnerRequest?.();
+      activeRequests--;
+      if (!activeRequests) {
+        for (const resolve of drainWaiters) resolve();
+        drainWaiters.clear();
+      }
     }
   });
+  // Stop accepting new work first. The caller closes SSE connections after the
+  // queue and runtime have drained; they do not keep database requests in flight.
+  const stopAccepting = () => {
+    stopping = true;
+    server.close();
+    const drained = activeRequests ? new Promise(resolve => drainWaiters.add(resolve)) : Promise.resolve();
+    return Promise.all([cancelPendingAuth(), drained]);
+  };
+  const pauseOwnerRequests = () => {
+    ownerPaused = true;
+    deps.webAuth.clear();
+    return Promise.all([cancelPendingAuth(), Promise.allSettled([...ownerRequests])]);
+  };
+  server.once('close', () => unsubscribeSessions?.());
+  return Object.assign(server, { stopAccepting, pauseOwnerRequests });
 }
 
 /** Bound request memory before parsing; aborted requests must not hang forever. */
