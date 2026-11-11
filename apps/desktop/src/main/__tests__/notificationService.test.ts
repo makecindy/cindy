@@ -1792,6 +1792,61 @@ describe('macOS latest session reply notification', () => {
     expect(bodies()).toEqual(['Previous reply']);
   });
 
+  // #9944 review / unit: native delivery can fail after admission. Keep the
+  // previously displayed reminder until its replacement actually emits show.
+  it.each(['throw', 'failed'] as const)('keeps the previous reply when replacement delivery reports %s', (failure) => {
+    deliver('Previous reply');
+    const previous = notificationInstances.at(-1)!;
+    const show = vi.spyOn(FakeNotification.prototype, 'show').mockImplementationOnce(function (this: FakeNotification) {
+      if (failure === 'throw') throw new Error('native delivery failed');
+      this.emit('failed', {}, 'native delivery failed');
+    });
+    try {
+      if (failure === 'throw') expect(() => deliver('Failed reply')).toThrow('native delivery failed');
+      else deliver('Failed reply');
+    } finally {
+      show.mockRestore();
+    }
+    expect(previous.close).not.toHaveBeenCalled();
+    expect(bodies()).toEqual(['Previous reply']);
+    deliver('Next successful reply');
+    expect(previous.close).toHaveBeenCalledOnce();
+    expect(bodies()).toEqual(['Next successful reply']);
+  });
+
+  it('waits for native show confirmation before replacing a visible reply', () => {
+    deliver('Previous reply');
+    const previous = notificationInstances.at(-1)!;
+    const show = vi.spyOn(FakeNotification.prototype, 'show').mockImplementationOnce(() => {});
+    deliver('Pending reply');
+    const pending = notificationInstances.at(-1)!;
+    show.mockRestore();
+    expect(previous.close).not.toHaveBeenCalled();
+    expect(bodies()).toEqual(['Previous reply']);
+    pending.show();
+    expect(previous.close).toHaveBeenCalledOnce();
+    expect(bodies()).toEqual(['Pending reply']);
+  });
+
+  it('does not resurrect an older pending reply after a newer shown reply closes', () => {
+    deliver('Original reply');
+    const show = vi.spyOn(FakeNotification.prototype, 'show').mockImplementation(() => {});
+    deliver('Older pending reply');
+    const older = notificationInstances.at(-1)!;
+    deliver('Newer pending reply');
+    const newer = notificationInstances.at(-1)!;
+    show.mockRestore();
+    newer.show();
+    expect(bodies()).toEqual(['Newer pending reply']);
+    newer.visible = false;
+    newer.emit('close');
+    older.show();
+    expect(bodies()).toEqual([]);
+    deliver('Latest reply');
+    older.emit('close');
+    expect(bodies()).toEqual(['Latest reply']);
+  });
+
   // #9944 patch / unit: previously only native close/click could retire an
   // actionable toast. A handled choice/input must also retire it, including a
   // delivery still waiting for preview enrichment; ordinary replies stay visible.

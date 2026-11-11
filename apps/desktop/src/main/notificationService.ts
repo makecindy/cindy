@@ -154,7 +154,13 @@ interface ShowSessionEventPayload {
 const liveNotifications = new Set<Notification>();
 // Completed replies replace one another. Action requests are tracked separately
 // until handled; errors retain their independent lifecycle.
-const latestReplyNotifications = new Map<string, { notification: Notification; dismiss: () => void }>();
+interface ReplyNotificationScope {
+  latest?: { notification: Notification; dismiss: () => void };
+  active: Set<Notification>;
+  nextOrder: number;
+  shownOrder: number;
+}
+const replyNotificationScopes = new Map<string, ReplyNotificationScope>();
 
 interface InteractionNotification {
   active: boolean;
@@ -979,13 +985,25 @@ function showDesktopToast(
     ...(avatar && !avatar.isEmpty() ? { icon: avatar } : devNotificationIcon ? { icon: devNotificationIcon } : {}),
   });
   liveNotifications.add(notif);
+  const replyScope = replyKey ? replyNotificationScopes.get(replyKey) ?? {
+    active: new Set<Notification>(), nextOrder: 0, shownOrder: 0,
+  } as ReplyNotificationScope : undefined;
+  const replyOrder = replyScope ? ++replyScope.nextOrder : 0;
+  if (replyScope && replyKey) {
+    replyScope.active.add(notif);
+    replyNotificationScopes.set(replyKey, replyScope);
+  }
 
   const release = () => {
     liveNotifications.delete(notif);
     interaction?.release();
     // A dismissed predecessor can emit close/failed after its successor is shown.
-    if (replyKey && latestReplyNotifications.get(replyKey)?.notification === notif) {
-      latestReplyNotifications.delete(replyKey);
+    if (replyScope && replyKey) {
+      replyScope.active.delete(notif);
+      if (replyScope.latest?.notification === notif) delete replyScope.latest;
+      if (replyScope.active.size === 0 && replyNotificationScopes.get(replyKey) === replyScope) {
+        replyNotificationScopes.delete(replyKey);
+      }
     }
   };
   const dismiss = () => {
@@ -1008,14 +1026,20 @@ function showDesktopToast(
     interaction.dismiss = dismiss;
     notif.on('show', () => { if (!interaction.active) dismiss(); });
   }
-  if (replyKey) {
-    const previous = latestReplyNotifications.get(replyKey);
-    latestReplyNotifications.set(replyKey, { notification: notif, dismiss });
-    previous?.dismiss();
-    // Native icon preparation can finish after a newer notification has replaced
-    // this one. Remove that late delivery rather than leaving an obsolete reply.
+  if (replyScope) {
+    // Admission can still fail natively. Replace only after show confirms
+    // delivery, preserving the last visible reply when a newer attempt fails.
     notif.on('show', () => {
-      if (latestReplyNotifications.get(replyKey)?.notification !== notif) dismiss();
+      if (!replyScope.active.has(notif) || replyOrder < replyScope.shownOrder) {
+        dismiss();
+        return;
+      }
+      const previous = replyScope.latest;
+      replyScope.latest = { notification: notif, dismiss };
+      // Keep this order until all pending deliveries release, even if the
+      // displayed reply closes first, so older native shows cannot resurrect.
+      replyScope.shownOrder = replyOrder;
+      if (previous?.notification !== notif) previous?.dismiss();
     });
   }
   try { notif.show(); }
