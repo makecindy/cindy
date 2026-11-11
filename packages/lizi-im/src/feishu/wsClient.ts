@@ -926,8 +926,8 @@ async function processClaimedMessage(
       }
     }
 
-    // whitelist gate(对外开放的实例放行非主人私聊, 下面带非主人标记进业务层)。
-    if (!ownerGuard.check(senderOpenId) && !getScope().guests) {
+    // 群成员准入不授予私聊权限。所有实例都在解析内容、下载附件和派发前验主人。
+    if (!ownerGuard.check(senderOpenId)) {
       log.warn(`[feishu/wsClient] drop non-whitelisted sender ...${senderOpenId.slice(-8)}`);
       return;
     }
