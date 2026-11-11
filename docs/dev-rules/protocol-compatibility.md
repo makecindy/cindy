@@ -65,32 +65,10 @@ Ghost manifest、自建中转同步维护与 Review 清单。每项具体能力�
 
 ## 3. Ghost manifest 与 Cindy 专属界面能力
 
-- OAuth 账号清单增量增加 Host 私有的 `reused` 账号引用，`/oauth` 账号视图可带
-  `reused:true`（不含来源凭证），插件原有列表/默认/断开调用保持兼容。普通账号字段、
-  刷新路径与 manifest 不变，旧账号无需迁移或重配。引用账号需要新 Host；旧 Host 不识别
-  引用时原来源的凭证仍保留，不得将其复制进受用插件作为回退。此项不新增 grant 账本。
-  新增本机 `ghosts:reusable-accounts` / `ghosts:reuse-account` IPC，仅接受 Cindy 可信主界面，
-  不进入 device-link allowlist 或插件管子；目录只回账号元数据，连接仍经原生确认。
-  停止使用只移除消费插件的引用；持久化失败时原 `/oauth` DELETE 回 500，不假回 204。
-  Node 管子增量增加 `HOST_INJECTION_REQUIRED` 失败码，表明引用账号仅能由宿主代注入；
-  普通账号的既有 Node 明文绑定保持不变，旧调用方按 `ok:false` 处理未知失败码。
-
-- `network.hosts` 的 string 数组增量接受精确 HTTP(S)/WS(S) origin；普通域名维持 HTTPS:443。
-  复用原声明、权限行和 receipt，不新增 schema 或批准存储。原客户端会在安装时拒绝新格式，
-  使用此能力的包须标明实际支持版本；已装旧插件的规范值与批准范围不变。凭证范围比较按协议、
-  主机与端口区分，不能把旧通配域名批准解释为 HTTP 或非默认端口授权。无新 device-link 帧，
-  官方与自建中转无需升级；网络仍在执行 Host 发起。
-  `fetch-request.as` 增量增加 `stream`，成功回执可带 `connectionId`；`network-request`
-  提供 open/read/send/close，read 返回有界事件、nextCursor、closed 与 resetRequired。
-  同一管子服务于 Desktop 与 Node Host；连接留在执行电脑，不是新 HTTP/Webhook 入口。
-  Node 私有控制通道新增 `network-request {reqId,request}`，旧引导层不会提供新 API，
-  插件须检测 `cindy.network`。不改 host-tool-request 或 HostToolCaller 的既有签名。
-
-- 文件管子在原 `fs-request` 上追加 `workdir` 的 read/list/delete/watch/changes/unwatch。
-  监听请求使用可选 `watchId` / `cursor`，结果为相对路径元数据与 `resetRequired`；list 条目可选增加
-  `type`。旧私有目录、save 票据和 write 回执不变，不修改 manifest schema 或 receipt 版本。
-  老宿主会拒绝新增 op，插件须处理 `ok:false`，不能从没有事件推定未发生变化。执行仍在任务电脑，
-  控制端不解析绝对路径；此增量不增加 device-link 帧或 channel，官方与自建中转透传原页面请求即可。
+- [插件复用已有 OAuth 账号](protocol-compatibility/plugin-oauth-account-reuse.md)
+- [插件网络来源、流与 WebSocket](protocol-compatibility/plugin-network-origins-streams.md)
+- [插件授权目录与文件操作](protocol-compatibility/plugin-authorized-files.md)
+- [插件宿主工具的平台服务](protocol-compatibility/plugin-host-tools-platform.md)
 
 - `ghost.json` 的跨消费者字段、v2 兼容映射与枚举属于 Ghost manifest 协议，客户端正本位于
   `packages/plugin-protocol/src/manifest.ts`；Desktop 在
@@ -114,34 +92,6 @@ Ghost manifest、自建中转同步维护与 Review 清单。每项具体能力�
   UI 管子新增 `host-tool-request`，Node 私有通道使用同类型加 `reqId`，共用宿主校验及 Agent 工具处理器；返回原始 MCP 结果。
   旧宿主可保留清单但不支持接口，插件须检测 `cindy.host?.call` 并处理不支持响应。无 Session 的插件调用方不会改变原任务调用方协议或身份；不涉及 device-link wire 变更。
   无 `node` 批准的插件不支持脚本/前置命令调度；普通调度更新、运行和恢复复用既有 `expectedSchedule` 参数及执行点检查，不新增协议字段或确认层，原 Agent 不带守卫时行为保持。
-  `terminal` 新增同一 helper registry 的 `terminal_start/list/read/write/resize/stop/forget`，不改 Host 调用签名。
-  新组仍须显式批准；旧 receipt 和未知字段不自动授予执行命令权限。终端输出用 Host 随机进程代次及
-  非消费游标续读，缺口显式 `resetRequired`；执行电脑不支持或重启后记录丢失时报告失败，不重放命令。
-  Node Host 与桌面控制端沿用上述工具签名、manifest 和 receipt。loopback SSE 客户端通过
-  `protocol=2&confirmations=1` 显式协商不回放的 `host_prompt` 帧；只有现有四种插件确认请求/
-  撤回 channel 可用，不占用或推进任务事件序号。旧客户端不协商就不投递此类帧；旧 Host
-  忽略额外 query，任务事件流保持原行为。回答沿用同名 preload 契约，经已认证控制端绑定
-  到原窗口确认桥；断线取消，不重试写操作。不改变 device-link 或自建中转 wire payload。
-  Node Host 的本机 `history` 查询增量接入相同回调和 owner 数据库，沿用原工具参数、分页、
-  错误与来源范围。任务动作的输入快照与确认复用共享实现，不新增身份字段、任务副本或批准记录。
-  Node Host 未装配的服务返回 MCP `UNSUPPORTED_CAPABILITY`，附当前执行环境不支持的说明；当前包括生产调度器。
-  Desktop 原有暂未就绪场景仍返回 `HOST_NOT_READY`。不新增调用字段，也不改变旧宿主返回值。
-  `files` 增量复用同一组批准事实。`pick-request.access:'files'` 成功时返回可选 `directoryRef`；
-  `fs-request.root:'picked'` 只接受该 Host 签发的同实例引用。旧 pick 路径没有新增访问权，未知组也不补批准。
-  原亲选目录文件仅增量增加可选 roots 记录，grants 原结构及 errand 语义保持；换源归档同时搬移两类事实。
-  helper `file_request` 沿用公共工具通道，不改变 `cindy.host.call`、管子请求或调用方身份签名；
-  旧 Host 不支持新 root/op 时明确失败。没有新远控 channel 或 relay payload，手机不把控制端目录当成执行端目录。
-  `storage` 增量复用相同组批准与 `storage_request` 工具通道，支持 providers/targets/call/share；
-  不新增管子、device-link 或 relay 字段。跨插件只交付原 handoff 副本，同账号本机、同组织且身份已确认，
-  可信确认和摘要复核不接受插件自报批准。新增组不把历史未知字符串变成批准事实，原存储布局与已有 API 不变。
-  handoff 新接口的分块读返回 base64/nextOffset/sha256，旧页面与原网络上传仍按旧通道读取同一份副本。
-  browser/computer/ssh/docs 增量扩展现有组和 server 准入，复用原 MCP registry 校验和风险规则；
-  不改变 host.call、host-tool-request 或 HostToolCaller 签名，不新增跨端字段。文档路径根为插件私有目录。
-  服务提供者继续使用 browserExtension.pageControl 原声明与详情页选择，不改变扩展 wire 协议。
-  discovery/host_services 继续用相同 helper 调用，增量返回本机服务目录及本插件声明/批准布尔值；
-  不增加跨端消息或批准字段，旧宿主不支持时按原工具错误处理。目录不授予执行或插件管理权。
-  服务依赖继续使用已存在的 agent.hostTools；资源退出只接回原运行时生命周期，不新增 manifest、receipt、
-  setup 或远程字段。停止、崩溃与换版后的电脑连接/快照失效，旧插件其余能力和持久数据不要求重新配置。
 - 历史查询通道增量支持 `list_teammates`，复用同一个工具 registry 校验与宿主目录读取；不新增 channel。
   目录和指定 `teammate_id` 的关系分别分页，默认 100、最多 1000，返回 `nextCursor` / `hasMore`，游标复用历史查询的编码。
 - `control/delete_session` 为增量 Agent 工具，插件通过同一入口调用；本机复用 `patchSessionMetaInDb(status:'deleted')`，

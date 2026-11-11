@@ -11,7 +11,7 @@ import { createTaskToolCallAuthorizer } from '../../../desktop/src/main/maker-ip
 import { createDesktopTaskActionAuthorizer } from '../../../desktop/src/main/maker-ipc/taskActionHost.js';
 import { createTaskActionConfirmation } from '../../../desktop/src/main/maker-ipc/taskActionConfirmation.js';
 import { createHistoryToolCallbacks } from '../../../desktop/src/main/mcp-integrations/historyToolCallbacks.js';
-import { resolveHelperSurface, resolveHelperSystemSkillsOff } from '../../../desktop/src/main/mcp-integrations/helperSurface.js';
+import { resolveHelperSurface } from '../../../desktop/src/main/mcp-integrations/helperSurface.js';
 import { DeviceLinkError } from '@cindy/device-link';
 import type { ChatHistoryReaderDeps } from '../../../desktop/src/main/mcp-integrations/remoteChatHistory.js';
 import { getCurrentDbClientSnapshot, tryGetDbClient } from '../../../desktop/src/main/localDb/client/current.js';
@@ -79,10 +79,6 @@ export function createHostToolService(options: Options) {
       resolveSurface: async ({ sessionId }) => {
         const db = current() ? tryGetDbClient() : null;
         return db ? resolveHelperSurface(db, sessionId) : 'restricted';
-      },
-      resolveSystemSkillsOff: async ({ sessionId }) => {
-        const db = current() ? tryGetDbClient() : null;
-        return db ? resolveHelperSystemSkillsOff(db, sessionId) : [];
       },
       history: createHistoryToolCallbacks({ authorizeCall,
         invokeRemote: options.invokeRemote ?? (async () => { throw new DeviceLinkError('NOT_CONNECTED', 'Device Link is unavailable'); }) }),
