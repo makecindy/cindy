@@ -26,7 +26,9 @@
  * CINDY_PI_TOOL_FOLD_MIN_PAIRS（攒够多少条折一次，默认 32）、
  * CINDY_PI_TOOL_FOLD_MIN_CHARS（攒够多少字符折一次，默认 36000）、
  * CINDY_PI_TOOL_FOLD_PIN_BUDGET（钉住预算字符数，默认 64000）、
- * CINDY_PI_TOOL_FOLD_INGEST_LIMIT / _INGEST_KEEP（入库截断阈值/保留，默认 20000/2000）。
+ * CINDY_PI_TOOL_FOLD_INGEST_LIMIT / _INGEST_KEEP（入库截断阈值/保留，默认 20000/2000）、
+ * CINDY_PI_TOOL_FOLD_GIANTS（保留的巨型结果条数，默认 64）、
+ * CINDY_PI_TOOL_FOLD_GIANT_BUDGET（巨型结果总字符预算，默认 2000000）。
  */
 
 export const CINDY_TOOL_FOLD_EXTENSION_FILENAME = 'cindy-tool-fold.ts';
@@ -92,6 +94,7 @@ export default function (pi) {
   var INGEST_LIMIT = intEnv('CINDY_PI_TOOL_FOLD_INGEST_LIMIT', 20000, 4000, 100000000);
   var INGEST_KEEP = intEnv('CINDY_PI_TOOL_FOLD_INGEST_KEEP', 2000, 500, 32000);
   var GIANT_KEEP = intEnv('CINDY_PI_TOOL_FOLD_GIANTS', 64, 8, 512);
+  var GIANT_BUDGET_CHARS = intEnv('CINDY_PI_TOOL_FOLD_GIANT_BUDGET', 2000000, 100000, 1000000000);
   var LINE = 160;
   var MAX_FOLDED = intEnv('CINDY_PI_TOOL_FOLD_MAX_FOLDED', 4000, 100, 1000000);
 
@@ -108,8 +111,11 @@ export default function (pi) {
   // Raw conversation snapshot from the latest context pass. Recovery reads originals
   // here instead of persisting payloads: pi already holds the full transcript.
   var lastMessages = null;
-  // Full text of ingestion-truncated giants (the only payloads absent from the transcript).
+  // Full text of ingestion-truncated giants (the only payloads absent from the transcript),
+  // bounded by entry count AND aggregate chars: a few multi-megabyte outputs must not
+  // retain hundreds of megabytes in a long-running process.
   var giants = new Map();
+  var giantBytes = 0;
 
   function markFolded(id, chars) {
     var key = String(id);
@@ -247,6 +253,23 @@ export default function (pi) {
     return true;
   }
 
+  /** Admit a giant payload; evict oldest entries until the aggregate bound holds. */
+  function admitGiant(id, text) {
+    if (text.length > GIANT_BUDGET_CHARS) return false; // a single payload over budget is never retained
+    if (giants.has(id)) {
+      giantBytes -= giants.get(id).length;
+      giants.delete(id);
+    }
+    giants.set(id, text);
+    giantBytes += text.length;
+    while (giants.size > 1 && (giants.size > GIANT_KEEP || giantBytes > GIANT_BUDGET_CHARS)) {
+      var oldest = giants.keys().next().value;
+      giantBytes -= giants.get(oldest).length;
+      giants.delete(oldest);
+    }
+    return giants.get(id) === text;
+  }
+
   function tripPinned(trip) {
     for (var i = 0; i < trip.calls.length; i++) if (pinned.has(String(trip.calls[i].id))) return true;
     return false;
@@ -263,11 +286,12 @@ export default function (pi) {
       if (content.length <= INGEST_LIMIT) return undefined;
       var sid = String((event && event.toolCallId) || '');
       if (!sid) return undefined;
-      if (giants.size >= GIANT_KEEP) giants.delete(giants.keys().next().value);
-      giants.set(sid, content);
+      var sidRetained = admitGiant(sid, content);
       return { content: [{ type: 'text', text: content.slice(0, INGEST_KEEP)
         + '\n[truncated ' + (content.length - INGEST_KEEP) + ' of ' + content.length
-        + ' chars; toolfold_read("' + sid + '") returns the full text]' }] };
+        + ' chars; ' + (sidRetained
+          ? 'toolfold_read("' + sid + '") returns the full text]'
+          : 'full text not retained; re-run if needed]') }] };
     }
     if (!Array.isArray(content)) return undefined;
     var hasImage = false;
@@ -282,8 +306,8 @@ export default function (pi) {
     var id = String((event && event.toolCallId) || '');
     if (!id) return undefined;
     var fullText = textOf(content);
-    if (giants.size >= GIANT_KEEP) giants.delete(giants.keys().next().value);
-    giants.set(id, fullText);
+    admitGiant(id, fullText);
+    var retained = giants.get(id) === fullText;
     var parts = [];
     var kept = 0;
     var truncated = 0;
@@ -296,7 +320,9 @@ export default function (pi) {
       else { kept = INGEST_KEEP; truncated += b.text.length - room; parts.push({ type: 'text', text: b.text.slice(0, room) }); }
     }
     parts.push({ type: 'text', text: '[truncated ' + truncated + ' of ' + total
-      + ' chars; toolfold_read("' + id + '") returns the full text]' });
+      + ' chars; ' + (retained
+        ? 'toolfold_read("' + id + '") returns the full text]'
+        : 'full text not retained; re-run if needed]') });
     var out = { content: parts };
     if (Object.prototype.hasOwnProperty.call(event, 'structuredContent')) out.structuredContent = event.structuredContent;
     return out;
@@ -308,51 +334,62 @@ export default function (pi) {
   // -----------------------------------------------------------------------
   function findOriginal(callId) {
     var key = String(callId);
-    if (giants.has(key)) return giants.get(key);
     var messages = lastMessages;
-    if (!messages) return null;
     var callBlock = null;
     var resultMsg = null;
     var truncatedPreview = null;
-    for (var i = 0; i < messages.length; i++) {
-      var message = messages[i];
-      if (!message) continue;
-      if (message.role === 'assistant' && Array.isArray(message.content)) {
-        for (var b = 0; b < message.content.length; b++) {
-          var block = message.content[b];
-          if (block && block.type === 'toolCall' && String(block.id) === key) callBlock = block;
-        }
-      } else if (message.role === 'toolResult' && String(message.toolCallId) === key) {
-        resultMsg = message;
-        var resultText = textOf(message.content);
-        // Ingestion truncation appends exactly one marker and it is the last thing in
-        // the result. Matching the id inside a marker that ENDS the text keeps ordinary
-        // results that merely quote the marker text recoverable — the preview is only
-        // ambiguous when the whole result is just the preview.
-        var marker = '[truncated ';
-        var markerAt = resultText.indexOf(marker);
-        while (markerAt !== -1) {
-          var markerEnd = resultText.indexOf(']', markerAt);
-          if (markerEnd !== -1) {
-            var markerBody = resultText.slice(markerAt, markerEnd + 1);
-            if (markerBody.indexOf('toolfold_read("' + key + '")') !== -1
-              && resultText.slice(markerEnd + 1).trim().length === 0) truncatedPreview = markerBody;
+    if (messages) {
+      for (var i = 0; i < messages.length; i++) {
+        var message = messages[i];
+        if (!message) continue;
+        if (message.role === 'assistant' && Array.isArray(message.content)) {
+          for (var b = 0; b < message.content.length; b++) {
+            var block = message.content[b];
+            if (block && block.type === 'toolCall' && String(block.id) === key) callBlock = block;
           }
-          markerAt = resultText.indexOf(marker, markerAt + 1);
+        } else if (message.role === 'toolResult' && String(message.toolCallId) === key) {
+          resultMsg = message;
+          var resultText = textOf(message.content);
+          // Ingestion truncation appends exactly one marker and it is the last thing in
+          // the result. Matching the id inside a marker that ENDS the text keeps ordinary
+          // results that merely quote the marker text recoverable — the preview is only
+          // ambiguous when the whole result is just the preview. Two marker shapes exist:
+          // "toolfold_read(...) returns the full text" (payload may still be retained) and
+          // "full text not retained" (payload was never admitted to the registry).
+          var marker = '[truncated ';
+          var markerAt = resultText.indexOf(marker);
+          while (markerAt !== -1) {
+            var markerEnd = resultText.indexOf(']', markerAt);
+            if (markerEnd !== -1) {
+              var markerBody = resultText.slice(markerAt, markerEnd + 1);
+              var endsText = resultText.slice(markerEnd + 1).trim().length === 0;
+              var namesThisCall = markerBody.indexOf('toolfold_read("' + key + '")') !== -1;
+              var notRetained = markerBody.indexOf('full text not retained') !== -1;
+              if (endsText && (namesThisCall || notRetained)) truncatedPreview = markerBody;
+            }
+            markerAt = resultText.indexOf(marker, markerAt + 1);
+          }
         }
       }
     }
-    if (!callBlock && !resultMsg) return null;
+    // The registry holds the FULL text of an ingestion-truncated payload (the transcript
+    // only has the preview). Prefer it, and combine it with the call block so recovery
+    // returns arguments + result as the tool promises.
+    var giant = giants.has(key) ? giants.get(key) : null;
     // Evicted/lost giant with only the truncation preview in context (the marker ends
     // the text): refuse rather than serve the preview as the original.
-    if (truncatedPreview) return null;
+    if (giant === null && truncatedPreview) {
+      return { ok: false, reason: truncatedPreview.indexOf('not retained') !== -1 ? 'not-retained' : 'evicted' };
+    }
+    if (!callBlock && !resultMsg && giant === null) return { ok: false, reason: 'missing' };
     var bits = [];
     if (callBlock) {
       bits.push('call: ' + callSummary(callBlock));
       try { bits.push('arguments: ' + JSON.stringify(callBlock.arguments || {})); } catch (error) { /* ignore */ }
     }
-    if (resultMsg) bits.push('result (' + (resultMsg.isError === true ? 'error' : 'ok') + '):\n' + textOf(resultMsg.content));
-    return bits.join('\n');
+    if (giant !== null) bits.push('result:\n' + giant);
+    else if (resultMsg) bits.push('result (' + (resultMsg.isError === true ? 'error' : 'ok') + '):\n' + textOf(resultMsg.content));
+    return { ok: true, text: bits.join('\n') };
   }
 
   function pinOriginal(callId) {
@@ -360,7 +397,7 @@ export default function (pi) {
     var chars = foldedIds[key];
     if (chars === undefined) {
       var original = findOriginal(key);
-      chars = typeof original === 'string' ? original.length : 0;
+      chars = original && original.ok === true ? original.text.length : 0;
     }
     var existing = pinned.get(key);
     if (existing) {
@@ -397,11 +434,16 @@ export default function (pi) {
       var id = params && typeof params.call_id === 'string' ? params.call_id : '';
       if (!id) throw new Error('call_id is required');
       var original = findOriginal(id);
-      if (original === null || typeof original !== 'string') {
-        return { content: [{ type: 'text', text: 'No folded or truncated round-trip with id ' + id + ' exists in this session. If the record says [truncated], its full text is no longer available (registry evicted or lost on resume); re-run the command instead.' }], isError: true };
+      if (!original || original.ok !== true) {
+        var reason = original && original.reason === 'not-retained'
+          ? 'its full text was not retained (payload over the retention budget); re-run the command instead.'
+          : original && original.reason === 'evicted'
+            ? 'its full text is no longer available (registry evicted or lost on resume); re-run the command instead.'
+            : 'no folded or truncated round-trip with that id exists in this session.';
+        return { content: [{ type: 'text', text: 'Cannot recover ' + id + ': ' + reason }], isError: true };
       }
       if (!giants.has(String(id))) pinOriginal(id);
-      return { content: [{ type: 'text', text: original }] };
+      return { content: [{ type: 'text', text: original.text }] };
     },
   });
 

@@ -198,6 +198,62 @@ describe('cindy-tool-fold extension source', () => {
     expect(isFolded(view[12])).toBe(false); // call-6 still pinned
   });
 
+  it('bounds retained giant payloads by aggregate characters, not just entry count', async () => {
+    // Budget 100k chars: three 60k payloads cannot all stay resident.
+    const { context, toolResult, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_GIANT_BUDGET: '100000' });
+    const payload = 'z'.repeat(60000);
+    for (const id of ['g1', 'g2', 'g3']) {
+      const out = toolResult({ toolName: 'bash', toolCallId: id, content: [{ type: 'text', text: payload }] }) as { content: Block[] };
+      expect(out).toBeDefined();
+    }
+    // g1 and g2 were evicted by the aggregate budget: their records promise recovery but
+    // the registry no longer holds them, so recovery refuses instead of serving a preview.
+    projection(context, [
+      call('g1', 'bash', { command: 'make g1' }),
+      { role: 'toolResult', toolCallId: 'g1', toolName: 'bash', content: [{ type: 'text', text: 'z'.repeat(2000) + '\n[truncated 58000 of 60000 chars; toolfold_read("g1") returns the full text]' }] } as unknown as { content: Block[] },
+    ]);
+    const refused = await tool.execute('t1', { call_id: 'g1' });
+    expect(refused.isError).toBe(true);
+    expect(String(refused.content![0].text)).toContain('no longer available');
+    // The newest payload is still resident and recovers in full.
+    const live = await tool.execute('t2', { call_id: 'g3' });
+    expect(live.isError).toBeUndefined();
+    expect(String(live.content![0].text)).toContain(payload);
+  });
+
+  it('does not retain a single payload larger than the aggregate budget', async () => {
+    const { context, toolResult, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_GIANT_BUDGET: '100000' });
+    const huge = 'w'.repeat(150000);
+    const out = toolResult({ toolName: 'bash', toolCallId: 'huge-1', content: [{ type: 'text', text: huge }] }) as { content: Block[] };
+    const text = (out.content ?? []).map((b) => String(b.text ?? '')).join('\n');
+    expect(text).toContain('full text not retained');
+    projection(context, [
+      call('huge-1', 'bash', { command: 'make huge' }),
+      { role: 'toolResult', toolCallId: 'huge-1', toolName: 'bash', content: [{ type: 'text', text }] } as unknown as { content: Block[] },
+    ]);
+    const refused = await tool.execute('t1', { call_id: 'huge-1' });
+    expect(refused.isError).toBe(true);
+    expect(String(refused.content![0].text)).toContain('re-run the command');
+  });
+
+  it('recovers a giant with its call arguments, not only the stored result text', async () => {
+    const { context, toolResult, tool } = loadExtension();
+    const giant = 'q'.repeat(25000);
+    toolResult({ toolName: 'bash', toolCallId: 'giant-arg', content: [{ type: 'text', text: giant }] });
+    // Put the truncated round-trip into the conversation so the call block is visible.
+    const messages = pairs(40);
+    messages.splice(0, 0,
+      { role: 'assistant', content: [{ type: 'toolCall', id: 'giant-arg', name: 'bash', arguments: { command: 'cat big.txt --flag' } }] },
+      { role: 'toolResult', toolCallId: 'giant-arg', toolName: 'bash', content: [{ type: 'text', text: 'q'.repeat(2000) + '\n[truncated 23000 of 25000 chars; toolfold_read("giant-arg") returns the full text]' }] });
+    projection(context, messages);
+    const recovered = await tool.execute('t1', { call_id: 'giant-arg' });
+    const text = String(recovered.content![0].text);
+    expect(text).toContain('call: bash');
+    expect(text).toContain('cat big.txt --flag');
+    expect(text).toContain('arguments:');
+    expect(text).toContain('q'.repeat(2000));
+  });
+
   it('truncates giant results at ingestion and recovers the full text from the in-memory registry', async () => {
     const { context, toolResult, tool } = loadExtension();
     const giant = 'y'.repeat(25000);
@@ -213,7 +269,7 @@ describe('cindy-tool-fold extension source', () => {
     expect(structured.structuredContent).toEqual({ ok: true });
     // The full original is recoverable even though the transcript only holds the truncation.
     const recovered = await tool.execute('t1', { call_id: 'giant-1' });
-    expect(String(recovered.content![0].text)).toBe(giant);
+    expect(String(recovered.content![0].text)).toContain(giant);
     // A truncated result still folds normally afterwards.
     const messages = pairs(40);
     messages[1] = { role: 'toolResult', toolCallId: 'call-0', toolName: 'bash', content: [{ type: 'text', text: kept }] };
@@ -275,6 +331,6 @@ describe('cindy-tool-fold extension source', () => {
     expect(String(refused.content![0].text)).toContain('full text is no longer available');
     // A live giant still recovers.
     const live = await tool.execute('t2', { call_id: 'giant-8' });
-    expect(String(live.content![0].text)).toBe(`payload 8 ${'g'.repeat(25000)}`);
+    expect(String(live.content![0].text)).toContain(`payload 8 ${'g'.repeat(25000)}`);
   });
 });
