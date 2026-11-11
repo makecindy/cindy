@@ -44,8 +44,10 @@ import {
   type VoiceInputUsageOutcome,
 } from '@/hooks/useVoiceInputUsageStats';
 import {
+  createStartCueGate,
   playVoiceInputEndCue,
   playVoiceInputStartCue,
+  type StartCueGate,
 } from './startCue';
 import {
   VOICE_INPUT_REFINEMENT_CACHE_SCOPE,
@@ -250,6 +252,7 @@ export function VoiceInputOverlay() {
   const settingsRef = useRef(getVoiceInputSettings());
   const startupTimelineRef = useRef<VoiceInputStartupTimeline | null>(null);
   const engineRef = useRef<WebMicAudioEngine | null>(null);
+  const startCueGateRef = useRef<StartCueGate | null>(null);
   const runIdRef = useRef<string | null>(null);
   const stateRef = useRef<VoiceInputState>('idle');
   const stopInFlightRef = useRef(false);
@@ -421,6 +424,8 @@ export function VoiceInputOverlay() {
   }, []);
 
   const stopEngine = useCallback(async () => {
+    // The attempt is ending: nothing is left for the start cue to wait for.
+    startCueGateRef.current?.abandon();
     const engine = engineRef.current;
     engineRef.current = null;
     if (engine) await engine.stop();
@@ -442,6 +447,7 @@ export function VoiceInputOverlay() {
   }, []);
 
   const drainAndStopEngine = useCallback(async () => {
+    startCueGateRef.current?.abandon();
     const engine = engineRef.current;
     if (!engine) return;
     // Keep submit semantics lossless: the worklet can hold a sub-chunk that has
@@ -826,6 +832,11 @@ export function VoiceInputOverlay() {
 
     log.debug('global voice input bootstrap requested');
 
+    // The start cue and system mute both touch the speakers; hold them until the
+    // microphone is open so capture does not queue behind that (see createStartCueGate).
+    const cueGate = createStartCueGate();
+    startCueGateRef.current = cueGate;
+
     const capturePromise = startVoiceInputCaptureSession({
       label: 'global',
       workletUrl,
@@ -838,6 +849,7 @@ export function VoiceInputOverlay() {
       isCurrentEngine: (engine) => startAttemptIdRef.current === attemptId && engineRef.current === engine,
       timeline,
       appendAudioChunk,
+      onCaptureReady: () => cueGate.release(),
       onSoundDetected: () => { hasRecordingContentRef.current = true; },
       onInterrupted: (message) => {
         if (isActiveStartAttempt(attemptId)) void failRecording(message);
@@ -851,12 +863,18 @@ export function VoiceInputOverlay() {
       elapsedMs,
     });
 
-    // Start capture first; feedback runs independently without awaiting the
-    // microphone. Only system mute waits for playback to avoid cutting it off.
-    const feedback = Promise.resolve().then(() => {
+    // Start capture first; the cue follows the open microphone (bounded by the
+    // gate's cap) and never waits for service checks or the cloud. Only system
+    // mute waits for playback to avoid cutting it off.
+    const feedback = cueGate.released.then((play) => {
+      if (!play || !settings.playInteractionSound) return;
       if (!isActiveStartAttempt(attemptId) || stateRef.current !== 'listening') return;
-      return settings.playInteractionSound ? playVoiceInputStartCue() : undefined;
+      timeline.mark('start_cue_released');
+      return playVoiceInputStartCue();
     });
+    // A capture that never becomes ready (denied, unavailable, cancelled) has no
+    // cue to wait for; do not leave system mute waiting for the cap.
+    void capturePromise.then((capture) => { if (!capture.ok) cueGate.abandon(); });
     if (settings.muteSystemAudio && supportsSystemAudioMute()) {
       void muteSystemAudioForRecording(feedback).then(() => timeline.mark('mute_finished'));
     } else {

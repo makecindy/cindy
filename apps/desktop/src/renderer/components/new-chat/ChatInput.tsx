@@ -3494,9 +3494,7 @@ export function ChatInput({
     return voiceInput.start({
       startedAt: performance.now(),
       beforeStart: onBeforeVoiceInputStart,
-      onStartFeedback: () => {
-        if (voiceInputSettings.playInteractionSound) return playVoiceInputStartCue();
-      },
+      onStartFeedback: voiceInputSettings.playInteractionSound ? playVoiceInputStartCue : undefined,
     });
   }, [onBeforeVoiceInputStart, voiceInput.start, voiceInputSettings.playInteractionSound]);
 
