@@ -1158,7 +1158,7 @@ CI 的三类测试位置问题同时修正：模型对账/手机说明 guard 指
 | A | 必须由后台处理：读写后台持有的数据或运行状态 | 918 |
 | B | 永久留在窗口：窗口外壳、对话框／剪贴板／系统外壳／通知、截屏录屏与远程桌面、电脑控制与浏览器、输入设备与语音、安装包更新与诊断 | 361 |
 | W | 窗口本地设置：侧栏设置与项目顺序，窗口直接读写同一份 profile | 6 |
-| S | 同步通道（处理函数给 `event.returnValue` 赋值，AST 自动识别）：S·本地 7（界面设置，窗口本地读 profile）；S·镜像 7（6 个 `ghosts:*` 与登录提示，数据归 Host） | 14 |
+| S | 同步通道（处理函数给 `event.returnValue` 赋值，AST 自动识别）：S·本地 8（界面设置与登录首帧提示，窗口本地读 profile）；S·镜像 6（`ghosts:*`，数据归 Host） | 14 |
 | R | 回执通道：主进程向界面要数据、界面回执（`model-favorites:host-*`、`setup-migration:host-*`、`app-preferences:reply`） | 6 |
 | C | C-后台 32（终端、任务范围文件操作）、C-两段式 40（选择框／访达／确认框后写后台）、C-窗口本地 11（本窗口选择的本机文件、进程监视）、C-专项设计 4（`input-handoff:*`、`device-link:invoke`） | 87 |
 
@@ -1187,10 +1187,11 @@ Orca、伙伴与 IM、远程执行。S 与 R 已从 A 中单列，C-窗口本地
   交接合同，**归交接任务留在原工作区的升级流程**，不归本计划的各批。
 - **Host 没有免账号本地模式**：桌面有 `auth:enter-local`，Host 只有云端账号一种登录态，所以
   隔离 profile 里客户端模式窗口停在登录页，无法在不碰真实凭证的情况下做完整客户端验收。
-- **S·镜像 7 个**（`ghosts:recommendations`、`unread`、`recent-usage`、`builtin-status`、
-  `errand-prefs`、`workdir-prefs` 与 `auth:has-persisted-session-hint-sync`）需要“窗口缓存镜像”
+- **S·镜像 6 个**（`ghosts:recommendations`、`unread`、`recent-usage`、`builtin-status`、
+  `errand-prefs`、`workdir-prefs`）需要“窗口缓存镜像”
   （Host 经事件流推送，窗口同步回答缓存）或把界面改成异步，是一个单独的小设计，放进插件那一
-  小批，不混进 1a。S·本地 7 个由窗口本地读同一份 profile。
+  小批，不混进 1a。S·本地 8 个由窗口本地读同一份 profile；其中
+  `auth:has-persisted-session-hint-sync` 只在第一帧之前读存量会话标记，登录状态本身仍以 Host 为准。
 - **R 回执通道 6 个**：数据在界面本地存储，Host 要用需经窗口往返一次，先标出来，不排期。
 - **C-专项设计 4 个**涉及“主人填写的值只交给宿主执行”和远程控制派发的安全边界，先读
   `docs/product-rules/input-handoff.md`，方案出来前不动。

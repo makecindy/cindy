@@ -47,7 +47,8 @@ test('sync channels form their own class: local settings or Host data behind a w
   assert.equal(sync('sidebar-settings:load-snapshot-sync', 'sidebarSettingsStore.ts'), 'S:local');
   assert.equal(sync('client-endpoints:get-sync', 'clientEndpointsService.ts'), 'S:local');
   assert.equal(sync('ghosts:unread', 'cindy-brain/index.ts'), 'S:mirror');
-  assert.equal(sync('auth:has-persisted-session-hint-sync', 'bootstrap-electron.ts'), 'S:mirror');
+  // First-frame hint read from the profile before the event stream connects; login state stays with the Host.
+  assert.equal(sync('auth:has-persisted-session-hint-sync', 'bootstrap-electron.ts'), 'S:local');
   // A window-only sync read stays B.
   assert.equal(sync('voice-input:history:get', 'voice-input/index.ts'), 'B');
   assert.equal(owner({ channel: 'sidebar-settings:get-project-order', file: main('projectOrderStore.ts') }), 'W');

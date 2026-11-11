@@ -152,7 +152,7 @@ export const OWNERSHIP_RULES = [
 ];
 
 /** A-rule domains whose synchronous reads the window serves from the shared profile files. */
-export const SYNC_LOCAL_DOMAINS = new Set(['设置与偏好']);
+export const SYNC_LOCAL_DOMAINS = new Set(['设置与偏好', '账号与凭据']);
 
 /** Electron exports that only a window process can use. */
 export const GUI_EXPORTS = new Set([
@@ -633,7 +633,10 @@ export function classify(registration, contract) {
   if (registration.sync) {
     // A synchronous answer cannot wait for an HTTP round trip to the Host.
     if (!rule || rule.owner === 'W' || SYNC_LOCAL_DOMAINS.has(rule.reason)) {
-      return { category: 'S', sub: 'local', reason: '同步通道·界面设置：窗口本地读同一份 profile 文件', basis: 'dependency' };
+      const reason = rule?.reason === '账号与凭据'
+        ? '同步通道·账号提示：只读 profile 里的首帧提示（事件流连上之前就要回答），登录状态仍以 Host 为准'
+        : '同步通道·界面设置：窗口本地读同一份 profile 文件';
+      return { category: 'S', sub: 'local', reason, basis: 'dependency' };
     }
     return {
       category: 'S', sub: 'mirror', basis: 'dependency',
@@ -659,7 +662,7 @@ export function moduleGroup(file) {
 const CATEGORIES = ['contract', 'client', 'A', 'B', 'W', 'S', 'R', 'C'];
 const SUBS = ['S:local', 'S:mirror', 'C:backend', 'C:two-phase', 'C:window', 'C:special'];
 export const SUB_LABELS = {
-  'S:local': '同步·界面设置（窗口本地读 profile）',
+  'S:local': '同步·本地（窗口读 profile：界面设置与首帧提示）',
   'S:mirror': '同步·数据归 Host（需窗口缓存镜像）',
   'C:backend': 'C-后台',
   'C:two-phase': 'C-两段式（窗口做界面动作，数据调 Host）',
@@ -923,7 +926,7 @@ export function renderMarkdown(summary, { usageSource, clientSource } = {}) {
     push('');
   };
   listSection('同步通道 S', (row) => row.category === 'S',
-    'S·本地：界面设置，由窗口本地读同一份 profile 文件，客户端模式下照常注册。S·镜像：数据归 Host（插件状态、登录提示），'
+    'S·本地：界面设置与登录首帧提示，由窗口本地读同一份 profile 文件，客户端模式下照常注册（登录状态本身仍以 Host 为准）。S·镜像：数据归 Host（插件状态），'
     + '需要“窗口缓存镜像”（Host 经事件流推送、窗口同步回答缓存）或把界面改成异步，单独设计，放进对应的小批（插件那批），不混进 1a。');
   listSection('回执通道 R', (row) => row.category === 'R',
     '主进程发请求、界面用本地存储里的数据回执。Host 要这些数据得经窗口往返一次，不是普通的“接一个接口”；先标出来，不排期。');
