@@ -8317,8 +8317,20 @@ describe("Pi provider-aware model routing", () => {
       await handle.close();
     };
 
-    await startRemote();
-    await startRemote();
+    // Remote spawn env does not inherit the local environment, so explicit
+    // tool-fold configuration must be forwarded key by key (P2 in review 9889).
+    process.env.CINDY_PI_TOOL_FOLD = "off";
+    process.env.CINDY_PI_TOOL_FOLD_MIN_CHARS = "48000";
+    try {
+      await startRemote();
+      await startRemote();
+    } finally {
+      delete process.env.CINDY_PI_TOOL_FOLD;
+      delete process.env.CINDY_PI_TOOL_FOLD_MIN_CHARS;
+    }
+    expect(capturedRemoteEnvs[0]!.CINDY_PI_TOOL_FOLD).toBe("off");
+    expect(capturedRemoteEnvs[0]!.CINDY_PI_TOOL_FOLD_MIN_CHARS).toBe("48000");
+    expect(capturedRemoteEnvs[0]!.CINDY_PI_TOOL_FOLD_KEEP).toBeUndefined();
     const expected = createHash("sha256")
       .update(CINDY_BRIDGE_EXTENSION_SOURCE)
       .update("\n")

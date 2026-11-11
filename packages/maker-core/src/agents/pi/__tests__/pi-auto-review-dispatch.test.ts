@@ -3210,12 +3210,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
 
       const configHome = captured.env.PI_CODING_AGENT_DIR;
       expect(configHome).toBeTruthy();
-      expect(readdirSync(path.join(configHome!, 'internal-extensions')).sort()).toEqual(['cindy-bridge.ts', 'cindy-tool-fold.ts']);
+      expect(readdirSync(path.join(configHome!, 'internal-extensions')).sort()).toEqual(['cindy-bridge.ts']);
       const extensionPaths = captured.args.flatMap((arg, index) => (arg === '--extension' ? [captured.args[index + 1]] : []));
-      expect(extensionPaths).toEqual([
-        path.posix.join(configHome!, 'internal-extensions', 'cindy-bridge.ts'),
-        path.posix.join(configHome!, 'internal-extensions', 'cindy-tool-fold.ts'),
-      ]);
+      expect(extensionPaths).toEqual([path.posix.join(configHome!, 'internal-extensions', 'cindy-bridge.ts')]);
 
       const permissionFile = captured.env.CINDY_PI_PERMISSION_FILE;
       expect(permissionFile).toBeTruthy();

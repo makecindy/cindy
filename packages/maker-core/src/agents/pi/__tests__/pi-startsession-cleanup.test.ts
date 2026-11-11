@@ -2822,11 +2822,6 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
         'internal-extensions',
         'cindy-bridge.ts',
       ),
-      path.posix.join(
-        knobs.spawnedEnvs[0]!.PI_CODING_AGENT_DIR!,
-        'internal-extensions',
-        'cindy-tool-fold.ts',
-      ),
     ]);
     await reviewHandle.close();
   });
@@ -3331,7 +3326,6 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     ]);
     expect(repeatedArgValues(knobs.spawnedArgs[reviewIndex]!, '--extension')).toEqual([
       path.posix.join(reviewHome, 'internal-extensions', 'cindy-bridge.ts'),
-      path.posix.join(reviewHome, 'internal-extensions', 'cindy-tool-fold.ts'),
     ]);
     expect(repeatedArgValues(knobs.spawnedArgs[approvedIndex]!, '--prompt-template')).toEqual([]);
     expect(repeatedArgValues(knobs.spawnedArgs[reviewIndex]!, '--prompt-template')).toEqual([]);

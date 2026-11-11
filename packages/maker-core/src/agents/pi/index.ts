@@ -112,6 +112,7 @@ import {
   CINDY_BRIDGE_EXTENSION_SOURCE } from './cindy-bridge-source.js';
 import { nativeProviderAdapterAliases } from './native-provider-adapter-source.js';
 import {
+  CINDY_TOOL_FOLD_ENV_NAMES,
   CINDY_TOOL_FOLD_EXTENSION_FILENAME,
   CINDY_TOOL_FOLD_EXTENSION_SOURCE } from './pi-tool-fold-source.js';
 import { parsePiNativeRuntimeSettings, resolvePiNativeReserve, type PiNativeRuntimeSettings } from './native-runtime-settings.js';
@@ -3410,8 +3411,12 @@ export class PiAgent extends BaseAgent {
     const bridgeExtensionPath = joinRemotePosixPath(extensionsDir, CINDY_BRIDGE_EXTENSION_FILENAME);
     await writeFile(bridgeExtensionPath, CINDY_BRIDGE_EXTENSION_SOURCE);
     // cindy-tool-fold: 老工具往返折叠成一行。默认开，CINDY_PI_TOOL_FOLD=off 可关。
+    // 取回工具 toolfold_read 在受邀者/Review/仅宿主工具会话里被各自工具门拦下
+    // (受邀者名单只登记经 bridge 代理注册的工具,Review 锁只读工具面,hostToolsOnly
+    // 只放行网关);没有取回路径时截断会把全文真的丢掉 —— 这些会话不加载扩展。
+    const toolFoldSupported = !reviewMode && !guestRoot && !opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly;
     const toolFoldExtensionPath = joinRemotePosixPath(extensionsDir, CINDY_TOOL_FOLD_EXTENSION_FILENAME);
-    await writeFile(toolFoldExtensionPath, CINDY_TOOL_FOLD_EXTENSION_SOURCE);
+    if (toolFoldSupported) await writeFile(toolFoldExtensionPath, CINDY_TOOL_FOLD_EXTENSION_SOURCE);
     // cindy-subagent extension:与 bridge 并列的独立扩展(职责分离 —— bridge 管权限门与
     // MCP 桥,这个只管子代理)。子进程继承 PI_CODING_AGENT_DIR,因此同样加载 bridge,
     // 权限门对子代理照样生效;递归由扩展内的 depth env 自己截断。
@@ -4176,8 +4181,7 @@ export class PiAgent extends BaseAgent {
         ...(guestContextExtensionPath ? ['--extension', guestContextExtensionPath] : []),
         '--extension',
         bridgeExtensionPath,
-        '--extension',
-        toolFoldExtensionPath,
+        ...(toolFoldSupported ? ['--extension', toolFoldExtensionPath] : []),
         ...(localSubagentSupported ? ['--extension', subagentExtensionPath] : []),
         ...(!reviewMode && !opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly && planModeExtAvailable ? ['--extension', planModeExtPath] : []),
         ...(loadProjectResourcesInPlace
@@ -5763,6 +5767,12 @@ export class PiAgent extends BaseAgent {
         PI_CACHE_RETENTION: 'long',
         ...(mcpBridge && mcpBridge.servers.length > 0 ? { [PI_MCP_BRIDGE_ENV]: JSON.stringify(mcpBridge) } : {}),
         CINDY_LOCAL_HOST_TOOLS_ONLY: opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly ? '1' : '',
+        // 工具折叠配置:远端 spawnEnv 不继承本机 env,用户显式设置的键在此转发
+        // (值无凭证;变化时远端 envHash 变化 → 条件 restart,属预期)。
+        ...(remote ? Object.fromEntries(
+          CINDY_TOOL_FOLD_ENV_NAMES.flatMap((name) => process.env[name] !== undefined
+            ? [[name, process.env[name] as string]] : []),
+        ) : {}),
       };
       // 不继承宿主进程里碰巧存在的同名变量；Windows 环境键大小写不敏感，必须先清掉
       // 所有 casing 再写入 host 校验并 stage 后的唯一绝对路径。

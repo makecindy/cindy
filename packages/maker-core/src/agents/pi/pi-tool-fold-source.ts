@@ -31,6 +31,18 @@
 
 export const CINDY_TOOL_FOLD_EXTENSION_FILENAME = 'cindy-tool-fold.ts';
 
+/** 远端 spawn env 不继承本机环境,这些配置键需要显式转发(值无凭证)。 */
+export const CINDY_TOOL_FOLD_ENV_NAMES = [
+  'CINDY_PI_TOOL_FOLD',
+  'CINDY_PI_TOOL_FOLD_KEEP',
+  'CINDY_PI_TOOL_FOLD_MIN_PAIRS',
+  'CINDY_PI_TOOL_FOLD_MIN_CHARS',
+  'CINDY_PI_TOOL_FOLD_PIN_BUDGET',
+  'CINDY_PI_TOOL_FOLD_INGEST_LIMIT',
+  'CINDY_PI_TOOL_FOLD_INGEST_KEEP',
+  'CINDY_PI_TOOL_FOLD_GIANTS',
+] as const;
+
 export const CINDY_TOOL_FOLD_EXTENSION_SOURCE = String.raw`/**
  * cindy-tool-fold: fold old tool round-trips into one-line records, truncate giant
  * results at ingestion, and let the model recover any folded/truncated original.
