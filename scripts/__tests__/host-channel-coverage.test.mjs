@@ -182,8 +182,19 @@ test('real git-review open-file chain detects shell in openReviewFile default ar
   };
   visit(sf);
   assert.ok(handler, 'real IPC registration must be found');
-  const scanner = createWindowApiScanner(program.getTypeChecker());
-  const gui = [...scanner.guiOf(handler, 0)];
-  assert.ok(gui.includes('shell'), `expected shell, got ${gui}`);
-  assert.equal(classify({ channel: 'git-review:open-file', file: main('git-review/ipc.ts'), gui }, contract).sub, 'two-phase');
+  const check = () => {
+    const scanner = createWindowApiScanner(program.getTypeChecker());
+    const gui = [...scanner.guiOf(handler, 0)];
+    assert.ok(gui.includes('shell'), `expected shell, got ${gui}`);
+    assert.equal(classify({ channel: 'git-review:open-file', file: main('git-review/ipc.ts'), gui }, contract).sub, 'two-phase');
+  };
+  check();
+  // Exercise Windows separators on every platform using the same parsed program.
+  const names = program.getSourceFiles().map(source => [source, source.fileName]);
+  try {
+    for (const [source, name] of names) source.fileName = name.replace(/\//g, '\\');
+    check();
+  } finally {
+    for (const [source, name] of names) source.fileName = name;
+  }
 });

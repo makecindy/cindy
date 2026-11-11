@@ -238,12 +238,15 @@ const REGISTER_METHODS = new Map([
 
 /** Window API dependency scan shared by inventory and focused source-analysis tests. */
 export function createWindowApiScanner(checker) {
-  const isDesktopSource = (sf) => sf && !sf.isDeclarationFile && sf.fileName.startsWith(path.join(desktopRoot, 'src') + path.sep);
+  // TypeScript uses slash paths on Windows too; normalize both sides before matching.
+  const sourcePath = (file) => file.replace(/\\/g, '/');
+  const desktopSourcePrefix = sourcePath(path.join(desktopRoot, 'src')) + '/';
+  const isDesktopSource = (sf) => sf && !sf.isDeclarationFile && sourcePath(sf.fileName).startsWith(desktopSourcePrefix);
   const electronExport = (node) => {
     let symbol = checker.getSymbolAtLocation(node);
     if (symbol && symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
     const decl = symbol?.declarations?.[0];
-    return decl && /node_modules\/electron\/electron\.d\.ts$/.test(decl.getSourceFile().fileName) ? symbol.getName() : null;
+    return decl && /node_modules\/electron\/electron\.d\.ts$/.test(sourcePath(decl.getSourceFile().fileName)) ? symbol.getName() : null;
   };
   const functionBody = (node) => {
     if (!node) return null;
@@ -251,7 +254,7 @@ export function createWindowApiScanner(checker) {
     let symbol = checker.getSymbolAtLocation(node);
     if (symbol && symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
     const decl = symbol?.valueDeclaration;
-    if (!decl || !isDesktopSource(decl.getSourceFile()) || GUI_SKIP_MODULES.test(decl.getSourceFile().fileName)) return null;
+    if (!decl || !isDesktopSource(decl.getSourceFile()) || GUI_SKIP_MODULES.test(sourcePath(decl.getSourceFile().fileName))) return null;
     if (ts.isFunctionLike(decl) && decl.body) return decl;
     const init = (ts.isVariableDeclaration(decl) || ts.isPropertyAssignment(decl)) ? decl.initializer : undefined;
     return init && ts.isFunctionLike(init) && init.body ? init : null;
