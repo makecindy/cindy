@@ -270,6 +270,17 @@ export function createTurnExecutor(deps) {
     ackInterruptedTurnDispatched: deps.ackInterruptedTurnDispatched,
     isClearBoundaryCurrent: deps.isClearBoundaryCurrent,
     rewindPersistedUserMessageAfterClear: deps.rewindPersistedUserMessageAfterClear,
+    readPiUserEntry: deps.readPiUserEntry ? async (id, clientId) => {
+      deps.assertCurrent();
+      const entry = await deps.readPiUserEntry(id, clientId);
+      deps.assertCurrent();
+      return entry;
+    } : undefined,
+    linkPiUserEntry: deps.linkPiUserEntry ? (id, clientId, entryId) =>
+      historyFor(id).enqueueDurableWrite(`pi-entry-link:${id}:${clientId}`, () => {
+        deps.assertCurrent();
+        return deps.linkPiUserEntry(id, clientId, entryId);
+      }) : undefined,
     readTaskSource: async id => (await readExecutionSession(id)).source ?? null,
     readHostDeviceIdentity: deps.readHostDeviceIdentity,
     planRepeatableWireNotes: (id, notes, options) => wireNotes.plan(id, notes, options),

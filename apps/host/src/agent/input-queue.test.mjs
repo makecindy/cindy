@@ -717,6 +717,43 @@ test('a remote device note is deduplicated until the native context is compacted
   }
 });
 
+// Unit: real Host queue/send transaction, fake native Pi boundary. The new
+// recovery ports must link the accepted row and reuse its id on explicit retry;
+// repository-level row tests alone cannot detect an unwired executor port.
+test('Pi native entry is linked after persistence and reused by explicit retry', async t => {
+  let linked;
+  const h = createHarness({
+    readSession: async id => ({ id, status: 'active', agentKind: 'pi', model: 'fixture-model', workingDir: '/tmp' }),
+    linkPiUserEntry: async (_id, clientId, entry) => {
+      assert.ok(h.persisted.some(row => row.clientId === clientId));
+      linked = { clientId, entry };
+      return true;
+    },
+    readPiUserEntry: async (_id, clientId) => linked?.clientId === clientId ? linked.entry : undefined,
+  });
+  t.after(() => h.queue.dispose());
+  const create = h.maker.createSession;
+  h.maker.createSession = async opts => {
+    const session = await create(opts);
+    const send = session.send;
+    session.send = async (message, options) => {
+      const result = await send(message, options);
+      await options.onTranscriptUserEntry?.('pi-native-entry');
+      return result;
+    };
+    return session;
+  };
+  await enqueue(h, 'pi-task', { clientId: 'first', text: 'perform task' });
+  await waitFor(() => linked?.entry === 'pi-native-entry');
+  const session = h.maker.getSession('pi-task');
+  session.emit({ type: 'error', data: { message: 'provider failed' }, sessionTurnGeneration: session.generation });
+  await waitFor(() => Boolean(h.queue.projection('pi-task').error));
+  await h.queue.retryLastError('pi-task');
+  await waitFor(() => session.sendOptions.length === 2);
+  assert.equal(session.sendOptions[1].retryTranscriptUserEntryId, 'pi-native-entry');
+  assert.equal(h.persisted.filter(row => row.clientId === 'first').length, 1);
+});
+
 // Shared steer must carry protected coordinator metadata and use the send
 // transaction's note memory. Prior direct Host steer lost both (unit, real queue).
 test('steer shares note memory and preserves question classification and persisted UUID', async t => {

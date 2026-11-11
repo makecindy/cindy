@@ -171,6 +171,7 @@ export function createInputQueue(deps) {
       getRecoveryContextSnapshot: deps.getRecoveryContextSnapshot,
       hasPendingInteraction: id => (deps.interactions?.pending(id)?.length ?? 0) > 0,
       hasPendingCredentialSwitch: deps.hasPendingCredentialSwitch,
+      rewindPersistedUserMessageAfterClear: deps.rewindPersistedUserMessageAfterClear,
       createUserMessage: (id, input, options) => deps.persistMessage?.(id, input, options),
       touchUserSend: deps.touchUserSend ?? (async () => {}),
       emitProjection: publish,

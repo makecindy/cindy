@@ -106,7 +106,7 @@ import { applyLiveSessionSettings } from './agent/session-settings.mjs';
 import { createInteractionBroker } from './agent/interactions.mjs';
 import { messageToCamel, sessionToCamel } from '../../desktop/src/main/localDb/mapper.ts';
 import { readHostSessionList, readHostSession } from './session-reads.js';
-import { createHostMessageStore } from './message-store.js';
+import { createHostMessageStore, createHostMessageRecovery } from './message-store.js';
 import { createSubagentReadService } from '../../desktop/src/main/localDb/ipc/subagentReadService.js';
 import { configureUserDataDir, configureAppDataDir, getUserDataDir } from '../../desktop/src/main/userDataPath.js';
 import { botSessionLinks, messages as messageTable, projectAliases as projectAliasTable, sessions as sessionTable } from '../../desktop/src/main/localDb/schema.js';
@@ -805,6 +805,9 @@ const interactions = {
 const insertSessionMessage = createHostMessageStore({ getOwner: getCurrentDbClientSnapshot,
   publish: (event: unknown) => eventHub.publish(event) });
 
+const messageRecovery = createHostMessageRecovery({ getOwner: getCurrentDbClientSnapshot,
+  publish: (event: unknown) => eventHub.publish(event) });
+
 const inputQueue = createInputQueue({
   getOwner: getCurrentDbClientSnapshot,
   interactions,
@@ -830,6 +833,7 @@ const inputQueue = createInputQueue({
   readMcpAppModelContext: async (id: string) => (await pluginGateway?.modelContext(id))
     ?? { text: '', async assertCurrent() {}, consume() {} },
   ackInterruptedTurnDispatched: ackSessionTurnEndedDurable,
+  ...messageRecovery,
   persistMessage: insertSessionMessage,
   persistQueueSnapshot: saveAgentInputQueueSnapshot,
   loadQueueSnapshot: loadAgentInputQueueSnapshot,
