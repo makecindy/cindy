@@ -459,6 +459,10 @@ export function createInputQueue(deps) {
           try { await stop(id); }
           finally {
             coordinator.onSessionClosed(id);
+            // close() can fail while draining writes, before Maker closes the
+            // runtime. Keep its temporary inputs until a confirmed close or
+            // the next process's orphan sweep; a finally cleanup could delete
+            // files still held by that runtime.
             try { await executor.close(id); await attachments?.closeSession(id); }
             finally { await flushed(id); }
           }
