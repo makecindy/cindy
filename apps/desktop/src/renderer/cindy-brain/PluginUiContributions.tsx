@@ -67,15 +67,53 @@ const LauncherContext = createContext<readonly PluginUiLauncher[]>([]);
 export const usePluginUiLaunchers = () => useContext(LauncherContext);
 export const usePluginUiHas = (position: GhostHostUiPosition) => !!useContext(DirectoryContext).get(position)?.length;
 
+export interface PluginUiMessageCandidates {
+  messageBody: boolean;
+  toolBody: boolean;
+  messageActions: boolean;
+  turnFooter: boolean;
+  userMenu: readonly PluginUiEntry[];
+  assistantMenu: readonly PluginUiEntry[];
+}
+export const EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES: PluginUiMessageCandidates = {
+  messageBody: false, toolBody: false, messageActions: false, turnFooter: false,
+  userMenu: NO_ENTRIES, assistantMenu: NO_ENTRIES,
+};
+
+/** One list owner reads the directory; dormant message rows do not consume Context. */
+export function usePluginUiMessageCandidates(sessionId?: string | null): PluginUiMessageCandidates {
+  const directory = useContext(DirectoryContext);
+  const messageBody = !!directory.get('message.body')?.length;
+  const toolBody = !!directory.get('tool.body')?.length;
+  const messageActions = !!directory.get('message.actions')?.length;
+  const turnFooter = !!directory.get('turn.footer')?.length;
+  const menu = directory.get('message.menu') ?? NO_ENTRIES;
+  const disabled = !!sessionId && !!getStickySessionDeviceId(sessionId);
+  return useMemo(() => {
+    if (disabled || !messageBody && !toolBody && !messageActions && !turnFooter && !menu.length) {
+      return EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES;
+    }
+    const forRole = (role: 'user' | 'assistant') => {
+      const entries = menu.filter(({ contribution: { match } }) => !match?.tools && !match?.plugins &&
+        (!match?.roles || match.roles.includes(role)));
+      return entries.length ? entries : NO_ENTRIES;
+    };
+    return { messageBody, toolBody, messageActions, turnFooter,
+      userMenu: forRole('user'), assistantMenu: forRole('assistant') };
+  }, [messageBody, toolBody, messageActions, turnFooter, menu, disabled]);
+}
+
 /** One window subscription, compiled only when the original installed projection changes. */
-export function PluginUiProvider({ children }: { children: ReactNode }) {
-  const ghosts = useInstalledGhosts();
+export function PluginUiProvider({ children, host: hostNode, enabled = true }: { children: ReactNode; host?: ReactNode; enabled?: boolean }) {
+  const ghosts = useInstalledGhosts(enabled);
   const directory = useMemo(() => {
     const entries = new Map<GhostHostUiPosition, PluginUiEntry[]>();
     const launchers: PluginUiLauncher[] = [];
+    let active = false;
     for (const ghost of ghosts) {
       if (!ghost.enabled || ghost.uiCapabilityApproved !== true) continue;
       const host = getApprovedGhostHostUi(ghost);
+      if (host) active = true;
       const instanceId = installedGhostStoragePart(ghost);
       for (const view of host?.views ?? []) launchers.push({ ghost, instanceId, id: view.id, title: view.title,
         kind: 'view', view: view.id, scope: view.scope ?? 'global' });
@@ -89,9 +127,9 @@ export function PluginUiProvider({ children }: { children: ReactNode }) {
         values.push({ ghost, instanceId: installedGhostStoragePart(ghost), contribution });
       }
     }
-    return { entries: entries.size ? entries : EMPTY, launchers };
+    return { entries: entries.size ? entries : EMPTY, launchers, active };
   }, [ghosts]);
-  return <DirectoryContext.Provider value={directory.entries}><LauncherContext.Provider value={directory.launchers}>{children}</LauncherContext.Provider></DirectoryContext.Provider>;
+  return <DirectoryContext.Provider value={directory.entries}><LauncherContext.Provider value={directory.launchers}>{directory.active && hostNode}{children}</LauncherContext.Provider></DirectoryContext.Provider>;
 }
 
 interface Target {
@@ -222,6 +260,11 @@ export function PluginUiBody({ children, position, ...target }: Target & { child
   const entries = useEntries(position, target);
   if (!entries.length || !target.sessionId) return <>{children}</>;
   return <PluginUiBodyChoice entries={entries} sessionId={target.sessionId} context={target.context}>{children}</PluginUiBodyChoice>;
+}
+
+/** Return the original element itself when the list has no candidate for this body. */
+export function renderPluginUiBody(options: (Target & { position: 'message.body' | 'tool.body' }) | undefined, children: ReactNode): ReactNode {
+  return options ? <PluginUiBody {...options}>{children}</PluginUiBody> : children;
 }
 
 function PluginUiBodyChoice({ children, entries, sessionId, context }: {

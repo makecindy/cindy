@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { getWallpaperVisibility, normalizeAppearanceSettings, type AppearanceSettings } from '@/../shared/appearanceSettings';
 import type { PluginAppearanceColor } from '@cindy/plugin-protocol/appearance';
 
@@ -6,6 +6,12 @@ type Bridge = typeof window.electronAPI.appearanceSettings;
 type Faces = Map<string, { key: string; face: FontFace }>;
 type PendingFont = { key: string; promise: Promise<FontFace | undefined>; current(): boolean };
 type PendingFonts = Map<string, PendingFont>;
+const hasExtendedAppearance = (settings: AppearanceSettings) => Boolean(settings.bodyFont || settings.reading || settings.contentStyle || settings.themeColors ||
+  settings.uiFontTraits || settings.codeFontTraits || settings.uiFontResource || settings.codeFontResource || settings.bodyFontResource);
+const setCss = (style: HTMLStyleElement, settings: AppearanceSettings, dark: boolean) => {
+  const next = css(settings, dark);
+  if (style.textContent !== next) style.textContent = next;
+};
 const region = '[data-plugin-appearance-region]';
 const colorVariables: Record<PluginAppearanceColor, string[]> = {
   text: ['--text-primary', '--msg-assistant-text'],
@@ -101,7 +107,7 @@ export async function applyPluginAppearance(settings: AppearanceSettings, option
   }
   if (!options.current()) return 'saved';
   options.applyFonts(settings);
-  options.style.textContent = css(settings, options.dark());
+  setCss(options.style, settings, options.dark());
   return wallpaperApplicationStatus(settings, options.dark);
 }
 
@@ -112,12 +118,21 @@ export async function applyPluginAppearanceInWindow(settings: AppearanceSettings
 }
 
 /** Uses the existing preference fan-out; default settings create no style, font request or observer. */
-export function usePluginAppearance(applyFonts: (settings: AppearanceSettings) => void): void {
+export function usePluginAppearance(applyFonts: (settings: AppearanceSettings) => void, initial?: AppearanceSettings): (settings: AppearanceSettings) => void {
+  const passive = useRef<((settings: AppearanceSettings) => void) | undefined>(undefined);
+  const initialRef = useRef(initial);
   useEffect(() => {
     const bridge = window.electronAPI?.appearanceSettings;
     if (!bridge?.onChanged) return;
     const faces: Faces = new Map();
     const pending: PendingFonts = new Map();
+    let appliedUiFace: FontFace | undefined, appliedCodeFace: FontFace | undefined;
+    const applyLoadedFonts = (settings: AppearanceSettings) => {
+      const uiFace = faces.get('uiFont')?.face, codeFace = faces.get('codeFont')?.face;
+      if (uiFace === appliedUiFace && codeFace === appliedCodeFace) return;
+      appliedUiFace = uiFace; appliedCodeFace = codeFace;
+      applyFonts(settings);
+    };
     let style: HTMLStyleElement | null = null, observer: MutationObserver | undefined;
     let latest: AppearanceSettings | undefined, generation = 0, live = true;
     let applying: { key: string; promise: Promise<'applied' | 'saved' | 'failed'> } | undefined;
@@ -125,18 +140,17 @@ export function usePluginAppearance(applyFonts: (settings: AppearanceSettings) =
     const clearStyle = () => { observer?.disconnect(); observer = undefined; style?.remove(); style = null; };
     const apply = (raw: AppearanceSettings): Promise<'applied' | 'saved' | 'failed'> => {
       const settings = normalizeAppearanceSettings(raw);
-      const extended = settings.bodyFont || settings.reading || settings.contentStyle || settings.themeColors ||
-        settings.uiFontTraits || settings.codeFontTraits || settings.uiFontResource || settings.codeFontResource || settings.bodyFontResource;
+      const extended = hasExtendedAppearance(settings);
       if (!extended && !style && !faces.size) return Promise.resolve(wallpaperApplicationStatus(settings, dark));
       const key = JSON.stringify(settings);
       if (applying?.key === key) return applying.promise;
       const currentGeneration = ++generation; latest = settings;
       if (!style) { style = document.createElement('style'); style.dataset.cindyPluginAppearance = 'true'; document.head.append(style); }
       if (!observer) {
-        observer = new MutationObserver(() => { if (style && latest) style.textContent = css(latest, dark()); });
+        observer = new MutationObserver(() => { if (style && latest) setCss(style, latest, dark()); });
         observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
       }
-      const promise = applyPluginAppearance(settings, { bridge, style, faces, pending, dark, applyFonts,
+      const promise = applyPluginAppearance(settings, { bridge, style, faces, pending, dark, applyFonts: applyLoadedFonts,
         current: () => live && currentGeneration === generation }).then(status => {
           if (!extended && live && generation === currentGeneration) clearStyle();
           return status;
@@ -145,14 +159,19 @@ export function usePluginAppearance(applyFonts: (settings: AppearanceSettings) =
       return promise;
     };
     applyInWindow = apply;
-    const initial = bridge.getSync(); // Cached preload snapshot, no IPC.
-    if (initial) void apply(initial);
-    const stop = bridge.onChanged(next => { void apply(next); });
+    const applyPassive = (settings: AppearanceSettings) => {
+      if (!hasExtendedAppearance(settings) && !style && !faces.size && !pending.size) return;
+      void apply(settings);
+    };
+    passive.current = applyPassive;
+    const snapshot = initialRef.current ?? bridge.getSync(); // Reuses the provider's cached snapshot.
+    if (snapshot) applyPassive(snapshot);
     return () => {
-      live = false; generation++; stop(); clearStyle();
+      live = false; generation++; passive.current = undefined; clearStyle();
       if (applyInWindow === apply) applyInWindow = undefined;
       for (const { face } of faces.values()) document.fonts.delete(face);
       faces.clear(); pending.clear();
     };
   }, [applyFonts]);
+  return useCallback(settings => passive.current?.(settings), []);
 }

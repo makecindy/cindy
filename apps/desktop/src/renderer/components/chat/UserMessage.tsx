@@ -87,7 +87,7 @@ import { ChatImageView } from './ChatImageView';
 import { TextLightbox } from './lazyPreviewLightboxes';
 import { ToolPayloadLightbox } from './ToolPayloadLightbox';
 import { MessageActionBar } from './MessageActionBar';
-import { PluginUiBody } from '@/cindy-brain/PluginUiContributions';
+import { renderPluginUiBody, type PluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
 import { shareSelectionStore } from './shareSelectionStore';
 import { ErrorMessageCard } from './ErrorMessageCard';
 import { useForkAtMessage, textToTiptapDoc } from './useForkAtMessage';
@@ -147,6 +147,7 @@ type UserImageItem =
   | { base64: string; mimeType: string; originalName?: string };
 
 interface UserMessageProps {
+  pluginUi: PluginUiMessageCandidates;
   /** Pending delivery uses the same bubble, with queue actions instead of history actions. */
   pendingActions?: ReactNode;
   pendingEditing?: boolean;
@@ -828,6 +829,7 @@ export function renderContent(
 // 老 UserImageItemView 已迁出,见 ChatImageView.tsx。
 
 export function UserMessage({
+  pluginUi,
   pendingActions,
   pendingEditing,
   pendingIndicator,
@@ -1277,6 +1279,7 @@ export function UserMessage({
   // Attachments belong to the user message independently of its visual shell.
   const messageActions = pendingActions ?? (
     <MessageActionBar
+      pluginUi={pluginUi}
       createdAt={createdAt}
       copyText={copyText}
       copyLinkText={messageDeepLink}
@@ -1693,8 +1696,9 @@ export function UserMessage({
                         )}
                       </div>
                     ) : displayBubbleBody.trim() ? (
-                      <PluginUiBody position="message.body" role="user" sessionId={sessionId} disabled={isRemoteFileOrigin(sessionFileCtx.origin)}
-                        plugin={sourcePlugin?.pluginId} context={() => ({ message: { clientId: messageClientId, role: 'user', content } })}>
+                      renderPluginUiBody(pluginUi.messageBody ? { position: 'message.body', role: 'user', sessionId,
+                        disabled: isRemoteFileOrigin(sessionFileCtx.origin), plugin: sourcePlugin?.pluginId,
+                        context: () => ({ message: { clientId: messageClientId, role: 'user', content } }) } : undefined,
                       <div
                         data-selection-quote-body=""
                         className={cn(
@@ -1756,7 +1760,7 @@ export function UserMessage({
                               bubbleAgentReferences,
                             )}
                       </div>
-                      </PluginUiBody>
+                      )
                     ) : null}
                     {shouldCollapseLongMessage && (
                       <button

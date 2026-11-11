@@ -49,7 +49,7 @@ import { cn } from '@/lib/utils';
 import { MENU_ITEM_CLASS } from '@/features/cc-agent/sidebar/menuStyles';
 import { CHAT_COLOR_TRANSITION_CLASS, CHAT_ICON_BUTTON_CLASS } from './chatChrome';
 import { MessageReadAloudContext } from './MessageReadAloudContext';
-import { PluginUiSlot, PluginUiMessageMenuItem, usePluginUiMessageMenuEntries, runPluginUiEntry, type PluginUiEntry } from '@/cindy-brain/PluginUiContributions';
+import { PluginUiSlot, PluginUiMessageMenuItem, runPluginUiEntry, type PluginUiEntry, type PluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
 import { ChatReplyIcon } from './ChatReplyIcon';
 import { Spinner } from '@/components/ui/spinner';
 import type { ForkAtMessageRunOptions } from './useForkAtMessage';
@@ -77,6 +77,7 @@ import {
 } from '../../../shared/regionalMoney';
 
 interface MessageActionBarProps {
+  pluginUi: PluginUiMessageCandidates;
   sessionId?: string;
   clientId?: string;
   createdAt?: string;
@@ -167,6 +168,7 @@ const actionIconClass = cn(
 );
 
 export function MessageActionBar({
+  pluginUi,
   createdAt,
   copyText,
   copyLinkText,
@@ -200,7 +202,7 @@ export function MessageActionBar({
 }: MessageActionBarProps) {
   const { t } = useTranslation();
   const readAloud = useContext(MessageReadAloudContext);
-  const pluginMenuEntries = usePluginUiMessageMenuEntries({ sessionId, role: align === 'right' ? 'user' : 'assistant' });
+  const pluginMenuEntries = align === 'right' ? pluginUi.userMenu : pluginUi.assistantMenu;
   const [copied, setCopied] = useState(false);
   const [forking, setForking] = useState(false);
   // 用户确认开启新任务后，到创建结束前提示与操作栏常驻，不随鼠标移开消失；
@@ -916,8 +918,7 @@ export function MessageActionBar({
         moreInFlight && 'opacity-60 pointer-events-none',
       )}
     >
-      {items}
-      <PluginUiSlot position="message.actions" sessionId={sessionId} clientId={clientId} role={align === 'right' ? 'user' : 'assistant'} />
+      {pluginUi.messageActions ? <>{items}<PluginUiSlot position="message.actions" sessionId={sessionId} clientId={clientId} role={align === 'right' ? 'user' : 'assistant'} /></> : items}
     </div>
   );
 }

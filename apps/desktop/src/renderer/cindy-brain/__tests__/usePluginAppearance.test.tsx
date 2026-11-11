@@ -157,10 +157,11 @@ describe('plugin appearance renderer', () => {
     const fonts = { add: vi.fn(), delete: vi.fn() };
     Object.defineProperty(document, 'fonts', { configurable: true, value: fonts });
     window.electronAPI = { appearanceSettings: { getSync: () => settings,
-      onChanged: (receive: typeof publish) => { publish = receive; return () => {}; }, loadPluginFont } } as unknown as typeof window.electronAPI;
+      onChanged: vi.fn(), loadPluginFont } } as unknown as typeof window.electronAPI;
     const applyFonts = vi.fn();
     try {
       const hook = renderHook(() => usePluginAppearance(applyFonts));
+      publish = hook.result.current;
       if (phase === 'decode') await act(async () => finishRead({ family, bytes: new Uint8Array([0]).buffer }));
       await act(async () => {
         for (let messageRadius = 1; messageRadius <= 3; messageRadius++) publish({ ...settings, contentStyle: { messageRadius } });
@@ -170,6 +171,9 @@ describe('plugin appearance renderer', () => {
       await act(async () => finishLoad());
       expect(load).toHaveBeenCalledTimes(1); expect(fonts.add).toHaveBeenCalledTimes(1);
       expect(applyFonts).toHaveBeenLastCalledWith(expect.objectContaining({ contentStyle: { messageRadius: 3 } }));
+      const fontApplications = applyFonts.mock.calls.length;
+      await act(async () => publish({ ...settings, contentStyle: { messageRadius: 4 } }));
+      expect(applyFonts).toHaveBeenCalledTimes(fontApplications);
       hook.unmount(); expect(fonts.delete).toHaveBeenCalledTimes(1);
     } finally {
       if (descriptor) Object.defineProperty(document, 'fonts', descriptor);

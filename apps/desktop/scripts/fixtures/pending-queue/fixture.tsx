@@ -1,3 +1,4 @@
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
 import { useState } from 'react';
 import { appendPendingQueueItems } from '../../../src/renderer/components/chat/pendingQueueItems';
 import { mountPage } from '../../ui-page/harness';
@@ -33,7 +34,7 @@ function Fixture() {
   return (
     <main className="mx-auto flex max-w-[880px] flex-col gap-4 p-6">
       {queue.map((entry, index) => visibleIds.has(entry.clientId) ? (
-        <PendingQueueBubble
+        <PendingQueueBubble pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
           key={entry.clientId}
           entry={entry}
           index={index}

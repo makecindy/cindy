@@ -1,7 +1,7 @@
 import manifest from '../../../resources/system-skills/cindy-plugin-creator/references/examples/interactive-pages/host-ui/ghost.json';
 import { ghostHostUiApprovalTokens, type InstalledGhost } from '../../../src/shared/ghost';
 import { pluginUiInterestKey, type PluginUiInterest, type PluginUiStateChange } from '../../../src/shared/pluginUi';
-import { PluginUiBody, PluginUiMenu, PluginUiProvider, PluginUiSlot } from '../../../src/renderer/cindy-brain/PluginUiContributions';
+import { PluginUiBody, PluginUiMenu, PluginUiProvider, PluginUiSlot, usePluginUiMessageCandidates } from '../../../src/renderer/cindy-brain/PluginUiContributions';
 import { Button } from '../../../src/renderer/components/ui/button';
 import { MessageActionBar } from '../../../src/renderer/components/chat/MessageActionBar';
 import { AppFrame, mountPage } from '../../ui-page/harness';
@@ -12,6 +12,11 @@ ghost.approvedHostUi = ghostHostUiApprovalTokens(ghost.manifest);
 let receive: ((update: { epoch: string; updates: PluginUiStateChange[] }) => void) | undefined;
 let epoch = '', interests: PluginUiInterest[] = [];
 const task = 'fixture-task';
+function MessageActions() {
+  const pluginUi = usePluginUiMessageCandidates(task);
+  return <MessageActionBar pluginUi={pluginUi} sessionId={task} clientId="message" copyText="原始消息" align="left" hovered
+    onAddToChat={() => {}} onDelete={async () => {}} />;
+}
 void mountPage({
   host: {
     ghosts: { listSync: () => ({ ghosts: [ghost] }), onChanged: () => () => {} },
@@ -31,8 +36,7 @@ void mountPage({
         <PluginUiBody position="message.body" sessionId={task} role="assistant" context={() => ({ message: { content: '原始消息' } })}>
           <p className="text-14 text-[var(--text-primary)]">原始消息内容始终保留，选择插件页面后才切换展示。</p>
         </PluginUiBody>
-        <div className="mt-3"><MessageActionBar sessionId={task} clientId="message" copyText="原始消息" align="left" hovered
-          onAddToChat={() => {}} onDelete={async () => {}} /></div>
+        <div className="mt-3"><MessageActions /></div>
         <div className="mt-3"><PluginUiSlot position="turn.footer" sessionId={task} clientId="message" /></div>
       </div>
       <div className="rounded-xl border border-[var(--border)] p-4">

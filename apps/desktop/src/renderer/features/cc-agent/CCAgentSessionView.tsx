@@ -5346,10 +5346,10 @@ function CCAgentSessionContent({
     if (sessionId) requestChatTaskFocus(sessionId, clientId);
   }, [sessionId]);
   const pendingMessages = useMemo(() => pendingQueue.map((entry) => entry.chatMessage), [pendingQueue]);
-  const renderPendingMessage = (message: ChatMessage) => {
+  const renderPendingMessage = (message: ChatMessage, pluginUi: import('@/cindy-brain/PluginUiContributions').PluginUiMessageCandidates) => {
     const index = pendingQueue.findIndex((entry) => entry.clientId === message.clientId);
     const entry = pendingQueue[index];
-    return entry ? <PendingQueueBubble entry={entry} sessionId={sessionId} index={index} count={pendingQueue.length}
+    return entry ? <PendingQueueBubble pluginUi={pluginUi} entry={entry} sessionId={sessionId} index={index} count={pendingQueue.length}
       editingClientId={activeQueueComposerEdit?.clientId ?? null}
       steeringClientIds={steeringQueueClientIds} editLocks={queueEditLocks} interactionLocks={queueInteractionLocks}
       readOnly={readOnly || queueAbortPending}

@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from "@/cindy-brain/PluginUiContributions";
 
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
@@ -51,7 +52,9 @@ vi.mock('@/lib/toast', () => ({
 }));
 
 import { MessageActionBar } from '../MessageActionBar';
-import { PluginUiProvider } from '@/cindy-brain/PluginUiContributions';
+import { PluginUiProvider, usePluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
+import { ChatMessageActions } from '@/features/bots/ChatServerControls';
+import type { GhostMcpApps } from '@cindy/plugin-protocol';
 import { MessageReadAloudContext, type MessageReadAloud } from '../MessageReadAloudContext';
 
 // 真实菜单消费入口：只替换已装插件投影与 IPC，保留声明批准、菜单和按需订阅实现。
@@ -75,9 +78,12 @@ describe('plugin entries in the message More menu', () => {
     value.approvedHostUi = ghostHostUiApprovalTokens(value.manifest);
     return value;
   };
-  const renderBar = () => render(<PluginUiProvider>
-    <MessageActionBar copyText="body" align="left" hovered sessionId="task-a" clientId="message-a" />
-  </PluginUiProvider>);
+  const Bar = ({ group = false }: { group?: boolean }) => {
+    const pluginUi = usePluginUiMessageCandidates(group ? undefined : 'task-a');
+    return group ? <ChatMessageActions pluginUi={pluginUi} shareScope="group:fixture" message={{ id: 'group-message', content: 'body' } as import('../../../../shared/botGroupChat').BotGroupMessageView} onChanged={vi.fn()} />
+      : <MessageActionBar pluginUi={pluginUi} copyText="body" align="left" hovered sessionId="task-a" clientId="message-a" />;
+  };
+  const renderBar = () => render(<PluginUiProvider><Bar /></PluginUiProvider>);
   const openMenu = () => fireEvent.pointerDown(screen.getByRole('button', { name: 'chat.messageActionBar.moreActions' }), { button: 0, ctrlKey: false });
 
   beforeEach(() => {
@@ -86,6 +92,19 @@ describe('plugin entries in the message More menu', () => {
     invoke.mockReset(); invoke.mockResolvedValue({ updates: [] });
     listen.mockClear(); stop.mockClear();
     window.electronAPI = { maker: { mcpApps: invoke, onPluginUiState: listen } } as unknown as typeof window.electronAPI;
+  });
+
+  it('keeps group message menus and actions available without a task session', async () => {
+    const value = ghost();
+    (value.manifest.mcpApps as GhostMcpApps).host!.contributions!.push({ id: 'message-action', title: 'Group action', position: 'message.actions', tool: 'help' });
+    value.approvedHostUi = ghostHostUiApprovalTokens(value.manifest);
+    installed.ghosts = [value];
+    render(<PluginUiProvider><Bar group /></PluginUiProvider>);
+    expect(screen.getByRole('button', { name: 'Group action' })).toBeTruthy();
+    openMenu();
+    const item = await screen.findByRole('menuitem', { name: /Analyze message/ });
+    fireEvent.click(item);
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith(null, expect.objectContaining({ op: 'plugin-action', instanceId: 'planner', id: 'message-menu' })));
   });
 
   it.each(['none', 'disabled', 'unapproved', 'other-role'])('adds no menu or subscription for %s consumers', mode => {
@@ -147,7 +166,7 @@ describe('companion message read-aloud', () => {
   });
   const bar = (value: MessageReadAloud | null, companion = true, eligible = true, compact = false) => (
     <MessageReadAloudContext.Provider value={value}>
-      <MessageActionBar copyText="Saved reply" align="left" hovered={false}
+      <MessageActionBar pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} copyText="Saved reply" align="left" hovered={false}
         simplifiedBotConversation={companion}
         compact={compact}
         readAloudMessage={eligible ? identity : undefined} />
@@ -207,7 +226,7 @@ describe('MessageActionBar', () => {
     const onAddToChat = vi.fn();
     let opener: Element | null = null;
     const openTopic = vi.fn(() => { opener = document.activeElement; });
-    render(<MessageActionBar copyText="private reply" align="left" hovered={false}
+    render(<MessageActionBar pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} copyText="private reply" align="left" hovered={false}
       simplifiedBotConversation companionFooter onAddToChat={onAddToChat}
       replyAction={{ label: 'Open topic', count: 3, onClick: openTopic }} />);
     fireEvent.click(screen.getByRole('button', { name: 'chat.messageActionBar.reply' }));
@@ -232,7 +251,7 @@ describe('MessageActionBar', () => {
     const deepLink = 'cindy://session/session-a?message=message-a';
 
     render(
-      <MessageActionBar
+      <MessageActionBar pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
         copyText="message body"
         copyLinkText={deepLink}
         align="right"
@@ -314,7 +333,7 @@ describe('MessageActionBar', () => {
   it.each(['left', 'right'] as const)('preserves edit and rewind callbacks with %s alignment', (align) => {
     const onEdit = vi.fn();
     const onRewind = vi.fn();
-    render(<MessageActionBar copyText="body" align={align} hovered onEdit={onEdit} onRewind={onRewind} />);
+    render(<MessageActionBar pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} copyText="body" align={align} hovered onEdit={onEdit} onRewind={onRewind} />);
     fireEvent.click(screen.getByRole('button', { name: 'chat.messageActionBar.edit' }));
     expect(onEdit).toHaveBeenCalledTimes(1);
     fireEvent.pointerDown(screen.getByRole('button', { name: 'chat.messageActionBar.moreActions' }), { button: 0, ctrlKey: false });
@@ -325,7 +344,7 @@ describe('MessageActionBar', () => {
   // 任务运行中编辑不外显(点编辑不中断任务),只能从 More 菜单进入;停下后按钮回到操作行。
   it('moves edit into the More menu while the task is running', () => {
     const onEdit = vi.fn();
-    render(<MessageActionBar copyText="body" align="right" hovered onEdit={onEdit} editInMenu />);
+    render(<MessageActionBar pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} copyText="body" align="right" hovered onEdit={onEdit} editInMenu />);
     expect(screen.queryByRole('button', { name: 'chat.messageActionBar.edit' })).toBeNull();
     fireEvent.pointerDown(screen.getByRole('button', { name: 'chat.messageActionBar.moreActions' }), { button: 0, ctrlKey: false });
     fireEvent.click(screen.getByRole('menuitem', { name: 'chat.messageActionBar.edit' }));
@@ -333,7 +352,7 @@ describe('MessageActionBar', () => {
   });
 
   it.each(['left', 'right'] as const)('does not invent user actions without callbacks with %s alignment', (align) => {
-    render(<MessageActionBar copyText="body" align={align} hovered />);
+    render(<MessageActionBar pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} copyText="body" align={align} hovered />);
     expect(screen.queryByRole('button', { name: 'chat.messageActionBar.edit' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'chat.messageActionBar.moreActions' })).toBeNull();
   });
@@ -345,7 +364,7 @@ describe('MessageActionBar', () => {
     const deepLink = 'cindy://session/session-a?message=message-a';
 
     const { container } = render(
-      <MessageActionBar
+      <MessageActionBar pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
         copyText="message body"
         copyLinkText={deepLink}
         align="left"
@@ -393,7 +412,7 @@ describe('MessageActionBar', () => {
 
   it('does not restore pointer focus to the ellipsis trigger after close', async () => {
     render(
-      <MessageActionBar
+      <MessageActionBar pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
         copyText="message body"
         align="left"
         hovered
@@ -424,7 +443,7 @@ describe('MessageActionBar', () => {
     const onEdit = vi.fn();
 
     render(
-      <MessageActionBar
+      <MessageActionBar pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
         copyText="message body"
         align="right"
         hovered
@@ -473,7 +492,7 @@ describe('MessageActionBar', () => {
       });
     });
     const bar = (hovered: boolean) => (
-      <MessageActionBar copyText="message body" align="left" hovered={hovered} onFork={onFork} />
+      <MessageActionBar pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} copyText="message body" align="left" hovered={hovered} onFork={onFork} />
     );
 
     const { container, rerender } = render(bar(true));
@@ -509,7 +528,7 @@ describe('MessageActionBar', () => {
 
   it('restores focus to the ellipsis trigger for keyboard users', async () => {
     render(
-      <MessageActionBar
+      <MessageActionBar pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
         copyText="message body"
         align="left"
         hovered
@@ -532,7 +551,7 @@ describe('MessageActionBar', () => {
 
   it('renders the user-turn total and aggregated details on separate lines', () => {
     render(
-      <MessageActionBar
+      <MessageActionBar pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
         copyText="message body"
         align="left"
         hovered
@@ -604,7 +623,7 @@ describe('MessageActionBar', () => {
 
     it('无金额 + 有 token 明细 → 显示 token,tooltip 说明取不到报价', () => {
       render(
-        <MessageActionBar
+        <MessageActionBar pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
           copyText="message body"
           align="left"
           hovered
@@ -631,7 +650,7 @@ describe('MessageActionBar', () => {
 
     it('有金额 → 仍显示金额,不出现 token 回退', () => {
       render(
-        <MessageActionBar
+        <MessageActionBar pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
           copyText="message body"
           align="left"
           hovered
@@ -646,7 +665,7 @@ describe('MessageActionBar', () => {
 
     it('金额为 0 → 视同无金额,走 token 回退(绝不显示 ¥0.00)', () => {
       render(
-        <MessageActionBar
+        <MessageActionBar pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
           copyText="message body"
           align="left"
           hovered
@@ -660,13 +679,13 @@ describe('MessageActionBar', () => {
     });
 
     it('既无金额也无明细 → 那一格不渲染', () => {
-      render(<MessageActionBar copyText="message body" align="left" hovered />);
+      render(<MessageActionBar pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} copyText="message body" align="left" hovered />);
       expect(screen.queryByText('chat.messageActionBar.turnTokens')).toBeNull();
     });
 
     it('明细存在但 totalTokens 为 0 → 不渲染(没有可展示的事实)', () => {
       render(
-        <MessageActionBar
+        <MessageActionBar pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
           copyText="message body"
           align="left"
           hovered
@@ -685,7 +704,7 @@ describe('MessageActionBar', () => {
 
     it('user 侧(align=right)不出现 token 格', () => {
       render(
-        <MessageActionBar
+        <MessageActionBar pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
           copyText="message body"
           align="right"
           hovered

@@ -7,14 +7,15 @@ import type { PluginUiStateChange } from '../../../shared/pluginUi';
 const installed = vi.hoisted(() => ({ ghosts: [] as InstalledGhost[] }));
 const translation = vi.hoisted(() => ({ read: vi.fn(() => ({ t: (key: string) => key })) }));
 const page = vi.hoisted(() => ({ mounted: vi.fn(), released: vi.fn() }));
-vi.mock('../useInstalledGhosts', () => ({ useInstalledGhosts: () => installed.ghosts }));
+vi.mock('../useInstalledGhosts', () => ({ useInstalledGhosts: (enabled = true) => enabled ? installed.ghosts : [] }));
 vi.mock('react-i18next', () => ({ useTranslation: translation.read }));
 // Presenter lifetime is covered separately at McpAppCard; replace only that boundary here.
 vi.mock('../PluginUiView', async () => {
   const { useEffect } = await import('react');
   return { PluginUiView: () => { useEffect(() => { page.mounted(); return page.released; }, []); return <div>Local page</div>; } };
 });
-import { PluginUiBody, PluginUiProvider, PluginUiSlot } from '../PluginUiContributions';
+import { memo } from 'react';
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES, PluginUiBody, PluginUiProvider, PluginUiSlot, renderPluginUiBody, usePluginUiMessageCandidates, type PluginUiMessageCandidates } from '../PluginUiContributions';
 
 // 生产入口：真实 Provider/正文/控件；只替换已装投影与 IPC，Main 订阅适配器不替换。
 // 规则与旧回归：无候选历史行不发请求、不构造数据；原测试只覆盖 App frame。
@@ -54,6 +55,22 @@ it('opens a page beside its trigger only on demand and releases it on close', as
   await waitFor(() => expect(screen.queryByText('Local page')).toBeNull());
   expect(page.released).toHaveBeenCalledTimes(1);
 });
+
+it('mounts the window host only for enabled and approved host declarations', () => {
+  const view = render(<PluginUiProvider host={<span>Window host</span>}>Chat</PluginUiProvider>);
+  expect(screen.queryByText('Window host')).toBeNull();
+  const ghost: InstalledGhost = { enabled: true, dir: '/fixture', uiCapabilityApproved: true,
+    approval: { state: 'approved', revision: 'one' }, manifest: { schemaVersion: 3, id: 'planner', name: 'Planner',
+      kind: 'chip', entry: 'main.js', version: '1', tools: [], mcpApps: { host: { capabilities: ['draft'] } } } };
+  ghost.approvedHostUi = ghostHostUiApprovalTokens(ghost.manifest); installed.ghosts = [ghost];
+  view.rerender(<PluginUiProvider host={<span>Window host</span>}>Chat</PluginUiProvider>);
+  expect(screen.getByText('Window host')).toBeTruthy();
+  view.rerender(<PluginUiProvider enabled={false} host={<span>Window host</span>}>Chat</PluginUiProvider>);
+  expect(screen.queryByText('Window host')).toBeNull();
+  installed.ghosts = [{ ...ghost, enabled: false }];
+  view.rerender(<PluginUiProvider host={<span>Window host</span>}>Chat</PluginUiProvider>);
+  expect(screen.queryByText('Window host')).toBeNull();
+});
 afterEach(async () => { cleanup(); await Promise.resolve(); await Promise.resolve(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 it.each([100, 1000])('keeps %i ordinary history rows free of additional payload construction and IPC', (count) => {
@@ -64,6 +81,35 @@ it.each([100, 1000])('keeps %i ordinary history rows free of additional payload 
   expect(screen.getAllByText('Original')).toHaveLength(count);
   expect(context).not.toHaveBeenCalled(); expect(invoke).not.toHaveBeenCalled();
   expect(translation.read).not.toHaveBeenCalled();
+});
+
+it('keeps 500 message rows and 1000 tool bodies on their original elements with one stable candidate projection', () => {
+  const rowRender = vi.fn();
+  const Row = memo(({ candidates }: { candidates: PluginUiMessageCandidates }) => {
+    rowRender();
+    const message = <span>Original message</span>;
+    const tool = <span>Original tool</span>;
+    const body = renderPluginUiBody(candidates.messageBody ? { position: 'message.body' } : undefined, message);
+    const toolBody = renderPluginUiBody(candidates.toolBody ? { position: 'tool.body' } : undefined, tool);
+    expect(body).toBe(message); expect(toolBody).toBe(tool);
+    return <article>{body}{toolBody}{toolBody}{candidates.messageActions && <PluginUiSlot position="message.actions" />}
+      {candidates.turnFooter && <PluginUiSlot position="turn.footer" />}</article>;
+  });
+  let projection: PluginUiMessageCandidates | undefined;
+  const List = () => {
+    const candidates = usePluginUiMessageCandidates();
+    projection = candidates;
+    return <>{Array.from({ length: 500 }, (_, index) => <Row key={index} candidates={candidates} />)}</>;
+  };
+  const view = render(<PluginUiProvider><List /></PluginUiProvider>);
+  expect(projection).toBe(EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES);
+  expect(rowRender).toHaveBeenCalledTimes(500);
+  expect(screen.getAllByText('Original tool')).toHaveLength(1000);
+  installed.ghosts = [{ enabled: false } as InstalledGhost];
+  view.rerender(<PluginUiProvider><List /></PluginUiProvider>);
+  expect(projection).toBe(EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES);
+  expect(rowRender).toHaveBeenCalledTimes(500);
+  expect(invoke).not.toHaveBeenCalled(); expect(translation.read).not.toHaveBeenCalled();
 });
 
 it('does not subscribe history when the installed plugin only matches another kind of tool', () => {
