@@ -165,8 +165,10 @@ rebase、fetch（包括 Cindy 自己的快照提交与 worktree 池 fetch）都�
   `node-linker=hoisted`：pnpm 10 会在 worker 线程里用相对路径把这类包复制到它的其余
   位置，而打 patch 时会切换整个进程的工作目录，两者重叠时安装随机以 `ERR_PNPM_ENOENT`
   或 `ENOTEMPTY` 失败（[pnpm#13627](https://github.com/pnpm/pnpm/issues/13627)，pnpm 11
-  才修复）。因此根 `package.json` 的 `pnpm.overrides` 把 `esbuild` 统一为一个版本，升级
-  esbuild 时连同这条 override 一起改。增减或升级依赖后，查看 `node_modules/.modules.yaml`
-  的 `hoistedLocations`，这类包出现多个位置时先统一版本再合入。
+  才修复）。因此根 `package.json` 的 `pnpm.overrides` 把 `esbuild` 统一为 0.28.1，只有
+  vite 6 例外：它的构建转译与 esbuild 0.28 不兼容，单独留在 0.25.12，且只有
+  `node_modules/vite` 下这一处。升级 esbuild 或 vite 时连同这两条 override 一起改。增减或
+  升级依赖后，查看 `node_modules/.modules.yaml` 的 `hoistedLocations`，这类包的同一版本
+  出现多个位置时，先调整版本再合入。
 
 贡献方式与 PR 流程见仓库根 [`CONTRIBUTING.md`](../../CONTRIBUTING.md)。

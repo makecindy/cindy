@@ -56,6 +56,7 @@
       "fast-uri": "^3.1.4",
       "sharp": "^0.35.0",
       "esbuild": "0.28.1",
+      "vite@6>esbuild": "0.25.12",
       "builder-util-runtime": "^9.7.0"
     },
     "patchedDependencies": {
