@@ -47,6 +47,7 @@ function wav(suffix: string) {
 beforeEach(() => {
   vi.stubGlobal('__DEV__', true);
   vi.stubEnv('EXPO_PUBLIC_VOICE_FAILURE_DIAGNOSTICS', undefined);
+  vi.stubEnv('EXPO_PUBLIC_CINDY_PERSONAL_BUILD', undefined);
   disk.files.clear(); disk.onWrite = undefined;
   setMobileAuthOwner('diagnostics-test-account');
 });
@@ -100,15 +101,18 @@ describe('personal mobile failure recordings', () => {
     ]);
   });
 
-  // User requested Debug defaults; the old opt-in test missed default capture and
-  // allowed Release to persist audio. Unit tier checks the real factory + disk output.
+  // Personal phones use Release JS: __DEV__ alone dropped all failure evidence.
+  // Unit tier checks actual disk output for personal/public builds and explicit opt-out.
   it.each([
     { dev: true, flag: undefined, saves: true },
     { dev: true, flag: '0', saves: false },
     { dev: false, flag: undefined, saves: false },
     { dev: false, flag: '1', saves: false },
-  ])('failure persistence: __DEV__=$dev flag=$flag saves=$saves', async ({ dev, flag, saves }) => {
+    { dev: false, personal: '1', flag: undefined, saves: true },
+    { dev: false, personal: '1', flag: '0', saves: false },
+  ])('failure persistence: __DEV__=$dev personal=$personal flag=$flag saves=$saves', async ({ dev, personal, flag, saves }) => {
     vi.stubGlobal('__DEV__', dev);
+    vi.stubEnv('EXPO_PUBLIC_CINDY_PERSONAL_BUILD', personal);
     vi.stubEnv('EXPO_PUBLIC_VOICE_FAILURE_DIAGNOSTICS', flag);
     const r = createMobileVoiceFailureRecording();
     r?.begin('build-boundary');

@@ -5,14 +5,21 @@
 
 ## 开启与关闭
 
-此个人实验分支的 Debug JS（`__DEV__ === true`）默认开启，无需配置环境变量。
-Release JS（`__DEV__ === false`）始终关闭；即使遗留
-`EXPO_PUBLIC_VOICE_FAILURE_DIAGNOSTICS=1` 也不能开启。应用名带“测试”或 bundle id
-为 `com.xd.cindytest` 不代表正在运行 Debug JS，必须核实实际加载的分支、Metro 和 build label。
-仅登录账号后的手机听写生效。
+此个人实验分支在个人构建和 Debug JS 中默认开启。个人 iOS 构建器
+`scripts/personal-build/mobile.mjs` 自动注入 `EXPO_PUBLIC_CINDY_PERSONAL_BUILD=1`，
+因此采用 Release 优化、development 或 Ad Hoc 签名的个人包也会保存失败录音；
+`__DEV__` 只表示 JS 开发模式，不是个人版身份。公共 Release 无个人标记，保持关闭，
+旧的 `EXPO_PUBLIC_VOICE_FAILURE_DIAGNOSTICS=1` 不能单独开启公共包录音。
+公共 Release/OTA 共用构建环境入口会剥除继承的个人标记，个人构建器随后重新注入。
+仅登录账号后生效，显式 `EXPO_PUBLIC_VOICE_FAILURE_DIAGNOSTICS=0` 在个人版和 Debug 中
+都优先关闭。标记只进入 JS，不写 Expo extra 或原生配置。
+
+个人包需使用包含本改动的构建器重新构建、安装；仅把 PR 合入源码、继续使用旧构建器或
+旧安装包都不能证明生效。安装后核实源码组合包含本 PR；复现一次失败，确认普通日志出现
+`local failure recording saved` 且沙盒实际有 WAV/manifest，才算交付录音验证完成。
 
 普通开发入口默认开启；临时停用需设置 `EXPO_PUBLIC_VOICE_FAILURE_DIAGNOSTICS=0`，
-重新启动 Metro 并重新加载/构建 JS（Expo 在打包时替换此变量，不能只改父进程环境）：
+重新启动 Metro 并重新加载/构建 JS（个人 Release 则重新构建安装）（Expo 在打包时替换此变量，不能只改父进程环境）：
 
 ```sh
 # 默认开启失败录音

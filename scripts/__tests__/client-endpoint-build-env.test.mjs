@@ -68,6 +68,7 @@ test('Mobile bundling 进程环境只在 CindyDev 保留 Release 清单基址', 
     KEEP_ME: '1',
     NODE_ENV: 'development',
     BABEL_ENV: 'development',
+    EXPO_PUBLIC_CINDY_PERSONAL_BUILD: '1',
     EXPO_PUBLIC_CINDY_DEV_RELEASE_ENDPOINT_MANIFEST_BASE_URL:
       'https://stale-release.example.invalid/app',
   };
@@ -77,6 +78,8 @@ test('Mobile bundling 进程环境只在 CindyDev 保留 Release 清单基址', 
     baseEnv: staleBaseEnv,
     repoRoot,
   });
+  // Public bundling must not inherit personal recording identity from the runner.
+  assert.equal(cn.EXPO_PUBLIC_CINDY_PERSONAL_BUILD, undefined);
   assert.equal(cn.KEEP_ME, '1');
   assert.equal(cn.NODE_ENV, 'production');
   assert.equal(cn.BABEL_ENV, 'production');
