@@ -137,6 +137,9 @@ export class ChatBridgeToolContext {
     const context = new ChatBridgeToolContext();
     for (const tool of request.tools ?? []) context.addResponseTool(tool);
     context.collectHistoryTools(request.input);
+    // Snapshot last: the catalog now holds every declaration this request made, and history
+    // ran before it so replayed entries cannot answer a selector.
+    context.recordCurrentSelectors();
     return context;
   }
 
