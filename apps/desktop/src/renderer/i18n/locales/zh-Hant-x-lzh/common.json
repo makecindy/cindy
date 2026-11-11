@@ -860,6 +860,7 @@
       "assignLocalAria": "許 {{name}} 接外來之新差事",
       "moreAria": "{{name}} 之餘者操作",
       "remove": "出組",
+      "removeLocalBlocked": "組所在之機，不可出組",
       "status": {
         "checking": "方察…",
         "idle": "閒",
