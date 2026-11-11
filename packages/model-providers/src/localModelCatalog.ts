@@ -1,7 +1,7 @@
 /** Registry V4 local-model curation. Data only; execution stays in the client. */
 import descriptionTranslations from './localModelDescriptions.json';
 
-export type LocalModelDescriptionLocale = 'en' | 'zh-CN' | 'zh-TW' | 'ja' | 'ko' | 'es' | 'fr' | 'de' | 'pt-PT' | 'pt-BR';
+export type LocalModelDescriptionLocale = 'en' | 'zh-CN' | 'zh-TW' | 'ja' | 'ko' | 'es' | 'fr' | 'de' | 'pt-PT' | 'pt-BR' | 'tr';
 export interface LocalModelVariant {
   libraryName: string;
   sizeBytes: number;

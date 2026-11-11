@@ -37,6 +37,7 @@ describe("Registry V4 local model contract", () => {
     expect(parseLocalModelCatalog(localized)).toEqual(localized);
     expect(localModelDescription(localized.models[0].descriptions, 'fr')).toBe('Candidat local');
     expect(localModelDescription({ en: 'Low-memory candidate to compare with Gemma 4 12B.' }, 'fr')).toBe('Candidat peu gourmand en mémoire à comparer avec Gemma 4 12B.');
+    expect(localModelDescription({ en: 'Low-memory candidate to compare with Gemma 4 12B.' }, 'tr')).toBe('Gemma 4 12B ile karşılaştırmak için düşük bellekli aday.');
     expect(localModelDescription({ en: 'New evaluation pending.' }, 'fr')).toBe('New evaluation pending.');
     expect(localModelDescription(undefined, 'fr')).toBeUndefined();
   });

@@ -115,6 +115,7 @@ describe("incoming share native file ownership", () => {
       "ko",
       "pt-BR",
       "pt-PT",
+      "tr",
       "zh-Hans",
       "zh-Hant",
     ]);
