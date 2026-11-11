@@ -808,10 +808,17 @@ export function writeFromRenderer(level: LogLevel, scope: string, msg: string): 
  */
 export function maskPath(p: string | null | undefined): string {
   if (!p) return '<null>';
-  // Detect separator from the path itself; mixing seps would be weird but
-  // we honor whatever's in the input.
-  const sep = p.includes('\\') ? '\\' : '/';
-  const parts = p.split(sep).filter((s) => s.length > 0);
+  // Pick whichever separator splits into more non-empty segments. A POSIX
+  // directory name may legally contain a literal backslash
+  // (`/home/alice/proj\private/resources/icon.png`): choosing the separator by
+  // mere presence of `\` would split that path into 2 chunks and hand back the
+  // FULL absolute path through the "already short" branch (2026-11-11 review).
+  // The dominant separator is the path's real structure; a stray other-separator
+  // character stays inside its segment and is dropped together with it.
+  const bySlash = p.split('/').filter((s) => s.length > 0);
+  const byBackslash = p.split('\\').filter((s) => s.length > 0);
+  const [sep, parts] =
+    bySlash.length >= byBackslash.length ? ['/', bySlash] : ['\\', byBackslash];
   if (parts.length <= 2) return p; // already short — show as-is
   const tail = parts.slice(-2).join(sep);
   // Preserve a leading separator so absolute paths still look absolute-ish.
