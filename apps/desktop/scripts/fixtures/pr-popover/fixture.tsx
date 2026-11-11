@@ -75,6 +75,8 @@ const rows = [
   },
 ];
 let managed = rows;
+const openedUrls: string[] = [];
+Object.assign(window, { __prOpenedUrls: openedUrls });
 const cardHtml = () =>
   cards[
     (ctx.case === 'reference'
@@ -95,6 +97,10 @@ mountPage({
   // The follow-up task link resolves its target through the router.
   route: '/',
   host: () => ({
+    openExternal: async (url: string) => {
+      openedUrls.push(url);
+      return { success: true };
+    },
     safeStorageRead: async () => null,
     deviceLink: {
       listDevices: async () => [],
