@@ -320,6 +320,13 @@ const PAGE_CONTENT_SPARSE_CHARS = 200;
 const PAGE_CONTENT_SPARSE_PROBES = 4;
 /** How long a finished document may stay without text before it is treated as a page that has none. */
 const PAGE_CONTENT_BLANK_MS = 2000;
+/**
+ * A few words that say the content is still on its way ("Loading assignments…", "Just a moment..."). Such a
+ * page is finished and holds still, so nothing else tells it from a short page; it is given this long to
+ * turn into something else.
+ */
+const PAGE_CONTENT_LOADING_TEXT = /loading|please wait|just a moment|redirecting|加载|載入|请稍|請稍|正在|読み込み|(?:…|\.\.\.)\s*$/i;
+const PAGE_CONTENT_LOADING_MS = 3000;
 /** What a new tab shows before the requested document arrives: finished, empty and not what was asked for. */
 const PAGE_CONTENT_PLACEHOLDER = /^(about|chrome|chrome-search|edge|brave|devtools):/;
 /** A probe fails while a navigation replaces the document; this many in a row is a page that cannot be probed. */
@@ -393,16 +400,20 @@ async function waitForPageContent(
   let previousLength = -1;
   let sameLength = 0;
   let blankSince: number | undefined;
+  let loadingSince: number | undefined;
   let failures = 0;
   for (;;) {
     const probedAt = Date.now();
     // A probe waits for the document it lands in; it must not outlast the whole wait (seen: 6 s on a slow page).
-    const probe = await readPageText(runtime, profile, targetId, { maxChars: 0 }, Math.max(deadline - probedAt, PAGE_CONTENT_POLL_MS));
+    const probe = await readPageText(runtime, profile, targetId, { maxChars: PAGE_CONTENT_SPARSE_CHARS }, Math.max(deadline - probedAt, PAGE_CONTENT_POLL_MS));
     if (probe.state === 'unsupported') return;
     if (probe.state === 'ok') {
       failures = 0;
       const { url, readyState, length } = probe.page;
-      if (!PAGE_CONTENT_PLACEHOLDER.test(url) && readyState !== 'loading') {
+      const loading = length > 0 && length < PAGE_CONTENT_SPARSE_CHARS && PAGE_CONTENT_LOADING_TEXT.test(probe.page.text);
+      if (loading && Date.now() - (loadingSince ??= Date.now()) < PAGE_CONTENT_LOADING_MS) {
+        // Still announcing its content: keep looking.
+      } else if (!PAGE_CONTENT_PLACEHOLDER.test(url) && readyState !== 'loading') {
         if (!opened && length > 0) return;
         if (length >= PAGE_CONTENT_ENOUGH_CHARS) return;
         sameLength = length === previousLength ? sameLength + 1 : 1;
@@ -764,6 +775,15 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
     name: 'browser',
     // Agents of every backend often write extract's fields/from/multiple next to it instead of inside it.
     normalizeArgs: (raw) => {
+      // A wait that names a condition and gives `timeMs` means "until then, at most this long" (seen: 20 s
+      // spent standing still before the condition was looked at). `timeMs` alone stays a fixed pause.
+      const request = raw.request as Record<string, unknown> | undefined;
+      if (raw.action === 'act' && request && typeof request === 'object' && request.kind === 'wait'
+        && request.timeMs !== undefined && request.timeoutMs === undefined
+        && ['text', 'textGone', 'selector', 'url', 'loadState', 'fn'].some((key) => request[key] !== undefined)) {
+        const { timeMs, ...condition } = request;
+        return { ...raw, request: { ...condition, timeoutMs: timeMs } };
+      }
       if (raw.action !== 'extract' || raw.extract !== undefined || raw.fields === undefined) return raw;
       const { fields, from, multiple, ...rest } = raw;
       return { ...rest, extract: { fields, ...(from !== undefined ? { from } : {}), ...(multiple !== undefined ? { multiple } : {}) } };

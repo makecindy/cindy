@@ -2017,7 +2017,7 @@ describe('browser · batch, cdp and target-tailored rules', () => {
       // The placeholder's emptiness does not count towards giving up on a blank page.
       expect(order(h.calls)).toEqual(['open', 'text', 'text', 'text', 'text', 'text', 'text', 'snapshot']);
       expect(h.calls.filter(isPageText).every((request) => request.targetId === 'tab-1'
-        && (request.request as { domRead: { text: { maxChars: number } } }).domRead.text.maxChars === 0)).toBe(true);
+        && (request.request as { domRead: { text: { maxChars: number } } }).domRead.text.maxChars === 200)).toBe(true);
     } finally { await h.cleanup(); }
   });
 
@@ -2029,6 +2029,33 @@ describe('browser · batch, cdp and target-tailored rules', () => {
     try {
       await h.invoke({ action: 'open', url: 'https://example.test/', afterSnapshot: {} });
       expect(order(h.calls)).toEqual(['open', 'text', 'text', 'text', 'text', 'snapshot']);
+    } finally { await h.cleanup(); }
+  });
+
+  it('gives a page that only announces its content three seconds to become that content', async () => {
+    // A finished page that holds still at "Loading…" is otherwise indistinguishable from a short page.
+    const announcing: Probe = ['https://example.test/', 'complete', 'Dock assignments\n\nLoading assignments…'];
+    const h = await scripted(page([announcing, announcing, announcing, announcing, announcing],
+      ['https://example.test/', 'complete', 'Dock assignments\n\nInbound truck 7 is assigned to DOCK-1.']));
+    try {
+      await h.invoke({ action: 'open', url: 'https://example.test/', afterSnapshot: {} });
+      // Five probes say "Loading…"; the content then has to hold for two probes like any short page.
+      expect(order(h.calls)).toEqual(['open', 'text', 'text', 'text', 'text', 'text', 'text', 'text', 'snapshot']);
+    } finally { await h.cleanup(); }
+  });
+
+  it('reads a wait that names a condition and timeMs as "until then, at most this long"', async () => {
+    const h = await scripted(() => ({ data: { targetId: 'tab-1' } }));
+    try {
+      await h.invoke({ action: 'act', targetId: 'tab-1', request: { kind: 'wait', textGone: 'Loading', timeMs: 20000 } });
+      expect(h.calls.at(-1)!.request).toEqual({ kind: 'wait', textGone: 'Loading', timeoutMs: 20000 });
+      await h.invoke({ action: 'batch', targetId: 'tab-1', steps: [{ action: 'act', request: { kind: 'wait', text: 'Ready', timeMs: 5000 } }] });
+      expect(h.calls.at(-1)!.request).toEqual({ kind: 'wait', text: 'Ready', timeoutMs: 5000 });
+      // A pause on its own, and a wait that already names its limit, are left as written.
+      await h.invoke({ action: 'act', targetId: 'tab-1', request: { kind: 'wait', timeMs: 300 } });
+      expect(h.calls.at(-1)!.request).toEqual({ kind: 'wait', timeMs: 300 });
+      await h.invoke({ action: 'act', targetId: 'tab-1', request: { kind: 'wait', text: 'Ready', timeMs: 300, timeoutMs: 9000 } });
+      expect(h.calls.at(-1)!.request).toEqual({ kind: 'wait', text: 'Ready', timeMs: 300, timeoutMs: 9000 });
     } finally { await h.cleanup(); }
   });
 
@@ -2175,7 +2202,7 @@ describe('browser · batch, cdp and target-tailored rules', () => {
     const h = await scripted(site({ 'https://a.test/': 'unused' }, (request) => {
       if (!isPageText(request)) return undefined;
       const spec = (request.request as { domRead: { text: { selector?: string; maxChars?: number } } }).domRead.text;
-      if (spec.maxChars === 0) return pageText('https://a.test/', 'complete', 4000);
+      if (!spec.selector && spec.maxChars === 200) return pageText('https://a.test/', 'complete', 4000);
       const sent = pageText('https://a.test/', 'complete', spec.selector ? '' : 'The whole page');
       if (spec.selector) sent.data.result.found = false;
       return sent;

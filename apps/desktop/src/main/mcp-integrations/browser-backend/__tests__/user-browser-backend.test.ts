@@ -520,16 +520,22 @@ describe('UserBrowserBackend · 读取与动作', () => {
       ok: true,
       data: { result: { password: false, code: false, unavailable: true } },
     });
-    // 旧版扩展不能跑页面脚本:可见文字读取明确拒绝,调用方据此退回声明式读取。
+    // 旧版扩展不能跑页面脚本:页面可见文字改用扩展自己的声明式读取,结果形状与页面脚本相同。
     const before = fake.jobs.length;
+    fake.responses.set('extract', () => ({ ok: true, record: { text: 'Shown   \n\n\n\ntext on the page' } }));
     expect(
       await call(b, {
         action: 'act',
         targetId: 't1',
-        request: { kind: 'evaluate', fn: 'x', domRead: { kind: 'text', text: {} } },
+        request: { kind: 'evaluate', fn: 'x', domRead: { kind: 'text', text: { selector: 'main', offset: 7, maxChars: 4 } } },
       }),
-    ).toMatchObject({ ok: false, errorCode: 'BROWSER_RUNTIME_INVALID_REQUEST' });
+    ).toMatchObject({
+      ok: true,
+      data: { result: { ok: true, readyState: 'complete', found: true, length: 23, text: 'text' } },
+    });
     expect(fake.jobs.slice(before).map(([action]) => action)).not.toContain('evaluate');
+    expect(fake.jobs.at(-1)).toMatchObject(['extract', { selector: 'main', fields: { text: { selector: ':self' } }, maxChars: 30000 }]);
+    fake.responses.delete('extract');
     expect(
       fake.jobs.filter(
         ([action, payload]) =>
@@ -683,6 +689,15 @@ describe('UserBrowserBackend · 读取与动作', () => {
     expect(fake.jobs.at(-1)?.[0]).toBe('evaluate');
     expect(String(fake.jobs.at(-1)?.[1].fn)).toContain('innerText');
     expect(String(fake.jobs.at(-1)?.[1].fn)).not.toContain('ignored');
+    // 页面的安全策略拦了脚本(实测 github.com):同一次读取退回扩展的声明式读取,不报错。
+    fake.responses.set('evaluate', () => ({ ok: false, error: 'EVAL_BLOCKED_BY_PAGE', execution: 'not_executed' }));
+    fake.responses.set('extract', () => ({ ok: true, record: { text: 'Visible text' } }));
+    expect(
+      await act({ kind: 'evaluate', fn: 'ignored', domRead: { kind: 'text', text: { maxChars: 7 } } }),
+    ).toMatchObject({ ok: true, data: { result: { ok: true, found: true, length: 12, text: 'Visible' } } });
+    expect(fake.jobs.slice(-2).map(([action]) => action)).toEqual(['evaluate', 'extract']);
+    fake.responses.delete('evaluate');
+    fake.responses.delete('extract');
   });
 
   it('新版扩展:上传只读会话允许目录里的文件,并以字节交给扩展', async () => {

@@ -1649,16 +1649,49 @@ export class UserBrowserBackend implements BrowserBackend {
     ).domRead;
     if (!domRead) return outdated(req.action, '任意页面脚本(evaluate.fn)');
     if (domRead.kind === 'text') {
-      // The rendered text of the page. The extension's declarative extract reads textContent (scripts,
-      // styles and hidden parts included), so this one needs a page script; callers fall back to extract.
-      if (!this.parity(control, record.clientId)) return outdated(req.action, '读取页面可见文字');
-      const job = await this.pageJob(control, record, 'evaluate', { fn: buildDomReadSource(domRead) });
-      if (!job.ok) return this.failureResult(req.action, job);
+      // The rendered text of the page, as `{ok, url, title, readyState, found, length, text}`.
+      const spec = (domRead as { text?: { selector?: string; offset?: number; maxChars?: number } }).text ?? {};
+      if (this.parity(control, record.clientId)) {
+        const job = await this.pageJob(control, record, 'evaluate', { fn: buildDomReadSource(domRead) });
+        if (job.ok)
+          return actionOk(req.action, {
+            backend: this.kind,
+            targetId: record.targetId,
+            url: record.url,
+            result: job.result,
+            untrusted_content: true,
+          });
+        if (job.error !== 'EVAL_BLOCKED_BY_PAGE') return this.failureResult(req.action, job);
+      }
+      // No page script here: an older extension, or a page whose Content Security Policy refuses them
+      // (seen on github.com). The extension's own extract reads the same rendered text, up to its
+      // 30,000 character limit; the load state is not reported, and `open` has already waited for it.
+      const job = await this.pageJob(control, record, 'extract', {
+        fields: { text: { selector: ':self' } },
+        ...(spec.selector ? { selector: spec.selector } : {}),
+        maxChars: 30000,
+      });
+      if (!job.ok && String(job.error ?? '') !== 'INVALID_ARGS') return this.failureResult(req.action, job);
+      const raw = job.ok ? (job.record as { text?: unknown } | undefined)?.text : undefined;
+      const text =
+        typeof raw === 'string'
+          ? raw.replace(/[ \t\u00a0]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim()
+          : '';
+      const offset = spec.offset ?? 0;
       return actionOk(req.action, {
         backend: this.kind,
         targetId: record.targetId,
         url: record.url,
-        result: job.result,
+        result: {
+          ok: job.ok,
+          ...(job.ok ? {} : { error: String(job.message ?? `invalid CSS selector: ${spec.selector ?? ''}`) }),
+          url: record.url,
+          title: record.title ?? '',
+          readyState: 'complete',
+          found: typeof raw === 'string',
+          length: text.length,
+          text: text.slice(offset, offset + (spec.maxChars ?? 8000)),
+        },
         untrusted_content: true,
       });
     }
