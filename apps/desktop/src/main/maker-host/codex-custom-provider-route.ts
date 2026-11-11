@@ -315,6 +315,8 @@ export interface CodexAppliedCustomProviderIdentityInput {
   currentThreadModelProviderId?: string | null;
   targetProviderId?: string | null;
   targetModel?: string | null;
+  /** 任务 id。用来对照该任务已经固定的接口；不传时仍按当前目录默认。 */
+  sessionId?: string | null;
 }
 
 /**
@@ -334,6 +336,7 @@ export function crossesCodexAppliedCustomProviderIdentity(
     appliedRoutes,
     input.targetProviderId?.trim() || null,
     input.targetModel?.trim() || null,
+    input.sessionId,
   );
   const actualIsAppliedCustomProviderIdentity = appliedRoutes.some(
     (route) => route.modelProviderId === actual,

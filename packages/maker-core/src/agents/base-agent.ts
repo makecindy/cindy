@@ -435,6 +435,15 @@ export interface CodexExtraSpawnConfig {
     capabilities: Readonly<Record<string, boolean | undefined>>;
     responseModels: readonly string[];
   }>;
+  /**
+   * 按任务接口快照选自定义供应商身份。旧任务已固定成非 Responses 时返回 null，
+   * thread 继续走普通路由，而不是 cindy_custom_*。
+   */
+  resolveCustomProviderModelProviderId?: (
+    providerId: string | null | undefined,
+    model: string | null | undefined,
+    sessionId?: string | null,
+  ) => string | null;
   /** One-shot cleanup for spawn-time resources when this Host is terminally retired. */
   onHostRetired?: () => void | Promise<void>;
 }

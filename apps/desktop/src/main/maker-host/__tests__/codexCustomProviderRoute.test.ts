@@ -27,6 +27,7 @@ import {
   toCodexCustomProviderHostRoutes,
 } from '../codex-custom-provider-route.js';
 import { setActiveCatalog } from '../active-catalog.js';
+import { isCodexThreadModelProviderIdentityMismatch } from '../codex-credential-switch.js';
 import { beginProviderRouteMutation } from '../provider-route.js';
 import { configureSessionModelInterfaceStorage, sessionModelInterface } from '../session-model-interface.js';
 
@@ -376,6 +377,58 @@ describe('Codex custom Provider identity', () => {
       expect(
         resolveCodexCustomProviderModelProviderId(routes, config.id, 'k3.1-pro', 'responses-task'),
       ).toBe(routes[0]?.modelProviderId);
+
+      // 生产路径与 spawn 回调同形：冻结进本次 Host 的路由，再按任务快照决定身份。
+      const resolveCustomProviderModelProviderId = (
+        providerId: string | null | undefined,
+        model: string | null | undefined,
+        sessionId?: string | null,
+      ) => resolveCodexCustomProviderModelProviderId(routes, providerId, model, sessionId);
+      expect(resolveCustomProviderModelProviderId(config.id, 'k3.1-pro', 'old-chat-task')).toBeNull();
+      expect(resolveCustomProviderModelProviderId(config.id, 'k3.1-pro', 'responses-task'))
+        .toBe(routes[0]?.modelProviderId);
+
+      setCodexAppliedCustomProviderRoutes(routes);
+      const pinnedThread = {
+        agentKind: 'codex' as const,
+        remoteHostId: null,
+        currentCodexProxyActive: true,
+        currentProviderId: config.id,
+        nextProviderId: config.id,
+        currentModel: 'k3.1-pro',
+        nextModel: 'k3.1-pro',
+        targetProviderId: config.id,
+        targetModel: 'k3.1-pro',
+      };
+      expect(crossesCodexAppliedCustomProviderIdentity({
+        ...pinnedThread,
+        currentThreadModelProviderId: 'cindy_gateway',
+        sessionId: 'old-chat-task',
+      })).toBe(false);
+      expect(crossesCodexAppliedCustomProviderIdentity({
+        ...pinnedThread,
+        currentThreadModelProviderId: routes[0]?.modelProviderId,
+        sessionId: 'old-chat-task',
+      })).toBe(true);
+      expect(crossesCodexAppliedCustomProviderIdentity({
+        ...pinnedThread,
+        currentThreadModelProviderId: 'cindy_gateway',
+      })).toBe(true);
+      expect(crossesCodexAppliedCustomProviderIdentity({
+        ...pinnedThread,
+        currentThreadModelProviderId: routes[0]?.modelProviderId,
+        sessionId: 'responses-task',
+      })).toBe(false);
+      expect(isCodexThreadModelProviderIdentityMismatch({
+        ...pinnedThread,
+        currentCodexThreadModelProviderId: 'cindy_gateway',
+        sessionId: 'old-chat-task',
+      })).toBe(false);
+      expect(isCodexThreadModelProviderIdentityMismatch({
+        ...pinnedThread,
+        currentCodexThreadModelProviderId: routes[0]?.modelProviderId,
+        sessionId: 'old-chat-task',
+      })).toBe(true);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

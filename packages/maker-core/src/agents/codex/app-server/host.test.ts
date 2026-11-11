@@ -413,6 +413,48 @@ describe('AppServerHost custom Provider subagent policy', () => {
     });
     expect(host.getCustomProviderThreadPolicy('images-a', 'image-a').disableModelOverrides).toBe(true);
   });
+
+  // 测试价值
+  // - 生产入口与可观察结果：getCustomProviderModelProviderId / getCustomProviderThreadPolicy。
+  //   回调拿到任务 id；回调说这个任务不该用自定义身份时，身份是 null，策略也不再打开 dynamicIdentity。
+  // - Bug／规则依据：#9759。恢复旧任务时要把 sessionId 交给主机快照，固定成非 Responses 的任务不能拿到 cindy_custom_*。
+  // - 现有覆盖缺口：上面的用例都没有 resolveCustomProviderModelProviderId，也不传 sessionId。
+  // - 最小失败输入：同一条文本路由，old-chat-task 的回调返回 null，responses-task 返回身份。
+  // - tier：unit。只构造 AppServerHost，不启进程、不访问网络。
+  it('forwards the task id and keeps a non-matching snapshot off the custom identity', () => {
+    const seen: Array<string | null | undefined> = [];
+    const identity = 'cindy_custom_cccccccccccccccccccc';
+    const host = new AppServerHost({
+      createTransport: () => new HangingTransport(),
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+      codexCustomProviderRoutes: [{
+        providerId: 'text-a',
+        modelProviderId: identity,
+        capabilities: { imageGeneration: false },
+        responseModels: ['text-model'],
+      }],
+      resolveCustomProviderModelProviderId: (providerId, model, sessionId) => {
+        seen.push(sessionId);
+        if (sessionId === 'old-chat-task') return null;
+        return providerId === 'text-a' && model === 'text-model' ? identity : null;
+      },
+    });
+
+    expect(host.getCustomProviderModelProviderId('text-a', 'text-model', 'old-chat-task')).toBeNull();
+    expect(host.getCustomProviderThreadPolicy('text-a', 'text-model', 'old-chat-task')).toEqual({
+      dynamicIdentity: false,
+      disableSubagents: false,
+      disableModelOverrides: false,
+    });
+    expect(host.getCustomProviderModelProviderId('text-a', 'text-model', 'responses-task')).toBe(identity);
+    expect(host.getCustomProviderThreadPolicy('text-a', 'text-model', 'responses-task')).toEqual({
+      dynamicIdentity: true,
+      disableSubagents: false,
+      disableModelOverrides: false,
+    });
+    expect(seen).toEqual(['old-chat-task', 'old-chat-task', 'responses-task', 'responses-task']);
+  });
 });
 
 describe('AppServerHost shutdown completion', () => {

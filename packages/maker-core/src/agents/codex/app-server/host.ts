@@ -307,6 +307,14 @@ export interface AppServerHostOptions {
     capabilities: Readonly<Record<string, boolean | undefined>>;
     responseModels: readonly string[];
   }>;
+  /**
+   * 按任务接口快照选自定义供应商身份。有回调时优先用它，旧任务固定成非 Responses 则返回 null。
+   */
+  resolveCustomProviderModelProviderId?: (
+    providerId: string | null | undefined,
+    model: string | null | undefined,
+    sessionId?: string | null,
+  ) => string | null;
   /** Per-thread host-owned MCP URL overrides keyed by the Session instance. */
   buildSessionMcpConfig?: (
     sessionInstanceId: string,
@@ -520,8 +528,12 @@ export class AppServerHost {
   getCustomProviderModelProviderId(
     providerId: string | null | undefined,
     model: string | null | undefined,
+    sessionId?: string | null,
   ): string | null {
     if (!providerId || !model) return null;
+    if (this.opts.resolveCustomProviderModelProviderId) {
+      return this.opts.resolveCustomProviderModelProviderId(providerId, model, sessionId);
+    }
     const route = this.opts.codexCustomProviderRoutes?.find(
       (candidate) => candidate.providerId === providerId,
     );
@@ -531,11 +543,15 @@ export class AppServerHost {
   getCustomProviderThreadPolicy(
     providerId: string | null | undefined,
     model: string | null | undefined,
+    sessionId?: string | null,
   ): {
     dynamicIdentity: boolean;
     disableSubagents: boolean;
     disableModelOverrides: boolean;
   } {
+    if (!this.getCustomProviderModelProviderId(providerId, model, sessionId)) {
+      return { dynamicIdentity: false, disableSubagents: false, disableModelOverrides: false };
+    }
     const route = providerId && model
       ? this.opts.codexCustomProviderRoutes?.find(
           (candidate) =>
