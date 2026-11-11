@@ -11784,7 +11784,9 @@
       "targetOutdated": "“{{device}}”, henüz {{name}} çalıştıramayan eski bir Cindy sürümü kullanıyor. Önce o cihazdaki Cindy'yi güncelleyin",
       "targetOutdatedItem": "“{{device}}” cihazına taşı · eski Cindy",
       "targetOutdatedMeta": "Eski Cindy",
-      "olderTargetNote": "“{{device}}” eski bir Cindy sürümü kullanıyor. Bu nedenle {{name}} orada eski yöntemle çalışır: sohbet geçmişi eşitlenmeye devam eder, ancak proje kuralları ve otomasyonlar orada uygulanmaz."
+      "olderTargetNote": "“{{device}}” eski bir Cindy sürümü kullanıyor. Bu nedenle {{name}} orada eski yöntemle çalışır: sohbet geçmişi eşitlenmeye devam eder, ancak proje kuralları ve otomasyonlar orada uygulanmaz.",
+      "localCindyConflict": "Devralan bilgisayarda zaten başka bir Cindy var. O Cindy'yi ayarlarından yönetin veya farklı bir ana bilgisayar seçin",
+      "localCindyConflictAction": "Yerel Cindy Ayarlarını Aç"
     },
     "market": {
       "heading": "Ekip Arkadaşlarını Keşfet",
@@ -19903,12 +19905,6 @@
       "from": "Kaynak: {{name}}",
       "closeChecklist": "Listeyi Kapat"
     },
-    "suggestion": {
-      "title": "“{{name}}” bilgisayarından aktarmak için Geçiş Yardımcısı kullanılsın mı?",
-      "description": "Bu bilgisayarı diğerindeki eklentiler, beceriler, ayarlar ve bağlantılarla kurabilirsiniz. Burada yeniden oturum açma veya izin gerektiren her şey sizin için listelenir. Yardımcıyı daha sonra Ayarlar → Genel → Geçiş Yardımcısı bölümünden de açabilirsiniz.",
-      "confirm": "Geçiş Yardımcısını Aç",
-      "later": "Şimdi Değil"
-    },
     "walkthrough": {
       "progress": "Kurulum kontrol listesi {{current}} / {{total}}",
       "open": "Aç",
@@ -20080,5 +20076,102 @@
     "original": "Orijinal",
     "menu": "Eklenti görünümleri ve komutları",
     "actionFailed": "Bu eklenti eylemi tamamlanamadı. Tekrar deneyin."
+  },
+  "firstRunGuide": {
+    "title": {
+      "new": "Cindy'ye hoş geldiniz",
+      "returning": "Tekrar hoş geldiniz"
+    },
+    "stepsLabel": "Rehber adımları",
+    "close": "Rehberi kapat",
+    "next": "İleri",
+    "skip": "Atla",
+    "preparing": "Hazırlanıyor…",
+    "steps": {
+      "legacy": "Önceki veriler",
+      "intro": "Cindy ile tanışın",
+      "migration": "Aktar",
+      "models": "Bir model bağlayın",
+      "import": "Çalışmalarınızı getirin",
+      "finish": "Tamamlandı"
+    },
+    "legacy": {
+      "title": "Önceki sürümdeki verileriniz burada",
+      "body": "Geçmiş görevler, medya dosyaları ve Agent tarayıcısı oturum açma bilgileri bu sürüme taşındı ve kullanıma hazır.",
+      "note": "Yetkilendirdiğiniz üçüncü taraf anahtarları ve kimlik bilgileri verilerle birlikte taşınmaz. Ayarlar'da bunları yeniden yetkilendirin veya girin."
+    },
+    "intro": {
+      "lead": "Cindy, aklınızdakileri gerçeğe dönüştüren AI asistanıdır.",
+      "work": {
+        "title": "İşi ona devredin",
+        "body": "Yalnızca soruları yanıtlamak yerine doğrudan klasörlerinizde ve uygulamalarınızda çalışır."
+      },
+      "connect": {
+        "title": "Zaten sahip olduğunuz modelleri ve araçları kullanın",
+        "body": "Kendi aboneliğinizi veya API anahtarınızı bağlayın; ihtiyaç duyduğunuzda eklentiler ve beceriler ekleyin."
+      },
+      "continue": {
+        "title": "Her yerden devam edin",
+        "body": "Bilgisayarınızdaki görevleri telefonunuzdan başlatın, kontrol edin ve devam ettirin."
+      },
+      "start": "Başlayın",
+      "next": "İleri"
+    },
+    "migration": {
+      "title": "Cindy'yi diğer bilgisayarınızdan getirin",
+      "body": "Hesabınızdaki başka bir bilgisayar zaten ayarlanmış durumda. Geçiş Yardımcısı; eklentilerini, becerilerini, ayarlarını ve bağlantılarını bu bilgisayara kopyalar; anahtarlar yalnızca o bilgisayarda İzin Ver'i seçtikten sonra kopyalanır.",
+      "manualBody": "Cindy'yi başka bir bilgisayarda kullandıysanız Geçiş Yardımcısı eklentilerini, becerilerini, ayarlarını ve bağlantılarını bu bilgisayara kopyalayabilir.",
+      "done": "“{{name}}” bilgisayarından aktarıldı",
+      "from": "Eski bilgisayar",
+      "to": "Bu bilgisayar"
+    },
+    "models": {
+      "title": "Cindy'ye bir model tanımlayın",
+      "body": "Bu ikisini birlikte kullanabilirsiniz.",
+      "cindy": {
+        "badge": "Resmî servis",
+        "body": "Cindy tarafından sağlanan model servisi. Hesabınızla birlikte gelir, açmanız gereken bir şey yoktur. Yeni hesaplar denemek için ücretsiz bir bakiye alır; ödeme yaptığınızda neredeyse tüm modeller kullanılabilir, ödeme yapmadığınızda model yelpazesi daha kısıtlıdır.",
+        "active": "Hesabınıza dahildir ve kullanıma hazırdır",
+        "freeBalance": "Başlamak için ücretsiz bir miktar. Deneyebilirsiniz."
+      },
+      "own": {
+        "title": "Kendi planınızı kullanın",
+        "badge": "Daha avantajlı",
+        "body": "Zaten bir Claude veya ChatGPT aboneliğiniz ya da API anahtarınız var mı? En iyi deneyim için bunu bağlamanızı ve Cindy AI ile birlikte kullanmanızı önemle tavsiye ederiz.",
+        "more": "Diğer sağlayıcılar ve API anahtarları",
+        "connected": "Bağlandı"
+      }
+    },
+    "import": {
+      "title": "Bu bilgisayarda zaten var olanları getirin",
+      "body": "Cindy'nin bu bilgisayardaki diğer AI araçlarında bulduğu içerikler bunlardır. Cindy yalnızca orijinalleri okur ve onları asla değiştirmez.",
+      "empty": "Bu bilgisayarda içe aktarılacak bir şey bulunamadı.",
+      "tasksHeading": "Görevler",
+      "tasksHint": "Görevlerini Cindy'ye getirmek ve çalışmaya devam etmek için araçları seçin.",
+      "pick": "Tek tek seçin",
+      "started": "İçe aktarma arka planda başlatıldı. İlerlemeyi Ayarlar → Görev İçe Aktarma bölümünden kontrol edebilirsiniz.",
+      "startFailed": "İçe aktarma başlatılamadı. Ayarlar → Görev İçe Aktarma bölümünden tekrar içe aktarın.",
+      "teammatesHeading": "Yol Arkadaşları",
+      "teammatesHint": "Diğer araçlardaki bir Agent'ı belleği, becerileri ve otomasyonlarıyla birlikte yol arkadaşı olarak içe aktarın.",
+      "importTeammate": "Yol arkadaşı olarak içe aktar"
+    },
+    "finish": {
+      "title": "Her şey hazır",
+      "legacy": "Önceki sürümdeki veriler bu sürüme taşındı",
+      "modelReady": "Bir model bağlandı",
+      "modelMissing": "Henüz bir model bağlanmadı. Yeni bir görev başlatırken dilediğiniz zaman bağlayabilirsiniz.",
+      "importStarted": "Diğer araçlardaki görevler arka planda içe aktarılıyor",
+      "native": "Claude Code ve Codex'teki becerileriniz ve MCP sunucularınız burada doğrudan çalışır; içe aktarılacak bir şey yoktur.",
+      "start": "İlk görevinizi başlatın"
+    },
+    "resume": {
+      "label": "Rehber devam ediyor · {{step}}",
+      "back": "Rehbere geri dön"
+    },
+    "settings": {
+      "title": "Başlangıç rehberi",
+      "description": "Cindy ile tanışma, başka bir bilgisayardan aktarma, model bağlama ve mevcut çalışmaları getirme adımlarını tekrar görüntüleyin.",
+      "open": "Rehberi aç"
+    }
   }
 }
