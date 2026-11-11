@@ -1,5 +1,6 @@
 /**
  * Regression coverage for the Plugin catalog's conditional list/detail mount.
+ * Scroll-end work must finish before the jsdom window is torn down.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  * @vitest-environment jsdom
  */
@@ -53,6 +54,7 @@ function setScrollTop(element: HTMLElement, value: number) {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -62,6 +64,7 @@ describe('usePluginListScrollRestoration', () => {
   // offset-only tests below cannot detect a grid that stays on six fallback
   // cards after its parent scroller is remounted with already-loaded items.
   it('restores a virtualized list and keeps later items reachable after returning from detail', () => {
+    vi.useFakeTimers();
     vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
     vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(800);
     vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(800);
@@ -80,7 +83,10 @@ describe('usePluginListScrollRestoration', () => {
     const list = screen.getByTestId('plugin-list');
     setScrollTop(list, 600);
     fireEvent.scroll(list);
+    // The virtualizer debounces scroll end; settle it before removing this grid.
+    act(() => { vi.runOnlyPendingTimers(); });
     expect(screen.getByTestId('plugin-item-8')).toBeTruthy();
+    expect(vi.getTimerCount()).toBe(0);
 
     act(() => {
       restoration.capture();
@@ -94,8 +100,11 @@ describe('usePluginListScrollRestoration', () => {
     expect(screen.getByTestId('plugin-item-8')).toBeTruthy();
     setScrollTop(restoredList, 1500);
     fireEvent.scroll(restoredList);
+    act(() => { vi.runOnlyPendingTimers(); });
     expect(screen.getByTestId('plugin-item-20')).toBeTruthy();
     expect(screen.queryByTestId('plugin-item-0')).toBeNull();
+    view.unmount();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('restores the captured catalog position when the list is mounted again', () => {
