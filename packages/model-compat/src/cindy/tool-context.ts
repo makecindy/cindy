@@ -130,6 +130,8 @@ export class ChatBridgeToolContext {
   private readonly currentSelectors = new Map<string, string | null>();
   /** Bare declarations only; a reserved `functions` selector may match just these. */
   private readonly currentBareSelectors = new Map<string, string>();
+  /** Exact identities of this turn's declarations, for kind-aware selector resolution. */
+  private readonly currentIdentities = new Map<string, string>();
 
   static fromRequest(request: ResponsesRequest): ChatBridgeToolContext {
     const context = new ChatBridgeToolContext();
@@ -195,9 +197,13 @@ export class ChatBridgeToolContext {
     // fallback can differ from the clamped wire name.
     const fallbackName = clampChatToolName(namespace === undefined ? name : `${namespace}__${name}`);
     const advertised = this.specsByChatName.get(fallbackName);
-    if (advertised === undefined) return clampChatToolName(name);
-    if (advertised.kind !== selectorKind) return clampChatToolName(name);
-    return advertised.chatName;
+    // A different kind of tool may legitimately occupy the plain name; it keeps its reserved
+    // wire name in the restoration map, so use only an entry this turn catalogued.
+    const currentIdentity = this.currentIdentities.get(kind + '\0' + (namespace === undefined ? '' : namespace) + '\0' + name);
+    if (advertised !== undefined && advertised.kind === selectorKind) return advertised.chatName;
+    // Otherwise the declaration may live under a reserved wire name because another kind of tool
+    // already owns the plain one; only an entry this turn catalogued may answer.
+    return currentIdentity === undefined ? clampChatToolName(name) : currentIdentity;
   }
 
   private reserveName(preferred: string, identity: string): string {
@@ -351,6 +357,8 @@ export class ChatBridgeToolContext {
       // A bare declaration answers its own name; when a namespaced child claims the same bare
       // name the snapshot records null, so the selector stays ambiguous instead of silently
       // preferring whichever entry happened to be registered first.
+      const identityKey = kind + '\0' + (namespace === undefined ? '' : namespace) + '\0' + name;
+      this.currentIdentities.set(identityKey, chatName);
       if (!namespace) {
         this.recordCurrentSelector(kind, name, chatName);
         this.currentBareSelectors.set(kind + '\0' + name, chatName);
