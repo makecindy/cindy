@@ -23,7 +23,7 @@ import { hasEmbeddedImPrompt } from './userMessageDisplayText';
  */
 
 import { ChatBubble, CHAT_BUBBLE_COLUMN_CLASS } from './ChatBubble';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bot,
   ChevronDown,
@@ -118,6 +118,7 @@ import { ghostCommandTokenLength, parseGhostCommandToken, splitGhostDirective } 
 import { splitHostCapabilityDirective } from '@/cindy-brain/hostCapabilityInvocation';
 import { GhostSummonCard } from './GhostSummonCard';
 import { MessageSourceLabels } from './MessageSourceLabels';
+import { BotTaskLetterOpen, BotTaskLetterPill } from './BotStartedTasks';
 import { UserMessageUrlLink } from './UserMessageUrlLink';
 import { InlineReferenceChip } from './InlineReferenceChip';
 import { QuoteChip } from './QuoteChip';
@@ -145,6 +146,10 @@ type UserImageItem =
   | { base64: string; mimeType: string; originalName?: string };
 
 interface UserMessageProps {
+  /** Pending delivery uses the same bubble, with queue actions instead of history actions. */
+  pendingActions?: ReactNode;
+  pendingEditing?: boolean;
+  pendingIndicator?: ReactNode;
   sharedAuthorName?: string;
   /** 共享任务成员 id:作者行悬停显示。 */
   sharedAuthorMemberId?: string;
@@ -822,6 +827,9 @@ export function renderContent(
 // 老 UserImageItemView 已迁出,见 ChatImageView.tsx。
 
 export function UserMessage({
+  pendingActions,
+  pendingEditing,
+  pendingIndicator,
   sharedAuthorName,
   sharedAuthorMemberId,
   workingDir,
@@ -888,6 +896,7 @@ export function UserMessage({
     name: string;
   } | null>(null);
   const [orcaExpanded, setOrcaExpanded] = useState(false);
+  const [letterExpanded, setLetterExpanded] = useState(false);
   const [longMessageExpanded, setLongMessageExpanded] = useState(false);
   // issue #946: 已发送消息里点粘贴段胶囊 → 只读全文 lightbox(无文件路径可给
   // TextLightbox,与 composer 侧一样走 ToolPayloadLightbox 的 text 模式)。
@@ -1245,10 +1254,18 @@ export function UserMessage({
         ? t('chat.userMessage.orcaFromWorkerNamed', { role: orcaWorkerRole })
         : t('chat.userMessage.orcaFromWorker');
 
+  // 伙伴对话：其他任务转来的消息不占主人在右侧的位置，收成左侧一行来信，点开看全文
+  // （2026-11-10 主人裁决；普通任务页不变）。
+  const botLetter =
+    simplifiedBotConversation && !editing && !orcaCommunication && !hookSource
+    && automationOrigin?.kind === 'session' && !automationOrigin.orca;
+  const letterPreview = botLetter
+    ? (displayContent.split('\n').find((line) => line.trim()) ?? '').trim()
+    : '';
   const attachmentsInBubble =
-    simplifiedBotConversation && !editing && !orcaCommunication && !hookSource && (hasImages || hasFiles);
+    simplifiedBotConversation && !editing && !orcaCommunication && !hookSource && !botLetter && (hasImages || hasFiles);
   // 伙伴私聊：常用操作始终在气泡下方，保留群聊原图标与菜单。
-  const bubbleActions = simplifiedBotConversation && !editing && !orcaCommunication && !hookSource
+  const bubbleActions = simplifiedBotConversation && !editing && !orcaCommunication && !hookSource && !botLetter
     && Boolean(inlineQuoteCount > 0 || displayBubbleBody.trim() || ghostChipDisplay || attachmentsInBubble);
   // 私聊话题：只有本机伙伴主对话里、主人自己发的消息能开话题（cindy-bots-runtime.md「私聊话题」）。
   const dmThread = useBotDmThreadForMessage(
@@ -1257,12 +1274,12 @@ export function UserMessage({
   );
 
   // Attachments belong to the user message independently of its visual shell.
-  const messageActions = (
+  const messageActions = pendingActions ?? (
     <MessageActionBar
       createdAt={createdAt}
       copyText={copyText}
       copyLinkText={messageDeepLink}
-      align={hookSource ? 'left' : 'right'}
+      align={hookSource || botLetter ? 'left' : 'right'}
       hovered={hovered}
       simplifiedBotConversation={simplifiedBotConversation}
       companionFooter={bubbleActions}
@@ -1310,7 +1327,7 @@ export function UserMessage({
       <div
         className={cn(
           'flex flex-wrap items-end gap-1.5',
-          hookSource || attachmentsInBubble ? 'justify-start' : 'justify-end',
+          hookSource || botLetter || attachmentsInBubble ? 'justify-start' : 'justify-end',
         )}
       >
         {files.map((f, idx) => (
@@ -1335,20 +1352,24 @@ export function UserMessage({
       // scrollIntoView 也以此为目标)。messageClientId 缺失时不挂属性,以免
       // querySelector 命中"data-user-msg-id" 空字符串。
       {...(messageClientId ? { 'data-user-msg-id': messageClientId } : {})}
-      // 自己发送的消息不显示主动浮出的“添加到对话”；右键菜单仍可添加。
-      data-selection-floating-quote-disabled=""
+      data-selection-quote-scope=""
       className={cn(
         'flex w-full',
-        orcaCommunication || hookSource ? 'justify-start' : 'justify-end',
+        orcaCommunication || hookSource || botLetter ? 'justify-start' : 'justify-end',
         bubbleActions && 'group/message',
+        // 与伙伴回复的气泡对齐：头像 28px + 间距 10px。
+        botLetter && 'group/letter pl-[38px]',
       )}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
+      {pendingIndicator && <span className="mr-2 flex h-12 shrink-0 items-center text-[var(--text-secondary)]">{pendingIndicator}</span>}
       <div
         className={cn(
           'flex flex-col gap-2',
-          orcaCommunication || hookSource
+          botLetter
+            ? cn(CHAT_BUBBLE_COLUMN_CLASS, 'w-full items-start')
+            : orcaCommunication || hookSource
             ? 'w-full max-w-[560px] items-start'
             : // 编辑态铺满可用宽度(上限 720px,Codex 同款"气泡展开成编辑器"观感);
               // 附件 chips 行保持右对齐不动。
@@ -1411,12 +1432,42 @@ export function UserMessage({
               </button>
               {orcaExpanded && (
                 <div className="border-t border-[var(--msg-tool-card-border)] px-3 py-2">
-                  <pre className="m-0 whitespace-pre-wrap break-words font-mono text-[length:calc(var(--app-code-font-size)_-_2px)] leading-[calc(var(--app-code-font-size)_+_4px)] text-foreground">
+                  <pre data-selection-quote-body="" className="m-0 whitespace-pre-wrap break-words font-mono text-[length:calc(var(--app-code-font-size)_-_2px)] leading-[calc(var(--app-code-font-size)_+_4px)] text-foreground">
                     {displayContent}
                   </pre>
                 </div>
               )}
             </div>
+          </>
+        ) : botLetter ? (
+          <>
+            <BotTaskLetterPill
+              senderSessionId={automationOrigin?.kind === 'session' ? automationOrigin.senderSessionId : undefined}
+              senderTitle={automationOrigin?.kind === 'session' ? automationOrigin.senderSessionTitle ?? null : null}
+              hostSessionId={sessionId}
+              preview={letterPreview}
+              expanded={letterExpanded}
+              onToggle={() => setLetterExpanded((value) => !value)}
+            />
+            {letterExpanded && (
+              <div className="flex w-full flex-col items-start gap-1.5 border-l-2 border-[var(--border-default)] pl-3">
+                <div className="w-full select-text whitespace-pre-wrap text-13 leading-5 text-[var(--text-secondary)] [overflow-wrap:anywhere]">
+                  {displayContent}
+                </div>
+                <BotTaskLetterOpen
+                  senderSessionId={automationOrigin?.kind === 'session' ? automationOrigin.senderSessionId : undefined}
+                  hostSessionId={sessionId}
+                />
+              </div>
+            )}
+            {imageAttachmentNodes}
+            {fileAttachmentNodes}
+            {/* 伙伴对话的操作栏常显；来信收起时只占一行，展开后操作在悬停或聚焦时出现。 */}
+            {letterExpanded && (
+              <div className="opacity-0 transition-opacity group-hover/letter:opacity-100 focus-within:opacity-100 motion-reduce:transition-none">
+                {messageActions}
+              </div>
+            )}
           </>
         ) : hookSource && !editing ? (
           <>
@@ -1527,7 +1578,7 @@ export function UserMessage({
                     {...(inlineQuoteCount === 0 && !displayBubbleBody.trim() && !attachmentsInBubble
                       ? { [SHARE_SOURCE_ATTR]: '' }
                       : {})}
-                    className="select-text"
+                    className={cn("select-text", pendingEditing && "opacity-40 transition-opacity motion-reduce:transition-none")}
                   >
                     {ghostChipDisplay && (
                       <GhostSummonCard
@@ -1562,6 +1613,7 @@ export function UserMessage({
                     )}
                     {inlineQuoteCount > 0 ? (
                       <div
+                        data-selection-quote-body=""
                         className={cn(
                           'min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]',
                           longMessageCollapsed &&
@@ -1639,6 +1691,7 @@ export function UserMessage({
                       </div>
                     ) : displayBubbleBody.trim() ? (
                       <div
+                        data-selection-quote-body=""
                         className={cn(
                           'whitespace-pre-wrap [overflow-wrap:anywhere]',
                           longMessageCollapsed &&

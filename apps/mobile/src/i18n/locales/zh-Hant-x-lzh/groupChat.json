@@ -1,12 +1,10 @@
 {
   "progress": {
-    "stop": "止"
-  },
-  "work": {
-    "queued": "待次 {{count}}",
-    "active": "行事中 {{count}}",
-    "expand": "展伙伴所事",
-    "collapse": "斂伙伴所事"
+    "stop": "止",
+    "stopMine": "止我所發",
+    "stopAll": "盡止",
+    "stopAllHint": "兼及他人所發",
+    "step": "第 {{step}}/{{total}} 步"
   },
   "title": "群議",
   "memberSeparator": "、",
@@ -85,7 +83,8 @@
     "planDone_one": "{{count}} 步皆畢，大功告成",
     "planDone_other": "{{count}} 步盡畢，大功告成",
     "planDoneGeneric": "分職已畢",
-    "olderOnComputer": "更早之訊，請於機上觀之"
+    "olderOnComputer": "更早之訊，請於機上觀之",
+    "endTalk": "終"
   },
   "quote": {
     "label": "引 {{name}}：{{summary}}",
@@ -104,6 +103,13 @@
     "stepFailed": "{{name}}此步有謬，未竟",
     "stepTimeout": "{{name}}久未竟，此步暫止",
     "stepUnavailable": "{{name}}今不可用，此步無從為之",
+    "runtimeFailureReason": {
+      "unclaimed_timeout": {
+        "summary": "{{name}}逾候未始處理，此請已終。",
+        "advice": "請夥伴之主查其電腦之 Cindy 運行與網路連線。",
+        "details": "待 Cindy 與網路復常，請重遣訊。"
+      }
+    },
     "runtimeFailure": {
       "REMOTE_DEVICE_LIMIT": {
         "summary": "{{name}}不能作覆：同僚所在之器所留遠端差事已達上限。",
@@ -175,6 +181,8 @@
     "start": "始",
     "dismiss": "不必",
     "editHint": "欲易人或改步驟，直言之",
+    "autoContinue": "一步既畢，自交次者",
+    "autoContinueSaveFailed": "分工交接未能存，請再試",
     "autoNote": "一步既畢，自交次一位。",
     "pauseNote": "每畢一步即止，候君點「續」。",
     "superseded": "已更",
@@ -324,7 +332,9 @@
     "groupDissolved": "群議已散，仍可觀有權存取之舊訊。",
     "lastOwner": "請先讓渡群主或解散群議，然後退出。",
     "allBotsMentionDisabled": "群主未啟 @所有夥伴。",
-    "turnAlreadyStarted": "此同伴已啟，不可略過"
+    "turnAlreadyStarted": "此同伴已啟，不可略過",
+    "stopOwnershipUnknown": "部分工作未能停止：無從確認由誰發起",
+    "nothingToStop": "目前無可停止之工作"
   },
   "followUp": {
     "next": "分職 · 次步",
@@ -623,5 +633,6 @@
       "uncertain": "加入之果尚未確認"
     },
     "externalFormatError": "請自原訊重新開啟完整連結。"
-  }
+  },
+  "waitingForOwner": "待主人允"
 }

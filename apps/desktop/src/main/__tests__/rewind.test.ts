@@ -42,6 +42,10 @@ vi.mock('../device-link/index.js', () => ({
 
 const previewRewindFilesMock = vi.fn();
 const commitRewindFilesMock = vi.fn();
+const syncBackgroundCommandWorkMock = vi.fn();
+vi.mock('../maker-host/claude-background-command-work-sync.js', () => ({
+  syncBackgroundCommandWork: syncBackgroundCommandWorkMock,
+}));
 const isTurnRunningMock = vi.fn(() => false);
 const recomputePrRefsForSessionMock = vi.fn();
 const executeCodexFileRewindPlanWithThreadRollbackMock = vi.fn();
@@ -149,7 +153,7 @@ vi.mock('../git-snapshot/gitSnapshotService', () => ({
 vi.mock('../worktree/gitExec', () => ({ gitExec: gitExecMock }));
 
 const setLastAssistantTranscriptUuidMock = vi.fn();
-vi.mock('../messagePersistBroadcaster.js', () => ({
+vi.mock('../messagePersistBroadcaster.desktop.js', () => ({
   setLastAssistantTranscriptUuid: setLastAssistantTranscriptUuidMock,
 }));
 
@@ -382,6 +386,12 @@ describe('commitRewindAtMessage', () => {
     expect(commitRewindFilesMock).toHaveBeenCalledWith(
       'sdk-msg-uuid-target',       // userUuid
       'sdk-msg-uuid-prior-asst',   // priorAssistantUuid
+    );
+    // 提交关闭旧 Query、后台命令随之终止,任务表被不带事件地清空:提交之后必须刷新
+    // 「后台命令仍在工作」,否则任务列表会一直显示已不存在的命令在跑,直到下次发送。
+    expect(syncBackgroundCommandWorkMock).toHaveBeenCalledExactlyOnceWith(fakeSession);
+    expect(syncBackgroundCommandWorkMock.mock.invocationCallOrder[0]).toBeGreaterThan(
+      commitRewindFilesMock.mock.invocationCallOrder[0]!,
     );
 
     // 段 2: 事务已封装为具名 tx — messages.rewind_at + sessions reset 在 worker 侧执行。

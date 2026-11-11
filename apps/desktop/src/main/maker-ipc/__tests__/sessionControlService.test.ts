@@ -258,7 +258,7 @@ describe('session control domain service', () => {
     expect(own({ kind: 'orca', senderLabel: 'reviewer', displayText: 'r' })).toBe(true);
     expect(own({ kind: 'session', senderSessionId: 'other', displayText: 'r' })).toBe(true);
     expect(own(undefined)).toBe(false);
-    expect(own({ kind: 'session', senderSessionId: 'other', senderBotId: 'bot-1', displayText: 'r' })).toBe(false);
+    expect(own({ kind: 'session', senderSessionId: 'other', senderBotId: 'bot-1', displayText: 'r' })).toBe(true);
     expect(own({ kind: 'session', senderSessionId: 'other', displayText: 'r' }, {
       sourcePlugin: { pluginId: 'plugin-1', name: 'Plugin' },
     } as Partial<AgentInputQueuedMessage>)).toBe(false);

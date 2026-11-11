@@ -526,6 +526,48 @@ const flushPromises = async () => {
 };
 
 describe('makerChatStore text delta batching', () => {
+  // #9498 review: old Hosts send raw text after the event has localized it or
+  // appended an HTTP status. These paired terminal inputs still own one row (unit).
+  it.each([
+    { reason: undefined, errorStatus: 503 },
+    { reason: 'turn-failed', errorStatus: undefined },
+    { reason: 'empty-response', errorStatus: undefined },
+  ])('retains the legacy Host error identity after presentation formatting ($reason, $errorStatus)', ({ reason, errorStatus }) => {
+    const unsubscribe = makerChatStore.subscribeLight(SESSION_ID, vi.fn());
+    try {
+      onEvent?.({ sessionId: SESSION_ID, persistId: 'legacy-error-row', event: {
+        type: 'error', source: 'claude-code',
+        data: { isTerminal: true, message: 'failed', reason, errorStatus },
+      } });
+      expect(makerChatStore.getLightSnapshot(SESSION_ID)).toMatchObject({
+        error: reason === 'turn-failed' ? i18n.t('logic.errors.turnFailed')
+          : reason === 'empty-response' ? i18n.t('logic.errors.emptyResponse') : 'failed (HTTP 503)',
+        errorPersistId: 'legacy-error-row',
+      });
+      onEvent?.({ sessionId: SESSION_ID, event: { type: 'done', source: 'claude-code', data: {} } });
+      onInputProjection?.(projection(SESSION_ID, { error: 'failed', errorReason: reason }));
+      expect(makerChatStore.getLightSnapshot(SESSION_ID).errorPersistId).toBe('legacy-error-row');
+    } finally { unsubscribe(); }
+  });
+
+  // #8147 follow-up: a recreated renderer gets history + projection, not the old
+  // terminal event. The exact row ID must reach light subscribers (unit).
+  it('restores the active error row ID from a snapshot without replaying its terminal event', () => {
+    const notify = vi.fn();
+    const unsubscribe = makerChatStore.subscribeLight(SESSION_ID, notify);
+    onInputProjection?.({ ...projection(SESSION_ID, { error: 'failed' }), errorPersistId: 'error-current' });
+    expect(makerChatStore.getLightSnapshot(SESSION_ID).errorPersistId).toBe('error-current');
+    onInputProjection?.(projection(SESSION_ID, { error: 'failed' }));
+    expect(makerChatStore.getLightSnapshot(SESSION_ID).errorPersistId).toBe('error-current');
+    onInputProjection?.(projection(SESSION_ID, { error: 'replacement failure' }));
+    expect(makerChatStore.getLightSnapshot(SESSION_ID).errorPersistId).toBeNull();
+    onInputProjection?.({ ...projection(SESSION_ID, { error: 'failed' }), errorPersistId: 'error-next' });
+    expect(makerChatStore.getLightSnapshot(SESSION_ID).errorPersistId).toBe('error-next');
+    onInputProjection?.({ ...projection(SESSION_ID), errorPersistId: 'error-next' });
+    expect(makerChatStore.getLightSnapshot(SESSION_ID).errorPersistId).toBeNull();
+    unsubscribe();
+  });
+
   // #7119: UI eligibility must survive the actual projection -> light subscriber
   // path and disappear when an older host omits the optional field (unit).
   it('projects host continuation eligibility to light subscribers and revokes missing eligibility', () => {

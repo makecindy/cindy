@@ -77,7 +77,9 @@ const rows = [
 let managed = rows;
 const cardHtml = () =>
   cards[
-    `${following ? 'on' : 'off'}-${settings ? 'settings' : 'summary'}-${mode}` as keyof typeof cards
+    (ctx.case === 'reference'
+      ? 'reference-task'
+      : `${following ? 'on' : 'off'}-${settings ? 'settings' : 'summary'}-${mode}`) as keyof typeof cards
   ];
 function update() {
   ingestCardPush({
@@ -90,6 +92,8 @@ function update() {
   });
 }
 mountPage({
+  // The follow-up task link resolves its target through the router.
+  route: '/',
   host: () => ({
     safeStorageRead: async () => null,
     deviceLink: {

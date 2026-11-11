@@ -1,0 +1,17 @@
+[package]
+name = "agent-net-bench"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+anyhow = "1"
+# unstable-custom-transports 只为基准固定路径；产品代码是否依赖它要单独评估。
+iroh = { version = "=1.2.0", features = ["unstable-custom-transports"] }
+tokio = { version = "1", features = ["full"] }
+
+[profile.release]
+strip = true
+lto = "thin"
+
+[workspace]

@@ -10,7 +10,7 @@
  * continuation message, logs or remote devices. The teammate is the one linked
  * to the card's session by the Host; the model never names it.
  */
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import { addBotImConnection, parseBotImConnectionAddInput } from '../im/shared/botImConnectionRuntime.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
 import type { BotImChannel, BotImFeishuService } from '../../shared/botImConnection.js';

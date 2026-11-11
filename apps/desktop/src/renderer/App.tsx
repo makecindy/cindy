@@ -1,3 +1,4 @@
+import { HostConnectionNotice } from '@/components/HostConnectionNotice';
 import { AppPreferenceControl } from './components/AppPreferenceControl';
 import { AppWindowSync } from './components/layout/AppWindowSync';
 import { readLocalWorkerCreationSelection } from './state/workerCreationPrefs';
@@ -29,6 +30,8 @@ import { LoginBrandStage } from '@/components/login/LoginBrandStage';
 import { StartupLogSupport } from '@/components/log-support/StartupLogSupport';
 import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
+import { installGithubStarPrompt } from '@/lib/githubStarPrompt';
+import { createGithubStarPromptEnvironment } from '@/lib/githubStarPromptHost';
 import { ToastContainer } from '@/components/ui/toast';
 import { LegacyMigrationDialog } from '@/components/auth/LegacyMigrationDialog';
 import { Tooltip } from '@/components/ui/tooltip';
@@ -85,28 +88,26 @@ import {
   subscribeProviderModelMemory,
 } from '@/state/providerModelMemory';
 import {
+  applyWorkerRolesMutation,
   readWorkerCreationPrefs,
   setWorkerPermissionModePreference,
   subscribeWorkerCreationPrefs,
+  toRemoteWorkerRoles,
+  writeWorkerCreationPrefs,
 } from '@/state/workerCreationPrefs';
+import type { OrcaWorkerRolesMutation } from '@cindy/device-link';
 import type { Effort } from '@/lib/userPreferences.types';
 
 import { router } from './router';
 
 /**
- * LoginHandoffProvider 的 auth 接线壳:LoginHandoffContext 模块本身不 import
- * AuthContext(避免传递性引入重依赖),推进锚里的「auth 初始化完成」由本壳从
- * useAuth 取值下传(Step 3b WHAT2 宿主契约)。
+ * 动画消费 AppShellCover 派生的当前目标；AuthContext 仍拥有认证和账号边界。
  */
 function LoginHandoffHost({ children }: { children: React.ReactNode }) {
-  const { isInitializing, isAuthenticated, canEnterApp } = useAuth();
-  const { coverHeld } = useAppShellCover();
+  const { isInitializing, canEnterApp } = useAuth();
+  const { startupTarget } = useAppShellCover();
   return (
-    <LoginHandoffProvider
-      authResolved={!isInitializing}
-      authenticated={isAuthenticated || canEnterApp}
-      coverHeld={coverHeld}
-    >
+    <LoginHandoffProvider target={startupTarget}>
       {/* 认证恢复后已登录(直进受保护路由、LoginPage 不挂载)时结束首启亮色门,
           避免 renderer localStorage 被清空但主进程仍持有会话时整个已登录会话
           被永久锁亮色;未登录场景仍由 LoginPage 卸载结束门(见组件头注释)。 */}
@@ -121,8 +122,25 @@ function syncWorkerPrefs() {
   window.electronAPI.syncWorkerCreationPrefs({
     workerPermissionMode: readWorkerCreationPrefs().workerPermissionMode,
     selection: readLocalWorkerCreationSelection(owner.dataOwnerId),
+    // 角色清单与每个角色的记忆：手机与远程控制的电脑读的就是这份镜像。
+    roles: toRemoteWorkerRoles(readWorkerCreationPrefs(), owner.dataOwnerId),
     ownerStamp: { dataOwnerId: owner.dataOwnerId, ownerGeneration: owner.generation },
   });
+}
+
+/** 手机或远程控制的电脑改了这台电脑的角色清单：只在仍是同一个账号时写回真源。 */
+function applyRemoteWorkerRolesMutation(payload: {
+  mutation: OrcaWorkerRolesMutation;
+  ownerStamp: { dataOwnerId: string | null; ownerGeneration: number };
+}) {
+  const owner = getDataOwnerGeneration();
+  if (
+    payload.ownerStamp.dataOwnerId !== owner.dataOwnerId
+    || payload.ownerStamp.ownerGeneration !== owner.generation
+  ) return;
+  writeWorkerCreationPrefs(
+    applyWorkerRolesMutation(readWorkerCreationPrefs(), owner.dataOwnerId, payload.mutation),
+  );
 }
 
 function syncNewMakerPrefs(appDefaultModelRequestId?: string) {
@@ -197,6 +215,15 @@ function MakerBootstrap() {
   const { isAuthenticated, dataOwnerId, dataOwnerRecoveryEpoch } = useAuth();
 
   useResyncAgentIslandSettingsAfterLogin(isAuthenticated);
+
+  // Remote SSH handlers register during the environment check. Read the
+  // snapshot only after that gate passes, then keep receiving live pushes.
+  useEffect(() => installCcMgrUpgradeListener(), []);
+
+  useEffect(() => {
+    if (!isAuthenticated || isSecondaryWindow() || isSidebarWindow()) return;
+    return installGithubStarPrompt(createGithubStarPromptEnvironment(router));
+  }, [isAuthenticated, dataOwnerId, dataOwnerRecoveryEpoch]);
 
   useEffect(() => {
     setPromptRecommendationOwner(`${dataOwnerId ?? 'signed-out'}:${dataOwnerRecoveryEpoch}`);
@@ -280,9 +307,12 @@ export function App() {
     const offApply = window.electronAPI.onWorkerCreationPrefsApply(({ workerPermissionMode }) => {
       setWorkerPermissionModePreference(workerPermissionMode);
     });
+    // 写回后 subscribeWorkerCreationPrefs 会把新的角色清单再镜像给 main。
+    const offRoles = window.electronAPI.onWorkerRolesApplyRequest(applyRemoteWorkerRolesMutation);
     return () => {
       unsubscribe();
       offApply();
+      offRoles();
     };
   }, []);
 
@@ -438,13 +468,6 @@ export function App() {
     return installAutoPermissionFallbackToastListener();
   }, []);
 
-  // cc-mgr 版本不匹配的 UpgradeBanner: 订阅 main 的 CC_MGR_UPGRADE_AVAILABLE push +
-  // 启动时拉一次 pending snapshot, 写进 ccMgrUpgradeStore。没挂这个 listener 的话
-  // main 探到版本差异 broadcast 了也没人接, banner 永不显示。详见 ccMgrUpgradeStore.ts。
-  useEffect(() => {
-    return installCcMgrUpgradeListener();
-  }, []);
-
   return (
     <ThemeProvider>
       <FontSettingsProvider>
@@ -454,6 +477,7 @@ export function App() {
             <ConfirmDialogProvider>
               <EnvCheckProvider>
                 <AuthProvider>
+                  <HostConnectionNotice />
                   <PluginReviewUpdatesProvider>
                   <AppShellCoverProvider>
                     <WorktreeProvider>

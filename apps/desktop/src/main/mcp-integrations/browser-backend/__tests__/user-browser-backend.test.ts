@@ -1136,3 +1136,114 @@ describe('UserBrowserBackend · 读取与动作', () => {
     expect(Date.now() - started).toBeLessThan(1000);
   });
 });
+
+
+// Regression: a closed browser previously failed every action without trying to start it.
+// Unit tier: real backend entry, fake launcher/bridge and clock; no user browser is touched.
+describe('automatic browser startup', () => {
+  it('shares one launch and waits for connection before dispatching simultaneous operations', async () => {
+    vi.useFakeTimers();
+    try {
+      const clients: string[] = [];
+      const fake = fakeControl({ clients, version: '0.4.68' });
+      fake.responses.set('open', payload => ({ ok: true, tabId: 8, url: payload.url }));
+      const startBrowser = vi.fn(async () => { setTimeout(() => clients.push('chrome'), 1000); });
+      const b = new UserBrowserBackend({ getPageControl: () => fake.control, startBrowser, logger: { info: vi.fn(), warn: vi.fn() } });
+      const first = b.call({ action: 'tabs' }), second = b.call({ action: 'open', url: 'https://example.test/' });
+      await vi.advanceTimersByTimeAsync(500);
+      expect(startBrowser).toHaveBeenCalledTimes(1);
+      expect(fake.jobs).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(500);
+      expect((await first).ok).toBe(true); expect((await second).ok).toBe(true);
+      expect(fake.jobs.filter(([action]) => action === 'open')).toHaveLength(1);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each(['status', 'doctor', 'profiles', 'stop'] as const)('%s never starts Chrome', async action => {
+    const fake = fakeControl({ clients: [] }), startBrowser = vi.fn();
+    const b = new UserBrowserBackend({ getPageControl: () => fake.control, startBrowser, logger: { info: vi.fn(), warn: vi.fn() } });
+    await b.call({ action }); expect(startBrowser).not.toHaveBeenCalled();
+  });
+
+  it('does not launch for a missing plugin, a named profile, or an unsupported proxy', async () => {
+    const startBrowser = vi.fn();
+    const fake = fakeControl({ clients: [] });
+    for (const [control, req] of [
+      [null, { action: 'start' }],
+      [fake.control, { action: 'start', profile: 'specific-account' }],
+      [fake.control, { action: 'start', proxyServer: 'http://proxy.test' }],
+    ] as const) {
+      const b = new UserBrowserBackend({ getPageControl: () => control, startBrowser, startupWaitMs: 0, logger: { info: vi.fn(), warn: vi.fn() } });
+      await b.call(req);
+    }
+    expect(startBrowser).not.toHaveBeenCalled();
+  });
+
+  it('does not launch an alternative browser while pairing is pending', async () => {
+    const fake = fakeControl({ clients: [] }), startBrowser = vi.fn();
+    const status = await fake.control.bridge.status();
+    if (!status.ok) throw new Error('fixture status failed');
+    fake.control.bridge.status = vi.fn(async () => ({ ...status, clients: [{
+      id: 'pending', browser: 'chrome' as const, version: '0.4.68', protocolVersion: '0.4.13',
+      connected: false, trusted: false, identitySupported: true, nativeBindingRequired: true,
+      origin: 'chrome-extension://fixture', extensionId: 'fixture',
+    }] }));
+    const b = new UserBrowserBackend({ getPageControl: () => fake.control, startBrowser, logger: { info: vi.fn(), warn: vi.fn() } });
+    expect((await b.call({ action: 'start' })).ok).toBe(false);
+    expect(startBrowser).not.toHaveBeenCalled(); expect(fake.jobs).toHaveLength(0);
+  });
+
+  it('launches the default browser for a profile-less request that joins a profile request already waiting', async () => {
+    vi.useFakeTimers();
+    try {
+      const clients: string[] = [];
+      const fake = fakeControl({ clients, version: '0.4.68' });
+      fake.responses.set('open', payload => ({ ok: true, tabId: 8, url: payload.url }));
+      const startBrowser = vi.fn(async () => { setTimeout(() => clients.push('chrome'), 1000); });
+      const b = new UserBrowserBackend({ getPageControl: () => fake.control, startBrowser, logger: { info: vi.fn(), warn: vi.fn() } });
+      const named = b.call({ action: 'tabs', profile: 'specific-account' });
+      await vi.advanceTimersByTimeAsync(100);
+      expect(startBrowser).not.toHaveBeenCalled();
+      const unnamed = b.call({ action: 'open', url: 'https://example.test/' });
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(startBrowser).toHaveBeenCalledTimes(1);
+      expect((await unnamed).ok).toBe(true);
+      await named;
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('stops waiting as soon as the launched browser reports an extension that still needs pairing', async () => {
+    vi.useFakeTimers();
+    try {
+      const fake = fakeControl({ clients: [] }), startBrowser = vi.fn(async () => {});
+      const empty = await fake.control.bridge.status();
+      if (!empty.ok) throw new Error('fixture status failed');
+      let pairing = false;
+      fake.control.bridge.status = vi.fn(async () => ({ ...empty, clients: pairing ? [{
+        id: 'pending', browser: 'chrome' as const, version: '0.4.68', protocolVersion: '0.4.13',
+        connected: false, trusted: false, identitySupported: true, nativeBindingRequired: true,
+        origin: 'chrome-extension://fixture', extensionId: 'fixture',
+      }] : [] }));
+      const b = new UserBrowserBackend({ getPageControl: () => fake.control, startBrowser, logger: { info: vi.fn(), warn: vi.fn() } });
+      const call = b.call({ action: 'start' });
+      await vi.advanceTimersByTimeAsync(600);
+      pairing = true;
+      await vi.advanceTimersByTimeAsync(1000); // far below the 35 s startup wait
+      const result = await call;
+      expect(startBrowser).toHaveBeenCalledTimes(1);
+      expect(result.ok).toBe(false);
+      expect(JSON.stringify(result)).toContain('配对');
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('reports disconnected when startup completes but no extension arrives', async () => {
+    vi.useFakeTimers();
+    try {
+      const fake = fakeControl({ clients: [] }), startBrowser = vi.fn(async () => {});
+      const b = new UserBrowserBackend({ getPageControl: () => fake.control, startBrowser, startupWaitMs: 1000, logger: { info: vi.fn(), warn: vi.fn() } });
+      const call = b.call({ action: 'start' });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect((await call).ok).toBe(false); expect(fake.jobs).toHaveLength(0);
+    } finally { vi.useRealTimers(); }
+  });
+});

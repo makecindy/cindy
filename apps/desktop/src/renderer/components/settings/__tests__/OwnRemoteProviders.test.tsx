@@ -46,6 +46,7 @@ vi.mock('@/hooks/useXaiSubscriptionUsage', () => ({
 }));
 vi.mock('@/hooks/useRemoteDeviceUsage', () => ({
   useRemoteCodexAccountUsage: () => null,
+  useRemoteCodexRateLimits: () => null,
   useRemoteXaiSubscriptionUsage: () => null,
   selectRemoteCodexAccountUsage: () => null,
 }));
@@ -335,7 +336,7 @@ describe('OwnRemoteProviderRows / OwnRemoteProviderDetail', () => {
     };
     const { rerender } = render(<OwnRemoteProviderDetail entry={subscription} />);
     expect(screen.getByRole('progressbar').getAttribute('aria-valuetext')).toBe('quotaCard.remainingPercent:{"percent":63}');
-    expect(usage.remoteClaude).toHaveBeenCalledWith('mini-a', 'anthropic');
+    expect(usage.remoteClaude).toHaveBeenCalledWith('mini-a', 'anthropic', { live: false });
     expect(usage.localClaude.mock.calls.every(([enabled]) => !enabled)).toBe(true);
     expect(screen.queryByRole('button')).toBeNull();
     expect(screen.queryByRole('link')).toBeNull();
@@ -343,7 +344,7 @@ describe('OwnRemoteProviderRows / OwnRemoteProviderDetail', () => {
     rerender(<OwnRemoteProviderDetail entry={{ ...subscription, key: ownRemoteProviderKey('mini-b', 'anthropic'), deviceId: 'mini-b' }} />);
     expect(screen.queryByRole('progressbar')).toBeNull();
     expect(screen.queryByTestId('provider-usage-module')).toBeNull();
-    expect(usage.remoteClaude).toHaveBeenLastCalledWith('mini-b', 'anthropic');
+    expect(usage.remoteClaude).toHaveBeenLastCalledWith('mini-b', 'anthropic', { live: false });
   });
 
   it.each(['api-key', 'group'] as const)('does not read or show a top-level subscription quota for %s', (kind) => {

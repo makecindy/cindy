@@ -81,7 +81,8 @@ export function SessionActionSheetFrame({
           onClose();
         }}
       >
-        <RNHostView matchContents>
+        {/* Width follows the sheet; only the height comes from the content (see NativeBottomSheet). */}
+        <RNHostView matchContents={{ vertical: true }}>
           <GestureHandlerRootView style={{ maxHeight: height * 0.8 }}>
             <ScrollView
               // Task tags and other expanded controls may host their own

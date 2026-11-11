@@ -111,6 +111,8 @@ export interface ProviderGroupMemberStatus {
   paused: boolean;
   /** 冷却到何时(unix ms)。 */
   coolingUntil?: number;
+  /** 可信配额快照确认已耗尽；仅展示原因与配额重置时刻，不从普通冷却推断。只发给同账号电脑。 */
+  usageLimit?: ProviderGroupUsageLimit;
   /**
    * 选电脑时排序用的那个配额窗口(provider-groups.md §5)：本机与同账号电脑的订阅才有，读不到时省略。
    * 发给同账号电脑，用来提议任务进行中换号(§6.2)，界面不显示；不进受邀者的匿名状态。
@@ -252,7 +254,9 @@ export type ProviderGroupLocalCommand =
   /** 用户发下一条消息前：要不要提议换号(provider-groups.md §6.2「任务进行中换号」)。 */
   | { action: 'rebalance-suggestion'; sessionId: string }
   /** 用户确认换号：这个任务的下一条消息先换到 `memberKey`；`remember` = 这个任务以后自动换。 */
-  | { action: 'rebalance-decision'; sessionId: string; memberKey: string; remember: boolean; clientId?: string };
+  | { action: 'rebalance-decision'; sessionId: string; memberKey: string; remember: boolean; clientId?: string }
+  /** 独立动作使旧端明确拒绝，不能误记成一次换号确认。 */
+  | { action: 'rebalance-preference'; sessionId: string; enabled: boolean };
 
 export type ProviderGroupCommand = ProviderGroupLocalCommand
   | { action: 'remote-manage'; deviceId: string; request: ProviderManagementRequest };
@@ -273,7 +277,7 @@ export type ProviderGroupCommandResult<C extends ProviderGroupCommand> =
           : C extends { action: 'remote-view' } ? ProviderGroupView
             : C extends { action: 'session-group' } ? ProviderGroupSessionGroup
               : C extends { action: 'rebalance-suggestion' } ? ProviderGroupRebalanceSuggestion
-                : C extends { action: 'rebalance-decision' } ? { ok: boolean }
+                : C extends { action: 'rebalance-decision' | 'rebalance-preference' } ? { ok: boolean }
                   : never;
 
 const PROVIDER_ID_PATTERN = /^[a-zA-Z0-9._-]{1,128}$/;
@@ -497,7 +501,8 @@ export type ProviderGroupRemoteRequest =
   | { action: 'session-group'; sessionId: string }
   /** 发给任务所在的电脑(手机、远程控制)：同本机命令的 `rebalance-suggestion` / `rebalance-decision`。 */
   | { action: 'rebalance-suggestion'; sessionId: string }
-  | { action: 'rebalance-decision'; sessionId: string; memberKey: string; remember: boolean; clientId?: string };
+  | { action: 'rebalance-decision'; sessionId: string; memberKey: string; remember: boolean; clientId?: string }
+  | { action: 'rebalance-preference'; sessionId: string; enabled: boolean };
 
 /** `session-group` 的回包：坐标是任务所在电脑视角(`groupDeviceId` 为 null = 那台自己建的组)。 */
 export interface ProviderGroupRemoteSessionGroup {
@@ -506,7 +511,7 @@ export interface ProviderGroupRemoteSessionGroup {
 
 /** Only verified subscription exhaustion; never inferred from a generic cooldown. */
 export interface ProviderGroupUsageLimit {
-  /** Earliest reset of an otherwise eligible member; null when no reset is known. */
+  /** Required quota reset; pick replies use the earliest eligible member's reset. Null when unknown. */
   resetAtMs: number | null;
 }
 
@@ -659,6 +664,9 @@ export function parseProviderGroupRemoteRequest(raw: unknown): ProviderGroupRemo
       return { action: 'session-group', sessionId: remoteSessionId(value.sessionId) };
     case 'rebalance-suggestion':
       return { action: 'rebalance-suggestion', sessionId: remoteSessionId(value.sessionId) };
+    case 'rebalance-preference':
+      if (typeof value.enabled !== 'boolean') invalidRemote('invalid enabled');
+      return { action: 'rebalance-preference', sessionId: remoteSessionId(value.sessionId), enabled: value.enabled as boolean };
     case 'rebalance-decision':
       if (typeof value.remember !== 'boolean') invalidRemote('invalid remember');
       return {
@@ -752,6 +760,11 @@ export function parseProviderGroupRemoteView(raw: unknown, groupProviderId: stri
     const guestSupport = ['supported', 'needs-update', 'unknown'].includes(item.guestSupport as string)
       ? item.guestSupport as ProviderGroupGuestSupport : undefined;
     const coolingUntil = typeof item.coolingUntil === 'number' && Number.isFinite(item.coolingUntil) ? item.coolingUntil : undefined;
+    const limit = item.usageLimit as Partial<ProviderGroupUsageLimit> | null | undefined;
+    const reset = limit?.resetAtMs;
+    const usageLimit = member.kind !== 'share' && state === 'cooling' && limit
+      && (reset === null || (typeof reset === 'number' && Number.isSafeInteger(reset) && reset > 0))
+      ? { resetAtMs: reset } as ProviderGroupUsageLimit : undefined;
     // 分享来的电脑不读配额(provider-groups.md §5「分享边界」)：回包里有也不收。
     const quota = member.kind === 'share' ? undefined : readProviderGroupMemberQuota(item.quota);
     const fiveHourTight = quota !== undefined && item.fiveHourTight === true;
@@ -770,6 +783,7 @@ export function parseProviderGroupRemoteView(raw: unknown, groupProviderId: stri
       weight: member.weight,
       paused: member.paused,
       ...(coolingUntil !== undefined ? { coolingUntil } : {}),
+      ...(usageLimit ? { usageLimit } : {}),
       ...(quota ? { quota } : {}),
       ...(fiveHourTight ? { fiveHourTight: true as const } : {}),
     }];

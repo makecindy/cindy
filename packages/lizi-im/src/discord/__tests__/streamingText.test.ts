@@ -79,6 +79,26 @@ describe('discord streaming text', () => {
     expect(deps.send.mock.calls[1][0].length).toBeLessThanOrEqual(2000);
   });
 
+  it('sends the final reply as a new message when the placeholder can no longer be edited', async () => {
+    const deps = makeDeps();
+    deps.edit.mockRejectedValueOnce(new Error('Missing Access'));
+    const handle = await startStreaming(deps);
+
+    await handle.finalize('final answer');
+
+    expect(deps.send).toHaveBeenLastCalledWith('final answer');
+    expect(deps.remove).toHaveBeenCalledWith('dm-1|m1');
+  });
+
+  it('still fails when neither editing nor re-sending the final reply works', async () => {
+    const deps = makeDeps();
+    deps.edit.mockRejectedValueOnce(new Error('Missing Access'));
+    const handle = await startStreaming(deps);
+    deps.send.mockRejectedValueOnce(new Error('Missing Permissions'));
+
+    await expect(handle.finalize('final answer')).rejects.toThrow('Missing Permissions');
+  });
+
   it('finalize is idempotent', async () => {
     const deps = makeDeps();
     const handle = await startStreaming(deps);

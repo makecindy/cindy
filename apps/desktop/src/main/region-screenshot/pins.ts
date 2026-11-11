@@ -11,7 +11,7 @@ import {
 
 import { createLogger } from '../logger';
 import { activeOwnerScopeKey } from '../appSessionState';
-import { getResolvedMainLocale, t } from '../i18n';
+import { getResolvedMainLocale, t } from '../i18n.desktop';
 import {
   REGION_SCREENSHOT_PIN_CHANNEL as C,
   REGION_SCREENSHOT_PIN_COMMANDS,

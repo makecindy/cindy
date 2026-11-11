@@ -1,0 +1,53 @@
+listening on 0.0.0.0:47812
+handshake from <客户端公网地址>:29358: down 15000000
+accepted f4219105 from Some(<客户端公网地址>:29358): down 15000000
+f4219105 done: delivered=0 seconds=19.98 mbps_per_second=[] longest_gaps=[] path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4955 bandwidth_mbps=9.6 retransmitted=8644 timeouts=296 packets_sent=21346 packets_received=5777 error=None
+handshake from <客户端公网地址>:29367: down 15000000
+accepted 1e234bcd from Some(<客户端公网地址>:29367): down 15000000
+1e234bcd peer moved Some(<客户端公网地址>:29367) -> Some(<客户端公网地址>:29368) at 4.01s: path_challenges=1 migrations=1 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=8467 timeouts=490 packets_sent=10536 packets_received=1159
+1e234bcd peer moved Some(<客户端公网地址>:29368) -> Some(<客户端公网地址>:29371) at 6.01s: path_challenges=2 migrations=2 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=10244 timeouts=490 packets_sent=13372 packets_received=1986
+1e234bcd done: delivered=0 seconds=21.71 mbps_per_second=[] longest_gaps=[] path_challenges=2 migrations=2 path_failures=0 silence_pings=0 srtt_us=5508 bandwidth_mbps=7.3 retransmitted=14585 timeouts=495 packets_sent=25541 packets_received=8222 error=None
+handshake from <客户端公网地址>:29511: down 15000000
+accepted b5a52b7d from Some(<客户端公网地址>:29511): down 15000000
+b5a52b7d peer moved Some(<客户端公网地址>:29511) -> Some(<客户端公网地址>:29512) at 3.01s: path_challenges=1 migrations=1 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=6294 timeouts=705 packets_sent=8560 packets_received=1148
+b5a52b7d peer moved Some(<客户端公网地址>:29512) -> Some(<客户端公网地址>:29513) at 6.01s: path_challenges=2 migrations=2 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=7587 timeouts=728 packets_sent=11348 packets_received=2312
+b5a52b7d done: delivered=0 seconds=20.45 mbps_per_second=[] longest_gaps=[] path_challenges=2 migrations=2 path_failures=0 silence_pings=0 srtt_us=4373 bandwidth_mbps=8.5 retransmitted=13136 timeouts=747 packets_sent=24091 packets_received=8089 error=None
+handshake from <客户端公网地址>:29517: up 120000000
+accepted c53c9aa6 from Some(<客户端公网地址>:29517): up 120000000
+c53c9aa6 done: delivered=120000000 seconds=8.67 mbps_per_second=[196.6 99.5 99.6 99.6 99.2 99.7 99.9 99.6 66.2] longest_gaps=[] path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=18133 packets_received=87897 error=None
+handshake from <客户端公网地址>:29521: up 120000000
+accepted ed498e55 from Some(<客户端公网地址>:29521): up 120000000
+ed498e55 peer moved Some(<客户端公网地址>:29521) -> Some(<客户端公网地址>:29522) at 3.01s: path_challenges=1 migrations=1 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=6562 packets_received=36430
+ed498e55 peer moved Some(<客户端公网地址>:29522) -> Some(<客户端公网地址>:29523) at 6.01s: path_challenges=2 migrations=2 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=12583 packets_received=63686
+ed498e55 done: delivered=120000000 seconds=8.69 mbps_per_second=[195.5 99.5 99.6 98.7 99.8 99.0 100.1 98.3 69.6] longest_gaps=[] path_challenges=2 migrations=2 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=17781 packets_received=87996 error=None
+handshake from <客户端公网地址>:29524: up 120000000
+accepted 0eba5972 from Some(<客户端公网地址>:29524): up 120000000
+0eba5972 peer moved Some(<客户端公网地址>:29524) -> Some(<客户端公网地址>:29525) at 3.01s: path_challenges=1 migrations=1 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=6597 packets_received=36446
+0eba5972 peer moved Some(<客户端公网地址>:29525) -> Some(<客户端公网地址>:29526) at 6.01s: path_challenges=2 migrations=2 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=12438 packets_received=63747
+0eba5972 done: delivered=120000000 seconds=8.75 mbps_per_second=[194.7 99.6 99.2 96.1 100.5 99.5 95.7 99.3 75.5] longest_gaps=[] path_challenges=2 migrations=2 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=17739 packets_received=88652 error=None
+handshake from <客户端公网地址>:29528: down 15000000
+accepted 23994640 from Some(<客户端公网地址>:29528): down 15000000
+23994640 done: delivered=0 seconds=20.85 mbps_per_second=[] longest_gaps=[] path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5557 bandwidth_mbps=7.5 retransmitted=9728 timeouts=320 packets_sent=20680 packets_received=5631 error=None
+handshake from <客户端公网地址>:29532: down 15000000
+accepted f38f438e from Some(<客户端公网地址>:29532): down 15000000
+f38f438e peer moved Some(<客户端公网地址>:29532) -> Some(<客户端公网地址>:29533) at 4.01s: path_challenges=1 migrations=1 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=6513 timeouts=384 packets_sent=8576 packets_received=1062
+f38f438e peer moved Some(<客户端公网地址>:29533) -> Some(<客户端公网地址>:29534) at 6.01s: path_challenges=2 migrations=2 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=7820 timeouts=384 packets_sent=10920 packets_received=1879
+f38f438e done: delivered=0 seconds=21.70 mbps_per_second=[] longest_gaps=[] path_challenges=2 migrations=2 path_failures=0 silence_pings=0 srtt_us=5373 bandwidth_mbps=7.3 retransmitted=12092 timeouts=391 packets_sent=23048 packets_received=7866 error=None
+handshake from <客户端公网地址>:29535: down 15000000
+accepted 3db14252 from Some(<客户端公网地址>:29535): down 15000000
+3db14252 peer moved Some(<客户端公网地址>:29535) -> Some(<客户端公网地址>:29537) at 3.01s: path_challenges=1 migrations=1 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=7373 timeouts=192 packets_sent=9396 packets_received=1090
+3db14252 peer moved Some(<客户端公网地址>:29537) -> Some(<客户端公网地址>:29538) at 6.01s: path_challenges=2 migrations=2 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=8369 timeouts=192 packets_sent=11886 packets_received=2283
+3db14252 done: delivered=0 seconds=20.93 mbps_per_second=[] longest_gaps=[] path_challenges=2 migrations=2 path_failures=0 silence_pings=0 srtt_us=5398 bandwidth_mbps=7.8 retransmitted=12402 timeouts=192 packets_sent=23360 packets_received=8226 error=None
+handshake from <客户端公网地址>:29543: up 120000000
+accepted 5eeed040 from Some(<客户端公网地址>:29543): up 120000000
+5eeed040 done: delivered=120000000 seconds=8.74 mbps_per_second=[193.0 99.7 99.7 99.7 99.7 99.6 99.5 99.7 69.3] longest_gaps=[] path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=18758 packets_received=88094 error=None
+handshake from <客户端公网地址>:29548: up 120000000
+accepted 6afb5be9 from Some(<客户端公网地址>:29548): up 120000000
+6afb5be9 peer moved Some(<客户端公网地址>:29548) -> Some(<客户端公网地址>:29549) at 3.01s: path_challenges=1 migrations=1 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=6867 packets_received=36416
+6afb5be9 peer moved Some(<客户端公网地址>:29549) -> Some(<客户端公网地址>:29550) at 6.01s: path_challenges=2 migrations=2 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=13248 packets_received=63777
+6afb5be9 done: delivered=120000000 seconds=8.68 mbps_per_second=[195.6 99.6 99.6 99.9 99.6 99.7 98.8 99.7 67.5] longest_gaps=[] path_challenges=2 migrations=2 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=18914 packets_received=88012 error=None
+handshake from <客户端公网地址>:29555: up 120000000
+accepted ef287a71 from Some(<客户端公网地址>:29555): up 120000000
+ef287a71 peer moved Some(<客户端公网地址>:29555) -> Some(<客户端公网地址>:29557) at 3.01s: path_challenges=1 migrations=1 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=6883 packets_received=36396
+ef287a71 peer moved Some(<客户端公网地址>:29557) -> Some(<客户端公网地址>:29558) at 6.01s: path_challenges=2 migrations=2 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=13065 packets_received=63663
+ef287a71 done: delivered=120000000 seconds=8.75 mbps_per_second=[195.4 99.6 99.5 95.7 99.7 99.0 96.3 100.0 74.7] longest_gaps=[] path_challenges=2 migrations=2 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=18650 packets_received=88551 error=None

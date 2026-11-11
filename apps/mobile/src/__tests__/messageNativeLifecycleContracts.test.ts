@@ -242,7 +242,9 @@ it('resets identity-bound row state before a recycled cell displays another item
     expect(bubbleSource).toContain('useRecyclingState(false)');
     expect(bubbleSource).toContain('useRecyclingState<{');
     expect(bubbleSource).toContain('useRecyclingState<string | null>(null)');
-    expect(source).toContain('const [contentWidth, setContentWidth] = useRecyclingState(0);');
+    // Markdown bodies also render in plain ScrollViews; only LegendList rows may pick recycling state.
+    expect(source).toContain('const [contentWidth, setContentWidth] = useRowState(0);');
+    expect(source).toContain('<LegendListRowContext.Provider value>');
     // 普通列表仍默认使用回收态；只有群聊的普通 ScrollView 注入 React 状态。
     // 同时守住逐层传递，避免嵌套缩略图漏接后恢复原来的群聊崩溃。
     for (const component of ['AttachmentStrip', 'MediaPreview', 'PendingAttachmentImage']) {

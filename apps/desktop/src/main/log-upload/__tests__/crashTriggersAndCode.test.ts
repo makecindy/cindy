@@ -139,10 +139,25 @@ describe('generateUploadCode', () => {
     };
   }
 
-  it('产出 XXXX-XXXX 形态', () => {
-    const code = generateUploadCode(fixedBytes([0, 1, 2, 3, 4, 5, 6, 7]));
+  // 同一随机输入在不同区域必须得到不同编号；旧用例只检查无前缀短码，无法保护跨区检索。
+  it.each([
+    ['cn', 'CN-2345-6789'],
+    ['global', 'GLOBAL-2345-6789'],
+    ['dev', 'DEV-2345-6789'],
+  ] as const)('%s 使用区域前缀，保留完整的 8 位随机部分', (region, expected) => {
+    const code = generateUploadCode(fixedBytes([0, 1, 2, 3, 4, 5, 6, 7]), region);
+    expect(code).toBe(expected);
     expect(isFormattedUploadCode(code)).toBe(true);
-    expect(code).toHaveLength(9); // 8 位 + 一个连字符
+  });
+
+  it.each([
+    ['2345-6789', true], // 历史上传编号继续有效。
+    ['OTHER-2345-6789', false],
+    ['CN-GLOBAL-2345-6789', false],
+    ['CN-2345-678', false],
+    ['GLOBAL-2345-6780', false],
+  ] as const)('编号校验 %s → %s', (value, valid) => {
+    expect(isFormattedUploadCode(value)).toBe(valid);
   });
 
   it('只用去掉易混字符的字符集（用户要能口述）', () => {
@@ -150,8 +165,8 @@ describe('generateUploadCode', () => {
       const out = new Uint8Array(size);
       for (let i = 0; i < size; i += 1) out[i] = i * 7;
       return out;
-    });
-    for (const ch of code.replace('-', '')) {
+    }, 'global');
+    for (const ch of code.slice('GLOBAL-'.length).replace('-', '')) {
       expect(UPLOAD_CODE_ALPHABET).toContain(ch);
     }
   });
@@ -164,7 +179,7 @@ describe('generateUploadCode', () => {
 
   it('丢弃越界字节后仍能凑满长度（rejection sampling 不会死循环）', () => {
     // 255 一定越界(limit = floor(256/30)*30 = 240),混入大量越界字节。
-    const code = generateUploadCode(fixedBytes([255, 255, 255, 5]));
+    const code = generateUploadCode(fixedBytes([255, 255, 255, 5]), 'global');
     expect(isFormattedUploadCode(code)).toBe(true);
   });
 
@@ -174,7 +189,7 @@ describe('generateUploadCode', () => {
       for (let i = 0; i < size; i += 1) out[i] = Math.floor(Math.random() * 256);
       return out;
     };
-    const codes = new Set(Array.from({ length: 50 }, () => generateUploadCode(random)));
+    const codes = new Set(Array.from({ length: 50 }, () => generateUploadCode(random, 'global')));
     expect(codes.size).toBeGreaterThan(40);
   });
 });

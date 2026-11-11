@@ -4,7 +4,7 @@ import { net } from 'electron';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { readFile as readMedia, supportedMime } from '../cindy-media/blobStore.js';
+import { readFile as readMedia, supportedMime } from '../cindy-media/blobStore.desktop.js';
 import { captureRemoteMediaCacheValidity, chatMediaPersistentCache, remoteMediaCacheGeneration } from '../device-link/remoteMediaPersistentCache.js';
 import { ownerScopedUserDataPath } from '../appSessionState.js';
 import { botGroupAttachmentsPath } from './botGroupWorkDir.js';

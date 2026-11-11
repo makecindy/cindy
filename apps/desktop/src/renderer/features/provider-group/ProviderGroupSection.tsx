@@ -178,7 +178,8 @@ export function ProviderGroupSection({ providerId, providerName, deviceId, devic
         {config && <span className="text-13 text-[var(--text-tertiary)]">{providerGroupDeviceCount(config.members)}</span>}
         <span className="flex-1" />
         {config && (
-          <Button variant="secondary" size="sm" compact tone="quiet" disabled={blocked} onClick={() => void deleteGroup()}>
+          // Deleting the group is irreversible: danger tone (DESIGN.md §4 destructive actions).
+          <Button variant="secondary" size="sm" compact tone="danger" disabled={blocked} onClick={() => void deleteGroup()}>
             {t('providerGroup.section.delete')}
           </Button>
         )}
@@ -398,6 +399,7 @@ function MemberRow({
   // 无障碍标签与移出确认用：账号行带上电脑名，同一台电脑的几个账号不会重名。
   const label = accountName === null ? computer : `${computer} · ${accountName}`;
   const ready = status?.state === 'available' || status?.state === 'full';
+  const quotaExhausted = status?.state === 'cooling' && status.usageLimit != null;
   const running = status?.running ?? 0;
   // 能用的时候状态词本身就报负载(「空闲」/「N 个任务运行中」)，所以每行永远看得出这台现在跑了几个；
   // 「已满」等于跑满上限，上限就在旁边的下拉里，不必再报一遍数。其余状态(冷却、不在线、已暂停)
@@ -456,15 +458,17 @@ function MemberRow({
                 />
               </span>
               <span className="flex flex-wrap items-center gap-1.5 text-12 text-[var(--text-secondary)]">
-                <span
-                  aria-hidden="true"
-                  className="h-1.5 w-1.5 shrink-0 rounded-full"
-                  style={{ background: ready ? 'var(--remote-status-ready)' : 'var(--remote-status-disconnected)' }}
-                />
+                <span className="inline-flex min-w-0 max-w-full items-center gap-1.5">
+                  <span
+                    aria-hidden="true"
+                    className="h-1.5 w-1.5 shrink-0 rounded-full"
+                    style={{ background: quotaExhausted ? 'var(--quota-bar-crit)' : ready ? 'var(--remote-status-ready)' : 'var(--remote-status-disconnected)' }}
+                  />
+                  <span className="min-w-0">{member.kind === 'local' && status?.state === 'paused'
+                    ? t('providerGroup.member.status.pausedLocal')
+                    : memberStatusText(t, status, i18n.language)}</span>
+                </span>
                 {/* 运行数是状态，上限是设置：各说一次，不再出现「0 / 10」与下拉里重复同一个上限。 */}
-                <span>{member.kind === 'local' && status?.state === 'paused'
-                  ? t('providerGroup.member.status.pausedLocal')
-                  : memberStatusText(t, status, i18n.language)}</span>
                 {appendRunning && (
                   <>
                     <span aria-hidden="true">·</span>

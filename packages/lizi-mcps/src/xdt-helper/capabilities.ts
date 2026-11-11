@@ -40,7 +40,7 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
     oneLiner: 'Grok 有浏览器跳转和设备短码两种登录方式；agent 可发授权页与短码并查询完成状态。',
     detail: [
       '浏览器跳转登录在「设置 → 模型供应商」的 Grok 连接中可用；仅伙伴对话可调用 cindy 网关的 connect_account({kind:"host", id:"grok"}) 弹出连接卡，普通任务请使用设置页或下述设备码登录。',
-      '设备码登录适合远程协助：agent 通过 cindy_helper 的 ask_owner（kind="connect"，service="grok"）取得 xAI 授权页和短码，发给用户；用户在授权页输入短码并确认，Cindy 在本机自动轮询并保存凭证。',
+      '设备码登录适合远程协助：agent 通过 cindy_helper 的 start_grok_device_login 取得 xAI 授权页和短码，发给用户；用户在授权页输入短码并确认，Cindy 在本机自动轮询并保存凭证。',
       'agent 可用 get_grok_login_status 查询连接状态，用户要求停止时可用 cancel_grok_device_login。长期 access token 和 refresh token 不会出现在工具返回值或聊天里；不要要求用户粘贴长期凭证。',
     ].join(' '),
   },
@@ -94,8 +94,7 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
       '【原则】用户本人能做的操作(含跨电脑)，Agent 也应有对应工具；是否执行由权限档与自动审核决定。数据保存在各自的电脑上：下结论「没有 / 没人在跟」之前，先确认查的是不是只有本机。',
       '【任务】cindy_helper history 类：list_sessions / search_chat_history(device=local|all|<deviceId>)、get_chat_history(deviceId::sessionId)、get_task_digest(一件任务的 ≤2KB 摘要：状态、已持续分钟、最后的要求与回答、待答问题、错误、模型路线与建议换到的下一条、PR、排队数；deviceId::sessionId 只读)、list_history_devices 可跨电脑；list_workdirs、list_session_queue 仅本机。handoff 类 send_to_session：发给既有任务可跨电脑(deviceId::sessionId)，新建任务仅本机。control 类 archive_sessions / unarchive_sessions 可跨电脑(deviceId::sessionId，单次限定一台电脑)；改名、移动、标签、排队消息、插话、停止、运行设置、list_projects 与项目增删改仅本机。',
       '【定时任务】cindy_scheduler：schedule_list / get / list_runs(device=local|all|<deviceId>，list 可用 query 做文本筛选)与 schedule_update / pause / resume / delete / run_now / schedule_create(device=<deviceId>)可跨电脑；schedule_set_pre_run_hook、当前运行的通知设置仅本机；本机定时任务可用 agentDeviceId 让每次新建的任务在其它电脑或分享来的供应商上运行（schedule_list_models 查位置与模型）。',
-      '【伙伴】cindy_helper bots 类(仅伙伴任务可见)：list_agents / send_to_agent 可跨电脑(deviceId::botId)；get_teammate_home / move_teammate_home 查看与更换任一伙伴的主力电脑(跨电脑，更换按权限档)；资料、能力、待办、后台任务仅本机。list_teammate_projects / set_teammate_project 读取与修改自身关联项目，资料按需读取，关联不授予任务责任或执行权限。',
-      '【自动跟进】宿主在任务卡住、等主人、出错、撞用量上限、做完时叫醒负责跟进的伙伴(内置例行任务)。伙伴先 get_task_digest 读摘要，再用 continue_workbench_task 让任务继续、send_to_session 代答低风险问题、set_session_runtime 换到 suggested_route(仅本机)、update_teammate_todo 记下要主人处理的事。get_workbench 是工作台「一眼」(等你 / 在做，仅本机投影)；负责「自动跟进所有任务」的伙伴可读取与继续另一台在线电脑上的任务(read_workbench_task / continue_workbench_task 传 deviceId::sessionId)，别的伙伴开的任务默认只读不继续(TASK_FOLLOWED_BY_OTHER_BOT，主人可在那位伙伴的设置里交出来)；其它伙伴只碰自己开的或接手的任务。',
+      '【伙伴】cindy_helper bots 类(仅伙伴任务可见)：list_agents 可跨电脑发现伙伴，返回伙伴主对话的 session_id(另一台电脑上为 deviceId::sessionId)，发消息用 send_to_session；get_teammate_home / move_teammate_home 查看与更换任一伙伴的主力电脑(跨电脑，更换按权限档)；资料、能力仅本机。list_teammate_projects / set_teammate_project 读取与修改自身关联项目，资料按需读取，关联不授予任务责任或执行权限。',
       '【跨电脑的前提】对方电脑在线、同一账号、已开启远程控制。离线、未开启、版本不支持或超时会按电脑写明原因，结果里的 partial=true 表示有电脑没查到。主力电脑在别处的伙伴是例外：它和主人的对话存在云端，那台电脑离线时 search_chat_history 也能查到（cloud_hits，关键词子串匹配）。',
       '【尚无工具】在另一台电脑上新建任务、管理另一台电脑上的任务(改名 / 停止 / 队列)与项目；这些用户可在远程控制里手动完成。定时任务可以 schedule_create(device=) 新建到另一台电脑。新任务的 Agent 可用 send_to_session create 的 agent_device_id 选另一台电脑的远程或分享供应商，任务与文件仍在本机。',
     ].join(' '),
@@ -157,7 +156,7 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
     detail: [
       '【授权】主人私聊输入及宿主实时核验的群内主人请求沿用普通任务权限流程，不另加行动确认卡。访客、转入消息及群授权核验暂不可用不算主人输入。自动唤醒、跟进责任与可用工具不增加操作授权。观察可以自动进行；发消息、插话、队列修改、停止、代答、恢复及模型/账号变更必须符合主人已委托的任务与动作范围，否则先展示目标、动作和内容并等待确认。',
       '【入口】cindy_helper 的 history 类 list_sessions / list_session_queue 提供 queuedCount、队列位置、来源、入队时间、正文摘要与 consuming 状态；control 类提供 update_session_queued_message、cancel_session_queued_message、steer_session_queued_message、move_session_queued_message、steer_session、stop_session_turn、get_session_runtime。',
-      '【伙伴入口】伙伴可发现通用 control 类；主人请求沿用普通权限流程，自动轮次的实际写入须通过 Host 行动授权。自己的后台任务优先用专属入口：message_session_task 的 queue / steer / resume 分别表示排队、同轮插话、恢复暂停；stop_session_task 的 cancel / request-stop / pause 分别表示取消任务、请求当前轮停止、保留任务与队列的可恢复暂停。check_session_task 的 control 区分 pausing / paused；requested 或 unconfirmed 不能当作已停。不支持的引擎明确返回失败。',
+      '【伙伴入口】伙伴可发现通用 control 类；主人请求沿用普通权限流程，自动轮次的实际写入须通过 Host 行动授权。',
       '【队列所有权】只能修改或撤回当前调用 session 自己通过 send_to_session 投递、且尚未进入 consuming 的消息；Orca、scheduler、用户或其它 session 的消息都会 fail-closed 拒绝。Orca worker 队列控制与这里复用同一底层生命周期实现。steer_session_queued_message / move_session_queued_message 把排队消息转为插话或调整顺序,可操作范围另含自己任务队列里由其它任务 / 协同成员发来的机器消息;没插成时消息留在队列并返回 reason。',
       '【插话】steer_session 只对正在运行且支持 same-turn steer 的 session 生效，在 provider 的下一个输入间隙注入当前 turn；若 turn 已结束会明确失败，不会退化成下一 turn。',
       '【停止】stop_session_turn 是请求式优雅停止：当前并行工具全部收尾后才发送 provider 软中断；不关闭 transport、不重建 session、不硬杀进程，超时未确认会返回 unconfirmed。',

@@ -31,7 +31,7 @@ vi.mock('../../cindy-brain/index.js', () => ({ getGhostManager: () => ({ list: i
 vi.mock('../download.js', () => ({ downloadVerifiedPlugin: io.download }));
 vi.mock('../../cindy-brain/exportGhostPackage.js', () => ({ inspectInstalledGhostPackageContent: io.content, snapshotInstalledGhostPackage: io.snapshot }));
 vi.mock('../../plugin-publisher/putObject.js', () => ({ putLocalFile: io.put, PluginPublisherPutError: class extends Error {} }));
-vi.mock('../../serverApiClient.js', () => ({ serverApiFetch: io.api, ServerApiError: class extends Error {} }));
+vi.mock('../../serverApiClient.desktop.js', () => ({ serverApiFetch: io.api, ServerApiError: class extends Error {} }));
 vi.mock('../../textClipboard.js', () => ({ rememberIssuedClipboardText: vi.fn() }));
 vi.mock('../../lifecycle.js', () => ({ onQuit: vi.fn() }));
 vi.mock('../objectUrlPolicy.js', () => ({ pluginObjectUrlOptions: () => undefined }));

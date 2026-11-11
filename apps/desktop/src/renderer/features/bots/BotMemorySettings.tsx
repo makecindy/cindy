@@ -450,7 +450,7 @@ function MemoryDetail({
         <span className="flex-1" />
         <Button
           variant="secondary"
-          tone="quiet"
+          tone="danger"
           size="md"
           onClick={() => void remove()}
           loading={busy}
