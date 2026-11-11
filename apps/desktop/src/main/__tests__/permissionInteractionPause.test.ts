@@ -14,13 +14,17 @@ const names = new Set([
   'schedulePendingPermissionTimeout',
   'resolvePendingInteraction', 'cancelPendingInteraction', 'defaultDecisionForPending',
   'cleanupPendingAgentInteractionsForSession', 'takePendingInteractionsForSession',
-  'bindSharedPermission', 'broadcastToAllWindows',
+  'bindSharedPermission', 'broadcastToAllWindows', 'getPendingInteractionsForSession',
 ]);
 const functions = ast.statements.filter((node) => ts.isFunctionDeclaration(node)
   && node.name && names.has(node.name.text)).map(node => node.getText(ast).replace(/^export /, ''));
 let resolveHandlerSource = '';
 let interactionReaderSource = '';
+let userActionSource = '';
 function visit(node: ts.Node): void {
+  if (ts.isPropertyAssignment(node) && node.name.getText(ast) === 'onUserAction') {
+    userActionSource = node.initializer.getText(ast);
+  }
   if (ts.isCallExpression(node) && node.expression.getText(ast) === 'setSharedTaskInteractionReader') {
     interactionReaderSource = node.arguments[0].getText(ast);
   }
@@ -33,12 +37,13 @@ function visit(node: ts.Node): void {
 visit(ast);
 if (!resolveHandlerSource) throw new Error('Resolve interaction IPC handler missing');
 if (!interactionReaderSource) throw new Error('Shared-task interaction reader missing');
+if (!userActionSource) throw new Error('User action callback missing');
 const compiled = ts.transpileModule(`${functions.join('\n')}
 setSharedTaskInteractionReader(${interactionReaderSource});
 return { install: installDesktopInteractionListener,
   answer: resolvePendingInteraction, cleanup: cleanupPendingAgentInteractionsForSession,
   take: takePendingInteractionsForSession, broadcast: broadcastToAllWindows,
-  resolveFromIpc: ${resolveHandlerSource} };`, {
+  userAction: ${userActionSource}, resolveFromIpc: ${resolveHandlerSource} };`, {
   compilerOptions: { target: ts.ScriptTarget.ES2022 },
 }).outputText;
 const MINUTE = 60_000;
@@ -55,6 +60,8 @@ function harness() {
   const entries = new Map();
   const dismiss = vi.fn();
   const dismissInteractionNotifications = vi.fn();
+  const pendingSetup: Array<{ request: { kind: 'plugin_setup'; requestId: string } }> = [];
+  const emptyBridge = { pendingSnapshots: () => [] };
   const deps = {
     maker: { getSession: () => ({ submitAsyncQuestionAnswer: vi.fn(async () => true) }) },
     createSharedPermission,
@@ -63,7 +70,12 @@ function harness() {
     setSharedTaskInteractionReader,
     isPluginSetupInteractionDecision: () => false,
     assertResolveInteractionOrigin: vi.fn(), isPendingDesktopOnlyConfirmation: () => false,
-    issueConfirmBridge: { pendingSnapshots: () => [] },
+    issueConfirmBridge: emptyBridge,
+    mcpSetupBridge: emptyBridge, renameSessionsConfirmBridge: emptyBridge,
+    taskActionConfirmBridge: emptyBridge, orcaWorkerPermissionConfirmBridge: emptyBridge,
+    ghostGrantConfirmBridge: emptyBridge,
+    getInputHandoffService: () => undefined,
+    usageLimitAutoResume: { noteUserAction: vi.fn() },
     pendingInteractionResolvers: entries,
     agentInputCoordinatorHolder: coordinator, inputCoordinator: coordinator,
     PERMISSION_INTERACTION_TIMEOUT_MS: 10 * MINUTE,
@@ -81,7 +93,8 @@ function harness() {
     MAKER_PUSH: { INTERACTION_REQUEST: 'request', INTERACTION_DISMISSED: 'dismissed' },
     handleAgentIslandInteractionAfterBroadcast: vi.fn(), handleAgentIslandInteractionDismissed: vi.fn(),
     dismissRendererInteraction: dismiss, persistInteractionDecision: vi.fn(),
-    goalAskAnswerObserver: null, ghostSetupInteractionBridge: { cleanupForSession: vi.fn() },
+    goalAskAnswerObserver: null,
+    ghostSetupInteractionBridge: { cleanupForSession: vi.fn(), pendingSnapshots: () => pendingSetup },
   };
   const runtime = new Function(...Object.keys(deps), compiled)(...Object.values(deps)) as {
     install: (session: InteractionSession) => void;
@@ -90,6 +103,7 @@ function harness() {
     take: (id: string) => Array<{ resolve: (decision: InteractionDecision) => void; sharedPermission?: SharedPermission }>;
     resolveFromIpc: (event: unknown, id: string, decision: InteractionDecision) => Promise<{ accepted: boolean }>;
     broadcast: (channel: string, payload: unknown) => void;
+    userAction: (sessionId: string) => void;
   };
   dismiss.mockImplementation((entry, requestId, reason, resolvedAs) => runtime.broadcast('dismissed', {
     sessionId: entry.sessionId, requestId, reason, resolvedAs,
@@ -108,7 +122,7 @@ function harness() {
     void promise.then(settled);
     return { promise, settled, lease };
   };
-  return { ...runtime, request, entries, dismiss, dismissInteractionNotifications,
+  return { ...runtime, request, entries, dismiss, dismissInteractionNotifications, pendingSetup,
     setPaused: (id: string, paused: boolean) => coordinator.setExecutionPaused(id, paused),
     setSharedTask: (peer?: SharedTaskPeerCapture) => { sharedTask = peer; } };
 }
@@ -131,6 +145,43 @@ it.each(['permission', 'ask_user_question', 'plan_review'] as const)('retires no
   h.setPaused('task', false);
   await expect(h.resolveFromIpc({}, 'request', decision)).resolves.toEqual({ accepted: true });
   await expect(pending.promise).resolves.toEqual(decision);
+  expect(h.dismissInteractionNotifications).toHaveBeenCalledExactlyOnceWith('task');
+});
+
+// #9944 review / unit: a queued message can update user activity while an
+// unanswered permission still blocks dispatch. Exercise that production callback.
+it('keeps interaction reminders when new input only updates user activity', () => {
+  const h = harness();
+  h.request('permission', 'task');
+  h.userAction('task');
+  expect(h.entries.has('permission')).toBe(true);
+  expect(h.dismissInteractionNotifications).not.toHaveBeenCalled();
+});
+
+// #9944 review / unit: one resolved permission must not erase another pending
+// async question or Host-owned card. Retire the group only when it is empty.
+it('keeps reminders until the last interaction in the task is handled', async () => {
+  const h = harness();
+  h.request('question', 'task', 'ask_user_question', undefined, undefined, false, 'async');
+  h.request('permission', 'task');
+  h.request('other-task-permission', 'other-task');
+  expect(h.answer('permission', { kind: 'permission', behavior: 'allow' })).toBe(true);
+  expect(h.dismissInteractionNotifications).not.toHaveBeenCalled();
+
+  await expect(h.resolveFromIpc({}, 'question', { kind: 'ask_user_question', answers: { choice: 'yes' } }))
+    .resolves.toEqual({ accepted: true });
+  expect(h.dismissInteractionNotifications).toHaveBeenCalledExactlyOnceWith('task');
+  expect(h.entries.has('other-task-permission')).toBe(true);
+});
+
+it('keeps reminders while a Host-owned setup confirmation is still pending', () => {
+  const h = harness();
+  h.request('permission', 'task');
+  h.pendingSetup.push({ request: { kind: 'plugin_setup', requestId: 'setup' } });
+  expect(h.answer('permission', { kind: 'permission', behavior: 'allow' })).toBe(true);
+  expect(h.dismissInteractionNotifications).not.toHaveBeenCalled();
+  h.pendingSetup.length = 0;
+  h.broadcast('dismissed', { sessionId: 'task', requestId: 'setup', reason: 'resolved' });
   expect(h.dismissInteractionNotifications).toHaveBeenCalledExactlyOnceWith('task');
 });
 

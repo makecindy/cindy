@@ -187,7 +187,7 @@ function trackInteractionNotification(sessionId: string, deviceId?: string): Int
   return entry;
 }
 
-/** A submitted choice/input retires this task's outstanding macOS action notices. */
+/** Retire this task's macOS action notices after its last interaction closes. */
 export function dismissSessionInteractionNotifications(sessionId: string, deviceId?: string): void {
   const entries = interactionNotifications.get(sessionDesktopNotificationKey(sessionId, deviceId));
   if (!entries) return;
