@@ -126,7 +126,6 @@ import {
   subscribeComposerSubmitRequest,
   subscribePromptInsert,
   subscribeSessionLinkInsert,
-  subscribeTodoReferenceInsert,
   takeComposerSubmitRequest,
 } from '@/lib/composerActionsBus';
 import { resolveComposerModelSelection } from './composerModelSelection';
@@ -2088,7 +2087,9 @@ export function ChatInput({
   const activePermissionModeRef = useRef(activePermissionMode);
   activePermissionModeRef.current = activePermissionMode;
   // handlePermissionModeChange 定义在 useEditor 之后, ref 桥接 (同 dispatchSendRef)。
-  const handlePermissionModeChangeRef = useRef<(mode: PermissionMode) => void | Promise<void>>(
+  const handlePermissionModeChangeRef = useRef<
+    (mode: PermissionMode, options?: { confirmFullAccess?: boolean }) => void | Promise<void>
+  >(
     () => {},
   );
 
@@ -2795,7 +2796,8 @@ export function ChatInput({
           );
           if (!next) return false;
           event.preventDefault();
-          void handlePermissionModeChangeRef.current(next);
+          // 快捷键轮切没有列表说明可看: 升级到完全访问时仍先确认。
+          void handlePermissionModeChangeRef.current(next, { confirmFullAccess: true });
           return true;
         }
 
@@ -3204,18 +3206,6 @@ export function ChatInput({
       appendMentionChip(editor, pastedSessionChipAttrs({ href, label: null }), { at });
       lastComposerSelectionFromRef.current = editor.state.selection.from;
       resolveSessionChipTitles(editor);
-    });
-  }, [editor, sessionId]);
-
-  // 伙伴近况里点一条待办：把它作为引用 chip 放进输入框，用户自己写一句再发。
-  useEffect(() => {
-    if (!editor || !sessionId) return;
-    return subscribeTodoReferenceInsert(({ targetSessionId, href, title }) => {
-      if (targetSessionId !== sessionId || editor.isDestroyed) return;
-      if (composerMutationLockedRef.current) return;
-      const at = lastComposerSelectionFromRef.current ?? editor.state.selection.from;
-      appendMentionChip(editor, { kind: 'todo', label: title, path: href }, { at });
-      lastComposerSelectionFromRef.current = editor.state.selection.from;
     });
   }, [editor, sessionId]);
 
@@ -9114,10 +9104,11 @@ export function ChatInput({
   }, [navigate, activeProviderId, activeModel, currentModelAgentKind]);
 
   const handlePermissionModeChange = useCallback(
-    async (newMode: PermissionMode) => {
+    async (newMode: PermissionMode, options?: { confirmFullAccess?: boolean }) => {
       if (settingsLocked) return;
+      // 列表里直接选择完全访问不再确认; 只有快捷键轮切(options.confirmFullAccess)保留确认。
       const previousMode = activePermissionModeRef.current;
-      if (requiresFullAccessConfirmation(previousMode, newMode)) {
+      if (options?.confirmFullAccess && requiresFullAccessConfirmation(previousMode, newMode)) {
         const confirmed = await confirmDialog({
           title: t('newChat.chatInput.fullAccessConfirmation.title'),
           description: t('newChat.chatInput.fullAccessConfirmation.description'),
@@ -9893,7 +9884,6 @@ export function ChatInput({
                         onBack={() => setAddDirViewOpen(false)}
                         onSelectRecent={handleAddRecentDir}
                         onBrowse={handleBrowseExtraDir}
-                        maxHeight={paletteMaxHeight}
                       />
                     ) : (
                       <AtMentionPanel
@@ -9940,6 +9930,7 @@ export function ChatInput({
                       />
                     )
                   }
+                  maxContentHeight={paletteMaxHeight}
                   disabled={composerMutationLocked}
                   dense={effectiveDenseToolbar}
                   visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
@@ -10178,6 +10169,7 @@ export function ChatInput({
                     // 已建会话按实际路由口径解析当前来源(含停用拷贝,跟真实扣费路由);
                     // 草稿是新路由选择,保持准入口径(PR #744 review 第十轮)。
                     actualRoute={!!sessionId}
+            previewSubscriptionPool={!sessionId}
                     // 有过 Agent 回复 = 供应商组已为这个任务选好电脑,组那一项的用量按那台显示。
                     taskStarted={taskStarted}
                     onProviderChange={(providerId, modelId, effort, fast) =>

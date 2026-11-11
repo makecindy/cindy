@@ -7,14 +7,18 @@ type ManagedSkills = Awaited<
   ReturnType<NonNullable<AgentDeps["getManagedSkills"]>>
 >;
 
+export interface ManagedSkillPlugins {
+  /** Absolute path of this call's staging directory, when one was created. */
+  stagingDir?: string;
+  roots: string[];
+  dispose: () => Promise<void>;
+}
+
 /** Claude ignores skillOverrides for plugins. Mount only this session's allowed skills. */
 export async function prepareManagedSkillPlugins(
   skills: ManagedSkills,
   onUnavailable?: (name: string) => void,
-): Promise<{
-  roots: string[];
-  dispose: () => Promise<void>;
-}> {
+): Promise<ManagedSkillPlugins> {
   if (!skills.length) return { roots: [], dispose: async () => {} };
   const staging = await fs.mkdtemp(
     path.join(os.tmpdir(), "cindy-claude-skills-"),
@@ -65,7 +69,7 @@ export async function prepareManagedSkillPlugins(
         process.platform === "win32" ? "junction" : "dir",
       );
     }
-    return { roots: [...roots.values()], dispose };
+    return { stagingDir: staging, roots: [...roots.values()], dispose };
   } catch (error) {
     await dispose();
     throw error;

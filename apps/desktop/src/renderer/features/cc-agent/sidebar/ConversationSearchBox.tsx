@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { NavigateFunction } from 'react-router-dom';
+import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
 
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Spinner } from '@/components/ui/spinner';
@@ -971,6 +972,7 @@ export function SearchFilterMenu({
           lockedProjectComparisonKey,
       ) ?? null
     : null;
+  const choosableProjects = allKnownProjects.filter((project) => !isTeammateProjectPath(project.workingDir));
   const lockedProjectLabel = lockedProject
     ? projectDisplayLabelWithMachine(lockedProject)
     : lockedProjectName;
@@ -1085,11 +1087,11 @@ export function SearchFilterMenu({
             <span className="truncate">{t('ccAgent.search.filter.allProjects')}</span>
             {projects === 'all' && <Check size={15} className="ml-auto shrink-0 text-[var(--text-primary)]" />}
           </DropdownMenuItem>
-          {allKnownProjects.length > 0 && (
+          {choosableProjects.length > 0 && (
             <DropdownMenuSeparator className="my-1 bg-[var(--cmd-palette-border)]" />
           )}
           <div className="max-h-[280px] overflow-y-auto">
-            {allKnownProjects.map((project) => {
+            {choosableProjects.map((project) => {
               const comparisonKey = projectKeyComparisonKey(project.projectKey, localPlatform);
               const selected = comparisonKey != null && (selectedProjects?.has(comparisonKey) ?? false);
               const remoteIdentity = getRemoteProjectMachineIdentity(project);

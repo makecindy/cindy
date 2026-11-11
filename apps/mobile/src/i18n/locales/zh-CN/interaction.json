@@ -29,6 +29,13 @@
       "description": "完全访问会关闭工作区沙箱并跳过常规审批。{{appName}} 可以修改工作区外的文件、执行联网命令且不再询问；内置高风险操作仍会要求确认。",
       "confirm": "开启完全访问",
       "cancel": "保留当前权限"
+    },
+    "description": {
+      "default": "操作按需由你审批。",
+      "acceptEdits": "文件编辑直接允许，其他操作按需由你审批。",
+      "auto": "操作由 AI 模型审批，可能需要额外等待；必要时由你确认。",
+      "bypass": "常规操作直接允许，可访问工作区外文件和联网执行命令。",
+      "plan": "只分析和规划，不修改文件。"
     }
   },
   "planMode": {
@@ -36,6 +43,10 @@
     "exit": "退出计划模式"
   },
   "panel": {
+    "questionUnanswered": "未回答",
+    "questionWithdrawn": "无需再回答",
+    "withdrawnDraft": "这个问题已不再需要回答。\n{{reason}}\n草稿已保留，你仍可作为补充发送。",
+    "sendSupplement": "发送补充",
     "readOnlyKind": "待确认",
     "readOnlyTitle": "电脑端正在等待确认",
     "pendingRequests": "待处理请求",
@@ -450,5 +461,39 @@
       "ghost_id": "插件",
       "tool": "工具"
     }
+  },
+  "issueConfirm": {
+    "title": "确认提交反馈到 {{appName}}",
+    "typeBug": "Bug",
+    "typeFeature": "功能建议",
+    "titleLabel": "标题",
+    "bodyLabel": "正文(Markdown)",
+    "privacyHint": "Issue 的标题和正文将公开显示，并可能被搜索或缓存。系统只能隐藏部分常见敏感信息，无法识别所有语义隐私。",
+    "relatedLogsHint": "本次提交包含上方显示的相关客户端日志；日志在公开前已经过来源和字段筛选、脱敏及长度限制。",
+    "privacyConfirm": "我已检查以上公开内容，不包含不应公开的个人、对话或业务信息",
+    "submissionMethodLabel": "提交身份",
+    "identityGithubUser": "我的 GitHub 账号 @{{login}}",
+    "identityGithubUserHint": "你将成为该 Issue 的 GitHub 作者，可以在 GitHub 编辑或关闭",
+    "identityPlatform": "Cindy 官方 Bot @{{login}}（默认）",
+    "identityPlatformHint": "无需配置 GitHub 账号；Issue 由官方 Bot 创建，你可在正文中选择公开署名",
+    "publicNameLabel": "公开署名",
+    "publicNameHint": "该署名会公开显示在 Issue 正文中",
+    "anonymous": "匿名",
+    "useAnonymous": "使用匿名署名",
+    "envLine": "提交客户端环境（提交时自动附加）：客户端 {{appVersion}} · {{platform}} {{arch}}（{{osVersion}}）· 界面语言 {{uiLanguage}}",
+    "runtimeLine": "Harness {{harness}} · Model ID {{modelId}}（当前任务）",
+    "regionLine": "版本区域：{{region}}",
+    "regionCodeCn": "CN",
+    "regionCodeDev": "Dev",
+    "submit": "提交反馈",
+    "cancel": "取消",
+    "previewLabel": "GitHub · 公开反馈",
+    "edit": "修改",
+    "doneEditing": "完成修改",
+    "publicSubmit": "公开提交反馈",
+    "publicationNotice": "提交后，内容和署名将公开在 GitHub。",
+    "attribution": "署名：{{name}}",
+    "environment": "附带运行环境",
+    "identitySettings": "署名与账号"
   }
 }

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { once } from 'node:events';
 import { WebSocket, WebSocketServer } from 'ws';
-import { createServer, request as httpRequest } from 'node:http';
+import { createServer, request as httpRequest, type ServerResponse } from 'node:http';
 import { Transform } from 'node:stream';
 import { gzipSync, brotliCompressSync } from 'node:zlib';
 import type { AddressInfo } from 'node:net';
@@ -58,6 +58,12 @@ const mockState = vi.hoisted(() => {
 
 vi.mock('../pi-provider-transport.js', async importOriginal => ({ ...await importOriginal<typeof import('../pi-provider-transport.js')>(), createPiProviderFetch: mockState.createPiProviderFetch, handlePiProviderRequest: mockState.handlePiProviderRequest }));
 
+// Proxy routing does not perform standby-share cloud mutations. Keep this
+// external writer outside the test process rather than booting the whole app.
+vi.mock('../../device-link/providerShareAvailabilityTransport.js', () => ({
+  disableShareAvailability: () => { throw new Error('Unexpected standby-share mutation in proxy test'); },
+}));
+
 vi.mock('electron', () => ({
   app: {
     isPackaged: false,
@@ -81,7 +87,7 @@ vi.mock('../../logger.js', () => ({
   getLogDir: () => mockState.logDir,
 }));
 
-vi.mock('../grok-oauth-login.js', async (importOriginal) => ({ ...await importOriginal<typeof import('../grok-oauth-login.js')>(), peekGrokAccessToken: () => 'fixture-xai-token' }));
+vi.mock('../grok-oauth-login.desktop.js', async (importOriginal) => ({ ...await importOriginal<typeof import('../grok-oauth-login.desktop.js')>(), peekGrokAccessToken: () => 'fixture-xai-token' }));
 
 vi.mock('../../usageBroadcaster.js', () => ({
   recordXaiRateLimitSnapshot: mockState.recordXaiRateLimitSnapshot,
@@ -186,7 +192,7 @@ async function freshCodexProxyHost(realStripTransforms = false) {
   mockState.realStripTransforms = realStripTransforms;
   mockState.reportCindyGatewayKeyRejected.mockReset();
   mockState.gatewayBaseUrl = '';
-  const host = await import('../codex-proxy-host.js');
+  const host = await import('../codex-proxy-host.desktop.js');
   await host.disposeCodexProxy();
   host.resetCodexThreadUpstreamForTest();
   host.clearCodexProxyAuthInjection();
@@ -212,7 +218,7 @@ async function freshCodexProxyHost(realStripTransforms = false) {
 // 冷启动,不属于任何断言 —— 文件级 beforeAll 先把模块图焐热(hook 超时独立计;
 // Windows 给 120s,其它平台仍 60s),之后各用例复用已加载的模块。
 beforeAll(async () => {
-  await import('../codex-proxy-host.js');
+  await import('../codex-proxy-host.desktop.js');
 }, process.platform === 'win32' ? 120_000 : 60_000);
 
 
@@ -408,7 +414,7 @@ describe('withCodexUpstreamRecording', () => {
 
 describe('codex gateway config', () => {
   it.each(['oauth-bearer', 'env-key', 'provider-oauth'] as const)('summary fallback preserves %s credentials and endpoint', async (mode) => {
-    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');
+    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.desktop.js');
     const args = buildCodexProxySpawnArgs('http://127.0.0.1:12345', mode);
     const provider = (id: string) => Object.fromEntries(args.filter(v => v.startsWith(`model_providers.${id}.`))
       .map(v => { const [key, ...value] = v.slice(`model_providers.${id}.`.length).split('='); return [key, value.join('=')]; }));
@@ -418,7 +424,7 @@ describe('codex gateway config', () => {
   });
 
   it('所有认证模式都让缺少 model metadata 的 Codex 模型使用 CodeModeOnly', async () => {
-    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');
+    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.desktop.js');
 
     for (const mode of ['oauth-bearer', 'env-key', 'provider-oauth'] as const) {
       const args = buildCodexProxySpawnArgs('http://127.0.0.1:12345', mode);
@@ -427,7 +433,7 @@ describe('codex gateway config', () => {
   });
 
   it('oauth-bearer 模式: requires_openai_auth, 不带 env_key', async () => {
-    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');
+    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.desktop.js');
 
     const args = buildCodexProxySpawnArgs('http://127.0.0.1:12345', 'oauth-bearer');
 
@@ -438,7 +444,7 @@ describe('codex gateway config', () => {
   });
 
   it('oauth-bearer 模式: 追加 OpenAI 身份 provider(远端压缩)并关掉请求 zstd 压缩', async () => {
-    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');
+    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.desktop.js');
 
     const args = buildCodexProxySpawnArgs('http://127.0.0.1:12345', 'oauth-bearer');
 
@@ -459,7 +465,7 @@ describe('codex gateway config', () => {
   });
 
   it('env-key / provider-oauth 声明不被选中的 cindy_openai 占位(#8670: 老 thread resume 校验)', async () => {
-    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');
+    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.desktop.js');
 
     for (const mode of ['env-key', 'provider-oauth'] as const) {
       const args = buildCodexProxySpawnArgs('http://127.0.0.1:12345', mode);
@@ -480,7 +486,7 @@ describe('codex gateway config', () => {
   });
 
   it('env-key 模式: env_key=XDT_CODEX_API_KEY, 不带 requires_openai_auth', async () => {
-    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');
+    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.desktop.js');
 
     const args = buildCodexProxySpawnArgs('http://127.0.0.1:12345', 'env-key');
 
@@ -490,7 +496,7 @@ describe('codex gateway config', () => {
   });
 
   it('provider-oauth 模式: 仍用 env_key 占位,由 proxy 覆盖供应商 OAuth token', async () => {
-    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');
+    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.desktop.js');
 
     const args = buildCodexProxySpawnArgs('http://127.0.0.1:12345', 'provider-oauth');
 
@@ -554,7 +560,7 @@ describe('createCrossProviderCompactionCompatTransform', () => {
   };
 
   it('同时降级 compaction 与 agent 消息密文，保留可读正文和 reasoning(非 GPT 模型)', async () => {
-    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.js');
+    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.desktop.js');
     const transform = createCrossProviderCompactionCompatTransform();
 
     const out = transform(
@@ -585,7 +591,7 @@ describe('createCrossProviderCompactionCompatTransform', () => {
   });
 
   it('agent_message 只有密文时整条丢弃', async () => {
-    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.js');
+    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.desktop.js');
     const transform = createCrossProviderCompactionCompatTransform();
 
     const out = transform(
@@ -608,7 +614,7 @@ describe('createCrossProviderCompactionCompatTransform', () => {
   });
 
   it('ChatGPT 上游原样透传(远端压缩语义不受影响)', async () => {
-    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.js');
+    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.desktop.js');
     const transform = createCrossProviderCompactionCompatTransform();
 
     expect(transform(
@@ -661,7 +667,7 @@ describe('createCrossProviderCompactionCompatTransform', () => {
   });
 
   it('gpt-oss 与非版本化 gpt 标签仍删除父子 Agent 协作密文', async () => {
-    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.js');
+    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.desktop.js');
     const transform = createCrossProviderCompactionCompatTransform();
     for (const model of ['gpt-oss:20b', 'codex/gpt-oss:20b', 'gpt-image-1']) {
       const out = transform(
@@ -682,14 +688,14 @@ describe('createCrossProviderCompactionCompatTransform', () => {
   });
 
   it('upstreamBase 缺失时不改写(保守方向:宁可维持现状,不误伤 ChatGPT 请求)', async () => {
-    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.js');
+    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.desktop.js');
     const transform = createCrossProviderCompactionCompatTransform();
 
     expect(transform({ model: 'gpt-5.5', input: [compactionItem] }, CTX_BASE)).toBeNull();
   });
 
   it('无压缩块时零改写', async () => {
-    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.js');
+    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.desktop.js');
     const transform = createCrossProviderCompactionCompatTransform();
 
     expect(transform(
@@ -699,7 +705,7 @@ describe('createCrossProviderCompactionCompatTransform', () => {
   });
 
   it('不携带加密内容的 compaction 变体原样透传(只处理"上游解不开"的加密块)', async () => {
-    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.js');
+    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.desktop.js');
     const transform = createCrossProviderCompactionCompatTransform();
 
     expect(transform(
@@ -713,7 +719,7 @@ describe('decideCodexRoute', () => {
   const CHATGPT = 'https://chatgpt.com/backend-api/codex';
 
   it('env-key spawn → 不 override(codex 已带 gateway key, 走默认上游)', async () => {
-    const { decideCodexRoute } = await import('../codex-proxy-host.js');
+    const { decideCodexRoute } = await import('../codex-proxy-host.desktop.js');
     expect(decideCodexRoute({ model: 'gpt-5.5', authInjection: 'env-key', gatewayKey: 'k' })).toBeNull();
     expect(decideCodexRoute({ model: 'codex/gpt-5.5', authInjection: 'env-key', gatewayKey: 'k' })).toBeNull();
   });
@@ -759,7 +765,7 @@ describe('decideCodexRoute', () => {
   });
 
   it('oauth-bearer + codex/ 折扣模型 → 换 gateway key', async () => {
-    const { decideCodexRoute } = await import('../codex-proxy-host.js');
+    const { decideCodexRoute } = await import('../codex-proxy-host.desktop.js');
     expect(decideCodexRoute({ model: 'codex/gpt-5.5', authInjection: 'oauth-bearer', gatewayKey: 'gw' }))
       .toEqual({ headerOverride: { authorization: 'Bearer gw' } });
     expect(decideCodexRoute({ model: 'openai-codex/gpt-6.1-sol', authInjection: 'oauth-bearer', gatewayKey: 'gw' }))
@@ -767,18 +773,18 @@ describe('decideCodexRoute', () => {
   });
 
   it('oauth-bearer + 普通模型 → override 到 ChatGPT, 不换 header(订阅默认)', async () => {
-    const { decideCodexRoute } = await import('../codex-proxy-host.js');
+    const { decideCodexRoute } = await import('../codex-proxy-host.desktop.js');
     expect(decideCodexRoute({ model: 'gpt-5.5', authInjection: 'oauth-bearer', gatewayKey: 'gw' }))
       .toEqual({ upstreamOverride: CHATGPT });
   });
 
   it('oauth-bearer + codex/ 折扣但无 gateway key → null(passthrough)', async () => {
-    const { decideCodexRoute } = await import('../codex-proxy-host.js');
+    const { decideCodexRoute } = await import('../codex-proxy-host.desktop.js');
     expect(decideCodexRoute({ model: 'codex/gpt-5.5', authInjection: 'oauth-bearer', gatewayKey: null })).toBeNull();
   });
 
   it('空 model → null', async () => {
-    const { decideCodexRoute } = await import('../codex-proxy-host.js');
+    const { decideCodexRoute } = await import('../codex-proxy-host.desktop.js');
     expect(decideCodexRoute({ model: '', authInjection: 'oauth-bearer', gatewayKey: 'gw' })).toBeNull();
   });
 });
@@ -1961,7 +1967,7 @@ describe('chatBridgeCapabilitiesForRoute', () => {
           authStrategy: 'api-key-header',
         },
       },
-      models: { codex: [{ id: 'smart/model-cheap', name: 'Smart Cheap Model' }] },
+      models: { codex: [{ id: 'smart/model-cheap', name: 'Smart Cheap Model', efforts: ['low'] }] },
     } as never]);
     setCustomProviderKeyReader(() => 'smart-subagent-key');
     mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
@@ -2006,9 +2012,31 @@ describe('chatBridgeCapabilitiesForRoute', () => {
         reasoning: { effort: 'low' },
         input: [],
       });
+      // 身份记在整条出站链之后，单跑路由那一步还读不到。
+      let observed: unknown = {
+        model: 'smart/model-cheap',
+        reasoning: { effort: 'low' },
+        input: [],
+      };
+      for (const transform of transforms) {
+        const next = transform(observed, ctx);
+        if (next !== null && next !== undefined) observed = next;
+      }
       expect(host.getObservedCodexSubagentIdentity('thread-smart-child')).toEqual({
         model: 'smart/model-cheap',
         reasoningEffort: 'low',
+      });
+
+      // 没盖父档位时，子请求自己没写 effort 也不得被代理填上一个更高的档。
+      expect(forcedRouteTransform({
+        model: 'smart/model-cheap',
+        input: [],
+      }, {
+        ...ctx,
+        headers: { ...ctx.headers, 'thread-id': 'thread-smart-child-bare' },
+      })).toEqual({
+        model: 'smart/model-cheap',
+        input: [],
       });
 
       await expect(Promise.resolve(host.createModelRoutingTransform()(
@@ -2022,6 +2050,344 @@ describe('chatBridgeCapabilitiesForRoute', () => {
     } finally {
       host.unregister('session-smart-parent');
       clearSessionProvider('session-smart-parent');
+      setCustomProviderKeyReader(() => null);
+      setCustomProviders([]);
+    }
+  });
+
+  it('parent level is written into the subagent route', async () => {
+    const host = await freshCodexProxyHost();
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setCustomProviders([{
+      id: 'smart-subagent-provider',
+      name: 'Smart Subagent Provider',
+      source: 'user',
+      agents: ['codex'],
+      auth: { method: 'apiKey' },
+      routing: {
+        codex: {
+          wireProtocol: 'openai-responses',
+          upstream: 'https://smart-subagent.invalid/v1',
+          authStrategy: 'api-key-header',
+        },
+      },
+      models: { codex: [{ id: 'smart/model-cheap', name: 'Smart Cheap Model', efforts: ['low', 'xhigh'] }] },
+    } as never]);
+    setCustomProviderKeyReader(() => 'smart-subagent-key');
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43211',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.setCodexProxyAuthInjection('oauth-bearer');
+    host.registerComposed(
+      'session-smart-parent-effort',
+      'thread-smart-parent-effort',
+      'PRODUCT_PROMPT',
+      {
+        smartSubagentRoutes: [{
+          providerId: 'smart-subagent-provider',
+          catalogModel: 'smart/model-cheap',
+          reasoningEffort: 'xhigh',
+        }],
+      },
+    );
+    setSessionProvider('session-smart-parent-effort', 'openai');
+
+    try {
+      const transforms = mockState.createAnthropicCompatProxy.mock.calls.at(-1)?.[0]?.transformRequest ?? [];
+      const forcedRouteTransform = transforms[4];
+      if (!forcedRouteTransform) throw new Error('expected smart Subagent route transform');
+      const headers = {
+        'thread-id': 'thread-smart-child-effort',
+        'x-openai-subagent': 'collab_spawn',
+        'x-codex-parent-thread-id': 'thread-smart-parent-effort',
+      };
+      const ctx = { reqId: 1, method: 'POST', url: '/responses', headers };
+      expect(forcedRouteTransform({
+        model: 'smart/model-cheap',
+        reasoning: { effort: 'low', summary: 'auto' },
+        input: [],
+      }, ctx)).toEqual({
+        model: 'smart/model-cheap',
+        reasoning: { effort: 'xhigh', summary: 'auto' },
+        input: [],
+      });
+      const bareCtx = {
+        ...ctx,
+        headers: { ...headers, 'thread-id': 'thread-smart-child-effort-bare' },
+      };
+      expect(forcedRouteTransform({
+        model: 'smart/model-cheap',
+        input: [],
+      }, bareCtx)).toEqual({
+        model: 'smart/model-cheap',
+        reasoning: { effort: 'xhigh' },
+        input: [],
+      });
+      // 该模型声明支持 xhigh，整条链收敛后观察值仍是发出去的 xhigh。
+      let bare: unknown = { model: 'smart/model-cheap', input: [] };
+      for (const transform of transforms) {
+        const next = transform(bare, bareCtx);
+        if (next !== null && next !== undefined) bare = next;
+      }
+      expect(host.getObservedCodexSubagentIdentity('thread-smart-child-effort-bare')).toEqual({
+        model: 'smart/model-cheap',
+        reasoningEffort: 'xhigh',
+      });
+    } finally {
+      host.unregister('session-smart-parent-effort');
+      clearSessionProvider('session-smart-parent-effort');
+      setCustomProviderKeyReader(() => null);
+      setCustomProviders([]);
+    }
+  });
+
+  it('records the clamped effort, not the parent xhigh the model never runs', async () => {
+    const host = await freshCodexProxyHost();
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setCustomProviders([{
+      id: 'smart-subagent-provider',
+      name: 'Smart Subagent Provider',
+      source: 'user',
+      agents: ['codex'],
+      auth: { method: 'apiKey' },
+      routing: {
+        codex: {
+          wireProtocol: 'openai-responses',
+          upstream: 'https://smart-subagent.invalid/v1',
+          authStrategy: 'api-key-header',
+        },
+      },
+      models: { codex: [{ id: 'smart/model-limited', name: 'Smart Limited Model', efforts: ['low', 'high'] }] },
+    } as never]);
+    setCustomProviderKeyReader(() => 'smart-subagent-key');
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43213',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.setCodexProxyAuthInjection('oauth-bearer');
+    host.registerComposed(
+      'session-smart-parent-clamp',
+      'thread-smart-parent-clamp',
+      'PRODUCT_PROMPT',
+      {
+        smartSubagentRoutes: [{
+          providerId: 'smart-subagent-provider',
+          catalogModel: 'smart/model-limited',
+          reasoningEffort: 'xhigh',
+        }],
+      },
+    );
+    setSessionProvider('session-smart-parent-clamp', 'openai');
+
+    try {
+      const transforms = mockState.createAnthropicCompatProxy.mock.calls.at(-1)?.[0]?.transformRequest ?? [];
+      const ctx = {
+        reqId: 1,
+        method: 'POST',
+        url: '/responses',
+        headers: {
+          'thread-id': 'thread-smart-child-clamp',
+          'x-openai-subagent': 'collab_spawn',
+          'x-codex-parent-thread-id': 'thread-smart-parent-clamp',
+        },
+      };
+      // 路由步先盖上父任务的 xhigh；模型改写步才按能力收敛成 high。
+      // 卡片读的是链尾记下的身份，必须是真正发出去的 high。
+      let current: unknown = {
+        model: 'smart/model-limited',
+        reasoning: { effort: 'low', summary: 'auto' },
+        input: [],
+      };
+      for (const transform of transforms) {
+        const next = transform(current, ctx);
+        if (next !== null && next !== undefined) current = next;
+      }
+      expect(current).toMatchObject({
+        model: 'smart/model-limited',
+        reasoning: { effort: 'high', summary: 'auto' },
+      });
+      expect(host.getObservedCodexSubagentIdentity('thread-smart-child-clamp')).toEqual({
+        model: 'smart/model-limited',
+        reasoningEffort: 'high',
+      });
+    } finally {
+      host.unregister('session-smart-parent-clamp');
+      clearSessionProvider('session-smart-parent-clamp');
+      setCustomProviderKeyReader(() => null);
+      setCustomProviders([]);
+    }
+  });
+
+  it('keeps Codex-converted effort when the smart child stays on the parent Responses connection', async () => {
+    const host = await freshCodexProxyHost();
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setCustomProviders([{
+      id: 'openai-api',
+      name: 'OpenAI API',
+      source: 'user',
+      agents: ['codex'],
+      auth: { method: 'apiKey' },
+      routing: {
+        codex: {
+          wireProtocol: 'openai-responses',
+          upstream: 'https://api.openai.com/v1',
+          authStrategy: 'api-key-header',
+          supportsImageGeneration: true,
+        },
+      },
+      models: { codex: [{ id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol', efforts: ['low', 'medium', 'high', 'xhigh', 'max'] }] },
+    } as never]);
+    setCustomProviderKeyReader(() => 'openai-api-key');
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43212',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.setCodexProxyAuthInjection('env-key');
+    host.registerComposed(
+      'session-same-connection',
+      'thread-same-connection',
+      'PRODUCT_PROMPT',
+      {
+        smartSubagentRoutes: [{
+          providerId: 'openai-api',
+          catalogModel: 'gpt-6.1-sol',
+          reasoningEffort: 'ultra',
+        }, {
+          providerId: 'other-provider',
+          catalogModel: 'other-model',
+          reasoningEffort: 'high',
+        }],
+      },
+    );
+    setSessionProvider('session-same-connection', 'openai-api');
+
+    try {
+      const transforms = mockState.createAnthropicCompatProxy.mock.calls.at(-1)?.[0]?.transformRequest ?? [];
+      const forcedRouteTransform = transforms[4];
+      if (!forcedRouteTransform) throw new Error('expected smart Subagent route transform');
+      const headers = {
+        'thread-id': 'thread-same-connection-child',
+        'x-openai-subagent': 'collab_spawn',
+        'x-codex-parent-thread-id': 'thread-same-connection',
+      };
+      // 父档位 ultra 不在目录声明里，按目标模型能力收敛成最高兼容档 max。
+      // 字面 ultra 不得写回请求。
+      expect(forcedRouteTransform({
+        model: 'gpt-6.1-sol',
+        reasoning: { effort: 'xhigh', summary: 'auto' },
+        input: [],
+      }, { reqId: 1, method: 'POST', url: '/responses', headers })).toEqual({
+        model: 'gpt-6.1-sol',
+        reasoning: { effort: 'max', summary: 'auto' },
+        input: [],
+      });
+      // A different provider does not get that conversion, so the parent level still stamps.
+      expect(forcedRouteTransform({
+        model: 'other-model',
+        reasoning: { effort: 'low', summary: 'auto' },
+        input: [],
+      }, {
+        reqId: 2,
+        method: 'POST',
+        url: '/responses',
+        headers: { ...headers, 'thread-id': 'thread-other-provider-child' },
+      })).toEqual({
+        model: 'other-model',
+        reasoning: { effort: 'high', summary: 'auto' },
+        input: [],
+      });
+    } finally {
+      host.unregister('session-same-connection');
+      clearSessionProvider('session-same-connection');
+      setCustomProviderKeyReader(() => null);
+      setCustomProviders([]);
+    }
+  });
+
+  it('stamps the parent high onto a same-provider child that spawn_agent picked as low', async () => {
+    const host = await freshCodexProxyHost();
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setCustomProviders([{
+      id: 'openai-api',
+      name: 'OpenAI API',
+      source: 'user',
+      agents: ['codex'],
+      auth: { method: 'apiKey' },
+      routing: {
+        codex: {
+          wireProtocol: 'openai-responses',
+          upstream: 'https://api.openai.com/v1',
+          authStrategy: 'api-key-header',
+        },
+      },
+      models: { codex: [{ id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol', efforts: ['low', 'high', 'xhigh'] }] },
+    } as never]);
+    setCustomProviderKeyReader(() => 'openai-api-key');
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43214',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.setCodexProxyAuthInjection('env-key');
+    host.registerComposed(
+      'session-same-provider-high',
+      'thread-same-provider-high',
+      'PRODUCT_PROMPT',
+      {
+        smartSubagentRoutes: [{
+          providerId: 'openai-api',
+          catalogModel: 'gpt-6.1-sol',
+          reasoningEffort: 'high',
+        }],
+      },
+    );
+    setSessionProvider('session-same-provider-high', 'openai-api');
+
+    try {
+      const transforms = mockState.createAnthropicCompatProxy.mock.calls.at(-1)?.[0]?.transformRequest ?? [];
+      const ctx = {
+        reqId: 1,
+        method: 'POST',
+        url: '/responses',
+        headers: {
+          'thread-id': 'thread-same-provider-high-child',
+          'x-openai-subagent': 'collab_spawn',
+          'x-codex-parent-thread-id': 'thread-same-provider-high',
+        },
+      };
+      // spawn_agent 选了 low，父任务存的是 high。同供应商也要盖上父档位。
+      let current: unknown = {
+        model: 'gpt-6.1-sol',
+        reasoning: { effort: 'low', summary: 'auto' },
+        input: [],
+      };
+      for (const transform of transforms) {
+        const next = transform(current, ctx);
+        if (next !== null && next !== undefined) current = next;
+      }
+      expect(current).toMatchObject({
+        model: 'gpt-6.1-sol',
+        reasoning: { effort: 'high', summary: 'auto' },
+      });
+      expect(host.getObservedCodexSubagentIdentity('thread-same-provider-high-child')).toEqual({
+        model: 'gpt-6.1-sol',
+        reasoningEffort: 'high',
+      });
+    } finally {
+      host.unregister('session-same-provider-high');
+      clearSessionProvider('session-same-provider-high');
       setCustomProviderKeyReader(() => null);
       setCustomProviders([]);
     }
@@ -2724,13 +3090,13 @@ describe('createModelRoutingTransform —— session-less 控制面请求(桶③
   const CHATGPT = 'https://chatgpt.com/backend-api/codex';
 
   afterEach(async () => {
-    const host = await import('../codex-proxy-host.js');
+    const host = await import('../codex-proxy-host.desktop.js');
     host.clearCodexProxyAuthInjection();
     host.setCodexProxyGatewayKeyReader(() => null);
   });
 
   it('oauth-bearer + 无 session + 无 model(GET /models)→ override 到 ChatGPT 订阅后端', async () => {
-    const host = await import('../codex-proxy-host.js');
+    const host = await import('../codex-proxy-host.desktop.js');
     host.setCodexProxyAuthInjection('oauth-bearer');
     const transform = host.createModelRoutingTransform();
     // GET /models: body=undefined, headers 无 thread-id → 解析不出 session。
@@ -2739,7 +3105,7 @@ describe('createModelRoutingTransform —— session-less 控制面请求(桶③
   });
 
   it('冻结 control-plane auth 形态后不受 session host 的全局模式改写', async () => {
-    const host = await import('../codex-proxy-host.js');
+    const host = await import('../codex-proxy-host.desktop.js');
     host.setCodexProxyAuthInjection('provider-oauth');
     const transform = host.createModelRoutingTransform('oauth-bearer');
 
@@ -2753,14 +3119,14 @@ describe('createModelRoutingTransform —— session-less 控制面请求(桶③
   });
 
   it('env-key + 无 session + 无 model(GET /models)→ null(留默认网关, sk- key 本就有效)', async () => {
-    const host = await import('../codex-proxy-host.js');
+    const host = await import('../codex-proxy-host.desktop.js');
     host.setCodexProxyAuthInjection('env-key');
     const transform = host.createModelRoutingTransform();
     expect(transform(undefined, { reqId: 1, method: 'GET', url: '/models', headers: {} })).toBeNull();
   });
 
   it('provider-oauth + 无 session + 无 model(GET /models)→ 路由到 provider OAuth 上游', async () => {
-    const host = await import('../codex-proxy-host.js');
+    const host = await import('../codex-proxy-host.desktop.js');
     const { setProviderOAuthTokenReader } = await import('../provider-route.js');
     setProviderOAuthTokenReader((providerId, agent) =>
       providerId === 'xai' && agent === 'codex' ? 'xai-live-token' : null,
@@ -2780,7 +3146,7 @@ describe('createModelRoutingTransform —— session-less 控制面请求(桶③
   });
 
   it('无 session 但带 model 的请求不落桶③ —— 仍走 decideCodexRoute(防误伤真实 /responses)', async () => {
-    const host = await import('../codex-proxy-host.js');
+    const host = await import('../codex-proxy-host.desktop.js');
     host.setCodexProxyAuthInjection('oauth-bearer');
     host.setCodexProxyGatewayKeyReader(() => 'gw');
     const transform = host.createModelRoutingTransform();
@@ -2791,7 +3157,7 @@ describe('createModelRoutingTransform —— session-less 控制面请求(桶③
   });
 
   it('env-key host + xAI session still routes through provider OAuth instead of falling back to gateway', async () => {
-    const host = await import('../codex-proxy-host.js');
+    const host = await import('../codex-proxy-host.desktop.js');
     const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
     const { setProviderOAuthTokenReader } = await import('../provider-route.js');
     host.registerComposed('session-xai-route', 'thread-xai-route', 'PRODUCT_PROMPT');
@@ -2814,7 +3180,7 @@ describe('createModelRoutingTransform —— session-less 控制面请求(桶③
   });
 
   it('implicit xAI model routes through provider OAuth even when sessionProvider is empty', async () => {
-    const host = await import('../codex-proxy-host.js');
+    const host = await import('../codex-proxy-host.desktop.js');
     const { clearSessionProvider } = await import('../session-provider-store.js');
     const { setProviderOAuthTokenReader } = await import('../provider-route.js');
     host.registerComposed('session-xai-implicit-route', 'thread-xai-implicit-route', 'PRODUCT_PROMPT');
@@ -2838,7 +3204,7 @@ describe('createModelRoutingTransform —— session-less 控制面请求(桶③
   it('provider-oauth spawn + xAI session + 非 xai/ 模型 → 换网关 key 的可用默认路由 (#890 review 第二轮)', async () => {
     // scope 门放下来的请求在 provider-oauth spawn 下只带占位 env key,直落网关必 401 ——
     // 必须换真网关 key 兜底(与 cc oauth-spawn 默认换 key 同语义)。
-    const host = await import('../codex-proxy-host.js');
+    const host = await import('../codex-proxy-host.desktop.js');
     const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
     host.registerComposed('session-xai-fallback', 'thread-xai-fallback', 'PRODUCT_PROMPT');
     setSessionProvider('session-xai-fallback', 'xai');
@@ -2919,15 +3285,15 @@ describe('codex proxy host', () => {
         // upstream 是函数形态(每请求现取,model-access 下发可运行期换 endpoint);
         // 断言其当前求值 = 网关 base + /v1
         upstream: expect.any(Function),
-        // [armed HTTP recovery strip(WS 错误后落回 HTTP 即激活对应 strip), encrypted activeStrip, image generation activeStrip, provider-aware Guardian reviewer, locked Subagent route, instructions 注入, locked Subagent exec guard, Gateway 原生 web_search, 跨来源压缩块兼容, xAI ModelInput activeStrip, responses item id activeStrip(#4738), responses item id length activeStrip(#4227), exec function adapter, strict gateway history 兼容, xAI ModelInput sanitize, DeepSeek V4 custom tool 兼容, xAI Responses 兼容, XD Gateway Grok 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, provider 参数归一, routed-model armed HTTP recovery strip, raw reasoning activeStrip, 视觉桥(controller 未注入 → 短路透传), 工具 ID 校正, Responses 重复工具调用清理 activeStrip(#7906), stripNonAnthropicFields]
+        // [armed HTTP recovery strip(WS 错误后落回 HTTP 即激活对应 strip), encrypted activeStrip, image generation activeStrip, provider-aware Guardian reviewer, locked Subagent route, instructions 注入, locked Subagent exec guard, Gateway 原生 web_search, 跨来源压缩块兼容, xAI ModelInput activeStrip, responses item id activeStrip(#4738), responses item id length activeStrip(#4227), DeepSeek V4.1 replay 兼容, exec function adapter, strict gateway history 兼容, xAI ModelInput sanitize, DeepSeek V4 custom tool 兼容, xAI Responses 兼容, XD Gateway Grok 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, provider 参数归一, routed-model armed HTTP recovery strip, raw reasoning activeStrip, 视觉桥(controller 未注入 → 短路透传), 工具 ID 校正, Responses 重复工具调用清理 activeStrip(#7906), stripNonAnthropicFields, 子代理身份观察]
         transformRequest: [
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
-          expect.any(Function), expect.any(Function), expect.any(Function), // frozen custom-provider effort
-          expect.any(Function), expect.any(Function), expect.any(Function),
+          expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), // frozen custom-provider effort
+          expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
         ],
         transformResponse: expect.any(Function),
         routingTransform: expect.any(Function),
@@ -2957,7 +3323,7 @@ describe('codex proxy host', () => {
     );
     expect(requestScopedTransforms).toHaveLength(2);
     expect(requestScopedTransforms[0]?.errorMode).toBe('reject-request');
-    const strip = mockState.createAnthropicCompatProxy.mock.calls[0][0].transformRequest.at(-2);
+    const strip = mockState.createAnthropicCompatProxy.mock.calls[0][0].transformRequest.at(-3);
     const body = { model: 'gpt-5', input: [] };
     strip(body, { url: '/responses' });
     expect(mockState.stripNonAnthropicFields).toHaveBeenCalledWith(body, { url: '/responses' });
@@ -5231,7 +5597,7 @@ describe('codex proxy host', () => {
     });
 
     it('独立 xAI 账号目录暂未包含当前模型时,按具体模型回退 first-party xai 目录,不误判成不支持 reasoning(#4892 review)', async () => {
-      const { resolveXaiCodexCatalogModel } = await import('../codex-proxy-host.js');
+      const { resolveXaiCodexCatalogModel } = await import('../codex-proxy-host.desktop.js');
       const model = (id: string, efforts: string[]) => ({ id, name: id, efforts, defaultEffort: efforts[0] ?? 'medium' });
       const providers = [
         { id: 'xai', models: { codex: [model('xai/grok-4.5', ['low', 'medium', 'high']), model('xai/grok-code-fast', [])] } },
@@ -6100,6 +6466,261 @@ describe('codex proxy host', () => {
     });
   });
 
+  it('replays complete DeepSeek V4.1 gateway results before interleaved developer context', async () => {
+    const host = await freshCodexProxyHost();
+    const { setXdGatewayModels } = await import('../active-catalog.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const model = 'deepseek/deepseek-v4.1-flash';
+    setXdGatewayModels([{ id: model, agents: ['codex'] }]);
+    host.setCodexProxyAuthInjection('env-key');
+    host.registerComposed('session-deepseek-replay', 'thread-deepseek-replay', 'PRODUCT_PROMPT');
+    setSessionProvider('session-deepseek-replay', 'xd');
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    try {
+      await host.ensureCodexProxyReady();
+      const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+      const call = { type: 'function_call', name: 'read', call_id: 'call_1', arguments: '{}' };
+      const developer = { type: 'message', role: 'developer', content: 'Use the returned value.' };
+      const output = { type: 'function_call_output', call_id: 'call_1', output: 'synthetic value' };
+      const input = [call, developer, output];
+      let current: unknown = { model, input };
+      const ctx = {
+        reqId: 8177,
+        method: 'POST',
+        url: '/responses',
+        headers: { 'thread-id': 'thread-deepseek-replay' },
+        upstreamBase: XD_GATEWAY_BASE_URL + '/v1',
+      };
+      for (const transform of transforms) current = await transform(current, ctx) ?? current;
+      expect(current).toHaveProperty('input', [call, output, developer]);
+      expect(input).toEqual([call, developer, output]);
+    } finally {
+      host.unregister('session-deepseek-replay');
+      clearSessionProvider('session-deepseek-replay');
+      setXdGatewayModels([]);
+    }
+  });
+
+  it('rejects an ambiguous DeepSeek gateway replay before reading the gateway key', async () => {
+    const host = await freshCodexProxyHost();
+    const { setXdGatewayModels } = await import('../active-catalog.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const model = 'deepseek/deepseek-v4.1-flash';
+    const readKey = vi.fn(() => 'synthetic-gateway-key');
+    const body = { model, input: [
+      { type: 'function_call', name: 'read', call_id: 'call_1', arguments: '{}' },
+      { type: 'message', role: 'developer', content: 'Use the returned value.' },
+    ] };
+    const ctx = { reqId: 8178, method: 'POST', url: '/responses', headers: { 'thread-id': 'thread-deepseek-invalid' } };
+    setXdGatewayModels([{ id: model, agents: ['codex'] }]);
+    host.setCodexProxyAuthInjection('env-key');
+    host.setCodexProxyGatewayKeyReader(readKey);
+    host.registerComposed('session-deepseek-invalid', 'thread-deepseek-invalid', 'PRODUCT_PROMPT');
+    setSessionProvider('session-deepseek-invalid', 'xd');
+    try {
+      const decision = await host.createModelRoutingTransform('env-key')(body, ctx);
+      expect(readKey).not.toHaveBeenCalled();
+      expect(decision?.localHandler).toBeTypeOf('function');
+      if (!decision?.localHandler) throw new Error('expected local rejection');
+      const res = { headersSent: false, destroyed: false, writeHead: vi.fn(), end: vi.fn() };
+      await decision.localHandler({ rawBody: Buffer.alloc(0), parsedBody: body, ctx, res: res as unknown as ServerResponse });
+      expect(res.writeHead).toHaveBeenCalledWith(400, expect.any(Object));
+      expect(JSON.parse(res.end.mock.calls[0]![0]).error.code).toBe('deepseek_tool_output_order_invalid');
+    } finally {
+      host.unregister('session-deepseek-invalid');
+      clearSessionProvider('session-deepseek-invalid');
+      setXdGatewayModels([]);
+      host.setCodexProxyGatewayKeyReader(() => null);
+    }
+  });
+
+  it('keeps other models, providers, upstreams and compact requests outside DeepSeek replay normalization', async () => {
+    const host = await freshCodexProxyHost();
+    const { buildUserProvider } = await import('@cindy/model-providers');
+    const { setXdGatewayModels, setCustomProviders } = await import('../active-catalog.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const model = 'deepseek/deepseek-v4.1-flash';
+    setXdGatewayModels([{ id: model, agents: ['codex'] }]);
+    setCustomProviders([buildUserProvider({
+      id: 'independent-responses',
+      name: 'Independent Responses',
+      runtimes: { codex: { baseUrl: 'https://other.example/v1', wireProtocol: 'openai-responses', models: [{ id: model, name: 'DeepSeek' }] } },
+    })]);
+    host.setCodexProxyAuthInjection('env-key');
+    host.registerComposed('session-xd-replay', 'thread-xd-replay', 'PRODUCT_PROMPT');
+    host.registerComposed('session-other-replay', 'thread-other-replay', 'PRODUCT_PROMPT');
+    setSessionProvider('session-xd-replay', 'xd');
+    setSessionProvider('session-other-replay', 'independent-responses');
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210', dispose: vi.fn(async () => undefined),
+    });
+    try {
+      await host.ensureCodexProxyReady();
+      const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+      const call = { type: 'function_call', name: 'read', call_id: 'call_1', arguments: '{}' };
+      const developer = { type: 'message', role: 'developer', content: 'Use the value.' };
+      const user = { type: 'message', role: 'user', content: 'interrupt' };
+      const output = { type: 'function_call_output', call_id: 'call_1', output: 'synthetic' };
+      const cases = [
+        { model: 'qwen/qwen3.7-max', input: [call, developer, output], url: '/responses', thread: 'thread-xd-replay', upstream: XD_GATEWAY_BASE_URL + '/v1' },
+        { model, input: [call, developer, output], url: '/responses', thread: 'thread-other-replay', upstream: XD_GATEWAY_BASE_URL + '/v1' },
+        { model, input: [call, developer, output], url: '/responses', thread: 'thread-xd-replay', upstream: 'https://other.example/v1' },
+        { model, input: [call, developer, output], url: '/responses/compact', thread: 'thread-xd-replay', upstream: XD_GATEWAY_BASE_URL + '/v1' },
+        { model, input: [call, user, output], url: '/responses', thread: 'thread-xd-replay', upstream: XD_GATEWAY_BASE_URL + '/v1' },
+      ];
+      for (const item of cases) {
+        let current: unknown = { model: item.model, input: item.input };
+        const ctx = { reqId: 8180, method: 'POST', url: item.url, headers: { 'thread-id': item.thread }, upstreamBase: item.upstream };
+        for (const transform of transforms) current = await transform(current, ctx) ?? current;
+        expect(current).toHaveProperty('input', item.input);
+      }
+    } finally {
+      host.unregister('session-xd-replay');
+      host.unregister('session-other-replay');
+      clearSessionProvider('session-xd-replay');
+      clearSessionProvider('session-other-replay');
+      setXdGatewayModels([]);
+      setCustomProviders([]);
+    }
+  });
+
+  it('does not reject a child whose frozen model is not DeepSeek even when its incoming model is DeepSeek', async () => {
+    const host = await freshCodexProxyHost();
+    const { setXdGatewayModels } = await import('../active-catalog.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const deepseek = 'deepseek/deepseek-v4.1-flash';
+    const childModel = 'qwen/qwen3.7-max';
+    const readKey = vi.fn(() => 'synthetic-gateway-key');
+    setXdGatewayModels([{ id: deepseek, agents: ['codex'] }, { id: childModel, agents: ['codex'] }]);
+    host.setCodexProxyAuthInjection('env-key');
+    host.setCodexProxyGatewayKeyReader(readKey);
+    host.registerComposed('session-replay-parent', 'thread-replay-parent', 'PRODUCT_PROMPT', {
+      subagentRoute: { providerId: 'xd', catalogModel: childModel },
+    });
+    setSessionProvider('session-replay-parent', 'xd');
+    expect(host.registerChildThread('thread-replay-parent', 'thread-replay-child')).toBe(true);
+    try {
+      const decision = await host.createModelRoutingTransform('env-key')({
+        model: deepseek,
+        input: [
+          { type: 'function_call', name: 'read', call_id: 'call_1', arguments: '{}' },
+          { type: 'message', role: 'developer', content: 'Use the returned value.' },
+        ],
+      }, { reqId: 8181, method: 'POST', url: '/responses', headers: { 'thread-id': 'thread-replay-child' } });
+      expect(readKey).toHaveBeenCalled();
+      expect(decision?.localHandler).toBeUndefined();
+    } finally {
+      host.unregister('session-replay-parent');
+      clearSessionProvider('session-replay-parent');
+      setXdGatewayModels([]);
+      host.setCodexProxyGatewayKeyReader(() => null);
+    }
+  });
+
+  it('rejects an ambiguous replay when the child is routed to DeepSeek from a different parent model', async () => {
+    const host = await freshCodexProxyHost();
+    const { setXdGatewayModels } = await import('../active-catalog.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const deepseek = 'deepseek/deepseek-v4.1-flash';
+    const parentModel = 'qwen/qwen3.7-max';
+    const readKey = vi.fn(() => 'synthetic-gateway-key');
+    setXdGatewayModels([{ id: deepseek, agents: ['codex'] }, { id: parentModel, agents: ['codex'] }]);
+    host.setCodexProxyAuthInjection('env-key');
+    host.setCodexProxyGatewayKeyReader(readKey);
+    host.registerComposed('session-replay-reverse', 'thread-replay-reverse', 'PRODUCT_PROMPT', {
+      subagentRoute: { providerId: 'xd', catalogModel: deepseek },
+    });
+    setSessionProvider('session-replay-reverse', 'xd');
+    expect(host.registerChildThread('thread-replay-reverse', 'thread-replay-reverse-child')).toBe(true);
+    const body = { model: parentModel, input: [
+      { type: 'function_call', name: 'read', call_id: 'call_1', arguments: '{}' },
+      { type: 'message', role: 'developer', content: 'Use the returned value.' },
+    ] };
+    const ctx = { reqId: 8184, method: 'POST', url: '/responses', headers: { 'thread-id': 'thread-replay-reverse-child' } };
+    try {
+      const decision = await host.createModelRoutingTransform('env-key')(body, ctx);
+      expect(readKey).not.toHaveBeenCalled();
+      if (!decision?.localHandler) throw new Error('expected local rejection');
+      const res = { headersSent: false, destroyed: false, writeHead: vi.fn(), end: vi.fn() };
+      await decision.localHandler({ rawBody: Buffer.alloc(0), parsedBody: body, ctx, res: res as unknown as ServerResponse });
+      expect(res.writeHead).toHaveBeenCalledWith(400, expect.any(Object));
+      expect(JSON.parse(res.end.mock.calls[0]![0]).error.code).toBe('deepseek_tool_output_order_invalid');
+    } finally {
+      host.unregister('session-replay-reverse');
+      clearSessionProvider('session-replay-reverse');
+      setXdGatewayModels([]);
+      host.setCodexProxyGatewayKeyReader(() => null);
+    }
+  });
+
+  it('preserves the unresolved child route error before DeepSeek replay validation', async () => {
+    const host = await freshCodexProxyHost();
+    const { setXdGatewayModels } = await import('../active-catalog.js');
+    const model = 'deepseek/deepseek-v4.1-flash';
+    setXdGatewayModels([{ id: model, agents: ['codex'] }]);
+    host.setCodexProxyAuthInjection('env-key');
+    const body = { model, input: [
+      { type: 'function_call', name: 'read', call_id: 'call_1', arguments: '{}' },
+      { type: 'message', role: 'developer', content: 'Use the returned value.' },
+    ] };
+    const ctx = { reqId: 8182, method: 'POST', url: '/responses', headers: {
+      'thread-id': 'thread-missing-child',
+      'x-openai-subagent': 'collab_spawn',
+      'x-codex-parent-thread-id': 'thread-missing-parent',
+    } };
+    try {
+      const decision = await host.createModelRoutingTransform('env-key')(body, ctx);
+      if (!decision?.localHandler) throw new Error('expected local rejection');
+      const res = { headersSent: false, destroyed: false, writeHead: vi.fn(), end: vi.fn() };
+      await decision.localHandler({ rawBody: Buffer.alloc(0), parsedBody: body, ctx, res: res as unknown as ServerResponse });
+      expect(res.writeHead).toHaveBeenCalledWith(503, expect.any(Object));
+      expect(JSON.parse(res.end.mock.calls[0]![0]).error.code).toBe('cindy_codex_parent_route_unavailable');
+    } finally {
+      setXdGatewayModels([]);
+    }
+  });
+
+  it('does not treat the same XD model as Responses when its selected wire protocol is Chat', async () => {
+    const host = await freshCodexProxyHost();
+    const { BUNDLED_CATALOG } = await import('@cindy/model-providers');
+    const { setActiveCatalog, setXdGatewayModels } = await import('../active-catalog.js');
+    const { getSessionRoutingDescriptor } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const model = 'deepseek/deepseek-v4.1-flash';
+    const readKey = vi.fn(() => 'synthetic-gateway-key');
+    // A model's perAgent display metadata does not change the provider's wire.
+    // Install an actual Chat route to exercise the protocol boundary.
+    setActiveCatalog({
+      ...BUNDLED_CATALOG,
+      providers: BUNDLED_CATALOG.providers.map(provider => provider.id !== 'xd' ? provider : {
+        ...provider,
+        routing: { ...provider.routing, codex: { ...provider.routing.codex!, wireProtocol: 'openai-chat' } },
+      }),
+    });
+    setXdGatewayModels([{ id: model, agents: ['codex'] }]);
+    host.setCodexProxyAuthInjection('env-key');
+    host.setCodexProxyGatewayKeyReader(readKey);
+    host.registerComposed('session-replay-chat', 'thread-replay-chat', 'PRODUCT_PROMPT');
+    setSessionProvider('session-replay-chat', 'xd');
+    try {
+      expect(getSessionRoutingDescriptor('session-replay-chat', 'codex', model)?.wireProtocol).toBe('openai-chat');
+      await host.createModelRoutingTransform('env-key')({ model, input: [
+        { type: 'function_call', name: 'read', call_id: 'call_1', arguments: '{}' },
+        { type: 'message', role: 'developer', content: 'Use the returned value.' },
+      ] }, { reqId: 8183, method: 'POST', url: '/responses', headers: { 'thread-id': 'thread-replay-chat' } });
+      expect(readKey).toHaveBeenCalled();
+    } finally {
+      host.unregister('session-replay-chat');
+      clearSessionProvider('session-replay-chat');
+      setXdGatewayModels([]);
+      setActiveCatalog(BUNDLED_CATALOG);
+      host.setCodexProxyGatewayKeyReader(() => null);
+    }
+  });
+
   it('keeps interleaved tool history unchanged for non-strict gateway models', async () => {
     const host = await freshCodexProxyHost();
     mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
@@ -6123,6 +6744,271 @@ describe('codex proxy host', () => {
     }
 
     expect(current).toEqual(original);
+  });
+
+  it.each([
+    ['x-ai-grok/grok-4.7', 'application/json'],
+    ['x-ai-grok/grok-4.7', 'text/event-stream'],
+    ['deepseek/deepseek-v4.1-flash', 'application/json'],
+    ['deepseek/deepseek-v4.1-flash', 'text/event-stream'],
+  ])('round-trips XD Gateway namespace tools for %s (%s)', async (model, contentType) => {
+    const host = await freshCodexProxyHost();
+    const { setXdGatewayModels } = await import('../active-catalog.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setXdGatewayModels([{ id: model, agents: ['codex'] }]);
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.registerComposed('session-grok-47', 'thread-grok-47', 'PRODUCT_PROMPT');
+    setSessionProvider('session-grok-47', 'xd');
+    try {
+      const config = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0];
+      let current: unknown = {
+        model,
+        tools: [{ type: 'namespace', name: 'files', tools: [{
+          type: 'function', name: 'read', parameters: { type: 'object', properties: {} },
+        }] }],
+        tool_choice: { type: 'function', namespace: 'files', name: 'read' },
+        input: [{ role: 'user', content: 'read a file' }],
+      };
+      const ctx = {
+        reqId: 9401,
+        method: 'POST',
+        url: '/responses',
+        upstreamBase: XD_GATEWAY_BASE_URL + '/v1',
+        headers: { 'thread-id': 'thread-grok-47' },
+      };
+      for (const transform of config.transformRequest) current = transform(current, ctx) ?? current;
+      expect(current).toMatchObject({
+        tools: [expect.objectContaining({ type: 'function', name: 'files__read' })],
+        tool_choice: { type: 'function', name: 'files__read' },
+      });
+
+      const responseTransform = config.transformResponse({
+        reqId: 9401,
+        responseHeaders: { 'content-type': contentType },
+      });
+      expect(responseTransform).not.toBeNull();
+      const chunks: Buffer[] = [];
+      responseTransform.on('data', (chunk: Buffer) => chunks.push(chunk));
+      const completed = new Promise<void>((resolve, reject) => {
+        responseTransform.once('end', resolve);
+        responseTransform.once('error', reject);
+      });
+      const upstreamResponse = { output: [{
+        type: 'function_call', name: 'files__read', call_id: 'call_read', arguments: '{}',
+      }] };
+      const wire = contentType === 'text/event-stream'
+        ? 'data: ' + JSON.stringify({ type: 'response.completed', response: upstreamResponse }) + '\n\n'
+        : JSON.stringify(upstreamResponse);
+      responseTransform.end(wire);
+      await completed;
+      const transformed = Buffer.concat(chunks).toString('utf8');
+      const parsed = JSON.parse(contentType === 'text/event-stream' ? transformed.trim().slice(6) : transformed);
+      const output = contentType === 'text/event-stream' ? parsed.response.output : parsed.output;
+      expect(output[0]).toMatchObject({
+        type: 'function_call', namespace: 'files', name: 'read', call_id: 'call_read',
+      });
+    } finally {
+      host.unregister('session-grok-47');
+      clearSessionProvider('session-grok-47');
+      setXdGatewayModels([]);
+    }
+  });
+
+  it('normalizes interleaved DeepSeek V4.1 Responses history but preserves compact', async () => {
+    const host = await freshCodexProxyHost();
+    const { setXdGatewayModels } = await import('../active-catalog.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const model = 'deepseek/deepseek-v4.1-flash';
+    setXdGatewayModels([{ id: model, agents: ['codex'] }]);
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.registerComposed('session-deepseek-41', 'thread-deepseek-41', 'PRODUCT_PROMPT');
+    setSessionProvider('session-deepseek-41', 'xd');
+    try {
+      const config = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0];
+      const calls = [
+        { type: 'function_call', name: 'first', call_id: 'call_1', arguments: '{}' },
+        { type: 'function_call', name: 'second', call_id: 'call_2', arguments: '{}' },
+      ];
+      const outputs = [
+        { type: 'function_call_output', call_id: 'call_1', output: 'first result' },
+        { type: 'function_call_output', call_id: 'call_2', output: 'second result' },
+      ];
+      const developer = { type: 'message', role: 'developer', content: 'context' };
+      const input = [...calls, outputs[0], developer, outputs[1]];
+      const expectedInput = [...calls, ...outputs, developer];
+      for (const url of ['/responses', '/responses/compact']) {
+        let current: unknown = { model, input };
+        const ctx = {
+          reqId: url === '/responses' ? 9402 : 9403,
+          method: 'POST',
+          url,
+          upstreamBase: XD_GATEWAY_BASE_URL + '/v1',
+          headers: { 'thread-id': 'thread-deepseek-41' },
+        };
+        for (const transform of config.transformRequest) current = transform(current, ctx) ?? current;
+        expect(current).toMatchObject({ input: url === '/responses' ? expectedInput : input });
+      }
+    } finally {
+      host.unregister('session-deepseek-41');
+      clearSessionProvider('session-deepseek-41');
+      setXdGatewayModels([]);
+    }
+  });
+
+  it.each(['x-ai-grok/grok-4.7', 'deepseek/deepseek-v4.1-flash'])(
+    'keeps namespace tool choices narrowed for %s', async (model) => {
+      const host = await freshCodexProxyHost();
+      const { setXdGatewayModels } = await import('../active-catalog.js');
+      const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+      setXdGatewayModels([{ id: model, agents: ['codex'] }]);
+      mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+        url: 'http://127.0.0.1:43210',
+        dispose: vi.fn(async () => undefined),
+      });
+      await host.ensureCodexProxyReady();
+      host.registerComposed('session-choice', 'thread-choice', 'PRODUCT_PROMPT');
+      setSessionProvider('session-choice', 'xd');
+      try {
+        const config = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0];
+        let current: unknown = {
+          model,
+          tools: [{ type: 'namespace', name: 'files', tools: [
+            { type: 'function', name: 'read', parameters: { type: 'object' } },
+            { type: 'function', name: 'write', parameters: { type: 'object' } },
+          ] }],
+          tool_choice: {
+            type: 'allowed_tools', mode: 'required',
+            tools: [{ type: 'function', namespace: 'files', name: 'read' }],
+          },
+        };
+        const ctx = {
+          reqId: 9404, method: 'POST', url: '/responses',
+          upstreamBase: XD_GATEWAY_BASE_URL + '/v1',
+          headers: { 'thread-id': 'thread-choice' },
+        };
+        for (const transform of config.transformRequest) current = transform(current, ctx) ?? current;
+        expect(current).toMatchObject({
+          tool_choice: { type: 'allowed_tools', mode: 'required', tools: [{ type: 'function', name: 'files__read' }] },
+        });
+
+        const responseTransform = config.transformResponse({
+          reqId: 9404, responseHeaders: { 'content-type': 'application/json' },
+        });
+        const chunks: Buffer[] = [];
+        responseTransform.on('data', (chunk: Buffer) => chunks.push(chunk));
+        const completed = new Promise<void>((resolve, reject) => {
+          responseTransform.once('end', resolve);
+          responseTransform.once('error', reject);
+        });
+        responseTransform.end(JSON.stringify({ output: [
+          { type: 'function_call', name: 'files__read', call_id: 'read', arguments: '{}' },
+          { type: 'function_call', name: 'files__write', call_id: 'write', arguments: '{}' },
+        ] }));
+        await completed;
+        const output = JSON.parse(Buffer.concat(chunks).toString('utf8')).output;
+        expect(output[0]).toMatchObject({ namespace: 'files', name: 'read' });
+        expect(output[1]).toMatchObject({ name: 'files__write' });
+        expect(output[1]).not.toHaveProperty('namespace');
+      } finally {
+        host.unregister('session-choice');
+        clearSessionProvider('session-choice');
+        setXdGatewayModels([]);
+      }
+    },
+  );
+
+  it.each(['x-ai-grok/grok-4.7', 'deepseek/deepseek-v4.1-flash'])(
+    'does not apply XD namespace lowering to another provider or endpoint for %s', async (model) => {
+      const host = await freshCodexProxyHost();
+      const { buildUserProvider } = await import('@cindy/model-providers');
+      const { setCustomProviders, setXdGatewayModels } = await import('../active-catalog.js');
+      const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+      setXdGatewayModels([{ id: model, agents: ['codex'] }]);
+      setCustomProviders([buildUserProvider({
+        id: 'same-endpoint-provider', name: 'Other provider',
+        runtimes: { codex: {
+          baseUrl: XD_GATEWAY_BASE_URL + '/v1', wireProtocol: 'openai-responses',
+          models: [{ id: model, name: 'Same model' }],
+        } },
+      })]);
+      mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+        url: 'http://127.0.0.1:43210',
+        dispose: vi.fn(async () => undefined),
+      });
+      await host.ensureCodexProxyReady();
+      host.registerComposed('session-scope', 'thread-scope', 'PRODUCT_PROMPT');
+      try {
+        const config = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0];
+        const tools = [{ type: 'namespace', name: 'files', tools: [
+          { type: 'function', name: 'read', parameters: { type: 'object' } },
+        ] }];
+        const cases = [
+          { provider: 'same-endpoint-provider', upstream: XD_GATEWAY_BASE_URL + '/v1' },
+          { provider: 'same-endpoint-provider', upstream: undefined },
+          { provider: 'xd', upstream: 'https://other-gateway.invalid/v1' },
+          { provider: 'xd', upstream: XD_GATEWAY_BASE_URL + '/v1/other' },
+          { provider: 'xd', upstream: XD_GATEWAY_BASE_URL + '/v1?route=other' },
+        ];
+        for (const [index, testCase] of cases.entries()) {
+          setSessionProvider('session-scope', testCase.provider);
+          let current: unknown = { model, tools };
+          const ctx = {
+            reqId: 9410 + index, method: 'POST', url: '/responses',
+            upstreamBase: testCase.upstream,
+            headers: { 'thread-id': 'thread-scope' },
+          };
+          for (const transform of config.transformRequest) current = transform(current, ctx) ?? current;
+          expect(current).toMatchObject({ model, tools });
+        }
+      } finally {
+        host.unregister('session-scope');
+        clearSessionProvider('session-scope');
+        setCustomProviders([]);
+        setXdGatewayModels([]);
+      }
+    },
+  );
+
+  it.each([
+    { auth: 'env-key', provider: 'openai' },
+    { auth: 'provider-oauth', provider: 'xai' },
+  ] as const)('lowers Grok tools when $provider falls back to XD under $auth', async ({ auth, provider }) => {
+    const host = await freshCodexProxyHost();
+    const { setXdGatewayModels } = await import('../active-catalog.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const model = 'x-ai-grok/grok-4.7';
+    setXdGatewayModels([{ id: model, agents: ['codex'] }]);
+    host.setCodexProxyAuthInjection(auth);
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210', dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.registerComposed('session-fallback', 'thread-fallback', 'PRODUCT_PROMPT');
+    setSessionProvider('session-fallback', provider);
+    try {
+      const config = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0];
+      let current: unknown = { model, tools: [{ type: 'namespace', name: 'files', tools: [
+        { type: 'function', name: 'read', parameters: { type: 'object' } },
+      ] }] };
+      const ctx = {
+        reqId: 9420, method: 'POST', url: '/responses', upstreamBase: XD_GATEWAY_BASE_URL + '/v1',
+        headers: { 'thread-id': 'thread-fallback' },
+      };
+      for (const transform of config.transformRequest) current = transform(current, ctx) ?? current;
+      expect(current).toMatchObject({ tools: [expect.objectContaining({ type: 'function', name: 'files__read' })] });
+    } finally {
+      host.unregister('session-fallback');
+      clearSessionProvider('session-fallback');
+      setXdGatewayModels([]);
+    }
   });
 
   it('drops Codex namespace tools for XD Gateway Grok models', async () => {
@@ -7359,7 +8245,7 @@ describe('codex proxy host', () => {
     await host.ensureCodexProxyReady();
 
     const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
-    expect(transforms).toHaveLength(30); // ordinary transforms + dump + frozen custom-provider effort
+    expect(transforms).toHaveLength(32); // ordinary transforms + dump + frozen custom-provider effort
     const ctx = {
       method: 'POST',
       url: '/v1/responses',

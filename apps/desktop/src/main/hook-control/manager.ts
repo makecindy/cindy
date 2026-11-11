@@ -36,6 +36,8 @@ import {
   HOOK_FEATURE_SLACK_TOOLS,
   HOOK_FEATURE_TELEGRAM_CARD_OPS,
   HOOK_FEATURE_TELEGRAM_COMMANDS,
+  HOOK_FEATURE_FEISHU_FINAL_OPS,
+  HOOK_FEATURE_FEISHU_PROGRESS_OPS,
   HOOK_FEATURE_TELEGRAM_FINAL_OPS,
   HOOK_FEATURE_TELEGRAM_PROGRESS_OPS,
   HOOK_FEATURE_TURN_DELIVERY,
@@ -652,6 +654,8 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     .bindingsCache.map((e) => ({ ...e, displaced: false }));
   /** (multi-team)在途授权状态(添加/重绑 workspace 的 pending 与其终止态)。 */
   let pendingBind: HookPendingBindView | null = null;
+  /** Optimistic row removal is not a revoke acknowledgment; wait for bind.state. */
+  const pendingSlackUnlinks = new Set<string>();
 
   // ── provider-neutral 连接线注册表(Telegram、X 与飞书; 新 provider 在此追加) ────
 
@@ -812,8 +816,9 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
   };
 
   // 官方飞书 / Lark(同一 provider, 品牌跟随组织的应用, 不随 Cindy 版本区域)。
-  // 第一里程碑由服务端排版: 进度 / 终稿 / 交互卡都走 legacy turn.progress /
-  // turn.end / interaction.request, 所以不声明 msg-op-v1 与任何 telegram-* 能力;
+  // 进度卡与不带附件的成功终稿由本端用个人飞书 bot 同一份排版经 msg.op 发布(服务端同时
+  // 宣告才启用, 见 dispatcher 的 feishuTurnCarrier); 交互卡、失败 / 取消 / 带附件的终稿
+  // 仍走 turn.end / interaction.request 由服务端排版。不声明任何 telegram-* 能力;
   // 也没有群消息中继(群上下文随 task.dispatch 的 source.threadContext 下发)。
   // 不声明 session-picker-v1: 飞书服务由多个组织的应用共用, query.request 不带收件身份,
   // 不能凭它交出本机任务列表(飞书侧也不查)。
@@ -830,8 +835,14 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     notConfiguredError: 'Feishu service endpoint is not configured',
     requiredFeatures: feishuProviderFeatures,
     // 与 Telegram 相同: 服务端按 hello.features 判定 provider 协商结果, 客户端
-    // 要求的基础能力必须全部自报。
-    helloFeatures: feishuProviderFeatures,
+    // 要求的基础能力必须全部自报。电脑排版的三项是可选增量: 旧服务端不宣告时照旧由
+    // 服务端排版, 不影响连接。
+    helloFeatures: [
+      ...feishuProviderFeatures,
+      HOOK_FEATURE_MESSAGE_OPS,
+      HOOK_FEATURE_FEISHU_PROGRESS_OPS,
+      HOOK_FEATURE_FEISHU_FINAL_OPS,
+    ],
     isEnabled: () => store.get().feishuEnabled,
     setEnabled: (enabled) => {
       store.setProviderEnabled('feishu', enabled);
@@ -1054,6 +1065,19 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     return multiBindings.some((row) =>
       !row.displaced || (communicationsSupported && row.communicationsEnabled !== undefined),
     );
+  }
+
+  /** Release only after unlink has completed, keeping other grants and authorization flows. */
+  function stopSlackIfUnlinked(): void {
+    if (
+      hasRetainedSlackConnection() || autoBindIntent || pendingSlackUnlinks.size > 0 ||
+      pendingBind?.state === 'pending' ||
+      (pendingBind?.state === 'failed' && pendingBind.reason === HOOK_BIND_REASON_NOT_INSTALLED)
+    ) return;
+    store.setEnabled(false);
+    openAuthorizeOnNextPending = false;
+    notifySlackToolProviderEnabledIfChanged();
+    stopSlack();
   }
 
   function communicationBindings(): HookTeamBindingView[] {
@@ -1806,13 +1830,21 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     if (
       lane.autoBindIntent &&
       view.state === 'none' &&
-      lane.config.isEnabled() &&
-      initiateProviderBind(lane)
+      lane.config.isEnabled()
     ) {
-      lane.autoBindIntent = false;
+      if (initiateProviderBind(lane)) lane.autoBindIntent = false;
+      else notifyStatus(toView());
       return;
     }
     lane.autoBindIntent = false;
+    // Wait for authoritative truth, never close immediately after sending revoke.
+    // Persist the disabled intent so sync/restart cannot reopen an unlinked lane.
+    if (
+      view.state === 'revoked' || view.state === 'superseded' || view.state === 'none'
+    ) {
+      lane.config.setEnabled(false);
+      stopLane(lane);
+    }
     notifyStatus(toView());
   }
 
@@ -2110,6 +2142,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         }
         log.info('multi-team bind.start send failed mid-frame, keeping auto-bind intent');
       }
+      stopSlackIfUnlinked();
       notifyStatus(toView());
       return;
     }
@@ -2297,6 +2330,14 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       multiBindings = next;
       persistBindingsCache();
       notifySlackToolProviderEnabledIfChanged();
+      let unlinkAcknowledged = false;
+      for (const teamId of pendingSlackUnlinks) {
+        if (!snap.some((entry) => entry.teamId === teamId)) {
+          pendingSlackUnlinks.delete(teamId);
+          unlinkAcknowledged = true;
+        }
+      }
+      if (unlinkAcknowledged) stopSlackIfUnlinked();
       // 开关即绑定(首次 0 绑定): 快照为空且用户刚开 toggle → 延迟一小窗发起
       // 首绑。不立即发的原因: server 的 hello 同步可能紧跟一帧 pending 回放,
       // 先让它走「pending + 意图 → 重新发起」路径签新链接; 短窗内没有任何
@@ -2804,6 +2845,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     clearBindWatchdog();
     clearInstallWatchdog();
     clearAutoBindDefer();
+    pendingSlackUnlinks.clear();
     if (transport === null) return;
     const t = transport;
     transport = null;
@@ -2861,7 +2903,12 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       getAuthToken,
       refreshAuthToken,
       buildHello: () => buildHello(SLACK_HELLO_FEATURES, true),
-      onMessage: (msg, send) => handleBusinessMessage('slack', msg, send),
+      onMessage: (msg, send) => {
+        // Closed account ingress still returns its terminal disabled ack.
+        // Otherwise, frames belong exclusively to the current transport.
+        if (created === null || (transport !== created && accountActive && !disposed)) return;
+        handleBusinessMessage('slack', msg, send);
+      },
       onWelcome: (payload) => {
         if (created === null || transport !== created) return;
         // server 能力集以最新一次握手为准(重连可能落到另一版本实例)
@@ -2946,7 +2993,10 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       getAuthToken,
       refreshAuthToken,
       buildHello: () => buildHello(lane.config.helloFeatures, false, lane.config.provider),
-      onMessage: (msg, send) => handleBusinessMessage(provider, msg, send),
+      onMessage: (msg, send) => {
+        if (created === null || (lane.transport !== created && accountActive && !disposed)) return;
+        handleBusinessMessage(provider, msg, send);
+      },
       onWelcome: (payload) => {
         if (created === null || lane.transport !== created) return;
         lane.serverFeatures = [...payload.features];
@@ -3099,6 +3149,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
           multiBindings = multiBindings.filter((b) => b.teamId !== teamId || !b.displaced || b.slackUserId !== target.slackUserId);
           persistBindingsCache();
           notifySlackToolProviderEnabledIfChanged();
+          stopSlackIfUnlinked();
           notifyStatus(toView());
           return true;
         });
@@ -3107,11 +3158,13 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         // displaced 行: 服务端本就没有该绑定, 删除 = 仅清本地缓存(离线可用)
         multiBindings.splice(idx, 1);
         persistBindingsCache();
+        stopSlackIfUnlinked();
         notifyStatus(toView());
         return true;
       }
       if (!serverMultiTeam() || transport === null || status !== 'connected') return false;
       if (!transport.send(makeBindRevoke({ teamId }))) return false;
+      pendingSlackUnlinks.add(teamId);
       // 乐观移除: server 处理后还会补推 bind.state 快照对齐
       multiBindings.splice(idx, 1);
       persistBindingsCache();
@@ -3294,7 +3347,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       }
       // Cached state is presentation-only until the server's authoritative
       // snapshot arrives. Always arm explicit enable; a confirmed snapshot
-      // clears the intent, while none/revoked starts a fresh one-time bind.
+      // clears the intent, while none starts a fresh one-time bind.
       lane.autoBindIntent = true;
       if (lane.transport === null) {
         startLane(lane);

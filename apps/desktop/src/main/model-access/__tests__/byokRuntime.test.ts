@@ -24,7 +24,7 @@ vi.mock('../byokCredentials.js', () => ({
     state.managedProviderReader = reader;
   },
 }));
-vi.mock('../../serverApiClient.js', () => ({ serverApiFetch: state.fetch }));
+vi.mock('../../serverApiClient.desktop.js', () => ({ serverApiFetch: state.fetch }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ debug: state.debug, warn: vi.fn() }) }));
 vi.mock('../../clientEndpointsService.js', () => ({
   getClientEndpoint: () => 'https://api.example.invalid',

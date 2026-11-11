@@ -27,6 +27,9 @@ import {
 } from '@cindy/maker-shared/agent-task';
 import { isSyntheticTriggerText, parseInputHandoffEndRecord } from '@cindy/maker-shared/synthetic-trigger';
 import {
+  asyncQuestionReplyDisplayText, isAnsweredAsyncQuestionClientId, isAsyncQuestionReplyClientId,
+} from '@cindy/maker-shared/interaction';
+import {
   isHookSchedulerOrigin,
   readMessageSourceDevice,
   readMessageSourceGroup,
@@ -272,7 +275,7 @@ const toolUsePayloadByMessage = new WeakMap<RemoteMessage, ToolUsePayload>();
 
 export function normalizeRemoteMessages(
   messages: readonly RemoteMessage[],
-  options: { preserveSourceOrder?: boolean; sessionSource?: string | null } = {},
+  options: { preserveSourceOrder?: boolean; sessionSource?: string | null; pendingQuestionIds?: ReadonlySet<string> } = {},
 ): NormalizedRemoteMessage[] {
   // History views already place live tails after their persisted prefix. A live
   // row's provisional timestamp must not undo that order during normalization.
@@ -382,7 +385,7 @@ export function normalizeRemoteMessages(
     }
 
     if (message.role === 'ask_user') {
-      const ask = normalizeAskUser(message);
+      const ask = normalizeAskUser(message, options.pendingQuestionIds);
       if (ask) result.push(ask);
       continue;
     }
@@ -604,7 +607,26 @@ export function normalizeRemoteMessages(
       });
       continue;
     }
-    const rawBody = userContent ? userContent.text : contentToPreview(message.content);
+    // The question card already shows this answer: the row keeps its place in the
+    // timeline (like the hidden instruction rows above) without a second copy as a bubble.
+    if (userContent && isAnsweredAsyncQuestionClientId(message.clientId)) {
+      result.push({
+        key: messageNormalizeKey(message),
+        source: message,
+        kind: 'user',
+        role: message.role,
+        label: 'user',
+        body: '',
+        isSyntheticTrigger: true,
+        align: 'user',
+        createdAt: message.createdAt,
+      });
+      continue;
+    }
+    // Replies saved before the readable copy existed hold the text sent to the model.
+    const rawBody = userContent
+      ? (isAsyncQuestionReplyClientId(message.clientId) ? asyncQuestionReplyDisplayText(userContent.text) : userContent.text)
+      : contentToPreview(message.content);
     const hookSource = message.role === 'user' ? readHookSource(message, rawBody) : undefined;
     // /goal 裁决块只给 Desktop 驱动续跑,与 Desktop 一致只在显示层剥掉(原文仍在 source)。
     // 本机 IM 落库的就是用户原文:正文保持完整落库内容,分叉 / 回退据此恢复草稿。
@@ -879,10 +901,12 @@ function normalizeGoalCard(message: RemoteMessage): NormalizedRemoteMessage | nu
   };
 }
 
-function normalizeAskUser(message: RemoteMessage): NormalizedRemoteMessage | null {
+function normalizeAskUser(message: RemoteMessage, pendingQuestionIds?: ReadonlySet<string>): NormalizedRemoteMessage | null {
   const content = readRecord(message.content);
   if (!content) return null;
-  if (content.status !== 'answered') return null;
+  const withdrawalReason = content.status === 'cancelled' ? readString(content.withdrawalReason) : undefined;
+  if (content.status === 'pending' && (pendingQuestionIds === undefined || pendingQuestionIds.has(String(content.requestId)))) return null;
+  if (!['answered', 'cancelled', 'expired', 'pending'].includes(String(content.status))) return null;
 
   const questions = normalizeAskQuestions(content.questions);
   const answers = readStringRecord(content.answers);
@@ -895,7 +919,9 @@ function normalizeAskUser(message: RemoteMessage): NormalizedRemoteMessage | nul
 
   const body = pairs
     .filter((pair) => pair.question || pair.answer)
-    .map((pair) => `Q: ${pair.question}\nA: ${pair.answer || '(skipped)'}`)
+    .map((pair) => content.status !== 'answered'
+      ? `Q: ${pair.question}\n${withdrawalReason ? `${i18n.t('interaction.panel.questionWithdrawn')} · ${withdrawalReason}` : i18n.t('interaction.panel.questionUnanswered')}`
+      : `Q: ${pair.question}\nA: ${pair.answer || '(skipped)'}`)
     .join('\n\n');
 
   if (!body) return null;

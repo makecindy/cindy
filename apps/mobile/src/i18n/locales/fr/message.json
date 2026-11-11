@@ -64,7 +64,8 @@
       "discord": "Discord",
       "wechat": "WeChat",
       "wecom": "WeCom",
-      "dingtalk": "DingTalk"
+      "dingtalk": "DingTalk",
+      "imessage": "iMessage"
     },
     "modelMismatch": "Ce tour a été traité par {{actual}} au lieu du modèle sélectionné {{selected}} (rétrogradation temporaire côté serveur)",
     "copyStateCopying": "Copie en cours",

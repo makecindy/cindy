@@ -66,6 +66,28 @@
 请求头；应前滚修复，不把密文转回明文来恢复兼容。实现与回归：`maker-host/custom-mcp-store.ts`
 及同名测试。Bearer token 继续走现有独立安全存储。
 
+## Codex 共享凭证与 Windows 独立登录
+
+Codex 共享登录使用文件软链接，不创建硬链接。Windows 无文件软链接权限时，
+显式连接进入现有的 Cindy 独立 OAuth 登录流程，凭证由 Codex 写在该实例的
+`codex-home/auth.json`；后台对账不复制 token，不按时间戳双向同步。
+独立 OAuth 回退仍受普通 Dev 禁止发起登录的写入门禁约束。启动 OAuth 前须确认
+本实例 auth 路径缺失或为单链接普通文件；旧别名清理失败、仍有共享链接或无法
+确认文件类型时拒绝启动，不把系统凭证交给声称独立的登录流程。
+
+升级只迁移当前实例的旧硬链接：可创建软链接则替换本实例的别名；不可创建时，
+仅移除仍与系统文件同 inode 的本实例硬链接，系统文件的字节和 inode 保持不变。
+已有独立文件保留。其它 profile 的别名由对应 profile 升级时迁移，不通过重写
+系统文件一次性拆链。早期开发实现遗留的 `.swapbak` / `.copytmp` 保留原样，
+不自动恢复或删除，避免撤销原生 Codex 登出或干扰仍在运行的旧实例。
+既有只读 Dev 消费 Release 凭证的一次性快照例外保持不变。
+目录 junction 或软链接可能让两个不同路径实际指向同一 `auth.json` 目录项。
+判断时展开父目录别名，不能仅比较路径字符串，也不能将不同名字的硬链接视为
+同一目录项；同一目录项直接复用，不执行迁移、快照覆盖或失效时的文件删除。
+
+实现与回归见 `maker-host/codex-auth-link.ts`、`auth-adapters.ts`、
+`codexAuthLink.test.ts` 和 `codexAuthInvalidation.test.ts`。
+
 ## Claude 订阅只经 Claude Code 自己的登录
 
 Anthropic 只允许用户用自己的订阅登录**未修改的 Claude Code**；第三方应用不得提供
@@ -303,7 +325,9 @@ relay 原有 60 秒主动续期节流保持不变。
 | 供应商按使用方的用量 | `userData/owners/<账号>/provider-usage-by-party.json`，按（日期、供应商、使用方、设备 id、组内电脑的键、Agent、模型）聚合 token 与轮次。使用方：本机、同账号另一台电脑、经同账号组所在电脑转来的受邀者任务、本机经另一台电脑的组在别的组内电脑上运行的（只用来报告给那台组所在电脑）、同账号电脑报告来的（每次报告整体替换那台从某天起的行）；没有使用方字段的旧行按设备 id 推出。原子替换写入，保留 400 天；只含供应商 id、设备 id、组内电脑的键与模型名，不含对话或凭证。按账号存放（供应商 id 在不同账号下会重复），从开始记录起不补历史 |
 | macOS 菜单栏余量设置 | `userData/menubar-settings.json`，本机偏好：是否显示、来源顺序与显隐、菜单栏文字、快见底通知、隐藏个人信息、统计范围；只含供应商 id，不含凭证或用量数值 |
 | macOS 菜单栏 Cindy 余额样本 | `userData/owners/<账号>/menubar-credit-samples.json`，只记录观测到的余额数值与时间（按区域与币种分组），用于估算日均消耗；保留 30 天、原子替换写入，不含凭证或账号标识 |
-| 云端伙伴同步状态 | `userData/owners/<账号>/companion-cloud/<sha256(端点\n主人 actor id)>.json`，只记伙伴的云端 actor id、1:1 房间 id、对话导入游标（本机消息时间与 id）、已上传资料的内容哈希与版本号、是否已交出主力电脑（本机副本隐藏、不跑例行任务）、接管后待重建上下文的标记；原子替换写入，读不出时从空开始并向服务器重新核对，不含凭证、消息正文或资料正文。见 `main/companion-cloud/state.ts` |
+| 记忆（Maker Memory 与伙伴记忆） | 普通项目：`userData/owners/<账号>/maker-memory/<范围目录>/`（记录 `*.md`、重建的 `MEMORY.md`、`meta.json`、检索库 `fts.db`），不写进用户的项目文件夹。V1 伙伴：`owners/<账号>/bots/<伙伴>/memories/`。V2 伙伴：伙伴项目里的 `bots/<伙伴>/workspace/.cindy/memory/`，记录与复制回执随项目 Git 记版本，派生文件由项目 `.gitignore` 排除；从项目外旧位置一次性复制（不覆盖、旧目录保留），完成回执 `bots/<伙伴>/project-memory-move.json`。该文件夹可被任务改动，宿主不顺着链接读写，`.cindy`／`.cindy/memory` 是链接时拒绝打开。不含凭证。见 `maker-host/maker-memory-host.ts`、`maker-ipc/botProjectMemory.ts`、`maker-ipc/botProjectMode.ts` |
+| 云端伙伴同步状态 | `userData/owners/<账号>/companion-cloud/<sha256(端点\n主人 actor id)>.json`，只记伙伴的云端 actor id、1:1 房间 id、对话导入游标（本机消息时间与 id）、已上传资料的内容哈希与版本号、是否已交出主力电脑（本机副本隐藏、不跑伙伴项目的自动化）、接管后待重建上下文的标记；原子替换写入，读不出时从空开始并向服务器重新核对，不含凭证、消息正文或资料正文。见 `main/companion-cloud/state.ts` |
+| 伙伴 V1→V2 升级（2026-11-08） | 每位伙伴一次：完成回执 `owners/<账号>/bots/<伙伴>/v2-migration.json`（全部步骤成功才写，失败下次启动重试）；V1 专用状态（`todos.v1.json`、`working-memory.json`、`nightly-learning.json`、`learning-history/`）移到同目录 `v1-archive/` 保留不删，转换前的例行任务定义与转换说明存为 `v1-archive/routines.json`、`routine-notes.json`，`workbench.json` 原位保留（关联项目仍用）并复制一份存档；未完成的旧待办、工作台事项与工作账本写进伙伴项目的 `workspace/CARRYOVER.md`，`AGENTS.md` 留一行指引。新伙伴仓库默认 `.gitignore` 排除存档、数据库与日志。不含凭证。见 `maker-ipc/botV2Migration.ts`、`botV2Carryover.ts`、`botV1Routines.ts` |
 | 伙伴已读位置 | `userData/owners/<账号>/bot-read-state.json`（electron-store），只存这台电脑上伙伴私聊（伙伴 id）、早期本机群（`group:<群 id>`）与私聊话题（`thread:<Session id>`）的已读时刻，最多 2000 条；只前进不后退，读不出时从空开始，不含消息正文或凭证。本机窗口、手机与其他电脑经远程资源 `read` 推进同一份；Renderer 另在 localStorage `cindy.bots.readState.v1.<账号>` 留副本供首帧读取。见 `main/maker-ipc/botReadStateStore.ts` |
 | macOS 菜单栏 helper（开发构建） | `userData/menubar/`，开发时由 `swiftc` 编译的 helper 及其 wordmark 图片和源码哈希；打包版改用 `resources/tools/menubar/`，不在 userData 落盘 |
 | 供应商分享：受邀者会话登记 | `userData/remote-agent/guest-sessions.json`（控制端摘要 → 本机侧任务与原生会话 id），只用来限制受邀者只能恢复自己的会话，并在分享删除时精确清理影子工作区、附件与会话记录 |
@@ -375,6 +399,17 @@ relay 原有 60 秒主动续期节流保持不变。
 定向测试。
 
 ## Cindy 托管的预装技能
+
+随包技能字节改变时必须递增 `BUILT_IN_SKILLS_BUNDLE_VERSION`。运行
+`pnpm check:built-in-skills`，对照完整 Git 历史核验工作区实际字节（含未跟踪文件），
+同版本不同内容或版本倒退会阻断；不会改 index、已安装技能或用户配置。检查在 CI 与
+个人版 `check` 安装依赖前执行，不给普通 Forge 打包增加 Git 历史要求（源码压缩包与
+浅克隆仍可打包，但不能声称通过此检查）。合成构建核验所有父分支，不能只和
+merge-base 比较：两个来源各自用了同一个新版本号，合成结果仍须再递增。可重复传
+`--base-ref <ref>` 纳入额外基准（例如不在当前祖先链中的上一次个人构建）。需要完整
+Git checkout；浅克隆先 `git fetch --unshallow`，不在缺失历史时假定核验通过。
+`.gitattributes` 固定整个资源目录的原始字节，避免 Windows 换行转换复用同一个版本号。
+该检查不改变运行时保留冲突版本、用户同名技能与用户修改的保护，也不打开跨 Harness 同步。
 
 `cindy-plugin-creator` 从内置 bundle 13 起提供。核验旧 bundle 时只对这个尚未引入的技能
 容许缺席；已记录的指纹以及 bundle 13 起的完整性要求不放宽。升级失败时保留旧 bundle

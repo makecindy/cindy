@@ -238,7 +238,8 @@ describe('built-in Skills', () => {
     expect(fs.readFileSync(path.join(repairedDescriptor.absolutePath, 'SKILL.md'), 'utf8')).toContain(
       '# Creator',
     );
-    expect(fs.existsSync(path.join(firstImmutablePath, 'SKILL.md'))).toBe(true);
+    // Repair publishes a new official copy; the user's modified bytes remain intact.
+    expect(fs.readFileSync(path.join(firstImmutablePath, 'SKILL.md'), 'utf8')).toBe('# Tampered\n');
 
     fs.appendFileSync(path.join(input.source, 'SKILL.md'), '\nUpdated\n');
     const updated = await prepareAndProjectBuiltInSkills({

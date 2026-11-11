@@ -11,7 +11,7 @@ import { PROVIDER_GROUP_USAGE_READ_TIMEOUT_MS, providerGroupMemberUsageState } f
 import { createGroupContinuityExecutor } from '../continuityExecutor.js';
 import type { GroupContinuityGrant } from '../../../shared/providerGroupContinuity.js';
 import { createProviderGroupService, type ProviderGroupServiceDeps } from '../service.js';
-import type { ProviderGroupBinding } from '../bindings.js';
+import type { ProviderGroupBinding } from '../bindings.desktop.js';
 
 let owner = 'owner-a';
 const io = vi.hoisted(() => ({
@@ -42,7 +42,7 @@ vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
 }));
 vi.mock('../../remote-agent/controller/deviceCatalog.js', () => ({ readDeviceProviderViews: io.catalog,
   readDeviceProviderCatalog: io.catalogState }));
-vi.mock('../bindings.js', () => ({ listProviderGroupBindings: () => ({}) }));
+vi.mock('../bindings.desktop.js', () => ({ listProviderGroupBindings: () => ({}) }));
 vi.mock('../store.js', () => ({ readProviderGroup: io.group }));
 vi.mock('../coolingStore.js', () => ({ readProviderGroupCooling: () => ({}), writeProviderGroupCooling: vi.fn() }));
 // Heavy leaves used only by service's failover/auto-resume paths, which these runtime

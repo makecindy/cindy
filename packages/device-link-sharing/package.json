@@ -1,0 +1,29 @@
+{
+  "name": "@cindy/device-link-sharing",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./shared-tasks": "./src/sharedTasks.ts",
+    "./provider-shares": "./src/providerShares.ts",
+    "./identity-card": "./src/identityCard.ts",
+    "./errors": "./src/errors.ts",
+    "./repositories": "./src/repositories.ts",
+    "./pages": "./src/pages.ts"
+  },
+  "scripts": {
+    "build": "tsup src/index.ts src/sharedTasks.ts src/providerShares.ts src/identityCard.ts src/errors.ts src/repositories.ts src/pages.ts --format esm --dts --clean",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "jose": "^6.2.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsup": "^8.3.0",
+    "typescript": "^5.7.0"
+  }
+}

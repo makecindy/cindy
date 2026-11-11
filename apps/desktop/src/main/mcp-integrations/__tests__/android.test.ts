@@ -44,7 +44,7 @@ vi.mock('electron', () => ({
   },
 }));
 
-vi.mock('../../maker-host/outbound-fetch.js', () => ({
+vi.mock('../../maker-host/outbound-fetch.desktop.js', () => ({
   outboundFetch: (...args: unknown[]) => outboundFetchMock(...args),
 }));
 

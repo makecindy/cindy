@@ -15,7 +15,7 @@
  * 只 mock electron(app)+ logger,与同目录 dispatchSendSafety.test 同范式。
  */
 import { describe, it, expect, vi } from 'vitest';
-import { connectedProvidersForAgent, pickRecommendedAgent, type ProviderView } from '@cindy/model-providers';
+import { connectedProvidersForAgent, pickRecommendedAgent, remoteInvocationModels, type ProviderView } from '@cindy/model-providers';
 import { PROVIDER_METADATA_TRUST_MS } from '@cindy/device-link';
 import { TEST_XD_GATEWAY_BASE_URL as XD_GATEWAY_BASE_URL } from '../../../test/vitest/clientEndpointsFixture';
 
@@ -36,7 +36,7 @@ vi.mock('../../logger', () => ({
   createLogger: () => ({ info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 
-import { __testing } from '../dispatch';
+import { __testing, setProviderShareAccess } from '../dispatch.desktop';
 
 const project = (result: unknown) =>
   __testing.projectInvokeResultForTunnel('maker:provider:list', result) as {
@@ -50,6 +50,37 @@ const projectForCurrentController = (result: unknown) =>
     providers: Record<string, unknown>[];
     modelVisibilityOverrides?: Record<string, boolean>;
   };
+
+// Upgrade 2026-11-11, standard: folding the local list must not remove an old remote grant.
+it.each([false, true])('retains the old remote source unless the complete pool is offered (%s)', offered => {
+  const projected = project({ providers: [
+    { id: 'openai', name: 'OpenAI', agents: [], models: {}, remoteInvocationEnabled: offered },
+    { id: 'old-openai', name: 'Old OpenAI', agents: [], models: {}, remoteInvocationEnabled: true, subscriptionPoolAlias: true },
+  ] });
+  expect(projected.providers.find(provider => provider.id === 'old-openai')?.subscriptionPoolAlias)
+    .toBe(offered ? true : undefined);
+});
+
+// PR #9900, standard: the pool's remote switch does not imply model coverage.
+// Previous upgrade fixtures had empty catalogs and could not expose a lost grant.
+it.each([
+  { poolModels: ['model-a'], oldModels: ['model-b'], hidden: false },
+  { poolModels: ['model-a', 'model-b'], oldModels: ['model-b'], hidden: true },
+])('keeps the old remote source until its models are covered: %j', ({ poolModels, oldModels, hidden }) => {
+  setProviderShareAccess({
+    guestAccess: () => null, ensureKnown: async () => {}, hasShares: () => false,
+    remoteModels: id => id === 'openai' ? poolModels : oldModels,
+  });
+  try {
+    const models = { codex: ['model-a', 'model-b'].map(id => ({ id, name: id, efforts: [], contextWindow: 1000 })) };
+    const projected = project({ providers: [
+      { id: 'openai', name: 'OpenAI', agents: ['codex'], models, remoteInvocationEnabled: true },
+      { id: 'old-openai', name: 'Old OpenAI', agents: ['codex'], models, remoteInvocationEnabled: true, subscriptionPoolAlias: true },
+    ] });
+    expect(projected.providers.find(provider => provider.id === 'old-openai')?.subscriptionPoolAlias)
+      .toBe(hidden ? true : undefined);
+  } finally { setProviderShareAccess(null); }
+});
 
 describe('schedule binding list projection', () => {
   const fields = {
@@ -157,6 +188,16 @@ describe('allowed object-form read stamps', () => {
 });
 
 describe('projectInvokeResultForTunnel — maker:provider:list 投影', () => {
+  // #9501 unit: the actual tunnel projection must preserve the host-only budget
+  // for Remote Agent selection while remote-control/settings keep the default.
+  it('preserves separate context overrides across tunnel serialization', () => {
+    const provider = xdProviderWithFullRouting();
+    const model = { ...provider.models['claude-code'][0], contextWindow: 200_000, contextWindowOverride: 1_000_000 };
+    provider.models['claude-code'] = [model];
+    const result = JSON.parse(JSON.stringify(project({ providers: [provider] })));
+    expect(result.providers[0].models['claude-code'][0]).toMatchObject({ contextWindow: 200_000, contextWindowOverride: 1_000_000 });
+    expect(remoteInvocationModels(result.providers[0]).models['claude-code']![0].contextWindow).toBe(1_000_000);
+  });
   it('advertises the bounded directory budget and keeps a shorter upstream remainder', () => {
     expect(project({ providers: [] }).providerContinuity)
       .toEqual({ stale: false, remainingMs: PROVIDER_METADATA_TRUST_MS });

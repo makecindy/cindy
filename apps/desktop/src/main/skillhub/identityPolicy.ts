@@ -1,6 +1,6 @@
 import { deriveSkillhubIdentityPolicy } from '../../shared/skillhubIdentityPolicy';
 import { getAuthState } from '../authManager';
-import { ServerApiError } from '../serverApiClient';
+import { ServerApiError } from '../serverApiClient.desktop';
 import type { SkillhubPublishVisibility } from '../../shared/skillhubIdentityPolicy';
 import { isAppSessionBoundaryPending } from '../appSessionState.js';
 

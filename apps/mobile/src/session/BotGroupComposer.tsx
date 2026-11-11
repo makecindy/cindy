@@ -90,7 +90,7 @@ type MentionOption =
   | { kind: 'member'; label: string; member: BotGroupMemberView };
 
 export function BotGroupComposer({
-  pullThrough, members, identityFor, deviceId, online, allowMentionAllBots = false, running, planState, attachmentsSupported, divisionSupported = true, uploadAttachment, quoteMessageId, focusRequest, onSend, onStop, topic = false, placeholder: placeholderOverride, maskIndicator, onParticipate,
+  pullThrough, members, identityFor, deviceId, online, allowMentionAllBots = false, running, stopPending = false, planState, attachmentsSupported, divisionSupported = true, uploadAttachment, quoteMessageId, focusRequest, onSend, onStop, topic = false, placeholder: placeholderOverride, maskIndicator, onParticipate,
 }: {
   pullThrough?: ComposerPullThroughBridge;
   maskIndicator?: import('react').ReactNode;
@@ -101,6 +101,7 @@ export function BotGroupComposer({
   deviceId: string;
   online: boolean;
   running: boolean;
+  stopPending?: boolean;
   planState: BotGroupComposerPlanState | null;
   /** The active server/computer path takes attachments on send. */
   attachmentsSupported: boolean;
@@ -299,7 +300,7 @@ export function BotGroupComposer({
   };
 
   const stop = async () => {
-    if (stoppingRef.current) return;
+    if (stopPending || stoppingRef.current) return;
     stoppingRef.current = true;
     setStopping(true);
     try { await onStop(); } catch { /* the screen reports the failure */ } finally {
@@ -349,10 +350,10 @@ export function BotGroupComposer({
   </View> : plus;
   const previewUrl = previewId ? tray.galleryImages.find((image) => image.key === previewId)?.url ?? null : null;
 
-  const actionDisabled = showStop ? stopping : !canSend || sending;
+  const actionDisabled = showStop ? stopping || stopPending : !canSend || sending;
   const trailing = <Pressable accessibilityRole="button"
     accessibilityLabel={showStop ? t('groupChat.composer.stop') : t('groupChat.composer.send')}
-    accessibilityState={{ disabled: actionDisabled, busy: sending || stopping || undefined }}
+    accessibilityState={{ disabled: actionDisabled, busy: sending || stopping || stopPending || undefined }}
     disabled={actionDisabled} hitSlop={CONTROL_HIT_SLOP} onPress={() => void (showStop ? stop() : send())}
     style={({ pressed }) => [styles.control, styles.send, actionDisabled && styles.sendInactive, pressed && mobileInteractionStyles.pressed]}
     testID={showStop ? 'botGroup.composer.stop' : 'botGroup.composer.send'}>

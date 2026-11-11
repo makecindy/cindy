@@ -142,7 +142,8 @@ function repositoryWorktrees(cwd = rootDir) {
 }
 
 function extractArgumentPath(command, name) {
-  const match = command.match(new RegExp(`--${name}=(.*?)(?=\\s--[A-Za-z0-9-]+=|\\s--[A-Za-z0-9-]+\\s|$)`));
+  // Windows Crashpad puts /prefetch:N between the profile path and --switches.
+  const match = command.match(new RegExp(`--${name}=(.*?)(?=\\s--[A-Za-z0-9-]+=|\\s--[A-Za-z0-9-]+\\s|\\s/prefetch:\\d+(?:\\s|$)|$)`));
   return match?.[1]?.replace(/^['"]|['"]$/g, '') ?? null;
 }
 
@@ -195,18 +196,9 @@ export function identifyDesktopProcesses(processes, worktrees) {
   const result = [];
   for (const worktree of worktrees) {
     const electronRoot = path.join(worktree.rootDir, 'node_modules', 'electron');
-    const native = readJson(path.join(worktree.rootDir, 'apps/desktop/resources/personal-native.json'));
-    const sharedExecutable = typeof native?.runtime?.directory === 'string'
-      ? path.join(native.runtime.directory, 'Cindy.app/Contents/MacOS/Electron') : null;
     for (const proc of processes) {
-      const fixedMatch = /^(\/.*?\.app)\/Contents\/MacOS\/Electron /.exec(proc.command);
-      const installed = fixedMatch ? readJson(fixedMatch[1] + '.personal-install.json') : null;
-      const fixedRuntime = installed && typeof installed.key === 'string' && installed.key === native?.runtime?.key
-        && installed.digest === native?.runtime?.digest;
       if (
-        !(commandContainsPath(proc.command, electronRoot) || sharedExecutable &&
-          (proc.command.startsWith(sharedExecutable + ' ') || fixedRuntime) &&
-          commandContainsPath(proc.command, path.join(worktree.rootDir, 'apps/desktop'))) ||
+        !commandContainsPath(proc.command, electronRoot) ||
         proc.command.includes('--type=') ||
         proc.command.includes('crashpad_handler')
       ) continue;

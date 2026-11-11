@@ -35,7 +35,7 @@ import {
 } from '../analytics-settings-store';
 import { isFatalShutdownReason, onFatalShutdown, onQuit } from '../lifecycle';
 import { createLogger, getLogDir } from '../logger';
-import { outboundFetch } from '../maker-host/outbound-fetch';
+import { outboundFetch } from '../maker-host/outbound-fetch.desktop';
 import { getPreviousRunReports } from '../startup-diagnostics';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { throwIpcError } from '../utils/ipcValidate.js';

@@ -64,7 +64,8 @@
       "discord": "Discord",
       "wechat": "WeChat",
       "wecom": "WeCom",
-      "dingtalk": "DingTalk"
+      "dingtalk": "DingTalk",
+      "imessage": "iMessage"
     },
     "modelMismatch": "This turn was answered by {{actual}} instead of the selected {{selected}} (temporary server-side downgrade)",
     "copyStateCopying": "Copying",

@@ -22,7 +22,7 @@ function localIngressEnabled(): boolean {
 async function notifyQuotaExhausted({ limit, resetAt }: RemoteWebhookQuota): Promise<void> {
   const [{ getDesktopNotificationsEnabled }, { t }] = await Promise.all([
     import('../../notificationService.js'),
-    import('../../i18n.js'),
+    import('../../i18n.desktop.js'),
   ]);
   if (!getDesktopNotificationsEnabled() || !Notification.isSupported()) return;
   const body = t('scheduler.webhook.quotaExhausted')
@@ -54,7 +54,7 @@ export async function startScheduleWebhooks(scheduler: Scheduler, logger: Logger
       import('../../authManager.js'),
       import('../../appCapabilities.js'),
       import('../../clientEndpointsService.js'),
-      import('../../maker-host/outbound-fetch.js'),
+      import('../../maker-host/outbound-fetch.desktop.js'),
     ]);
   if (host || startingGeneration !== generation) return;
   const isSignedIn = (): boolean => getAppCapabilities().canUseCindyAccountServices;

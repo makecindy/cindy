@@ -5,7 +5,7 @@ import type { AgentInputSerializedFile } from '../../../shared/agentInputQueue.j
 
 const state = vi.hoisted(() => ({ owner: { client: { drizzle: {} } }, ingest: vi.fn() }));
 vi.mock('../../localDb/client/current.js', () => ({ getCurrentDbClientSnapshot: () => state.owner }));
-vi.mock('../blobStore.js', () => ({
+vi.mock('../blobStore.desktop.js', () => ({
   extForMime: (mime: string) => ({ 'image/png': '.png', 'image/jpeg': '.jpg' } as Record<string, string>)[mime],
   blobUrl: (hash: string, ext: string) => `cindy-media://blobs/${hash}${ext}`,
 }));

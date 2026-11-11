@@ -266,7 +266,7 @@ import {
 const TEST_INSTALL_CONTEXT: PluginMarketInstallContext = {
   consent: { prompt: async () => true, initiator: 'user' },
 };
-import type { PluginMarketApi } from '../api';
+import { PluginMarketEndpointUnsupportedError, type PluginMarketApi } from '../api';
 import { downloadVerifiedPlugin } from '../download';
 import { createOrganizationPrefixStore } from '../organizationPrefixStore';
 
@@ -883,6 +883,21 @@ describe('PluginMarketService migration and defaultInstall', () => {
     expect(runtime.uninstall).not.toHaveBeenCalled();
     expect(h.ledger.installationForPlugin({ ghostId: item.ghostId, namespace: 'acme' })?.installed).toBe(true);
     expect(h.api.listAll).not.toHaveBeenCalled();
+  });
+
+  // unit：客户端先于 plugin-server 上线（无 defaults 接口）时，插件页与迁移仍要读到官方目录。
+  it('falls back to the full catalog only when the server lacks the defaults endpoint', async () => {
+    const item = summary({ namespace: null });
+    const h = harness([item]);
+    h.api.defaults.mockRejectedValueOnce(new PluginMarketEndpointUnsupportedError());
+    const result = await h.service.snapshot();
+    expect(result.unavailableReason).toBeNull();
+    expect(result.items.map(entry => entry.pluginId)).toContain(item.id);
+    expect(h.api.listAll).toHaveBeenCalledTimes(1);
+
+    h.api.defaults.mockRejectedValueOnce(new Error('network down'));
+    expect((await h.service.snapshot()).unavailableReason).toBe('network down');
+    expect(h.api.listAll).toHaveBeenCalledTimes(1);
   });
 
   it('upgrades the official simulator through the old route and atomically replaces its ledger key', async () => {
@@ -3551,15 +3566,15 @@ describe('PluginMarketService migration and defaultInstall', () => {
 
   // 测试价值
   // - 生产入口与可观察结果：snapshot() 的市场投影与随后的自动更新——内置种子覆盖过的商店安装
-  //   在种子已撤或当前种子不比 Release 新时被更新回商店包，否则保持冲突、不下载。
+  //   在种子已撤或当前种子不比 Release 新时可更新回商店包，但不允许覆盖更高的已装版本。
   // - 规则依据：种子与商店按版本取新、相同取商店（2026-11）；只放行播种台账内的实例。
   // - 现有覆盖缺口：上一条用例只覆盖普通本地漂移（冲突、不自动更新）。
   // - 最小失败输入：已装字节与账本不符且在播种台账内，当前 Release 与种子同版本；
-  //   或种子已撤而已装的旧种子版本更高（本地测试抬过版本号）。
+  //   种子已撤但已装版本更高时也不得自动降级（2026-11-11 回归）。
   // - tier：unit（内存 runtime）。
   it.each([
     { installed: '2.0.0', seed: '2.0.0' as string | null | undefined, updates: true },
-    { installed: '3.0.0', seed: null, updates: true },
+    { installed: '3.0.0', seed: null, updates: false },
     { installed: '3.0.0', seed: '3.0.0', updates: false },
     { installed: '2.0.0', seed: undefined, updates: false },
   ])('installed $installed with seed $seed yields to release 2.0.0: $updates', async ({ installed, seed, updates }) => {
@@ -3595,7 +3610,8 @@ describe('PluginMarketService migration and defaultInstall', () => {
       });
     } else {
       expect(runtime.install).not.toHaveBeenCalled();
-      expect(items[0]?.installState).toBe('conflict');
+      expect(items[0]?.installState).toBe(seed === null ? 'update-available' : 'conflict');
+      expect(runtime.ghosts[0]?.manifest.version).toBe(installed);
     }
   });
 
@@ -3745,6 +3761,34 @@ describe('PluginMarketService migration and defaultInstall', () => {
       expect(snapshot.items[0]).toMatchObject({ installState: 'update-available' });
     },
   );
+
+  // Regression (unit): snapshot must preserve a newer installed package/ledger when
+  // client compatibility filtering returns an older release (1.5.11 -> 1.3.0).
+  // Existing upgrade tests only covered increasing versions, not this data-loss path.
+  it.each([false, true])('does not automatically downgrade a tracked release (defaultInstall=%s)', async (defaultInstall) => {
+    const item = summary({
+      scope: defaultInstall ? 'organization' : 'public',
+      organizationId: defaultInstall ? 'org-1' : null,
+      defaultInstall,
+      currentRelease: { ...summary().currentRelease, id: 'compatible-old', version: '1.3.0' },
+    });
+    const installedManifest = manifest(item.ghostId, '1.5.11');
+    const dir = installRuntimeGhost(installedManifest);
+    const h = harness([item]);
+    h.ledger.upsertInstallation(recordForTest(item, {
+      releaseId: 'installed-new', version: '1.5.11',
+      manifestDigest: ghostManifestDigest(installedManifest),
+    }));
+    const before = h.ledger.read();
+
+    await h.service.snapshot();
+
+    expect(runtime.install).not.toHaveBeenCalled();
+    expect(h.api.download).not.toHaveBeenCalled();
+    expect(runtime.ghosts[0]?.manifest.version).toBe('1.5.11');
+    expect(JSON.parse(fs.readFileSync(path.join(dir, 'ghost.json'), 'utf8')).version).toBe('1.5.11');
+    expect(h.ledger.read().installations[item.ghostId]?.releaseId).toBe(before.installations[item.ghostId]?.releaseId);
+  });
 
   it('silently updates an organization defaultInstall package and preserves disabled state', async () => {
     const item = summary({
@@ -5669,6 +5713,20 @@ describe('organization default Plugin takeover', () => {
       uniqueGhostId: false, installed, record: null, installOrigin: 'manual',
       runtimeAvailable: true, optedOut: false, builtinRemoved: true, busy: false,
     })).toEqual({ eligible: true });
+  });
+
+  // Unit: default-source takeover is another background replacement path;
+  // unlike tracked upgrades it starts from a conflict without a matching ledger.
+  it('does not automatically downgrade a newer manual plugin during default takeover', async () => {
+    setCurrentOrganization();
+    const item = organizationDefaultSummary();
+    installRuntimeGhost(manifest(item.ghostId, '9.0.0'));
+    const h = harness([item]);
+    await h.service.snapshot();
+    expect(runtime.install).not.toHaveBeenCalled();
+    expect(h.api.download).not.toHaveBeenCalled();
+    expect(runtime.ghosts[0]?.manifest.version).toBe('9.0.0');
+    expect(h.ledger.installationForGhost(item.ghostId)).toBeNull();
   });
 
   it('re-downloads and replaces a same-release bad target record without writing opt-out', async () => {
