@@ -337,6 +337,40 @@ function mockWorkspaceRootExists(workspaceRoot: string): void {
 }
 
 describe('computer mcp integration', () => {
+  // #9887: window-bound tokens cannot address status items. Tier unit: exercise
+  // production dispatch with desktop captures, which existing window tests lack.
+  it('requires fresh desktop evidence and yields after other input or failed capture', async () => {
+    mcpListToolsMock.mockResolvedValue({ tools: COMPUTER_TOOLS.map((tool) => ({
+      name: tool.name, inputSchema: { type: 'object', properties: { target: {}, capture_id: {} }, additionalProperties: true },
+    })) });
+    mcpCallToolMock.mockImplementation(async ({ name }) => ({ structuredContent: name === 'get_desktop_state'
+      ? { capture_id: 'capture-1', screenshot_frame_valid: true } : { ok: true, effect: 'confirmed' } }));
+    const context = { sessionId: 'desktop-evidence' };
+    const pointer = { target: { kind: 'desktop', display_id: 'primary' }, capture_id: 'capture-1', delivery_mode: 'foreground', x: 10, y: 20 };
+    powerMonitorState.idleSeconds = 3600;
+    await expect(callComputerDriverTool('click', pointer, context)).rejects.toMatchObject({ code: 'STALE_SNAPSHOT' });
+    await callComputerDriverTool('get_window_state', { pid: 123, window_id: 7 }, context);
+    await expect(callComputerDriverTool('click', pointer, context)).rejects.toMatchObject({ code: 'STALE_SNAPSHOT' });
+    await callComputerDriverTool('get_desktop_state', {}, context);
+    await expect(callComputerDriverTool('click', { ...pointer, capture_id: 'older-capture' }, context)).rejects.toMatchObject({ code: 'STALE_SNAPSHOT' });
+    await expect(callComputerDriverTool('click', pointer, context)).resolves.toBeDefined();
+    await expect(callComputerDriverTool('click', pointer, context)).rejects.toMatchObject({ code: 'STALE_SNAPSHOT' });
+    expect(mcpCallToolMock.mock.calls.find(([call]) => call.name === 'click')?.[0].arguments)
+      .toMatchObject(pointer);
+    const read = mcpCallToolMock.mock.calls.find(([call]) => call.name === 'get_desktop_state')?.[0].arguments;
+    expect(read?.screenshot_out_file).toMatch(/get_desktop_state/);
+    expect(read?.session).toBe(mcpCallToolMock.mock.calls.find(([call]) => call.name === 'click')?.[0].arguments.session);
+    await callComputerDriverTool('get_desktop_state', {}, context);
+    await callComputerDriverTool('launch_app', { name: 'Own app' }, context);
+    await expect(callComputerDriverTool('click', pointer, context)).rejects.toMatchObject({ code: 'STALE_SNAPSHOT' });
+    await callComputerDriverTool('get_desktop_state', {}, context);
+    await callComputerDriverTool('launch_app', { name: 'Other app' }, { sessionId: 'other-input' });
+    await expect(callComputerDriverTool('click', pointer, context)).rejects.toMatchObject({ code: 'STALE_SNAPSHOT' });
+    await callComputerDriverTool('get_desktop_state', {}, context);
+    mcpCallToolMock.mockImplementation(async () => ({ structuredContent: { screenshot_frame_valid: false } }));
+    await callComputerDriverTool('get_desktop_state', {}, context);
+    await expect(callComputerDriverTool('click', pointer, context)).rejects.toMatchObject({ code: 'STALE_SNAPSHOT' });
+  });
   let revisionSpy: ReturnType<typeof vi.spyOn>;
   let agentRevisionSpy: ReturnType<typeof vi.spyOn>;
   beforeEach(async () => {
@@ -4418,6 +4452,9 @@ describe('foreground input while the person is using this computer', () => {
     await expect(callComputerDriverTool('click', { ...target, x: 1, y: 1, delivery_mode: 'foreground' }, context))
       .rejects.toMatchObject({ code: 'USER_INPUT_ACTIVE' });
     expect(mcpCallToolMock.mock.calls.filter(([call]) => call.name === 'click')).toHaveLength(0);
+    await expect(callComputerDriverTool('click', {
+      target: { kind: 'desktop', display_id: 'primary' }, capture_id: 'capture-1', x: 1, y: 1, delivery_mode: 'foreground',
+    }, context)).rejects.toMatchObject({ code: 'USER_INPUT_ACTIVE' });
     await expect(callComputerDriverTool('click', { ...target, x: 1, y: 1, delivery_mode: 'background' }, context))
       .resolves.toBeDefined();
     await expect(callComputerDriverTool('get_window_state', target, context)).resolves.toBeDefined();

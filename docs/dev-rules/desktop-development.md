@@ -264,6 +264,38 @@ Codex / Pi 进程数起落，持续上涨说明有客户端退出后会话没被
 变大的那几行就是泄漏点。不要在用户正在用的 GB 级主进程上拍完整堆快照：会冻结一两分钟
 并额外占用同等内存。正式版不读这个开关。
 
+## macOS 菜单栏位置保存
+
+菜单栏 helper 的 `NSStatusItem.autosaveName` 只标识条目；AppKit 还需要稳定的应用偏好域。
+`native/menubar/Info.plist` 在编译时嵌入 Mach-O 的 `__TEXT/__info_plist`，正式构建使用
+当前区域 appId 的 `.menubar` 子标识，随后沿用 tools 目录的签名流程。开发构建再附加
+userData 路径的摘要，使同一沙箱跨重启保持身份、不同沙箱与正式版互不覆盖位置；编译缓存
+同时包含 Swift 源码和最终 plist。偏好由 AppKit 管理，不自行写入或迁移系统位置键。
+
+验收需真实 ⌘ 拖动图标，保持分辨率不变并重启客户端，核对其相对位置、折叠后的可见性
+和菜单点击。仅看到 `autosaveName`、构建成功或偏好键存在不能证明恢复成功。嵌入 plist
+不是把 helper 改成 `.app` bundle，也不据此声称完成第三方菜单栏工具的所有身份兼容。
+
+## Computer Use 的窗口与桌面目标
+
+普通控件继续使用 `get_window_state` 和窗口内元素／坐标。macOS 菜单栏、状态栏图标不属于
+设置窗口：不能删除 `window_id` 或关闭驱动的窗口归属检查来让窗口 token 越界操作。
+经用户允许占用前台键鼠后，先通过 `cindy_computer.get_desktop_state` 取得桌面截图，再以
+`click`／`drag` 的 `target: { kind: "desktop", display_id: "primary" }`、该截图的
+`capture_id` 和 `delivery_mode: "foreground"` 操作。坐标来自这次截图，不混用窗口截图、
+AX token 或 zoom；操作后重新截图核实。窗口失败不会自动转成桌面输入。
+
+桌面输入沿用 Computer Use 总开关、任务归属、输入队列和用户操作保护；旧驱动未声明
+桌面目标时明确返回不兼容，不降级为窗口输入。CUA 0.47 的 drag 不接收 capture_id，
+由 Cindy 在输入队列内验证最新、未使用的截图后，转换为同一驱动任务的桌面拖动；click 保留驱动凭据。新任务、用户输入、其他任务的
+操作或失败的桌面读取之后，都需要新的桌面观察。新字段只用于本机 CUA 调用，无新增
+device-link 帧、IPC 或服务端接口。
+
+原生接入回归可用 `CINDY_CUA_SMOKE=desktop-pointer pnpm restart:desktop:remote -- --mock --region=global --isolated=cua-desktop-test`。
+它通过真实 Cindy MCP → host → CUA 在自己的临时窗口点击计数按钮，验证旧截图拒绝和
+新截图精确点击与桌面滑块拖动；结果写入该隔离沙箱的 `computer-use-smoke.json`，测试窗口、截图及驱动
+任务会自动收尾。开发客户端仍需按本任务的进程归属关闭。这是接入测试，不替代实际产品场景验收。
+
 ## 分层验证
 
 工作目录误报缺失或切到备用目录时，参见[工作目录异常日志判读](../working-directory-diagnostics.md)，
