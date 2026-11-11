@@ -94,7 +94,7 @@ describe('take over', () => {
       return {};
     } });
     t.local.host.findConflictingCindy = vi.fn(async () => 'local-cindy');
-    expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: false, code: 'LOCAL_CINDY_CONFLICT' });
+    expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: false, code: 'LOCAL_CINDY_CONFLICT', conflictingBotId: 'local-cindy', conflictingDeviceId: 'desk' });
     expect(t.log.warn).toHaveBeenCalledWith('Companion home change failed', {
       action: 'takeOver', botId: 'bot_mia', code: 'LOCAL_CINDY_CONFLICT', conflictingBotId: 'local-cindy',
     });

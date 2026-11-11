@@ -301,7 +301,8 @@ export function startCompanionCloud(input: {
       code: /^[A-Z][A-Z0-9_]{0,79}$/.test(reason) ? reason : (result.ok ? 'FAILED' : result.code),
       ...(error instanceof CompanionIdentityConflict ? { conflictingBotId: error.conflictingBotId } : {}),
     });
-    return result;
+    return !result.ok && error instanceof CompanionIdentityConflict
+      ? { ...result, conflictingBotId: error.conflictingBotId, conflictingDeviceId: input.selfDeviceId } : result;
   }
 
   function loop(run: (only: Set<string> | null) => Promise<void>, intervalMs: number, debounceMs: number) {

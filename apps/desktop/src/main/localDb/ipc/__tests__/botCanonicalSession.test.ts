@@ -1104,15 +1104,15 @@ describe('Bot canonical Session lifecycle', () => {
     // #9960: the runtime preflight and the real host/SQLite creation must agree. The old
     // materializer projection had no worker singleton, so relaxing only preflight was insufficient.
     // DB tier; synthetic cloud, isolated SQLite; no Electron app or real account involved.
-    it.each(['missing', 'remote', 'local'] as const)('takes over next to a shadowed Cindy: %s', async location => {
+    it.each(['missing', 'remote', 'local', 'unregistered'] as const)('handles a local Cindy copy during take-over: %s', async location => {
       h.sqlite!.prepare('UPDATE bot_profile_versions SET capabilities_json = ? WHERE bot_id = ?')
         .run(JSON.stringify({ templateId: 'cindy' }), 'bot-1');
       const original = await invoke('local-db:bots:get', 'bot-1');
       const actor = { id: 'incoming-actor', kind: 'bot', externalId: 'incoming_cindy', name: 'Cloud Cindy', avatar: null, homeDeviceId: 'old-home' };
-      const actors = [actor, ...(location === 'missing' ? [] : [{ id: 'old-actor', kind: 'bot', externalId: 'bot-1', name: 'Old Cindy', avatar: null,
+      const actors = [actor, ...(['missing', 'unregistered'].includes(location) ? [] : [{ id: 'old-actor', kind: 'bot', externalId: 'bot-1', name: 'Old Cindy', avatar: null,
         homeDeviceId: location === 'local' ? 'self' : 'elsewhere' }])];
       const { state } = memoryState();
-      state.update('bot-1', 'old-actor', entry => { entry.demoted = true; });
+      if (location !== 'unregistered') state.update('bot-1', 'old-actor', entry => { entry.demoted = true; });
       const host = createCompanionCloudHost({ deliverToCanonical: async () => ({ ok: true }),
         ensureCanonicalSession: async () => 'unused', rebuildContext: async () => 'rebuilt', listDevices: async () => [] });
       host.openState = () => state;
@@ -1131,8 +1131,11 @@ describe('Bot canonical Session lifecycle', () => {
         current: () => true, bots: () => [], actors: () => actors, publish, initialKick: false });
       try {
         const result = await runtime.takeOver(actor.externalId);
-        if (location === 'local') {
-          expect(result.ok).toBe(false);
+        if (location === 'local' || location === 'unregistered') {
+          expect(result).toEqual({ ok: false, code: 'LOCAL_CINDY_CONFLICT', conflictingBotId: 'bot-1', conflictingDeviceId: 'self' });
+          // The original active+absent/empty-state orphan remains protected, but the exact
+          // profile is readable through the settings route even when absent from cloud merge.
+          expect(await invoke('local-db:bots:list', {})).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'bot-1' })]));
           expect(calls.every(call => call.method === 'GET')).toBe(true);
           expect(actor.homeDeviceId).toBe('old-home');
         } else {
@@ -1147,7 +1150,7 @@ describe('Bot canonical Session lifecycle', () => {
             .toMatchObject({ id: actor.externalId });
         }
         expect(await invoke('local-db:bots:get', 'bot-1')).toEqual(original);
-        expect(state.isDemoted('bot-1')).toBe(true);
+        expect(state.isDemoted('bot-1')).toBe(location !== 'unregistered');
       } finally { runtime.dispose(); companionHomes.reset(); }
     });
 
