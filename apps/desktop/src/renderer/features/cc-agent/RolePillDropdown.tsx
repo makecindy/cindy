@@ -350,6 +350,65 @@ function WorkerReportChip({ report }: { report: WorkerInfo['latestReport'] }) {
   );
 }
 
+/**
+ * 行标识（avatar + role + label + 回报标记）的唯一实现：tabs 提示、两处菜单行都走它。
+ * 之前三处各写一份内联标记，加回报标记时漏掉了菜单行，用户在主入口看不到状态。
+ */
+function WorkerRowIdentity({
+  worker,
+  attentionKind,
+  selected = false,
+  compact = false,
+}: {
+  worker: WorkerInfo;
+  attentionKind?: AttentionKind;
+  selected?: boolean;
+  compact?: boolean;
+}) {
+  return (
+    <div className={cn('flex items-center gap-2 leading-snug', compact ? 'text-11' : 'text-13')}>
+      <WorkerAvatar
+        agent={worker.agent}
+        status={worker.status}
+        attentionKind={attentionKind}
+        selected={selected}
+        remote={Boolean(worker.agentDeviceId)}
+      />
+      <span
+        className={cn(
+          'font-medium',
+          selected ? 'text-[var(--surface-on-card)]' : 'text-[var(--text-primary)]',
+        )}
+      >
+        {worker.role}
+      </span>
+      {shouldShowWorkerLabel(worker.role, worker.label) && !compact && (
+        <>
+          <span
+            className={
+              selected
+                ? 'text-[var(--surface-on-card)] opacity-60'
+                : 'text-[var(--text-tertiary)]'
+            }
+          >
+            #
+          </span>
+          <span
+            className={
+              selected
+                ? 'text-[var(--surface-on-card)] opacity-80'
+                : 'text-[var(--text-secondary)]'
+            }
+          >
+            {worker.label}
+          </span>
+        </>
+      )}
+      {!compact && <WorkerReportChip report={worker.latestReport} />}
+    </div>
+  );
+}
+
 function WorkerSummary({
   worker,
   attentionKind,
@@ -363,46 +422,12 @@ function WorkerSummary({
 }) {
   return (
     <>
-      <div className={cn('flex items-center gap-2 leading-snug', compact ? 'text-11' : 'text-13')}>
-        <WorkerAvatar
-          agent={worker.agent}
-          status={worker.status}
-          attentionKind={attentionKind}
-          selected={selected}
-          remote={Boolean(worker.agentDeviceId)}
-        />
-        <span
-          className={cn(
-            'font-medium',
-            selected ? 'text-[var(--surface-on-card)]' : 'text-[var(--text-primary)]',
-          )}
-        >
-          {worker.role}
-        </span>
-        {shouldShowWorkerLabel(worker.role, worker.label) && !compact && (
-          <>
-            <span
-              className={
-                selected
-                  ? 'text-[var(--surface-on-card)] opacity-60'
-                  : 'text-[var(--text-tertiary)]'
-              }
-            >
-              #
-            </span>
-            <span
-              className={
-                selected
-                  ? 'text-[var(--surface-on-card)] opacity-80'
-                  : 'text-[var(--text-secondary)]'
-              }
-            >
-              {worker.label}
-            </span>
-          </>
-        )}
-        {!compact && <WorkerReportChip report={worker.latestReport} />}
-      </div>
+      <WorkerRowIdentity
+        worker={worker}
+        attentionKind={attentionKind}
+        selected={selected}
+        compact={compact}
+      />
       {!compact && (
         <WorkerModelLine workerSessionId={worker.sessionId} model={worker.model} effort={worker.effort} device={worker.executionDevice} />
       )}
@@ -730,21 +755,7 @@ function WorkerLayoutMenu({
                           closeMenu();
                         }}
                       >
-                        <div className="flex items-center gap-2 text-13 leading-snug">
-                          <WorkerAvatar
-                            agent={w.agent}
-                            status={w.status}
-                            attentionKind={attentionKind}
-                            remote={Boolean(w.agentDeviceId)}
-                          />
-                          <span className="font-medium text-[var(--text-primary)]">{w.role}</span>
-                          {shouldShowWorkerLabel(w.role, w.label) && (
-                            <>
-                              <span className="text-[var(--text-tertiary)]">#</span>
-                              <span className="text-[var(--text-secondary)]">{w.label}</span>
-                            </>
-                          )}
-                        </div>
+                        <WorkerRowIdentity worker={w} attentionKind={attentionKind} />
                         <WorkerModelLine
                           workerSessionId={w.sessionId}
                           model={w.model}
@@ -1512,21 +1523,7 @@ export function RolePillDropdown({
                     }}
                   >
                     {/* 主行: avatar (含 status icon + 可选 attention dot) + role + optional internal label. */}
-                    <div className="flex items-center gap-2 text-13 leading-snug">
-                      <WorkerAvatar
-                        agent={w.agent}
-                        status={w.status}
-                        attentionKind={attentionKind}
-                        remote={Boolean(w.agentDeviceId)}
-                      />
-                      <span className="font-medium text-[var(--text-primary)]">{w.role}</span>
-                      {shouldShowWorkerLabel(w.role, w.label) && (
-                        <>
-                          <span className="text-[var(--text-tertiary)]">#</span>
-                          <span className="text-[var(--text-secondary)]">{w.label}</span>
-                        </>
-                      )}
-                    </div>
+                    <WorkerRowIdentity worker={w} attentionKind={attentionKind} />
                     {/* 副行: 简化 model 名 (去 provider 前缀) + 档位文字.
                         各模型档位集合不同,不用信号条假装同一把尺子. */}
                     <WorkerModelLine

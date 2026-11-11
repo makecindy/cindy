@@ -607,6 +607,8 @@ interface AutoBridgeState {
   structuredReport?: OrcaStructuredWorkerReport;
   /** 该回报已按六态映射到 worker 状态；终态早于回报时由回报侧补映射。 */
   reportApplied?: boolean;
+  /** 本轮真实终态；晚到回报按它映射，避免覆盖 error。 */
+  terminalStatus?: 'done' | 'error';
   /** Reports of this assignment that reached the Lead directly or by same-turn steer. */
   deliveredReports: number;
   /**
@@ -1295,7 +1297,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
               resolveSettlement,
             };
             provisionalDispatches.set(target.sessionId, currentProvisional);
-            await deps.updateWorkerStatus(target.id, 'running');
+            await deps.updateWorkerStatus(target.id, 'running', null);
             deps.broadcastOrcaWorkerChanged(link.leadSessionId);
           });
           if (currentPending) await markPendingReady(target.sessionId, currentPending);
@@ -2201,7 +2203,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
               state.structuredReport = report;
               // 终态先到、回报后到：由回报侧补做映射，否则晚到的 waiting / blocked 会永久停在 done。
               if (state.terminalObserved && !state.reportApplied) {
-                await applyWorkerReportState(state, report, 'done');
+                // 用真实终态：晚到的 ready 不能把已判 error 的轮次洗成成功。
+                await applyWorkerReportState(state, report, state.terminalStatus ?? 'done');
               } else if (!state.terminalObserved) {
                 // 终态还没到：至少把最新回报落盘，面板与通知不读旧问题。
                 await deps.setWorkerLatestReport(state.workerId, report);
@@ -2279,7 +2282,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         const worker = workers.find((item) => item.id === link.workerId);
         if (!worker || worker.status === 'running') return;
 
-        await deps.updateWorkerStatus(link.workerId, 'running');
+        // 新 turn 开始：上一轮的回报不再描述当前状态，面板标记与未读判定都必须作废旧值。
+        await deps.updateWorkerStatus(link.workerId, 'running', null);
         deps.broadcastOrcaWorkerChanged(link.leadSessionId);
       });
       // running 提交后旧 entry 已不可能被重新登记,此时清理才是可靠的。
@@ -2393,6 +2397,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
 
           // 结构化回报的六态映射只在一处做（applyWorkerReportState）；已映射过的
           // （终态先到、回报后到时由回报侧补映射）不再覆盖。无结构化回报时保持旧路径。
+          if (state) state.terminalStatus = params.status;
           const structured = state && !state.reportApplied ? state.structuredReport : undefined;
           if (state && structured) {
             await applyWorkerReportState(state, structured, params.status);

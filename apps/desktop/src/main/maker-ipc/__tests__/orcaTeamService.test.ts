@@ -898,8 +898,8 @@ describe('OrcaTeamService', () => {
     expect(reserveWorkerMessage).toHaveBeenCalledTimes(1);
     expect(order).toEqual(['reserve-head', 'request-stop', 'after-stop-request']);
     expect(deps.updateWorkerStatus).toHaveBeenCalledTimes(2);
-    expect(deps.updateWorkerStatus).toHaveBeenNthCalledWith(1, 'worker-1', 'running');
-    expect(deps.updateWorkerStatus).toHaveBeenNthCalledWith(2, 'worker-1', 'running');
+    expect(deps.updateWorkerStatus).toHaveBeenNthCalledWith(1, 'worker-1', 'running', null);
+    expect(deps.updateWorkerStatus).toHaveBeenNthCalledWith(2, 'worker-1', 'running', null);
     expect(deps.broadcastOrcaWorkerChanged).toHaveBeenCalledTimes(2);
   });
 
@@ -1843,6 +1843,44 @@ describe('OrcaTeamService', () => {
 
     expect(getWorker().status).toBe('idle');
     expect(deps.setWorkerLatestReport).toHaveBeenCalledWith('worker-1', expect.objectContaining({ state: 'waiting' }));
+  });
+
+  // 晚到的 ready 不能把已经判 error 的轮次洗成 done（真实终态必须被保留）。
+  it('keeps an error terminal when a late ready report arrives', async () => {
+    const { getWorker, service } = createDeps();
+    await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: '干活',
+    });
+    const finish = service.captureLocalWorkerReport('worker-session-1');
+    const terminal = service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'error',
+      finalText: 'worker 崩了',
+    });
+    await finish(true, { delivered: true, report: { state: 'ready', summary: '其实完成了' } });
+    await terminal;
+
+    expect(getWorker().status).toBe('error');
+  });
+
+  // 新派活开始即作废上一轮回报：否则上一轮 dropped 会把新一轮的完成判成「无需处理」。
+  it('clears the previous round report when a new turn starts', async () => {
+    const { deps, service } = createDeps();
+    await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: '第一轮',
+    });
+    await service.captureLocalWorkerReport('worker-session-1')(true, {
+      delivered: true,
+      report: { state: 'dropped', summary: '无需处理' },
+    });
+    expect(deps.setWorkerLatestReport).toHaveBeenCalledWith('worker-1', expect.objectContaining({ state: 'dropped' }));
+
+    await service.handleWorkerTurnStarted('worker-session-1');
+    expect(deps.updateWorkerStatus).toHaveBeenCalledWith('worker-1', 'running', null);
   });
 
   it('persists the latest report so the panel never shows a stale question', async () => {
