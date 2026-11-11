@@ -972,5 +972,8 @@
       "disk-full": "没导入成功：磁盘空间不足",
       "native-unloadable": "没导入成功：原记录无法加载"
     }
+  },
+  "liveActivity": {
+    "waitingForUpdate": "等待更新"
   }
 }

@@ -64,7 +64,7 @@ export function AgentActivityBridge() {
         running: t("devices.companions.avatarStatus.running"),
         completed: t("devices.companions.avatarStatus.done"),
         error: t("devices.companions.avatarStatus.error"),
-        stale: t("devices.companions.stale"),
+        stale: t("devices.liveActivity.waitingForUpdate"),
       },
       onRegistered: (hasActivity) =>
         setRegistered((previous) =>
@@ -75,7 +75,7 @@ export function AgentActivityBridge() {
         ),
     });
     const listener = AppState.addEventListener("change", (state) => {
-      if (state === "active") sync.sync();
+      if (state === "active") sync.sync(true);
     });
     return () => {
       listener.remove();
@@ -133,7 +133,7 @@ export function AgentActivityBridge() {
           Linking.createURL(`/sessions/${encodeURIComponent(session.id)}`, {
             queryParams: { deviceId: session.deviceLinkDeviceId! },
           }),
-        t("devices.companions.stale"),
+        t("devices.liveActivity.waitingForUpdate"),
       );
       // An idle online peer cannot attest that an unreachable peer has finished.
       // Prefer a displayable live activity; otherwise retain the last stale one.
@@ -151,7 +151,7 @@ export function AgentActivityBridge() {
       )
         return undefined;
       return state ? JSON.stringify({ accountId: scope, state }) : null;
-    }, native);
+    }, native, () => AppState.currentState === "active");
     const unsubscribe = remoteSessionStore.subscribeHomeStatus(() =>
       controller.sync(),
     );
@@ -164,7 +164,6 @@ export function AgentActivityBridge() {
       heartbeat = setInterval(() => controller.sync(), 60_000);
     };
     resume();
-    if (AppState.currentState !== "active") controller.sync();
     const listener = AppState.addEventListener("change", (state) => {
       if (state === "active") resume();
       else {
