@@ -2924,7 +2924,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
    * Work the server announced for a companion this installation cannot resolve to a local profile.
    * Nothing claims it, so the room simply stays quiet: no refusal, no retry and no failure notice
    * (issue #9909). A paused, remote or shadowed companion is deliberately not claimed here and
-   * stays silent; only an actor no local profile answers for is a fault.
+   * stays silent; only an actor no local profile answers for is a fault. Install confirmation
+   * cannot gate this line: it is derived from the very local profiles that are missing here, so
+   * demanding it would hide the identity loss this diagnostic exists for.
    */
   const unresolvedWorkNoted = new Set<string>();
   function noteUnresolvedWork(actorId: string, roomId: string) {
@@ -2932,7 +2934,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const actor = actors.find(candidate => candidate.id === actorId);
     if (!actor || actor.kind !== 'bot' || actor.disabled || localBot(actorId)) return;
     if (actor.homeDeviceId && actor.homeDeviceId !== selfDeviceId) return;
-    if (companionHome && (companion?.isShadowed(actor.externalId) || !companion?.installConfirmed(actor.externalId))) return;
+    if (companionHome && companion?.isShadowed(actor.externalId)) return;
     unresolvedWorkNoted.add(actorId);
     if (unresolvedWorkNoted.size > 200) unresolvedWorkNoted.delete(unresolvedWorkNoted.values().next().value!);
     deps.log?.warn('Group work queued for a companion this installation cannot resolve', { actorId, groupId: roomId });

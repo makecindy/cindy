@@ -1413,6 +1413,23 @@ describe('Chat Server result delivery and refresh', () => {
       expect(posts()).toBe(0);
     });
 
+    // A paused companion is deliberately not claimed; only an unresolved identity is a fault.
+    it('stays quiet for a companion the owner paused', async () => {
+      const warn = withLogger();
+      fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'paused' }];
+      fixture.handle.mockImplementation((route) => route === '/executions/claim' ? { body: { execution: null } } : response(route));
+      await vi.advanceTimersByTimeAsync(2000);
+      const socket = fixture.sockets[0]!;
+      Object.defineProperty(socket, 'readyState', { value: 1 });
+      socket.emit('message', JSON.stringify({ type: 'ready' }));
+      expect((await service.getGroup(roomId)).ok).toBe(true);
+      socket.emit('message', JSON.stringify({ type: 'changes', scope: `conversation:${roomId}`, cursor: '8',
+        changes: [{ type: 'execution.changed', entityId: execution.id, data: { status: 'queued', botId } }] }));
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(notWarned(warn, 'Group work queued for a companion this installation cannot resolve')).toHaveLength(0);
+      expect(deps.dispatch).not.toHaveBeenCalled();
+    });
+
     // Claimed work for an actor that resolves to no local companion cannot run at all; the claim
     // is dropped instead of being settled, so nothing else would ever mention it.
     it('records a claimed execution it cannot resolve to a companion', async () => {
