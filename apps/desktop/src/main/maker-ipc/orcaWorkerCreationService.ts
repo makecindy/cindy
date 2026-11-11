@@ -189,6 +189,8 @@ export type OrcaWorkerCreationErrorCode =
   | 'REMOTE_WORKDIR_NOT_DIRECTORY'
   | 'REMOTE_WORKDIR_INVALID'
   | 'REMOTE_WORKDIR_UNAVAILABLE'
+  /** Worker 路由未通过模型执行授权(执行层 deny;可用 ≠ 授权)。 */
+  | 'MODEL_EXECUTION_DENIED'
   | 'INTERNAL';
 
 /** worker 创建结果保留首条派活 outcome，让调用方区分 created-but-not-dispatched。 */
@@ -317,6 +319,17 @@ export interface OrcaWorkerCreationDeps {
   createWorkerWorktree?(sessionId: string, directory: string, sourceBranch: string): Promise<string>;
   discardWorkerWorktree?(sessionId: string): Promise<void>;
   getAvailableModels(agent: AgentKind): OrcaWorkerModelCapabilities[];
+  /**
+   * 模型执行授权(decideModelExecution 同口径)。**失败关闭(P0-3)**:缺失/null/未注入、
+   * 抛错一律拒绝创建;{ allowed: false } = 创建拒绝。生产路径由 register.ts 注入;
+   * 测试需显式传桩(避免"未注入 resolver 时静默放行"正是本次复审的 P0-3)。
+   */
+  resolveModelExecutionPolicy?: (input: {
+    sessionId: string;
+    projectRoot?: string;
+    provider: string;
+    model: string;
+  }) => Promise<{ allowed: boolean; reason?: string } | null | undefined>;
   /**
    * 从同一次 provider registry 读取构造 Worker 路由上下文。
    * availability 只保留已连接 provider 的最小视图；显式 model 的默认来源解析复用
@@ -1357,6 +1370,36 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     });
     if (!resolvedConfig.ok) {
       return { ok: false, errorCode: 'INVALID_PARAMS', message: resolvedConfig.message };
+    }
+    // 模型执行授权(失败关闭,P0-3):
+    // Worker 的 (provider, model) 必须在当前会话的执行 allow-list 内或命中有效的
+    // user approval。"出现在可用模型目录里"不等于授权 —— 与 pi subagent 同口径。
+    // resolver 缺失、抛错、返回 null/undefined 一律拒绝(生产路径一律 fail-closed);
+    // 只有显式 { allowed: true } 才继续。
+    {
+      const policyProviderId = inheritedProviderId ?? providerRouting.resolveDefaultProviderIdForModel(params.agent, resolvedConfig.model);
+      const policyDenied = (reason: string) => ({
+        ok: false as const,
+        errorCode: 'MODEL_EXECUTION_DENIED' as const,
+        message: `Worker model execution policy denied route "${policyProviderId ?? ''}/${resolvedConfig.model}": ${reason}. Being listed as an available model is not authorization.`,
+      });
+      if (!deps.resolveModelExecutionPolicy) {
+        return policyDenied('model execution policy resolver is not available');
+      }
+      let policyDecision: Awaited<ReturnType<NonNullable<OrcaWorkerCreationDeps['resolveModelExecutionPolicy']>>>;
+      try {
+        policyDecision = await deps.resolveModelExecutionPolicy({
+          sessionId: params.leadSessionId,
+          ...(lead.workingDir ? { projectRoot: lead.workingDir } : {}),
+          provider: policyProviderId ?? '',
+          model: resolvedConfig.model,
+        });
+      } catch {
+        return policyDenied('model execution policy resolver failed');
+      }
+      if (!policyDecision || policyDecision.allowed !== true) {
+        return policyDenied(policyDecision?.reason ?? 'model execution policy returned no decision');
+      }
     }
     const defaultProviderId = providerRouting.resolveDefaultProviderIdForModel(
       params.agent,

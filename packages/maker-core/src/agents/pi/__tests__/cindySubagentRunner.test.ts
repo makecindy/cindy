@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { Buffer } from 'node:buffer';
 import { chmod, mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -7,6 +8,15 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { CINDY_SUBAGENT_RUNNER_SOURCE } from '../cindy-subagent-runner-source.js';
+import { createExecutionPolicyKeyPair, parseModelExecutionPolicy, signExecutionPolicySnapshot } from '../model-execution-policy.js';
+
+// 测试签发 key:与 maker-core canonicalExecutionPolicy 字节级一致(P1-8)。
+const POLICY_KEYPAIR = createExecutionPolicyKeyPair();
+function signPolicy(policy: Record<string, unknown>) {
+  const parsed = parseModelExecutionPolicy(policy);
+  if (!parsed) throw new Error('invalid test execution policy');
+  return { ...parsed, signature: signExecutionPolicySnapshot(parsed, POLICY_KEYPAIR.secretKey) };
+}
 
 /**
  * Every case here spawns a real runner process (and that runner spawns a fake
@@ -270,6 +280,20 @@ async function makeFixture(options: {
   poisonResultPath?: boolean;
   /** Override the per-task profile prompt, e.g. to blow the spawn argv budget. */
   profilePrompt?: string;
+  /** P0-2:allow-list 付费路由 + 带 maxCostUsd 的短效 approval。 */
+  modeOverride?: 'local-only' | 'development' | 'approved-paid';
+  allowedRoutesOverride?: Array<{ provider: string; model: string; tier: 'local' | 'free' | 'paid'; sourceProviderId?: string }>;
+  approvalsOverride?: Array<Record<string, unknown>> | ((sessionId: string) => Array<Record<string, unknown>>);
+  /** P0-2:预置已耗尽 cap 的 spend 账本(实际记账 1 USD)。 */
+  preExhaustedLedger?: boolean;
+  /** P0-2:预置损坏 JSON 账本,断言付费任务 fail-closed。 */
+  corruptSpendLedger?: boolean;
+  /** P0-2:写入自定义账本内容(可选 fixture 直落)。 */
+  spendFileContent?: string;
+  /** P0-0:把账本放到普通文件之下,读账本得 ENOTDIR,必须失败关闭。 */
+  spendFileUnderFile?: boolean;
+  /** P0-0:把账本 chmod 0,读账本得 EACCES,必须失败关闭(锁文件仍可建)。 */
+  spendFileUnreadable?: boolean;
 } = {}) {
   const root = await tempRoot();
   const runId = randomUUID();
@@ -530,6 +554,18 @@ process.stdin.on('end', () => {
     description: 'runner fixture',
     concurrency: options.concurrency ?? 4,
     timeoutMs: options.timeoutMs ?? 10_000,
+    // 测试夹具授权快照:fixture/fixture-model 显式列入 allow-list ——
+    // runner 在 spawn 前复核验签,与生产 config.executionPolicy 注入一致。
+    executionPolicy: signPolicy({
+      version: 1,
+      sessionId: path.basename(root),
+      mode: options.modeOverride ?? 'development',
+      allowedRoutes: options.allowedRoutesOverride ?? [{ provider: 'fixture', model: 'fixture-model', tier: 'local' }],
+      approvals: typeof options.approvalsOverride === 'function'
+        ? options.approvalsOverride(path.basename(root))
+        : (options.approvalsOverride ?? []),
+      issuedAt: Date.now(),
+    }),
     tasks: Array.from({ length: count }, (_, index) => ({
       childId: `${runId}-${index + 1}`,
       stepId: `step-${index + 1}`,
@@ -557,10 +593,40 @@ process.stdin.on('end', () => {
   // Before the spawn, so the artifact is already unwritable on the run's very
   // first terminal write — no race with a fast child.
   if (options.poisonResultPath) await mkdir(path.join(runDir, 'result.json'), { recursive: true });
+  // P0-B:公钥以 env 字面量注入(不是文件路径);恢复 run 时进程继承同一 env。
+  const policyPublicKey = POLICY_KEYPAIR.publicKey;
+  let spendFilePath = path.join(runDir, 'spend-ledger.json');
+  if (options.spendFileUnderFile) {
+    await writeFile(path.join(runDir, 'not-a-dir'), 'I am a file', { mode: 0o600 });
+    spendFilePath = path.join(runDir, 'not-a-dir', 'spend-ledger.json');
+  } else if (options.preExhaustedLedger) {
+    // P0-2:已耗尽的 cap。实际记账 1 USD = maxCostUsd。
+    const scopeKey = 'session:' + path.basename(root);
+    await writeFile(spendFilePath, JSON.stringify({
+      version: 3,
+      byScope: { [scopeKey]: { actualUsd: 1, estimatedUsd: 0, reservedUsdById: {}, reservedAtById: {}, updatedAt: Date.now() } },
+    }), { mode: 0o600 });
+  } else if (options.corruptSpendLedger) {
+    // P0-2:损坏的账本必须 fail-closed(拒绝付费任务启动),不能静默当清零。
+    await writeFile(spendFilePath, '{ this ledger is corrupted', { mode: 0o600 });
+  } else if (options.spendFileContent !== undefined) {
+    await writeFile(spendFilePath, options.spendFileContent, { mode: 0o600 });
+  }
+  if (options.spendFileUnreadable) {
+    await writeFile(spendFilePath, JSON.stringify({
+      version: 3,
+      byScope: { ['session:' + path.basename(root)]: { actualUsd: 0, estimatedUsd: 0, reservedUsdById: {}, reservedAtById: {}, updatedAt: Date.now() } },
+    }), { mode: 0o600 });
+    await chmod(spendFilePath, 0o000);
+  }
+  // resume 重新拉起 runner 时要继承 key 文件 env(与生产 Host 注入一致)。
+  process.env.CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY = policyPublicKey;
   const child = spawn(process.execPath, [runnerFile, configPath], {
     cwd: root,
     env: {
       ...process.env,
+      CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY: policyPublicKey,
+      CINDY_PI_SUBAGENT_SPEND_FILE: spendFilePath,
       CINDY_TEST_PI_PIDS: pidsFile,
       CINDY_TEST_PI_ARGS: argsFile,
       CINDY_TEST_PI_PROMPTS: promptsFile,
@@ -639,6 +705,108 @@ describe('Cindy durable PI Subagent runner', () => {
       expect(JSON.parse(await readFile(completed.resultPath!, 'utf8'))).toMatchObject({
         state: 'completed',
       });
+      await waitForClose(fixture.child, fixture.stderr);
+    });
+  });
+
+  // P0-2 并发原子裁决:带 maxCostUsd 的 approval 的预算预留必须在锁内完成;
+  // 预留失败、账本不可读一律拒绝付费任务启动,且不启动 fake pi(无真实请求)。
+  describe('budget reservation atomicity (P0-2)', () => {
+    const cappedApproval = (maxCostUsd: number) => (sessionId: string) => [{
+      id: 'approval-paid-1',
+      provider: 'fixture',
+      model: 'fixture-model',
+      scope: 'session',
+      sessionId,
+      grantedBy: 'user',
+      grantedAt: Date.now() - 1_000,
+      expiresAt: Date.now() + 60_000,
+      maxCostUsd,
+    }];
+
+    it('spawns the paid task when budget reservation succeeds (approval has headroom)', async () => {
+      const fixture = await makeFixture({
+        modeOverride: 'development',
+        allowedRoutesOverride: [{ provider: 'fixture', model: 'fixture-model', tier: 'paid', sourceProviderId: 'fixture' }],
+        approvalsOverride: cappedApproval(10),
+      });
+      const completed = await waitFor(async () => {
+        const [run] = await listPiSubagentRuns(fixture.root);
+        return run?.state === 'completed' ? run : null;
+      });
+      expect(completed.tasks[0]).toMatchObject({ status: 'completed' });
+      // 预算预留已内发生并在结算释放;fake pi 实际被启动(release 路径同在)。
+      expect(await readCommandsIfPresent(fixture.commandsFile)).not.toBeNull();
+      await waitForClose(fixture.child, fixture.stderr);
+    });
+
+    it('denies launch when the cap is exhausted (ledger already at cap)', async () => {
+      const fixture = await makeFixture({
+        modeOverride: 'development',
+        allowedRoutesOverride: [{ provider: 'fixture', model: 'fixture-model', tier: 'paid', sourceProviderId: 'fixture' }],
+        approvalsOverride: cappedApproval(1),
+        preExhaustedLedger: true,
+      });
+      const failed = await waitFor(async () => {
+        const [run] = await listPiSubagentRuns(fixture.root);
+        return run?.state === 'failed' ? run : null;
+      });
+      expect(failed.tasks[0]?.status).toBe('failed');
+      expect(failed.tasks[0]?.error).toMatch(/spend cap reached/i);
+      expect(await readCommandsIfPresent(fixture.commandsFile)).toBeNull();
+      await waitForClose(fixture.child, fixture.stderr);
+    });
+
+    it('denies launch when the ledger is corrupt (fail-closed, fake pi never starts)', async () => {
+      const fixture = await makeFixture({
+        modeOverride: 'development',
+        allowedRoutesOverride: [{ provider: 'fixture', model: 'fixture-model', tier: 'paid', sourceProviderId: 'fixture' }],
+        approvalsOverride: cappedApproval(10),
+        corruptSpendLedger: true,
+      });
+      const failed = await waitFor(async () => {
+        const [run] = await listPiSubagentRuns(fixture.root);
+        return run?.state === 'failed' ? run : null;
+      });
+      expect(failed.tasks[0]?.status).toBe('failed');
+      expect(failed.tasks[0]?.error).toMatch(/unreadable/i);
+      expect(await readCommandsIfPresent(fixture.commandsFile)).toBeNull();
+      await waitForClose(fixture.child, fixture.stderr);
+    });
+
+    it('denies launch when the ledger path is under a file (ENOTDIR, P0-0)', async () => {
+      const fixture = await makeFixture({
+        modeOverride: 'development',
+        allowedRoutesOverride: [{ provider: 'fixture', model: 'fixture-model', tier: 'paid', sourceProviderId: 'fixture' }],
+        approvalsOverride: cappedApproval(10),
+        spendFileUnderFile: true,
+      });
+      const failed = await waitFor(async () => {
+        const [run] = await listPiSubagentRuns(fixture.root);
+        return run?.state === 'failed' ? run : null;
+      });
+      expect(failed.tasks[0]?.status).toBe('failed');
+      // ENOTDIR 下账本与锁文件同父目录,锁也失败 —— 仍是 fail-closed。
+      expect(failed.tasks[0]?.error).toMatch(/unreadable|lock timeout/i);
+      expect(await readCommandsIfPresent(fixture.commandsFile)).toBeNull();
+      await waitForClose(fixture.child, fixture.stderr);
+    });
+
+    it.skipIf(process.platform === 'win32')('denies launch when the ledger is unreadable (EACCES, P0-0)', async () => {
+      const fixture = await makeFixture({
+        modeOverride: 'development',
+        allowedRoutesOverride: [{ provider: 'fixture', model: 'fixture-model', tier: 'paid', sourceProviderId: 'fixture' }],
+        approvalsOverride: cappedApproval(10),
+        spendFileUnreadable: true,
+      });
+      const failed = await waitFor(async () => {
+        const [run] = await listPiSubagentRuns(fixture.root);
+        return run?.state === 'failed' ? run : null;
+      });
+      expect(failed.tasks[0]?.status).toBe('failed');
+      expect(failed.tasks[0]?.error).toMatch(/unreadable/i);
+      // 读面 EACCES 已 fail-closed,fake pi 从未启动。
+      expect(await readCommandsIfPresent(fixture.commandsFile)).toBeNull();
       await waitForClose(fixture.child, fixture.stderr);
     });
   });

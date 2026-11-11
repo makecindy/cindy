@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { classifyClaudeSubagentModelAccess } from '../subagent-model-access-policy.js';
+import {
+  applyExecutionPolicyToClaudeAccess,
+  classifyClaudeSubagentModelAccess,
+} from '../subagent-model-access-policy.js';
 
 const xdModel = (id: string) => ({ id, agents: ['claude-code' as const] });
 
@@ -120,5 +123,58 @@ describe('Claude subagent model access', () => {
       credentialMode: 'oauth-bearer',
       gatewayKeyAvailable: true,
     })).toEqual({ status: 'denied' });
+  });
+
+  describe('Host execution policy overlay', () => {
+    const availabilityAllowed = { status: 'allowed' as const };
+    const availabilityUnknown = { status: 'unknown' as const };
+
+    it('preserves fixed-model execution without requiring a cross-model approval', () => {
+      expect(applyExecutionPolicyToClaudeAccess({
+        availability: availabilityAllowed,
+        policyAllowed: false,
+        model: 'claude-sonnet-4-6',
+        parentModel: 'CLAUDE-SONNET-4-6[1m]',
+      })).toEqual({ status: 'allowed' });
+    });
+
+    it('denies cross-model when the policy denies, with the policy reason', () => {
+      expect(applyExecutionPolicyToClaudeAccess({
+        availability: availabilityAllowed,
+        policyAllowed: false,
+        policyReason: 'route "xd/xai/grok-4.6" is not in this session\'s model execution allow-list',
+        model: 'xai/grok-4.6',
+        parentModel: 'claude-sonnet-4-6',
+      })).toEqual({ status: 'denied', reason: 'route "xd/xai/grok-4.6" is not in this session\'s model execution allow-list' });
+    });
+
+    it('keeps availability unknown when the policy allows (hook treats unknown as routable)', () => {
+      expect(applyExecutionPolicyToClaudeAccess({
+        availability: availabilityUnknown,
+        policyAllowed: true,
+        model: 'claude-opus-4-6',
+        parentModel: 'claude-sonnet-4-6',
+      })).toEqual({ status: 'unknown' });
+    });
+
+    it('availability denial (payment tombstone) wins even when the policy allows', () => {
+      expect(applyExecutionPolicyToClaudeAccess({
+        availability: { status: 'denied' },
+        policyAllowed: true,
+        model: 'claude-opus-4-6',
+        parentModel: 'claude-sonnet-4-6',
+      })).toEqual({ status: 'denied' });
+    });
+
+    it('denies an alias cross-model unless the full id is allow-listed (no alias drift)', () => {
+      // 若 alias 不同于父模型,policy 精确匹配必拒(允许名单里是全名),
+      // 不靠 alias 猜测最终 generation —— 这是 Phase A 禁动态跨模型的一部分。
+      expect(applyExecutionPolicyToClaudeAccess({
+        availability: availabilityAllowed,
+        policyAllowed: false,
+        model: 'opus',
+        parentModel: 'claude-sonnet-4-6',
+      }).status).toBe('denied');
+    });
   });
 });

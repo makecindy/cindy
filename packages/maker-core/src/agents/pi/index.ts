@@ -3483,6 +3483,15 @@ export class PiAgent extends BaseAgent {
       process.pid,
       opts.sessionInstanceId?.trim() || runtimeInstanceId,
     );
+    // 执行策略 verifier 输入(P1-7/P0-B):公钥字面量(SPKI DER base64,公开值)+费用累计路径。
+    // 私钥从不下发到扩展/runner;公钥作为 env 字面量(不是文件路径),Agent 没有可替换的
+    // public-key.json 文件;私钥只活在 Desktop 主进程内存里(或 safeStorage 密文)。
+    let executionPolicyFiles: { publicKey?: string; spendFile?: string } | undefined;
+    try {
+      executionPolicyFiles = await this.deps.resolvePiSubagentModelExecutionFiles?.();
+    } catch {
+      executionPolicyFiles = undefined; // 缺失时扩展侧 fail-closed
+    }
     // 轮 20-V1 HIGH:远端路径必须 POSIX join —— path.join 在 Windows 本地会把
     // runtimeDir 与文件名拼成反斜杠(远端 shell 不认, 权限文件/子代理 runtime
     // 写不进删不掉, 破坏权限门与子代理路由)。runtimeDir 已是 posix(956 行)。
@@ -3721,10 +3730,38 @@ export class PiAgent extends BaseAgent {
     const writeSubagentRuntimeFile = async (
       next: { model?: string; provider?: string; pending?: boolean }): Promise<boolean> => {
       const gen = ++subagentRuntimeWriteGen;
+      // 模型执行授权快照:Host 按当前会话生成(allow-list + approvals)。可用(modelRoutes)
+      // 不会生成授权 —— 授权只认这份快照。Host 未接 resolver 时**不写**(fail-closed,
+      // 扩展拒绝新派发;已运行 run 不受影响),并打 warn 便于排障。
+      let executionPolicy: unknown;
+      const resolvePolicy = this.deps.resolvePiSubagentModelExecutionPolicy;
+      if (typeof resolvePolicy === 'function') {
+        try {
+          const runtimeProviderForPolicy = next.provider ?? initialProvider ?? '';
+          executionPolicy = await resolvePolicy({
+            sessionId: opts.sessionId ?? '',
+            ...(opts.workingDir ? { projectRoot: opts.workingDir } : {}),
+            model: next.model ?? initialWireModel ?? '',
+            provider: runtimeProviderForPolicy,
+            ...(runtimeProviderForPolicy ? { sourceProviderId: resolveSourceProvider(runtimeProviderForPolicy) } : {}),
+          });
+        } catch (error) {
+          this.deps.logger.warn('pi subagent model execution policy resolve failed; snapshot will omit authorization', {
+            sessionId: opts.sessionId,
+            message: error instanceof Error ? error.message : String(error),
+          });
+          executionPolicy = undefined;
+        }
+      } else {
+        this.deps.logger.warn('pi subagent execution policy resolver not registered; new dispatches will fail closed', {
+          sessionId: opts.sessionId,
+        });
+      }
       const snapshot = {
         ...(next.model ? { model: next.model } : {}),
         ...(next.provider ? { provider: next.provider } : {}),
         modelRoutes: subagentModelRoutes,
+        ...(executionPolicy ? { executionPolicy } : {}),
         // `pending: true` = 这条路由**尚未**被 pi 确认。扩展见到它就拒绝派发(fail-closed),
         // 于是模型切换的等待窗口里一个子进程都起不来 —— 详见 setModel 的注释。
         ...(next.pending ? { pending: true } : {}),
@@ -5683,6 +5720,9 @@ export class PiAgent extends BaseAgent {
         // 扩展照旧现读快照,能力不受影响。
         CINDY_SUBAGENT_ENV.runtimeFile,
         CINDY_SUBAGENT_ENV.ownerId,
+        // 执行策略 verifier 输入(P0-B):费用账本路径是控制面(防 Agent 篡改记账),
+        // 剥离;公钥 env 字面量是公开值,不进剥离名单(扩展/runner 才需要)。
+        'CINDY_PI_SUBAGENT_SPEND_FILE',
         'CINDY_PI_MODEL_REQUEST_PREFS_FILE',
         // 受管工具路径同属控制面：不得让获批 bash 改写/替换后影响后续自动放行的 grep/find。
         ...(managedRipgrepPath ? [PI_MANAGED_RG_PATH_ENV] : []),
@@ -5746,6 +5786,10 @@ export class PiAgent extends BaseAgent {
           [CINDY_SUBAGENT_ENV.runRoot]: subagentRunRoot,
           [CINDY_SUBAGENT_ENV.runnerFile]: subagentRunnerPath,
           [CINDY_SUBAGENT_ENV.ownerId]: subagentRuntimeOwnerId,
+          // 校验文件路径:扩展/runner 派发前读取 key 与累计费用(P1-7/P1-8)。
+          // 只存在时注入;缺省时扩展侧验证失败 -> fail-closed。
+          ...(executionPolicyFiles?.publicKey ? { CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY: executionPolicyFiles.publicKey } : {}),
+          ...(executionPolicyFiles?.spendFile ? { CINDY_PI_SUBAGENT_SPEND_FILE: executionPolicyFiles.spendFile } : {}),
         } : {}),
         // 嵌入式 runtime 不做启动期联网:关掉 pi 的版本检查与安装遥测
         // (pi.dev/api/latest-version、report-install)。LLM 请求走 provider 通道不受影响。

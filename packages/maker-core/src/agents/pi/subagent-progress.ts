@@ -148,6 +148,11 @@ export function parsePiSubagentProgress(partialResult: unknown): PiSubagentProgr
   const description = readString(raw.task);
   const summary = readString(raw.summary);
   const model = readString(raw.model, 200);
+  // 审计:子任务实际执行的 provider(真实路由)+ 授权结论 +命中的 approval id。
+  // runner 状态里 provider 已是真实值(如 openrouter-a3fe858b);这里绝不改写成 'pi'。
+  const modelProviderId = readString(raw.provider, 200);
+  const authorizationDecision = readString(raw.authorizationDecision, 32);
+  const approvalId = readString(raw.approvalId, 200);
 
   const delegatedUsage = readUsage(raw.usage);
   const delegatedUsageSegments = readUsageSegments(raw.usageSegments);
@@ -167,6 +172,9 @@ export function parsePiSubagentProgress(partialResult: unknown): PiSubagentProgr
       ...(description ? { description } : {}),
       ...(summary ? { summary } : {}),
       ...(model ? { model } : {}),
+      ...(modelProviderId ? { modelProviderId } : {}),
+      ...(authorizationDecision ? { authorizationDecision } : {}),
+      ...(approvalId ? { approvalId } : {}),
       ...(usage ? { usage } : {}),
     },
     ...(delegatedUsage ? { delegatedUsage } : {}),

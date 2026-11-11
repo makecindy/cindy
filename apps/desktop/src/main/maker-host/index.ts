@@ -272,6 +272,9 @@ import {
 } from './anthropic-compat-proxy-host.js';
 import { resolveRemoteClaudeRoute } from './remote-claude-route.js';
 import { resolveDesktopClaudeSubagentModelAccess } from './subagent-model-access.js';
+import { resolveDesktopPiSubagentModelExecutionPolicy } from './subagent-model-execution-policy-host.js';
+import { getOrCreateSubagentModelSigningKey } from './subagent-model-signing-key-store.js';
+import { subagentModelSpendFilePath } from './subagent-model-spend.js';
 import { claudeSubagentUsageBridge } from './claude-subagent-usage-bridge.js';
 import { createAutoPermissionReviewer } from './auto-permission-reviewer.js';
 import { createToolLoopReviewer } from './tool-loop-reviewer.js';
@@ -2290,6 +2293,14 @@ export function getMaker(): Maker {
         availableModels: deriveAvailableModels(getDesktopSelectableCatalog(), 'pi'),
       },
       resolvePiRuntimeModels: () => deriveAvailableModels(getDesktopSelectableCatalog(), 'pi'),
+      resolvePiSubagentModelExecutionPolicy: resolveDesktopPiSubagentModelExecutionPolicy,
+      // P0-B:公钥以 env 字面量注入扩展/runner(CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY
+      // 是 SPKI DER base64 的**值**本身,不是文件路径)—— 这条 env 没有文件可替换;
+      // 私钥只留在 Desktop 主进程内存(或 safeStorage 密文),不下发。
+      resolvePiSubagentModelExecutionFiles: () => {
+        const { publicKey } = getOrCreateSubagentModelSigningKey();
+        return { publicKey, spendFile: subagentModelSpendFilePath() };
+      },
       resolvePiRuntimeModelDescriptor: (providerId, modelId) =>
         resolvePiRuntimeModelDescriptor(getDesktopSelectableCatalog(), providerId, modelId, {
           localOverrides: getLocalCatalogOverridesSnapshot(),

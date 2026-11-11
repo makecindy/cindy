@@ -274,6 +274,8 @@ function main() {
       model: typeof task.model === 'string' ? task.model : undefined,
       displayModel: typeof task.displayModel === 'string' ? task.displayModel : undefined,
       sourceProviderId: typeof task.sourceProviderId === 'string' ? task.sourceProviderId : undefined,
+      authorizationDecision: typeof task.authorizationDecision === 'string' ? task.authorizationDecision : undefined,
+      approvalId: typeof task.approvalId === 'string' ? task.approvalId : undefined,
       proxySessionAuth: task.proxySessionAuth === true,
       thinking: typeof task.thinking === 'string' ? task.thinking : undefined,
       sessionId: String(task.sessionId),
@@ -374,6 +376,9 @@ function main() {
           task: task.originalTask || task.task,
           status: task.status,
           model: task.displayModel || task.model,
+          provider: task.provider,
+          authorizationDecision: task.authorizationDecision,
+          approvalId: task.approvalId,
           thinking: task.thinking,
           toolUses: task.toolUses,
           usage: task.usage,
@@ -758,6 +763,415 @@ function main() {
     pruneControlReceipts(false);
   }
 
+  // 执行授权第二道检查(检查后、spawn 前)。扩展的第一道检查写进 config.executionPolicy;
+  // 这里在真正 spawn 子进程之前逐任务复核 —— 手改 config、绕过扩展直接写 run 目录、
+  // 或扩展被篡改时,子进程也不起来。语义与 Host model-execution-policy.ts 保持一致
+  // (此文件不能 import,判定逻辑在此内联镜像;改一处必须改另一处)。
+  function policyNonEmptyString(value) {
+    return typeof value === 'string' && value.trim().length > 0;
+  }
+  function policyNormalizeRouteEntry(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    if (!policyNonEmptyString(raw.provider) || !policyNonEmptyString(raw.model)) return null;
+    if (raw.tier !== 'local' && raw.tier !== 'free' && raw.tier !== 'paid' && raw.tier !== 'trusted-lan') return null;
+    return {
+      provider: raw.provider.trim(),
+      model: raw.model.trim(),
+      ...(policyNonEmptyString(raw.sourceProviderId) ? { sourceProviderId: raw.sourceProviderId.trim() } : {}),
+      tier: raw.tier,
+    };
+  }
+  function policyNormalizeApprovalEntry(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    if (!policyNonEmptyString(raw.id)) return null;
+    if (!policyNonEmptyString(raw.provider) || !policyNonEmptyString(raw.model)) return null;
+    if (raw.grantedBy !== 'user') return null;
+    if (raw.scope !== 'session' && raw.scope !== 'project') return null;
+    if (raw.scope === 'session' && !policyNonEmptyString(raw.sessionId)) return null;
+    if (raw.scope === 'project' && !policyNonEmptyString(raw.projectRoot)) return null;
+    if (typeof raw.grantedAt !== 'number' || !Number.isFinite(raw.grantedAt)) return null;
+    if (typeof raw.expiresAt !== 'number' || !Number.isFinite(raw.expiresAt)) return null;
+    if (raw.expiresAt <= raw.grantedAt) return null;
+    if (raw.maxCostUsd !== undefined
+      && (typeof raw.maxCostUsd !== 'number' || !Number.isFinite(raw.maxCostUsd) || raw.maxCostUsd < 0)) return null;
+    return {
+      id: raw.id.trim(), provider: raw.provider.trim(), model: raw.model.trim(),
+      ...(policyNonEmptyString(raw.sourceProviderId) ? { sourceProviderId: raw.sourceProviderId.trim() } : {}),
+      scope: raw.scope,
+      ...(policyNonEmptyString(raw.sessionId) ? { sessionId: raw.sessionId.trim() } : {}),
+      ...(policyNonEmptyString(raw.projectRoot) ? { projectRoot: raw.projectRoot.trim() } : {}),
+      grantedBy: 'user',
+      grantedAt: raw.grantedAt,
+      expiresAt: raw.expiresAt,
+      ...(typeof raw.maxCostUsd === 'number' ? { maxCostUsd: raw.maxCostUsd } : {}),
+    };
+  }
+  function policyRouteMatches(route, requested) {
+    if (route.provider !== requested.provider || route.model !== requested.model) return false;
+    const routeSource = route.sourceProviderId ?? route.provider;
+    const requestedSource = requested.sourceProviderId ?? requested.provider;
+    return routeSource === requestedSource;
+  }
+  function policyWithinProject(projectRoot, approvalRoot) {
+    const normalize = function (input) { return String(input).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase(); };
+    const project = normalize(projectRoot);
+    const approval = normalize(approvalRoot);
+    if (!project || !approval) return false;
+    return project === approval || project.startsWith(approval + '/');
+  }
+  function parseRunnerExecutionPolicy(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    if (raw.version !== 1) return null;
+    if (!policyNonEmptyString(raw.sessionId)) return null;
+    if (raw.mode !== 'local-only' && raw.mode !== 'development' && raw.mode !== 'approved-paid') return null;
+    if (!Array.isArray(raw.allowedRoutes) || !Array.isArray(raw.approvals)) return null;
+    const allowedRoutes = [];
+    for (const entry of raw.allowedRoutes) {
+      const route = policyNormalizeRouteEntry(entry);
+      if (!route) return null;
+      allowedRoutes.push(route);
+    }
+    const approvals = [];
+    for (const entry of raw.approvals) {
+      const approval = policyNormalizeApprovalEntry(entry);
+      if (!approval) return null;
+      approvals.push(approval);
+    }
+    if (typeof raw.issuedAt !== 'number' || !Number.isFinite(raw.issuedAt) || raw.issuedAt <= 0) return null;
+    if (raw.signature !== undefined && (typeof raw.signature !== 'string' || !/^[0-9a-f]{128}$/.test(raw.signature))) return null;
+    return {
+      version: 1,
+      sessionId: raw.sessionId.trim(),
+      ...(policyNonEmptyString(raw.projectRoot) ? { projectRoot: raw.projectRoot.trim() } : {}),
+      mode: raw.mode,
+      allowedRoutes,
+      approvals,
+      issuedAt: raw.issuedAt,
+      ...(typeof raw.signature === 'string' ? { signature: raw.signature } : {}),
+    };
+  }
+  function policyCanonical(snapshot) {
+    return JSON.stringify({
+      version: snapshot.version,
+      sessionId: snapshot.sessionId,
+      projectRoot: snapshot.projectRoot ?? null,
+      mode: snapshot.mode,
+      allowedRoutes: snapshot.allowedRoutes.map(function (route) {
+        return {
+          provider: route.provider,
+          model: route.model,
+          ...(route.sourceProviderId ? { sourceProviderId: route.sourceProviderId } : {}),
+          tier: route.tier,
+        };
+      }),
+      approvals: snapshot.approvals.map(function (approval) {
+        return {
+          id: approval.id,
+          provider: approval.provider,
+          model: approval.model,
+          ...(approval.sourceProviderId ? { sourceProviderId: approval.sourceProviderId } : {}),
+          scope: approval.scope,
+          ...(approval.sessionId ? { sessionId: approval.sessionId } : {}),
+          ...(approval.projectRoot ? { projectRoot: approval.projectRoot } : {}),
+          grantedBy: approval.grantedBy,
+          grantedAt: approval.grantedAt,
+          expiresAt: approval.expiresAt,
+          ...(approval.maxCostUsd !== undefined ? { maxCostUsd: approval.maxCostUsd } : {}),
+        };
+      }),
+      issuedAt: snapshot.issuedAt,
+    });
+  }
+  var POLICY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+  var policyKeyCache = {};
+  /** 读取 Host 公钥(公开值;读不到一律 null -> fail-closed)。 */
+  function policyReadPublicKey() {
+    // P0-B(env 字面量):SPKI DER base64 公钥直接放在 env 里 —— 没有文件可替换。
+    // 绝不从文件系统读取(旧文件路径 wiring 视为不可信)。
+    const value = process.env.CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY;
+    if (typeof value !== 'string' || value.length === 0) return null;
+    if (policyKeyCache.file === value) return policyKeyCache.key || null;
+    policyKeyCache.file = value;
+    policyKeyCache.key = null;
+    try {
+      const { createPublicKey } = require('node:crypto');
+      const key = createPublicKey({ key: Buffer.from(value, 'base64'), format: 'der', type: 'spki' });
+      if (key.asymmetricKeyType !== 'ed25519') throw new Error('not an Ed25519 public key');
+      policyKeyCache.key = key;
+    } catch (error) {
+      policyKeyCache.key = null;
+    }
+    return policyKeyCache.key;
+  }
+  function verifyRunnerExecutionPolicy(snapshot, expectedSessionId, now) {
+    if (!snapshot) return null;
+    const publicKey = policyReadPublicKey();
+    if (!publicKey) return null;
+    if (typeof snapshot.signature !== 'string') return null;
+    if (!expectedSessionId || snapshot.sessionId !== expectedSessionId) return null;
+    if ((now || Date.now()) - snapshot.issuedAt > POLICY_MAX_AGE_MS) return null;
+    const { verify: ed25519Verify } = require('node:crypto');
+    let ok = false;
+    try {
+      ok = ed25519Verify(null, Buffer.from(policyCanonical(snapshot), 'utf8'), publicKey, Buffer.from(snapshot.signature, 'hex'));
+    } catch (error) {
+      return null;
+    }
+    if (!ok) return null;
+    return snapshot;
+  }
+  function policyApprovalSpendKey(approval, snapshot) {
+    if (approval.scope === 'session') return 'session:' + (approval.sessionId || snapshot.sessionId);
+    const root = String(approval.projectRoot || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+    return 'project:' + root;
+  }
+  const POLICY_RESERVE_TTL_MS = 10 * 60 * 1000;
+  const POLICY_RESERVE_PER_TASK_CEILING = 1;
+  function policyComputeScopeTotal(scope) {
+    const actual = typeof scope.actualUsd === 'number' && Number.isFinite(scope.actualUsd) ? Math.max(0, scope.actualUsd) : 0;
+    const estimated = typeof scope.estimatedUsd === 'number' && Number.isFinite(scope.estimatedUsd) ? Math.max(0, scope.estimatedUsd) : 0;
+    const reserved = scope.reservedUsdById && typeof scope.reservedUsdById === 'object'
+      ? Object.values(scope.reservedUsdById).reduce(function (acc, v) { return acc + (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0); }, 0)
+      : 0;
+    return actual + estimated + reserved;
+  }
+  // 崩溃回收:TTL 内无结算/释放的预留视为死亡 runner 遗留,在锁内删掉。
+  function policyPruneExpiredReservations(scope, now) {
+    if (!scope || typeof scope !== 'object') return;
+    if (!scope.reservedUsdById || typeof scope.reservedUsdById !== 'object') { scope.reservedUsdById = {}; }
+    const atById = scope.reservedAtById && typeof scope.reservedAtById === 'object' ? scope.reservedAtById : {};
+    for (const id of Object.keys(scope.reservedUsdById)) {
+      const at = typeof atById[id] === 'number' && Number.isFinite(atById[id]) ? atById[id] : (typeof scope.updatedAt === 'number' && Number.isFinite(scope.updatedAt) ? scope.updatedAt : 0);
+      if (at > 0 && now - at > POLICY_RESERVE_TTL_MS) {
+        delete scope.reservedUsdById[id];
+        delete atById[id];
+      }
+    }
+    scope.reservedAtById = atById;
+  }
+  function policyReleaseReservation(scopeKey, reservationId) {
+    // 在 settle 时释放并发预留(P0-C);best-effort,失败不影响任务收尾。
+    if (typeof scopeKey !== 'string' || !scopeKey || typeof reservationId !== 'string' || !reservationId) return;
+    const file = process.env.CINDY_PI_SUBAGENT_SPEND_FILE;
+    if (typeof file !== 'string' || !file) return;
+    const lockPath = file + '.lock';
+    let fd;
+    const deadline = Date.now() + 2000;
+    while (true) {
+      try {
+        fd = fs.openSync(lockPath, 'wx');
+        fs.writeSync(fd, String(process.pid));
+        break;
+      } catch (error) {
+        if (fd !== undefined) { try { fs.closeSync(fd); } catch (ignored) {} }
+        try {
+          const stat = fs.statSync(lockPath);
+          if (Date.now() - stat.mtimeMs > 30000) { fs.unlinkSync(lockPath); continue; }
+        } catch (ignored) {}
+        if (Date.now() > deadline) return;
+        const end = Date.now() + 10;
+        while (Date.now() < end) {}
+      }
+    }
+    try {
+      const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+      const scope = parsed && typeof parsed === 'object' && parsed.byScope && typeof parsed.byScope === 'object'
+        ? parsed.byScope[scopeKey]
+        : null;
+      if (scope && typeof scope === 'object' && scope.reservedUsdById && typeof scope.reservedUsdById === 'object') {
+        if (reservationId in scope.reservedUsdById) {
+          delete scope.reservedUsdById[reservationId];
+          if (scope.reservedAtById && typeof scope.reservedAtById === 'object') delete scope.reservedAtById[reservationId];
+          scope.updatedAt = Date.now();
+          atomicWriteJson(file, parsed);
+        }
+      }
+    } catch (ignored) {} finally {
+      try { if (fd !== undefined) fs.closeSync(fd); } catch (ignored) {}
+      try { fs.unlinkSync(lockPath); } catch (ignored) {}
+    }
+  }
+  /**
+   * 预算预留(P0-C 并发原子裁决):“读账本 → 计算余额 → 预留 → 持久化”全部在同一把
+   * O_EXCL 锁临界区内完成;预留失败、账本不可读、锁超时或持久化失败一律返回
+   * { ok: false },由 launchTask 拒绝付费任务启动(fail-closed)。
+   * 返回:{ ok: true, reserved } | { ok: false, reason }
+   */
+  function policyReserve(capUsd, scopeKey, reservationId) {
+    const file = process.env.CINDY_PI_SUBAGENT_SPEND_FILE;
+    if (typeof file !== 'string' || !file) return { ok: false, reserved: 0, reason: 'spend file env is missing; refusing to spawn an unaccounted paid task' };
+    if (!(capUsd > 0)) return { ok: false, reserved: 0, reason: 'approval cap is not positive; refusing to spawn' };
+    const lockPath = file + '.lock';
+    let fd;
+    const deadline = Date.now() + 2000;
+    while (true) {
+      try {
+        fd = fs.openSync(lockPath, 'wx');
+        fs.writeSync(fd, String(process.pid));
+        break;
+      } catch (error) {
+        if (fd !== undefined) { try { fs.closeSync(fd); } catch (ignored) {} }
+        try {
+          const stat = fs.statSync(lockPath);
+          if (Date.now() - stat.mtimeMs > 30000) { fs.unlinkSync(lockPath); continue; }
+        } catch (ignored) {}
+        if (Date.now() > deadline) return { ok: false, reserved: 0, reason: 'spend lock timeout; refusing to spawn' };
+        const end = Date.now() + 10;
+        while (Date.now() < end) {}
+      }
+    }
+    try {
+      // fail-closed 读取:文件不存在(首个付费任务)视为可建账;账本损坏/不可读则拒绝。
+      let raw = null;
+      let missing = false;
+      try { raw = fs.readFileSync(file, 'utf8'); } catch (readError) {
+        // P0-0:仅 ENOENT 视为可建新账。EACCES / ENOTDIR / EIO 等一律
+        // 失败关闭,不把历史费用清零后放行未授权付费任务。
+        if (readError && readError.code === 'ENOENT') missing = true;
+        else return { ok: false, reserved: 0, reason: 'spend ledger unreadable; refusing to spawn' };
+      }
+      let parsed;
+      if (missing) {
+        parsed = { version: 2, byScope: {} };
+      } else {
+        try { parsed = JSON.parse(raw); } catch (parseError) {
+          return { ok: false, reserved: 0, reason: 'spend ledger unreadable; refusing to spawn' };
+        }
+        if (!parsed || typeof parsed !== 'object' || !parsed.byScope || typeof parsed.byScope !== 'object') {
+          return { ok: false, reserved: 0, reason: 'spend ledger unreadable; refusing to spawn' };
+        }
+      }
+      const now = Date.now();
+      const scope = parsed.byScope[scopeKey] && typeof parsed.byScope[scopeKey] === 'object'
+        ? parsed.byScope[scopeKey]
+        : { actualUsd: 0, estimatedUsd: 0, reservedUsdById: {}, reservedAtById: {}, updatedAt: 0 };
+      policyPruneExpiredReservations(scope, now);
+      // 幂等:同一 reservationId 已在途时不再叠加(可重入);
+      // 若这条是 TTL 刚被回收的旧预留,按新预留走。
+      if (scope.reservedUsdById && typeof scope.reservedUsdById === 'object' && reservationId in scope.reservedUsdById) {
+        return { ok: true, reserved: scope.reservedUsdById[reservationId] };
+      }
+      const total = policyComputeScopeTotal(scope);
+      const remaining = capUsd - total;
+      if (remaining <= 0) {
+        return { ok: false, reserved: 0, reason: 'approval spend cap reached; request a new capped approval from the user' };
+      }
+      // 单任务预留上限:每子会话最多预留 POLICY_RESERVE_PER_TASK_CEILING —— 防止一个长
+      // 会话把 cap 的全部剩余额度占住。
+      const amount = Math.min(POLICY_RESERVE_PER_TASK_CEILING, remaining);
+      if (!(amount > 0)) {
+        return { ok: false, reserved: 0, reason: 'approval spend cap reached; request a new capped approval from the user' };
+      }
+      scope.reservedUsdById = scope.reservedUsdById && typeof scope.reservedUsdById === 'object' ? scope.reservedUsdById : {};
+      scope.reservedUsdById[reservationId] = amount;
+      scope.reservedAtById = scope.reservedAtById && typeof scope.reservedAtById === 'object' ? scope.reservedAtById : {};
+      scope.reservedAtById[reservationId] = now;
+      scope.updatedAt = now;
+      parsed.byScope[scopeKey] = scope;
+      try {
+        atomicWriteJson(file, parsed);
+      } catch (writeError) {
+        return { ok: false, reserved: 0, reason: 'spend ledger persist failed; refusing to spawn' };
+      }
+      return { ok: true, reserved: amount };
+    } finally {
+      try { if (fd !== undefined) fs.closeSync(fd); } catch (ignored) {}
+      try { fs.unlinkSync(lockPath); } catch (ignored) {}
+    }
+  }
+  /**
+   * 预算预留(P0-C 并发原子裁决):launch 时按剩余 cap 预留一笔(plausible upper bound),
+   * 并发 Worker 互相可见 reserved,避免 N 个 Worker 同时穿透 cap。
+   * reservationId = 子会话 id —— Host 结算时以同一 id 释放。
+   */
+  function policyReserveAmount(capUsd, scopeKey, reservationId) {
+    if (!(capUsd > 0)) return { ok: false, reserved: 0, reason: 'approval cap is not positive; refusing to spawn' };
+    return policyReserve(capUsd, scopeKey, reservationId);
+  }
+  function policyReadSpendByScope() {
+    const file = process.env.CINDY_PI_SUBAGENT_SPEND_FILE;
+    if (typeof file !== 'string' || file.length === 0) return {};
+    try {
+      const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+      const out = {};
+      const byScope = parsed && typeof parsed === 'object' ? parsed.byScope : null;
+      if (!byScope || typeof byScope !== 'object') return out;
+      const now = Date.now();
+      for (const scopeKey of Object.keys(byScope)) {
+        const entry = byScope[scopeKey];
+        if (!entry || typeof entry !== 'object') continue;
+        const actual = typeof entry.actualUsd === 'number' && Number.isFinite(entry.actualUsd) ? Math.max(0, entry.actualUsd) : 0;
+        const estimated = typeof entry.estimatedUsd === 'number' && Number.isFinite(entry.estimatedUsd) ? Math.max(0, entry.estimatedUsd) : 0;
+        // 过期预留下锁生效(死亡 runner 的遗留预留不计入 decider 总额);
+        // 权威清理在 policyReserve 锁内,读这里只算不改。
+        let reserved = 0;
+        if (entry.reservedUsdById && typeof entry.reservedUsdById === 'object') {
+          const atById = entry.reservedAtById && typeof entry.reservedAtById === 'object' ? entry.reservedAtById : {};
+          for (const id of Object.keys(entry.reservedUsdById)) {
+            const v = entry.reservedUsdById[id];
+            if (!(typeof v === 'number' && Number.isFinite(v) && v > 0)) continue;
+            const at = typeof atById[id] === 'number' && Number.isFinite(atById[id])
+              ? atById[id]
+              : (typeof entry.updatedAt === 'number' && Number.isFinite(entry.updatedAt) ? entry.updatedAt : 0);
+            if (at > 0 && now - at > POLICY_RESERVE_TTL_MS) continue;
+            reserved += v;
+          }
+        }
+        out[scopeKey] = actual + estimated + reserved;
+      }
+      return out;
+    } catch (error) {
+      return {};
+    }
+  }
+  function decideRunnerModelExecution(snapshot, requested, now, spendByApproval) {
+    const at = typeof now === 'number' && Number.isFinite(now) ? now : Date.now();
+    if (!snapshot) return { allowed: false, reason: 'model execution policy snapshot is missing or invalid; refusing to spawn' };
+    const provider = typeof requested.provider === 'string' ? requested.provider.trim() : '';
+    const model = typeof requested.model === 'string' ? requested.model.trim() : '';
+    if (!provider || !model) return { allowed: false, reason: 'requested provider/model is empty; refusing to spawn' };
+    const requestedNorm = {
+      provider,
+      model,
+      sourceProviderId: typeof requested.sourceProviderId === 'string' && requested.sourceProviderId.trim() ? requested.sourceProviderId.trim() : undefined,
+    };
+    for (const route of snapshot.allowedRoutes) {
+      if (!policyRouteMatches(route, requestedNorm)) continue;
+      if (route.tier === 'local') return { allowed: true, reason: 'local route is allowed in every mode' };
+      if (route.tier === 'free') {
+        if (snapshot.mode === 'local-only') return { allowed: false, reason: 'cloud route is not authorized in local-only mode; free is not authorization' };
+        return { allowed: true, reason: 'explicitly allow-listed free route' };
+      }
+      if (route.tier === 'trusted-lan') {
+        if (snapshot.mode === 'local-only') return { allowed: false, reason: 'route "' + provider + '/' + model + '" is not executable in local-only mode; trusted LAN is not local (session mode is local-only)' };
+        return { allowed: true, reason: 'explicitly allow-listed trusted LAN route' };
+      }
+      if (snapshot.mode !== 'approved-paid') break; // paid 继续走 approval 检查(P1-4)
+      return { allowed: true, reason: 'explicitly allow-listed paid route under approved-paid mode' };
+    }
+    // P0-A:local-only 硬隔离 —— approvals 不进入判定,任何非本地路由直接拒。
+    if (snapshot.mode === 'local-only') {
+      return { allowed: false, reason: 'route "' + provider + '/' + model + '" is not executable in local-only mode; temporary approvals cannot override local-only' };
+    }
+    let exhaustedByCap = false;
+    for (const approval of snapshot.approvals) {
+      if (!policyRouteMatches(approval, requestedNorm)) continue;
+      if (approval.scope === 'session' && approval.sessionId !== snapshot.sessionId) continue;
+      if (approval.scope === 'project' && (!snapshot.projectRoot || !approval.projectRoot || !policyWithinProject(snapshot.projectRoot, approval.projectRoot))) continue;
+      if (at < approval.grantedAt || at > approval.expiresAt) continue;
+      if (approval.maxCostUsd !== undefined && spendByApproval) {
+        const spent = spendByApproval(approval);
+        if (typeof spent === 'number' && Number.isFinite(spent) && spent >= approval.maxCostUsd) {
+          exhaustedByCap = true;
+          continue;
+        }
+      }
+      return { allowed: true, approvalId: approval.id, reason: 'time-boxed approval covers this route' };
+    }
+    if (exhaustedByCap) return { allowed: false, reason: 'route approval spend cap reached; request a new capped approval from the user' };
+    return { allowed: false, reason: 'route is not in this session model execution allow-list' };
+  }
+
   function launchTask(task) {
     return new Promise(function (resolve) {
       if (state.stopRequested || task.stopRequested || state.timedOut) {
@@ -766,6 +1180,51 @@ function main() {
         task.endedAt = Date.now();
         resolve();
         return;
+      }
+      // 第二道执行授权检查:deny 直接把任务置 failed,不发任何模型请求。
+      // 先完整校验签名 + session 绑定 + 时效,再用费用上限(若有)裁决。
+      const parsedPolicy = parseRunnerExecutionPolicy(config.executionPolicy);
+      const policySnapshot = verifyRunnerExecutionPolicy(parsedPolicy, config.parentSessionId);
+      const policySpend = policyReadSpendByScope();
+      const policyDecision = decideRunnerModelExecution(policySnapshot, {
+        provider: task.provider,
+        model: task.model || task.displayModel,
+        sourceProviderId: task.sourceProviderId,
+      }, Date.now(), function (approval) {
+        const key = policyApprovalSpendKey(approval, policySnapshot);
+        return Object.prototype.hasOwnProperty.call(policySpend, key) ? policySpend[key] : undefined;
+      });
+      if (!policyDecision.allowed) {
+        task.status = 'failed';
+        task.error = 'Model execution policy denied spawn for ' + task.provider + '/' + (task.model || task.displayModel) + ': ' + policyDecision.reason;
+        task.authorizationDecision = 'denied';
+        task.endedAt = Date.now();
+        scheduleStatus();
+        resolve();
+        return;
+      }
+      task.authorizationDecision = 'allowed';
+      if (policyDecision.approvalId) task.approvalId = policyDecision.approvalId;
+      // P0-C:带 maxCostUsd 的 approval 在 launch 时原子预留预算(并发可见),
+      // 避免 N 个 Worker 同时穿透 cap。reservationId = 子会话 id(Host 结算释放)。
+      // 预留失败、账本不可读、锁超时或持久化失败一律拒绝付费任务启动(fail-closed)。
+      if (policySnapshot && policyDecision.approvalId) {
+        const approval = policySnapshot.approvals.find(a => a.id === policyDecision.approvalId);
+        if (approval && approval.maxCostUsd !== undefined) {
+          const scopeKeyForReserve = policyApprovalSpendKey(approval, policySnapshot);
+          const result = policyReserveAmount(approval.maxCostUsd, scopeKeyForReserve, task.sessionId);
+          if (!result.ok || !(result.reserved > 0)) {
+            task.status = 'failed';
+            task.error = 'Model execution policy denied spawn for ' + task.provider + '/' + (task.model || task.displayModel) + ': ' + (result.reason || 'budget reservation failed; request a capped approval from the user');
+            task.authorizationDecision = 'denied';
+            task.endedAt = Date.now();
+            scheduleStatus();
+            resolve();
+            return;
+          }
+          task.policySpendScopeKey = scopeKeyForReserve;
+          task.policyReservationId = task.sessionId;
+        }
       }
       fs.mkdirSync(task.sessionDir, { recursive: true, mode: 0o700 });
       const args = [
@@ -883,6 +1342,12 @@ function main() {
         task.stdin = undefined;
         task.inputClosed = true;
         task.pendingApprovals = [];
+        // P0-C:任务收尾释放并发预留(Host 结算侧也会按子会话 id 释放,幂等)。
+        if (task.policySpendScopeKey && task.policyReservationId) {
+          policyReleaseReservation(task.policySpendScopeKey, task.policyReservationId);
+          task.policySpendScopeKey = undefined;
+          task.policyReservationId = undefined;
+        }
         task.endedAt = Date.now();
         if (state.stopRequested || task.stopRequested) {
           task.status = 'stopped';

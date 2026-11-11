@@ -1026,6 +1026,12 @@ export const subagentRuns = sqliteTable(
     returnedResultTruncated: integer('returned_result_truncated'),
     model: text('model'),
     reasoningEffort: text('reasoning_effort'),
+    /** 子任务实际执行的 provider(真实路由,如 openrouter-a3fe858b;而非泛泛的 'pi')。 */
+    modelProviderId: text('model_provider_id'),
+    /** 模型执行授权结论:'allowed'|'denied'(审计用;denied 不执行)。 */
+    authorizationDecision: text('authorization_decision'),
+    /** 命中的 user approval id(有才落库;Agent 不能自行创建)。 */
+    approvalId: text('approval_id'),
     totalTokens: integer('total_tokens'),
     toolUses: integer('tool_uses'),
     durationMs: integer('duration_ms'),

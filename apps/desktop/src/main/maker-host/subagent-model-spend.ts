@@ -1,0 +1,285 @@
+// 子代理审批的**费用记账**(P1-7 / P0-C)。
+//
+// maxCostUsd 只有配合实际记账才算有效上限:本模块按 approval 的 scopeKey
+// (见 maker-core `approvalSpendKey`)在 receipt 结算后累计 USD 金额;
+// 扩展/runner 在派发/启动时读取累计 + 预留值,超过上限则拒绝。
+//
+// 记账金额三类:
+//   - actualUsd:台账确认的真实成本(amount>0 的结算行);
+//   - estimatedUsd:BYOM 模型无台账金额时,用参考定价估算的部分(标记为估计);
+//   - reservedUsdById:并发 Worker 的**原子预算预留**(P0-C)—— launch 时预留,
+//     结算/结束时释放;上限判断 = actual + estimated + reserved。
+// 诚实口径:上限按**已结算累计 + 在途预留**度量。单请求中途的实时 token 消费
+// 不可拦截,"maxCostUsd 是对单次请求的硬天花板"为不实表述,不得宣称。
+//
+// 写并发:跨进程(node -e + 主进程 + runner)需要文件锁;用 O_EXCL 锁文件 +
+// 短自旋(与本进程内同步读写同临界区)。锁超时 30s 自动失效,避免死锁。
+import { app } from 'electron';
+import fs from 'node:fs';
+import path from 'node:path';
+import { getActiveAppSession, ownerScopedUserDataPath } from '../appSessionState.js';
+import { desktopMakerLogger } from './logger-adapter.js';
+
+const log = desktopMakerLogger.child('subagent-model-spend');
+
+const SPEND_FILE_NAME = 'subagent-model-spend.json';
+const LOCK_STALE_MS = 30_000;
+const LOCK_WAIT_MS = 5_000;
+const RESERVATION_TTL_MS = 10 * 60 * 1000; // 在途预留过期自清(防 runner 崩溃泄漏)
+
+export interface ScopeTotals {
+  actualUsd: number;
+  estimatedUsd: number;
+  /** reservationId -> 保留金额(USD)。key 用子会话 id 或 runId:taskId。 */
+  reservedUsdById: Record<string, number>;
+  /** reservationId -> 预留落盘时间戳(ms epoch),用于 TTL 回收崩溃遗留预留。 */
+  reservedAtById: Record<string, number>;
+  updatedAt: number;
+}
+
+interface SpendFile {
+  version: 3;
+  byScope: Record<string, ScopeTotals>;
+}
+
+/**
+ * 读取账本(严格模式):失败即返回 null,调用方必须失败关闭,不静默清零
+ * 历史费用。仅 ENOENT 视为账本缺失(首个付费任务可建新账);EACCES /
+ * ENOTDIR / EIO / 其他读失败一律返回 null —— 不得当作空账本继续记账。
+ */
+function readSpendFile(): SpendFile | null {
+  return readSpendFileForLock();
+}
+
+/**
+ * 读账本(严格模式,供预留裁决):文件不存在视为可建新账;存在但 JSON 损坏或
+ * 结构不合法返回 null —— 调用方必须据此拒绝付费任务启动,而不是静默当账已清零。
+ */
+function readSpendFileForLock(): SpendFile | null {
+  const filePath = subagentModelSpendFilePath();
+  let raw: string;
+  try {
+    raw = fs.readFileSync(filePath, 'utf8');
+  } catch (error) {
+    // P0-0:仅 ENOENT 视为可建新账。权限/路径/I/O 失败必须失败关闭,
+    // 不能把 EACCES / ENOTDIR / EIO 当空账本放行未授权付费请求。
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    if (code === 'ENOENT') return { version: 3, byScope: {} };
+    return null;
+  }
+  let parsed: Partial<SpendFile>;
+  try {
+    parsed = JSON.parse(raw) as Partial<SpendFile>;
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object' || (parsed.version !== 1 && parsed.version !== 2 && parsed.version !== 3)) {
+    return null;
+  }
+  const byScope: Record<string, ScopeTotals> = {};
+  const rawByScope = parsed.byScope as Record<string, unknown> | undefined;
+  if (rawByScope && typeof rawByScope === 'object') {
+    for (const [scopeKey, value] of Object.entries(rawByScope)) {
+      if (!value || typeof value !== 'object') continue;
+      const entry = value as Partial<ScopeTotals>;
+      byScope[scopeKey] = {
+        actualUsd: typeof entry.actualUsd === 'number' && Number.isFinite(entry.actualUsd) ? Math.max(0, entry.actualUsd) : 0,
+        estimatedUsd: typeof entry.estimatedUsd === 'number' && Number.isFinite(entry.estimatedUsd) ? Math.max(0, entry.estimatedUsd) : 0,
+        reservedUsdById: normalizeReserved(entry.reservedUsdById),
+        reservedAtById: normalizeReserved(entry.reservedAtById),
+        updatedAt: typeof entry.updatedAt === 'number' && Number.isFinite(entry.updatedAt) ? entry.updatedAt : 0,
+      };
+    }
+  }
+  return { version: 3, byScope };
+}
+
+export function subagentModelSpendFilePath(): string {
+  const root = getActiveAppSession().dataOwnerId ? ownerScopedUserDataPath() : null;
+  return path.join(root ?? app.getPath('userData'), 'subagent-model-spend.json');
+}
+
+function normalizeReserved(raw: unknown): Record<string, number> {
+  const out: Record<string, number> = {};
+  if (!raw || typeof raw !== 'object') return out;
+  for (const [id, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof id !== 'string' || !id) continue;
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) out[id] = value;
+  }
+  return out;
+}
+
+function writeSpendFile(state: SpendFile): void {
+  if (!tryWriteSpendFile(state)) {
+    log.warn('subagent model spend accumulation failed');
+  }
+}
+
+/** 持久化;失败返回 false，供预留面据此拒绝付费任务启动。 */
+function tryWriteSpendFile(state: SpendFile): boolean {
+  try {
+    fs.mkdirSync(path.dirname(subagentModelSpendFilePath()), { recursive: true });
+    const tmp = subagentModelSpendFilePath() + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(state), { mode: 0o600 });
+    fs.renameSync(tmp, subagentModelSpendFilePath());
+    return true;
+  } catch (error) {
+    log.warn('subagent model spend write failed', { message: String(error) });
+    return false;
+  }
+}
+
+function acquireSpendLock(): (() => void) | undefined {
+  const lockPath = subagentModelSpendFilePath() + '.lock';
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  while (true) {
+    let fd: number | undefined;
+    try {
+      fd = fs.openSync(lockPath, 'wx');
+      fs.writeSync(fd, String(process.pid));
+      return () => {
+        try { if (fd !== undefined) fs.closeSync(fd); } catch { /* best-effort */ }
+        try { fs.unlinkSync(lockPath); } catch { /* best-effort */ }
+      };
+    } catch {
+      if (fd !== undefined) { try { fs.closeSync(fd); } catch { /* ignore */ } }
+      // 锁持有者可能已死:陈旧锁自动失效,不死等。
+      try {
+        const stat = fs.statSync(lockPath);
+        if (Date.now() - stat.mtimeMs > LOCK_STALE_MS) {
+          fs.unlinkSync(lockPath);
+          continue;
+        }
+      } catch { /* 锁已被回收,重试 */ }
+      if (Date.now() > deadline) return undefined;
+      // 短自旋等待;同步忙等在单进程里没意义,仅 nanosleep。
+      const end = Date.now() + 10;
+      while (Date.now() < end) { /* spin */ }
+    }
+  }
+}
+
+function withSpendLock<T>(fn: () => T): T | undefined {
+  const release = acquireSpendLock();
+  if (!release) return undefined;
+  try {
+    return fn();
+  } finally {
+    release();
+  }
+}
+
+/** 累计一次结算的费用(实际或估计)。amountUsd<=0 时直接跳过。 */
+export function addSubagentModelSpend(
+  scopeKey: string,
+  amountUsd: number,
+  estimated: boolean,
+): void {
+  if (!scopeKey || !Number.isFinite(amountUsd) || amountUsd <= 0) return;
+  withSpendLock(() => {
+    const state = readSpendFile();
+    // P0-0:账本不可读(含 EACCES / ENOTDIR / EIO / 损坏)时不写入,
+    // 不把历史费用清零。结算丢弃仅记 warn,预留侧已失败关闭。
+    if (!state) {
+      log.warn('subagent model spend settlement skipped: ledger unreadable (history preserved)');
+      return;
+    }
+    const existing = state.byScope[scopeKey] ?? emptyScope();
+    if (estimated) existing.estimatedUsd += amountUsd;
+    else existing.actualUsd += amountUsd;
+    existing.updatedAt = Date.now();
+    state.byScope[scopeKey] = existing;
+    writeSpendFile(state);
+  });
+}
+
+function emptyScope(): ScopeTotals {
+  return { actualUsd: 0, estimatedUsd: 0, reservedUsdById: {}, reservedAtById: {}, updatedAt: 0 };
+}
+
+/** 崩溃回收:超过 TTL 的预留视为死亡 runner 的遗留,在锁内清掉。 */
+export function pruneExpiredReservations(totals: ScopeTotals, now: number = Date.now()): void {
+  for (const id of Object.keys(totals.reservedUsdById)) {
+    const at = totals.reservedAtById[id] ?? totals.updatedAt ?? 0;
+    if (at > 0 && now - at > RESERVATION_TTL_MS) {
+      delete totals.reservedUsdById[id];
+      delete totals.reservedAtById[id];
+    }
+  }
+}
+
+/**
+ * 预算预留(并发原子裁决,P0-C):读账本 → 计算余额 → 预留 → 持久化在同一把
+ * O_EXCL 锁临界区内完成。`capUsd` 给定时按剩余额度裁决：额度耗尽、账本损坏、
+ * 锁超时或持久化失败均返回 0（调用方据此拒绝付费任务启动）；不给 cap 时保留
+ * 旧语义（无条件预留）。同一 reservationId 幂等。
+ */
+export function reserveSubagentModelSpend(
+  scopeKey: string,
+  reservationId: string,
+  amountUsd: number,
+  capUsd?: number,
+): number {
+  if (!scopeKey || !reservationId || !Number.isFinite(amountUsd) || amountUsd <= 0) return 0;
+  if (capUsd !== undefined && !(capUsd > 0)) return 0;
+  const result = withSpendLock(() => {
+    const state = readSpendFileForLock();
+    // 账本存在但不可读(损坏 JSON / 结构错误)→ 失败关闭:不覆盖、不预留。
+    if (state === null) return 0;
+    const existing = state.byScope[scopeKey] ?? emptyScope();
+    pruneExpiredReservations(existing);
+    if (existing.reservedUsdById[reservationId] !== undefined) {
+      return existing.reservedUsdById[reservationId];
+    }
+    if (capUsd !== undefined) {
+      const reserved = Object.values(existing.reservedUsdById).reduce((acc, v) => acc + v, 0);
+      const total = existing.actualUsd + existing.estimatedUsd + reserved;
+      const remaining = capUsd - total;
+      if (remaining <= 0) return 0;
+      const amount = Math.min(amountUsd, remaining);
+      existing.reservedUsdById[reservationId] = amount;
+      existing.reservedAtById[reservationId] = Date.now();
+      existing.updatedAt = Date.now();
+      state.byScope[scopeKey] = existing;
+      if (!tryWriteSpendFile(state)) return 0;
+      return amount;
+    }
+    existing.reservedUsdById[reservationId] = amountUsd;
+    existing.reservedAtById[reservationId] = Date.now();
+    existing.updatedAt = Date.now();
+    state.byScope[scopeKey] = existing;
+    writeSpendFile(state);
+    return amountUsd;
+  });
+  return result ?? 0;
+}
+
+/** 释放一次预留(任务结束/结算时)。 */
+export function releaseSubagentModelSpend(scopeKey: string, reservationId: string): void {
+  if (!scopeKey || !reservationId) return;
+  withSpendLock(() => {
+    const state = readSpendFile();
+    // P0-0:不可读时不写入,保留账本字节不变。
+    if (!state) return;
+    const existing = state.byScope[scopeKey];
+    if (!existing) return;
+    if (!(reservationId in existing.reservedUsdById)) return;
+    delete existing.reservedUsdById[reservationId];
+    delete existing.reservedAtById[reservationId];
+    existing.updatedAt = Date.now();
+    state.byScope[scopeKey] = existing;
+    writeSpendFile(state);
+  });
+}
+
+/** 供 Host 侧在决议时核对(扩展/runner 自己的实现读同一文件)。 */
+export function readSubagentModelSpend(scopeKey: string): number | undefined {
+  const state = readSpendFile();
+  if (!state) return undefined;
+  const totals = state.byScope[scopeKey];
+  if (!totals) return undefined;
+  pruneExpiredReservations(totals);
+  const reserved = Object.values(totals.reservedUsdById).reduce((acc, v) => acc + v, 0);
+  const total = totals.actualUsd + totals.estimatedUsd + reserved;
+  return total <= 0 && Object.keys(totals.reservedUsdById).length === 0 ? undefined : total;
+}

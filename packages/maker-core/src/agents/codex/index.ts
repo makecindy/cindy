@@ -6651,6 +6651,11 @@ assertRouteCurrent();
         ...(reviewMode ? {} : readSessionMcpConfig()),
         ...capabilityRoutingConfig,
         ...customProviderThreadConfig,
+        // Phase A secure default:spawn_agent 不暴露 model override,子 thread
+        // 固定继承父模型。Codex app-server 没有逐调用 Host 闸门可可靠执行
+        // 「跨模型授权」,动态跨模型一律关闭,但固定执行不受影响。如需跨模型
+        // 协作请走 Pi/Orca 或 Claude 的 Host 授权通道。
+        'features.multi_agent_v2.expose_spawn_agent_model_overrides': false,
         // Install while the thread is created/resumed: a later switch to Auto
         // changes the turn reviewer without rebuilding this thread config.
         ...nativeContinuationConfig,

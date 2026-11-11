@@ -25,6 +25,7 @@ export {
 } from './agents/claude-code/cli-login-status.js';
 export { workspaceSettingsFiles, parseClaudeSettingsJson } from './agents/claude-code/workspace-settings-guard.js';
 export * from './agents/pi/managed-command.js';
+export * from './agents/pi/model-execution-policy.js';
 export { evaluatePiProjectTrust, piProjectKey } from './agents/pi/project-trust.js';
 export {
   assertReviewMessageContentPaths,

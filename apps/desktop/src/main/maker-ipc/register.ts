@@ -16,7 +16,7 @@ import { pluginAppResult } from '../mcp-apps/pluginCards.js';
 import { restorePluginPageSession } from '../mcp-apps/pluginPageCall.js';
 import { resumeInterruptedScheduleRun } from '../scheduler-host/index.desktop.js';
 import { setVoiceTaskDispatch, setVoiceCallMemoryReader } from '../voice-conversation/taskBridge.js';
-import { buildBotMemoryScopeKey, SessionCreationCleanupPendingError } from '@cindy/maker-core';
+import { approvalSpendKey, buildBotMemoryScopeKey, decideModelExecution, SessionCreationCleanupPendingError } from '@cindy/maker-core';
 import { createOrcaWorkerProjectHandlers } from './orcaWorkerProjectHandlers';
 import { getTeamByWorkerSession } from '../localDb/orcaTeamStore';
 import { readWorkerProjectContext, createWorkerWorktree, rememberWorkerProject, probeWorkerProject, resolveWorkerWorktreeSourceSelection, getWorkerOwnedWorktree } from './orcaWorkerProject';
@@ -187,6 +187,8 @@ import { readCodexContextWindowInfo } from '../maker-host/codex-context-window.j
 import { readSshCodexModelList, assertSshCodexModel, isVerifiedSshCodexResume } from '../remote-ssh/codex-model-list.js';
 import { prepareCodexCustomContextCatalog } from '../maker-host/codex-custom-context-catalog.js';
 import { inferProviderIdForModel } from '../maker-host/provider-route.js';
+import { resolveDesktopOrcaWorkerModelExecutionPolicy } from '../maker-host/subagent-model-execution-policy-host.js';
+import { readSubagentModelSpend } from '../maker-host/subagent-model-spend.js';
 import { bindGroupFastPolicy } from '../provider-group/fastPolicyRuntime.js';
 import { resolveConfiguredContextWindow, contextWindowBudgetChangesEffectiveWindow, resolveDesktopModelContextProviderId, resolveSessionContextWindowBounds, readStoredSessionContextWindowBudget, applySessionContextWindowBudgetToCreateOpts } from '../maker-host/model-context-settings.js';
 import { isSessionContextWindowBudgetCustomized, readSessionContextWindowBudget } from '../maker-host/session-context-budget-store.js';
@@ -16507,6 +16509,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       };
     },
     getWorkerDefaults: getWorkerDefaultsFromNewMaker,
+    // Orca Worker 模型执行授权:与 pi subagent 同口径(decideModelExecution + Host 快照)。
+    resolveModelExecutionPolicy: async (input) => {
+      if (!input.provider.trim() || !input.model.trim()) return { allowed: false, reason: 'requested provider/model is empty' };
+      const snapshot = await resolveDesktopOrcaWorkerModelExecutionPolicy({
+        sessionId: input.sessionId,
+        ...(input.projectRoot ? { projectRoot: input.projectRoot } : {}),
+        provider: input.provider,
+        model: input.model,
+      });
+      if (!snapshot) return { allowed: false, reason: 'model execution policy snapshot unavailable' };
+      return decideModelExecution(snapshot, { provider: input.provider, model: input.model }, Date.now(),
+        (approval) => readSubagentModelSpend(approvalSpendKey(approval, snapshot)));
+    },
     getCreationSelection: () => isAppSessionBoundaryPending() ? null : getWorkerCreationSelection(getActiveDataOwnerPushStamp()),
     getWorkerPermissionMode: getWorkerPermissionModeFromCreationPrefs,
     resolveWorkerWorkingDir: async (dir, lead) => {

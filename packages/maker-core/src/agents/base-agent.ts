@@ -717,7 +717,32 @@ export interface AgentDeps {
     parentModel: string;
     credentialMode?: AgentCredentialMode;
     model: string;
+    sessionId?: string;
+    projectRoot?: string;
   }) => ClaudeSubagentModelAccessResult | Promise<ClaudeSubagentModelAccessResult>;
+
+  /**
+   * Pi subagent 模型执行授权：Host 按当前会话生成 ModelExecutionPolicySnapshot
+   * (可用模型 ≠ 授权模型)。缺省或返回 null → 扩展 fail-closed 拒绝新派发
+   * (已运行的 run 不受影响)。
+   */
+  resolvePiSubagentModelExecutionPolicy?: (context: {
+    sessionId: string;
+    projectRoot?: string;
+    projectId?: string;
+    model: string;
+    provider: string;
+    sourceProviderId?: string;
+  }) => unknown | Promise<unknown>;
+
+  /**
+   * 子代理执行策略的**可信 verifier 输入**(仅 Host 资产,Agent 无写入面):
+   * 公钥整个序列化的 SPKI DER base64 **字面量**(不是文件路径 —— 没有文件
+   * 可替换)+ 费用账本文件路径。pi 以 env(CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY
+   * / CINDY_PI_SUBAGENT_SPEND_FILE)交给扩展和 runner;
+   * 私钥从不下发,Agent 即使读 env 也拿不到签名能力。
+   */
+  resolvePiSubagentModelExecutionFiles?: () => { publicKey?: string; spendFile?: string } | Promise<{ publicKey?: string; spendFile?: string } | undefined>;
 
   /**
    * 解析某 session 的 cc-debug raw 文件落盘路径 (host 注入)。host 用 logger 的 logDir 拼

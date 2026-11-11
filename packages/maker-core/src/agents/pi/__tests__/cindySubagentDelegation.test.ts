@@ -1,10 +1,11 @@
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHmac, generateKeyPairSync, sign } from 'node:crypto';
+import { Buffer } from 'node:buffer';
 import { createRequire } from 'node:module';
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import ts from 'typescript';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CINDY_SUBAGENT_EXTENSION_SOURCE } from '../cindy-subagent-source.js';
 
 // Execute the exact staged extension, including its filesystem mailbox and
@@ -25,6 +26,41 @@ afterEach(async () => {
   vi.unstubAllEnvs();
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
 });
+const testKeyPair = generateKeyPairSync('ed25519');
+const POLICY_PUBLIC_KEY = testKeyPair.publicKey.export({ format: 'der', type: 'spki' }).toString('base64');
+// 与 maker-core canonicalExecutionPolicy 字节级一致的签发（P1-8：签名防篡改）。
+function signPolicy(policy: Record<string, unknown>) {
+  const snapshot = { ...policy, issuedAt: Date.now() };
+  const canonical = JSON.stringify({
+    version: snapshot.version,
+    sessionId: snapshot.sessionId,
+    projectRoot: (snapshot.projectRoot as string | undefined) ?? null,
+    mode: snapshot.mode,
+    allowedRoutes: (snapshot.allowedRoutes as Array<Record<string, unknown>>).map((route) => ({
+      provider: route.provider,
+      model: route.model,
+      ...(route.sourceProviderId ? { sourceProviderId: route.sourceProviderId } : {}),
+      tier: route.tier,
+    })),
+    approvals: (snapshot.approvals as Array<Record<string, unknown>>).map((approval) => ({
+      id: approval.id,
+      provider: approval.provider,
+      model: approval.model,
+      ...(approval.sourceProviderId ? { sourceProviderId: approval.sourceProviderId } : {}),
+      scope: approval.scope,
+      ...(approval.sessionId ? { sessionId: approval.sessionId } : {}),
+      ...(approval.projectRoot ? { projectRoot: approval.projectRoot } : {}),
+      grantedBy: approval.grantedBy,
+      grantedAt: approval.grantedAt,
+      expiresAt: approval.expiresAt,
+      ...(approval.maxCostUsd !== undefined ? { maxCostUsd: approval.maxCostUsd } : {}),
+    })),
+    issuedAt: snapshot.issuedAt,
+  });
+  const signature = sign(null, Buffer.from(canonical, 'utf8'), testKeyPair.privateKey).toString('hex');
+  return { ...snapshot, signature };
+}
+
 async function fixture(fsOverrides: Record<string, unknown> = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'pi-delegation-'));
   roots.push(root);
@@ -32,6 +68,10 @@ async function fixture(fsOverrides: Record<string, unknown> = {}) {
   vi.stubEnv('CINDY_PI_SUBAGENT_OWNER_ID', 'owner');
   vi.stubEnv('CINDY_PI_SUBAGENT_BINARY', '/fixture/pi');
   vi.stubEnv('CINDY_PI_SUBAGENT_RUNTIME_FILE', path.join(root, 'runtime.json'));
+  // P1-8：快照验签需要 key 文件与会话 id env，与生产 pi/index.ts 注入一致。
+  // P0-B:公钥以 env 字面量注入(不是文件路径)——没有文件可替换。
+  vi.stubEnv('CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY', POLICY_PUBLIC_KEY);
+  vi.stubEnv('CINDY_PI_SESSION_ID', 'sess-test');
   await writeFile(path.join(root, 'runtime.json'), JSON.stringify({ modelRoutes: { 'available-model': [] } }));
   const runId = randomUUID();
   const dir = path.join(root, runId);
@@ -304,11 +344,38 @@ describe('Pi delegation behavior', () => {
 });
 
 describe('Pi subagent provider selection', () => {
+  // 各路由测试直接调 resolveTaskModelRoutes,不经过 fixture():这里补齐验签 env(P1-8)。
+  beforeEach(async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'pi-policy-key-'));
+    roots.push(dir);
+    vi.stubEnv('CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY', POLICY_PUBLIC_KEY);
+    vi.stubEnv('CINDY_PI_SESSION_ID', 'sess-test');
+  });
   // 同一裸模型 id 在两个真实连接下重名(ex: 智谱 Coding Plan 与 OpenCode Go 都有 glm-5.3-flash),
   // 父会话在第三个 provider 上时,只有调用方显式点名的 provider 能消歧。
   const runtime = {
     model: 'parent-model',
     provider: 'parent',
+    // 测试快照:把路由用到的组合都列进 allow-list(亚军执行策略的"路由存在"与"授权"
+    // 是两回事,路由解析本身仍需快照在场 —— 与生产 pi/index.ts 注入一致)。
+    executionPolicy: signPolicy({
+      version: 1,
+      sessionId: 'sess-test',
+      mode: 'development',
+      allowedRoutes: [
+        { provider: 'parent', model: 'parent-model', tier: 'local' },
+        { provider: 'opencode-go', model: 'glm-5.3-flash', sourceProviderId: 'opencode-go', tier: 'local' },
+        { provider: 'glm-coding-plan', model: 'glm-5.3-flash', sourceProviderId: 'glm-coding-plan', tier: 'local' },
+        { provider: 'cindy', model: 'gateway-model', sourceProviderId: 'cindy-gateway', tier: 'local' },
+        { provider: 'commandcode', model: 'gateway-model', sourceProviderId: 'commandcode', tier: 'local' },
+        { provider: 'openai-codex', model: 'gpt-5.4', sourceProviderId: 'openai', tier: 'local' },
+        { provider: 'cindy-byom-openai-codex', model: 'chatgpt/gpt-5.4', sourceProviderId: 'openai-codex', tier: 'local' },
+        { provider: 'anthropic', model: 'claude-5-sonnet', sourceProviderId: 'anthropic', tier: 'local' },
+        { provider: 'parent', model: 'claude-5-sonnet', sourceProviderId: 'parent', tier: 'local' },
+      ],
+      approvals: [],
+      issuedAt: 1_700_000_000_000,
+    }),
     modelRoutes: {
       'parent-model': [{ provider: 'parent', model: 'parent-model' }],
       'glm-5.3-flash': [
@@ -442,9 +509,64 @@ describe('Pi subagent provider selection', () => {
     });
     expect(perTask.tasks.map((task: { provider: string }) => task.provider))
       .toEqual(['call-level', 'task-level']);
-    expect(extension.normalizeInvocation({ agent: 'worker', task: 'x' }).tasks[0].provider).toBe('');
-    const f = await fixture();
-    expect(f.tool.parameters.properties.provider.type).toBe('string');
-    expect(f.tool.parameters.properties.tasks.items.properties.provider.type).toBe('string');
+  });
+
+  it('denies dispatch when the execution policy snapshot is missing (fail-closed)', () => {
+    const noPolicy = { ...runtime, executionPolicy: undefined };
+    expect(() => extension.resolveTaskModelRoutes([{ model: 'glm-5.3-flash', provider: 'glm-coding-plan' }], noPolicy))
+      .toThrow(/model execution policy snapshot is missing/);
+  });
+
+  it('denies a route the policy does not list even though the model catalog knows it', () => {
+    const narrowPolicy = {
+      ...runtime,
+      executionPolicy: signPolicy({
+        version: 1,
+        sessionId: 'sess-test',
+        mode: 'development',
+        allowedRoutes: [{ provider: 'parent', model: 'parent-model', tier: 'local' }],
+        approvals: [],
+        issuedAt: 1_700_000_000_000,
+      }),
+    };
+    expect(() => extension.resolveTaskModelRoutes([{ model: 'glm-5.3-flash', provider: 'glm-coding-plan' }], narrowPolicy))
+      .toThrow(/is not in this session/);
+  });
+
+  // P0-B 负向:env 里的公钥被 Agent 换成自己的 → 自签快照永远验不过(Host 签名
+  // 用的是另一把私钥),派发 fail-closed。公钥在 env 字面量里,没有文件可替换。
+  it('denies dispatch when the verifier env holds an attacker public key (self-signed policy fails)', () => {
+    const attackerKeyPair = generateKeyPairSync('ed25519');
+    const attackerPublicKey = attackerKeyPair.publicKey.export({ format: 'der', type: 'spki' }).toString('base64');
+    const signedByAttacker = {
+      ...runtime,
+      executionPolicy: signPolicy({
+        version: 1,
+        sessionId: 'sess-test',
+        mode: 'development',
+        allowedRoutes: [{ provider: 'glm-coding-plan', model: 'glm-5.3-flash', tier: 'paid', sourceProviderId: 'glm-coding-plan' }],
+        approvals: [],
+        issuedAt: Date.now(),
+      }),
+    };
+    vi.stubEnv('CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY', attackerPublicKey);
+    expect(() => extension.resolveTaskModelRoutes([{ model: 'glm-5.3-flash', provider: 'glm-coding-plan' }], signedByAttacker))
+      .toThrow(/snapshot is missing/);
+    // env 复原时 Host 签名快照正常派发。
+    vi.stubEnv('CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY', POLICY_PUBLIC_KEY);
+    const hostSigned = {
+      ...runtime,
+      executionPolicy: signPolicy({
+        version: 1,
+        sessionId: 'sess-test',
+        mode: 'development',
+        allowedRoutes: [{ provider: 'glm-coding-plan', model: 'glm-5.3-flash', tier: 'local' }],
+        approvals: [],
+        issuedAt: Date.now(),
+      }),
+    };
+    const tasks = [{ model: 'glm-5.3-flash', provider: 'glm-coding-plan' }];
+    extension.resolveTaskModelRoutes(tasks, hostSigned);
+    expect(tasks[0]).toMatchObject({ routeProvider: 'glm-coding-plan', routeModel: 'glm-5.3-flash' });
   });
 });
