@@ -1,4 +1,3 @@
-import { remoteBackgroundInvoke } from '../device-link/index.js';
 import { randomUUID } from 'node:crypto';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import { getCodexHome } from '../maker-host/codex-home-path.js';
@@ -687,16 +686,17 @@ export async function readSubscriptionPool(
 export async function needsSubscriptionAccountHandoff(sessionId: string, row: {
   providerId?: string | null; agentKind: string; sdkSessionId?: string | null;
   agentDeviceId?: string | null; remoteHostId?: string | null; model?: string | null;
-}): Promise<boolean> {
+}, invokeRemote?: (deviceId: string, channel: string, args: unknown[], options: { preSend: () => void }) => Promise<{ ok: boolean; result?: unknown }>): Promise<boolean> {
   if (row.remoteHostId || (row.agentDeviceId && isProviderShareAgentDeviceId(row.agentDeviceId))) return false;
   const provider = row.providerId === 'anthropic' && ['cc', 'claude-code'].includes(row.agentKind)
     ? 'anthropic' : row.providerId === 'openai' ? 'openai' : null;
   if (!provider) return false;
   if (row.agentDeviceId) {
     if (!row.sdkSessionId) return false;
+    if (!invokeRemote) throw new Error('Remote subscription account query is not configured');
     const state = currentRuntime();
     const preSend = () => assertOwner(state);
-    const reply = await remoteBackgroundInvoke(row.agentDeviceId, SUBSCRIPTION_ACCOUNTS_CHANNEL,
+    const reply = await invokeRemote(row.agentDeviceId, SUBSCRIPTION_ACCOUNTS_CHANNEL,
       [{ action: 'session', providerId: provider, nativeSessionId: row.sdkSessionId }], { preSend });
     assertOwner(state);
     const view = reply.ok ? parseSubscriptionSessionAccountView(reply.result, provider) : null;
@@ -705,7 +705,7 @@ export async function needsSubscriptionAccountHandoff(sessionId: string, row: {
     // The executing host owns both model quota and new-route permissions.
     // A missing/old/failed reply cannot authorize retiring the native context.
     if (!row.model) throw new Error('No subscription account is available');
-    const availableReply = await remoteBackgroundInvoke(row.agentDeviceId, 'maker:subscription-pool:quota',
+    const availableReply = await invokeRemote(row.agentDeviceId, 'maker:subscription-pool:quota',
       [provider, row.model], { preSend });
     assertOwner(state);
     const available = availableReply.ok

@@ -26,9 +26,16 @@ const io = vi.hoisted(() => ({
   self: vi.fn(() => 'self'),
   closeEpoch: vi.fn(() => 0),
   offlineDirect: vi.fn(() => false),
+  localAccountPush: undefined as (() => void) | undefined,
   accountPush: undefined as ((deviceId: string, channel: string) => void) | undefined,
 }));
 
+// Keep the real account runtime; capture only its event subscription so both
+// local and remote invalidation exercise the production directory/cache owner.
+vi.mock('../../subscription-accounts/runtime.js', async importOriginal => ({
+  ...await importOriginal<Record<string, unknown>>(),
+  onSubscriptionAccountsChanged: (listener: () => void) => { io.localAccountPush = listener; return () => {}; },
+}));
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => owner, isAppSessionBoundaryPending: () => false }));
 vi.mock('../../device-link/providerShareGuest.js', () => ({ getReceivedShares: io.shares,
   captureProviderShareGroupRecovery: () => async () => undefined }));
@@ -731,14 +738,15 @@ describe('provider group runtime quota account selection', () => {
 
   // Unit, pause report: invalidating the visible directory used to leave the
   // separate 30-second pool cache alive. The real change event must change quota.
-  it('drops remote pool quota caches immediately when the account pool changes', async () => {
+  it.each(['local', 'remote'])('drops pool quota caches on %s account changes', async source => {
     const h = harness('anthropic', 'claude');
     let percent = 100;
     io.invoke.mockImplementation(async () => ({ ok: true, result: { providerId: 'anthropic', pooled: true,
       usage: { claudeUsage: { ...usage(), fiveHour: { utilization: percent, resetsAt: Date.now() / 1000 + 3600 } } } } }));
     expect((await h.read())[1].claudeUsage?.fiveHour?.utilization).toBe(100);
     percent = 10;
-    io.accountPush!('mini', 'subscription-accounts:changed');
+    if (source === 'local') io.localAccountPush!();
+    else io.accountPush!('mini', 'subscription-accounts:changed');
     expect((await h.read())[1].claudeUsage?.fiveHour?.utilization).toBe(10);
   });
 

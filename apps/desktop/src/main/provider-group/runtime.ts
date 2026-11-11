@@ -36,7 +36,7 @@ import { captureProviderManagementScope } from './managementScope.js';
 import { createProviderGroupRouter, type ProviderGroupRouter } from './router.js';
 import type { ProviderGroupRemoteGroups } from './service.js';
 import { readProviderGroup } from './store.js';
-import { readSubscriptionPoolUsage, readSubscriptionPoolModelAvailability } from '../subscription-accounts/runtime.js';
+import { onSubscriptionAccountsChanged, readSubscriptionPoolUsage, readSubscriptionPoolModelAvailability } from '../subscription-accounts/runtime.js';
 import { isSubscriptionProvider } from '../../shared/subscriptionAccounts.js';
 import { createGroupContinuityClient } from './continuityClient.js';
 import { createProviderGroupUsageReader, providerGroupUsageSnapshot, providerGroupCodexUsageSnapshot, providerGroupCodexUsageFromReads, type ProviderGroupCodexUsageSnapshot } from './usage.js';
@@ -62,6 +62,9 @@ let codexRateLimitsReader: ((providerId: string) => Promise<unknown>) | null = n
 function runtimeForActiveOwner(): OwnerRuntime {
   if (!accountPushSubscribed) {
     accountPushSubscribed = true;
+    onSubscriptionAccountsChanged(() => {
+      if (current?.owner === activeOwnerScopeKey()) current.directory.invalidate();
+    });
     onRemotePushChannel((deviceId, channel) => {
       if (channel === 'subscription-accounts:changed' && current?.owner === activeOwnerScopeKey())
         current.directory.invalidate(deviceId);

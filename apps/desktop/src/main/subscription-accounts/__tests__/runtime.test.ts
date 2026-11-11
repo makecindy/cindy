@@ -87,7 +87,7 @@ vi.mock('../store.js', () => ({
 }));
 import {
   acquireSubscriptionAccount,
-  needsSubscriptionAccountHandoff,
+  needsSubscriptionAccountHandoff as probeSubscriptionAccountHandoff,
   readSubscriptionPool,
   disconnectSubscriptionPool,
   readSubscriptionPoolUsage,
@@ -138,6 +138,8 @@ beforeEach(() => {
 // Unit, 2026-11-11 pause report: exercise the pre-send probe and real agent
 // wrapper. Earlier coverage intentionally kept paused native sessions pinned;
 // now the host must hand off first, then a fresh context may choose another account.
+const needsSubscriptionAccountHandoff = (id: string, row: Parameters<typeof probeSubscriptionAccountHandoff>[1]) => probeSubscriptionAccountHandoff(id, row, h.remote);
+
 describe('paused account next-turn handoff', () => {
   it.each(['anthropic', 'openai'] as const)('moves a fresh %s context while preserving native history ownership', async provider => {
     h.pools[provider] = { strategy: 'order', accounts: [account('default'), account('second')] };
