@@ -453,6 +453,23 @@ describe('appearance settings IPC authorization', () => {
       wallpaperOverlay: 0.35,
     });
   });
+  // The slider writes through this whitelist; a missing entry silently reverted every
+  // commit in the renderer while the UI still showed the new value.
+  it('accepts and clamps an independent sidebar transparency patch', async () => {
+    const setHandler = mocks.ipcHandle.mock.calls.find(
+      ([channel]) => channel === 'appearance-settings:set-patch',
+    )?.[1] as (event: unknown, patch: unknown) => Promise<unknown>;
+    mocks.writeAppearanceSettingsPatch.mockResolvedValue(persisted);
+
+    await setHandler({}, { sidebarVisibility: 0.5 });
+    expect(mocks.writeAppearanceSettingsPatch).toHaveBeenCalledWith({ sidebarVisibility: 0.5 });
+
+    await setHandler({}, { sidebarVisibility: 4 });
+    expect(mocks.writeAppearanceSettingsPatch).toHaveBeenLastCalledWith({ sidebarVisibility: 1 });
+
+    await setHandler({}, { sidebarVisibility: null });
+    expect(mocks.writeAppearanceSettingsPatch).toHaveBeenLastCalledWith({ sidebarVisibility: null });
+  });
   it.each(['cindy', 'cindy-portrait', 'aurora', 'sunset', 'paper'])(
     'rejects retired wallpaper %s at the write boundary',
     async (wallpaperId) => {

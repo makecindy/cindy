@@ -444,7 +444,7 @@ export function WallpaperSection() {
           {/* 独立左侧栏透明度控制 */}
           <div className="flex items-center gap-3">
             <span className="shrink-0 text-12 text-[var(--settings-section-sublabel)]">
-              {t('settings.appearance.sidebarVisibilityLabel')}
+              {t('settings.appearance.wallpaper.sidebarVisibilityLabel')}
             </span>
             <Slider data-setting-id={appearanceSettings.wallpaperCustomChoose.id}
               min={APPEARANCE_LIMITS.sidebarVisibility.min}
@@ -459,7 +459,7 @@ export function WallpaperSection() {
               }}
               onPointerCancel={cancelSidebarVisibilityPreview}
               onLostPointerCapture={cancelSidebarVisibilityPreview}
-              aria-label={t('settings.appearance.sidebarVisibilityLabel')}
+              aria-label={t('settings.appearance.wallpaper.sidebarVisibilityLabel')}
               aria-describedby="sidebar-visibility-hint"
             />
             <span className="w-10 shrink-0 text-right font-mono text-12 text-[var(--settings-section-sublabel)]">
@@ -467,7 +467,7 @@ export function WallpaperSection() {
             </span>
           </div>
           <p id="sidebar-visibility-hint" className={SETTINGS_HINT}>
-            {t('settings.appearance.sidebarVisibilityHint')}
+            {t('settings.appearance.wallpaper.sidebarVisibilityHint')}
           </p>
         </SettingsBlock>
       </SettingsCard>

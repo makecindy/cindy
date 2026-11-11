@@ -2480,10 +2480,11 @@ html[data-desktop-background='true'] .wallpaper-message-viewport [data-scroll-co
    by the macOS material beneath Chromium; CSS samples only in-app artwork/UI. */
 html:is([data-theme='cindy-light'], [data-theme='cindy-dark'])[data-wallpaper-active='true']
   aside.bg-sidebar > .sidebar-frost {
-  /* If --sidebar-visibility is set by user, use that directly; otherwise maintain
-     the original background-visibility linkage. */
+  /* If the user set an explicit sidebar transparency, --sidebar-surface-alpha
+     carries the resulting surface alpha (0 = fully transparent, 1 = opaque);
+     otherwise keep the original background-visibility linkage. */
   background: rgb(from var(--surface-translucent-sidebar) r g b /
-    var(--sidebar-visibility,
+    var(--sidebar-surface-alpha,
       clamp(0, calc(1 - (1 - alpha) / max(0.001, var(--background-visibility, 1))), 1)
     )
   );
