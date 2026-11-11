@@ -40,6 +40,7 @@ import { imBotSettings } from './ImBotSection.settings-search';
  */
 
 import { Button } from '@/components/ui/button';
+import { SettingsCard, SettingsRow } from '@/components/ui/settings-rows';
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -69,6 +70,8 @@ import {
   slackHookInstallUrl,
   type HookTeamBindingView,
   type ProviderHookView,
+  type ProviderBindingView,
+  type FeishuAppView,
   type SlackHookView,
 } from '../../../shared/hookControlIpc';
 
@@ -608,11 +611,14 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
   /** (multi-team)绑定动作 IPC 的统一收口(应用快照 + 失败 toast)。 */
   const [selectingWorkingDevice, setSelectingWorkingDevice] = useState(false);
   const workingSelectionSequence = useRef(0);
-  const selectWorkingDevice = async () => {
+  const selectingWorkingBindingId = useRef<string | null>(null);
+  const selectWorkingDevice = async (bindingId?: string) => {
     const sequence = ++workingSelectionSequence.current;
+    selectingWorkingBindingId.current = bindingId ?? hookRef.current?.feishu.binding?.bindingId ?? null;
     setSelectingWorkingDevice(true);
     try {
-      await window.electronAPI.hookControl.providerBindSelect('feishu');
+      if (bindingId === undefined) await window.electronAPI.hookControl.providerBindSelect('feishu');
+      else await window.electronAPI.hookControl.providerBindSelect('feishu', bindingId);
       if (mountedRef.current && workingSelectionSequence.current === sequence) {
         toast.success(t('settings.remoteControl.hook.feishu.workingDeviceSet'));
       }
@@ -621,7 +627,10 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
         toast.error(t('settings.remoteControl.hook.toast.actionFailed'));
       }
     } finally {
-      if (mountedRef.current && workingSelectionSequence.current === sequence) setSelectingWorkingDevice(false);
+      if (mountedRef.current && workingSelectionSequence.current === sequence) {
+        selectingWorkingBindingId.current = null;
+        setSelectingWorkingDevice(false);
+      }
     }
   };
 
@@ -920,9 +929,11 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
   const handleProviderOpen = (
     provider: NeutralCardProvider,
     action: 'connect' | 'provider' | 'add-to-group',
+    scopeId?: string,
   ) => {
-    void window.electronAPI.hookControl
-      .openProviderAction(provider, action)
+    void (scopeId
+      ? window.electronAPI.hookControl.openProviderAction(provider, action, scopeId)
+      : window.electronAPI.hookControl.openProviderAction(provider, action))
       .catch((err: unknown) => {
         toast.error(
           extractIpcError(err)?.message ?? t('settings.remoteControl.hook.toast.actionFailed'),
@@ -953,9 +964,9 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
     }
   };
 
-  const handleProviderUnlink = async (provider: NeutralCardProvider) => {
-    const targetBindingId =
-      hook?.[provider].binding?.state === 'confirmed' ? hook[provider].binding.bindingId : null;
+  const handleProviderUnlink = async (provider: NeutralCardProvider, selectedBindingId?: string) => {
+    const targetBindingId = selectedBindingId ?? (
+      hook?.[provider].binding?.state === 'confirmed' ? hook[provider].binding.bindingId : null);
     if (targetBindingId === null) return;
     const ok = await confirm({
       title: t(`settings.remoteControl.hook.${provider}.unlinkConfirmTitle`),
@@ -963,7 +974,9 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
       confirmText: t(`settings.remoteControl.hook.${provider}.unlink`),
       cancelText: t('settings.remoteControl.hook.notInstalled.confirmCancel'),
     });
-    const currentBinding = hookRef.current?.[provider].binding;
+    const currentView = hookRef.current?.[provider];
+    const currentBinding = selectedBindingId === undefined ? currentView?.binding
+      : currentView?.bindings?.find((row) => row.bindingId === selectedBindingId);
     if (
       !ok ||
       !mountedRef.current ||
@@ -972,11 +985,14 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
     ) {
       return;
     }
-    if (provider === 'feishu') {
+    if (provider === 'feishu' && selectingWorkingBindingId.current === targetBindingId) {
+      selectingWorkingBindingId.current = null;
       ++workingSelectionSequence.current;
       setSelectingWorkingDevice(false);
     }
-    runHookAction(() => window.electronAPI.hookControl.providerBindRevoke(provider));
+    runHookAction(() => selectedBindingId === undefined
+      ? window.electronAPI.hookControl.providerBindRevoke(provider)
+      : window.electronAPI.hookControl.providerBindRevoke(provider, selectedBindingId));
   };
 
   /**
@@ -1143,6 +1159,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
     const confirmed = state === 'confirmed';
     const inProgress = view.enabled && (state === 'pending' || state === 'awaiting_confirmation');
     const canStartLink =
+      (view.multiBindAvailable === true && state === 'confirmed') ||
       state === 'none' ||
       ((state === 'failed' ||
         state === 'denied' ||
@@ -1174,12 +1191,17 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                 ),
               }
             : connectionBadge(
-                view.status, confirmed, inProgress,
+                view.status, confirmed || (view.multiBindAvailable === true && (view.bindings?.length ?? 0) > 0), inProgress,
                 t(`settings.remoteControl.hook.${provider}.status.none`),
               );
     /** 绑定态一行(收起行摘要与展开区共用文案)。 */
-    const bindingLine =
-      view.enabled && view.available && !view.capabilityPending && view.status === 'connected' &&
+    const linkedAccounts = provider === 'feishu' && view.applications?.length ? view.bindings ?? [] : [];
+    const linkedBots = new Set(linkedAccounts.map((account) => account.scopeId)).size;
+    const bindingLine = view.enabled && view.available && linkedBots > 0
+      ? t('settings.remoteControl.hook.feishu.linkedBotsSummary', { bots: linkedBots, accounts: linkedAccounts.length })
+      : view.enabled && view.multiBindAvailable && (view.bindings?.length ?? 0) > 0 && state === 'confirmed'
+      ? t('settings.remoteControl.hook.feishu.linkedAccounts', { count: view.bindings!.length })
+      : view.enabled && view.available && !view.capabilityPending && view.status === 'connected' &&
       state !== 'none' && state !== 'revoked'
         ? confirmed
           ? t(`settings.remoteControl.hook.${provider}.status.confirmed`, {
@@ -1246,13 +1268,18 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
       mode: 'chip' | 'row';
       provider: NeutralCardProvider;
     },
+    /**
+     * 非空 = 换掉区块标题与说明。飞书的目录与模型跟随 Cindy 账号和这台电脑,
+     * 不属于某个机器人或飞书账号, 通用的「按渠道独立」说不清这层归属。
+     */
+    copy?: { title: string; description: string },
   ) => (
     <>
       <div className="h-px w-full bg-[var(--border-default)]" />
       <div className="flex flex-col gap-1.5">
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-12 font-medium text-[var(--text-secondary)]">
-            {t('settings.remoteControl.hook.form.workspacesCardTitle')}
+            {copy?.title ?? t('settings.remoteControl.hook.form.workspacesCardTitle')}
           </span>
           <span className="text-12 text-[var(--text-tertiary)]">
             · {t('settings.remoteControl.hook.form.workspacesBoundCount', { count: workdirCount })}
@@ -1321,7 +1348,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
           ) : null}
         </div>
         <span className="text-11 leading-relaxed text-[var(--text-tertiary)]">
-          {t('settings.remoteControl.hook.form.workspacesCardDescription')}
+          {copy?.description ?? t('settings.remoteControl.hook.form.workspacesCardDescription')}
         </span>
         {/* row 形态才需要解释"选中即默认"这层语义, 并把权限档的后果说在选之前。
             文案不用方位词指代("下面的目录") —— 同一区块也渲染进确认门弹窗。 */}
@@ -1485,6 +1512,94 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
     }
   };
 
+  const workingDeviceHint = (account: ProviderBindingView) => <span className="block break-words text-12 leading-[1.4] text-[var(--text-secondary)]">
+    {account.workingDevice
+      ? t('settings.remoteControl.hook.feishu.workingDeviceLabel', { name: account.workingDevice.name ?? t('settings.remoteControl.hook.feishu.workingDeviceUnnamed') })
+      : t('settings.remoteControl.hook.feishu.workingDeviceUnknown')}
+    {account.workingDevice?.isCurrent ? <span className="ml-1.5 text-[var(--text-tertiary)]">· {t('settings.remoteControl.hook.feishu.workingDeviceThisComputer')}</span> : null}
+  </span>;
+
+  const renderFeishuAccount = (account: ProviderBindingView, view: ProviderHookView, showTenantName = true) => <SettingsRow key={account.bindingId} wrap
+    data-setting-id={imBotSettings.cindyFeishuWorkingDevice.id}
+    title={account.principalName ?? account.principalId}
+    hint={<>
+      {showTenantName && account.tenantName ? <span className="block break-words">{t('settings.remoteControl.hook.feishu.connectionTenant', { tenant: account.tenantName })}</span> : null}
+      {workingDeviceHint(account)}
+    </>}
+    trailing={<div className="flex flex-wrap items-center gap-2">
+      {account.actions.includes('select_device') && account.workingDevice?.isCurrent !== true ? <Button variant="secondary" size="xs" compact type="button"
+        data-setting-id={imBotSettings.cindyFeishuWorkingDevice.id}
+        disabled={selectingWorkingDevice || !view.enabled || !view.available || view.status !== 'connected'}
+        onClick={() => void selectWorkingDevice(account.bindingId!)}>{t('settings.remoteControl.hook.feishu.setWorkingDevice')}</Button> : null}
+      {account.actions.includes('revoke') ? <Button variant="secondary" tone="quiet" size="xs" compact type="button"
+        data-settings-search-action="Unlink this bot account"
+        disabled={!view.enabled || !view.available || view.status !== 'connected'}
+        onClick={() => void handleProviderUnlink('feishu', account.bindingId!)}>{t('settings.remoteControl.hook.feishu.unlink')}</Button> : null}
+    </div>} />;
+
+  const renderFeishuApplications = (view: ProviderHookView) => {
+    const busy = view.binding?.state === 'pending' || view.binding?.state === 'awaiting_confirmation';
+    return <div id={imBotSettings.cindyFeishuWorkingDevice.targetId} className="flex flex-col gap-3">
+      {/* 机器人只是消息入口: 先说清它不持有目录与模型, 那两样在卡片后半段单独成区。 */}
+      {view.applications!.length > 0 ? <div className="flex flex-col gap-1.5">
+        <span className="text-12 font-medium text-[var(--text-secondary)]">{t('settings.remoteControl.hook.feishu.bridgeTitle')}</span>
+        <span className="text-11 leading-relaxed text-[var(--text-tertiary)]">{t('settings.remoteControl.hook.feishu.bridgeDescription')}</span>
+      </div> : null}
+      {!view.enabled || view.applications!.length === 0 ? <p className="text-11 leading-relaxed text-[var(--text-tertiary)]">{t(!view.enabled ? 'settings.remoteControl.hook.feishu.disabledHint' : personalAccount ? 'settings.remoteControl.hook.feishu.unavailableHintPersonal' : 'settings.remoteControl.hook.feishu.unavailableHint')}</p> : null}
+      {view.applications!.length > 0 && view.enabled && view.available && view.status === 'connected' && !busy && (view.bindings?.length ?? 0) === 0
+        ? <p className="text-11 leading-relaxed text-[var(--text-secondary)]">{t('settings.remoteControl.hook.feishu.chooseBot')}</p> : null}
+      {view.applications!.map((app: FeishuAppView) => {
+        const tenantName = app.appType === 'self_built' ? app.tenantName?.trim() : null;
+        const accounts = (view.bindings ?? []).filter((row) => row.scopeId === app.appId);
+        const own = view.binding?.scopeId === app.appId ? view.binding : accounts[0] ?? null;
+        const state = providerCardState('feishu', { ...view, binding: own, bindings: accounts, multiBindAvailable: app.appType === 'store' && view.multiBindAvailable === true });
+        const active = busy && view.binding?.scopeId === app.appId;
+        const failed = own && ['failed', 'denied', 'expired', 'superseded'].includes(own.state);
+        const badge = !view.enabled || !view.available || view.status !== 'connected' || view.capabilityPending
+          ? state.badge
+          : active ? { tone: 'progress' as const, label: t('settings.remoteControl.hook.authorizing') }
+          : failed ? { tone: 'error' as const, label: t(`settings.remoteControl.hook.feishu.status.${own.state}`) }
+          : accounts.length > 0 ? { tone: 'ok' as const, label: t('settings.remoteControl.hook.feishu.linkedAccounts', { count: accounts.length }) }
+          : { tone: 'attention' as const, label: t('settings.remoteControl.hook.feishu.status.none') };
+        return <SettingsCard key={app.appId} role="group" aria-label={app.botName ?? t('settings.remoteControl.hook.feishu.botFallback')}>
+          <SettingsRow wrap title={app.botName ?? t('settings.remoteControl.hook.feishu.botFallback')}
+            trailing={<ChannelStatusBadge tone={badge.tone} label={badge.label} />}
+            hint={<>
+              <span>{t(`settings.remoteControl.hook.feishu.appType.${app.appType}`)}{tenantName ? ` · ${tenantName}` : ''}</span>
+            </>} />
+          {active && own?.bindCode ? <SettingsRow wrap
+            title={<span className="font-mono tracking-wider">{own.bindCode}</span>}
+            hint={t('settings.remoteControl.hook.feishu.bindCode.hint')}
+            trailing={<Button variant="secondary" size="xs" compact type="button" data-settings-search-action="Copy the Feishu bind code"
+              onClick={() => void handleCopyBindCode('feishu')}>{t('settings.remoteControl.hook.feishu.bindCode.copy')}</Button>} /> : null}
+          <div className="flex flex-wrap items-center gap-2 px-4 pb-4">
+              <Button variant={accounts.length > 0 ? "primary" : "secondary"} size="xs" compact type="button" data-settings-search-action="Open the channel connection or group setup link"
+                disabled={!view.enabled || !view.available || view.status !== 'connected'}
+                onClick={() => handleProviderOpen('feishu', 'provider', app.appId)}>{t('settings.remoteControl.hook.feishu.openBot')}</Button>
+            {active ? <>
+              {own?.actions.includes('open_connect_url') ? <Button variant="secondary" size="xs" compact type="button"
+                data-settings-search-action="Open the channel connection or group setup link"
+                onClick={() => handleProviderOpen('feishu', 'connect', app.appId)}>{t('settings.remoteControl.hook.feishu.openApp')}</Button> : null}
+              {own?.actions.includes('copy_connect_url') ? <Button variant="secondary" size="xs" compact type="button"
+                data-settings-search-action="Copy the channel connection link"
+                onClick={() => void handleCopyProviderLink('feishu')}>{t('settings.remoteControl.hook.binding.copyLink')}</Button> : null}
+              {own?.actions.includes('cancel') ? <Button variant="secondary" size="xs" compact type="button"
+                data-settings-search-action="Start or cancel linking this bot account"
+                onClick={() => runHookAction(() => window.electronAPI.hookControl.providerBindCancel('feishu'))}>{t('settings.remoteControl.hook.feishu.cancel')}</Button> : null}
+            </> : <>
+              {(app.appType === 'store' && view.multiBindAvailable) || accounts.length === 0 ? <Button variant={accounts.length === 0 ? 'primary' : 'secondary'} size="xs" compact type="button"
+                data-settings-search-action="Start or cancel linking this bot account"
+                disabled={busy || !view.enabled || !view.available || view.status !== 'connected'}
+                onClick={() => runHookAction(() => window.electronAPI.hookControl.providerBindStart('feishu', app.appId))}>{t(`settings.remoteControl.hook.feishu.${accounts.length > 0 ? 'linkAnotherAccount' : 'connectBot'}`)}</Button> : null}
+            </>}
+
+          </div>
+          {accounts.map((account) => renderFeishuAccount(account, view, app.appType === 'store'))}
+        </SettingsCard>;
+      })}
+    </div>;
+  };
+
   const renderProviderCard = (provider: NeutralCardProvider) => {
     const setting = provider === 'telegram'
       ? imBotSettings.cindyTelegram
@@ -1492,6 +1607,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
     const view = hook[provider] as ProviderHookView | undefined;
     if (view === undefined) return null; // 旧 main 快照尚无该 provider 字段时不渲染
     const cs = providerCardState(provider, view);
+    const storeAccounts = provider === 'feishu' && view.multiBindAvailable === true;
     if (!cs.visible) return null;
     const prefsState =
       provider === 'telegram'
@@ -1524,6 +1640,14 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
         onToggle={() => toggleCard(provider)}
       >
         <div className="flex flex-col gap-2">
+          {view.enabled &&
+          view.status === 'error' &&
+          cs.errorText &&
+          cs.errorText !== cs.badge.label ? (
+            <span className="text-11 leading-relaxed text-[var(--error-fg)]">{cs.errorText}</span>
+          ) : null}
+
+          {provider === 'feishu' && view.applications !== undefined ? renderFeishuApplications(view) : <>
           {!view.enabled ? (
             <span className="text-11 leading-relaxed text-[var(--text-tertiary)]">
               {t(`settings.remoteControl.hook.${provider}.disabledHint`)}
@@ -1547,12 +1671,6 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
             </span>
           ) : null}
 
-          {view.enabled &&
-          view.status === 'error' &&
-          cs.errorText &&
-          cs.errorText !== cs.badge.label ? (
-            <span className="text-11 leading-relaxed text-[var(--error-fg)]">{cs.errorText}</span>
-          ) : null}
 
           {/* 飞书服务已连上但没宣告 provider:feishu: 组织账号是组织还没配置(或停用了)
               飞书机器人; 个人账号是 Cindy 全局应用尚未开放。徽章只放得下短词,
@@ -1570,6 +1688,8 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
               )}
             </span>
           ) : null}
+
+          {provider === 'feishu' && cs.confirmed && !storeAccounts && view.binding ? workingDeviceHint(view.binding) : null}
 
           {view.enabled && view.available ? (
             <div className="flex flex-wrap items-center gap-2">
@@ -1610,7 +1730,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                   {t(`settings.remoteControl.hook.${provider}.cancel`)}
                 </Button>
               ) : null}
-              {cs.confirmed ? (
+              {cs.confirmed && !storeAccounts ? (
                 <>
                   {cs.actions.includes('open_provider') ? (
                     <Button data-settings-search-action="Open the channel connection or group setup link"
@@ -1634,7 +1754,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                       {t(`settings.remoteControl.hook.${provider}.addToGroup`)}
                     </Button>
                   ) : null}
-                  {provider === 'feishu' && cs.actions.includes('select_device') ? (
+                  {provider === 'feishu' && cs.actions.includes('select_device') && view.binding?.workingDevice?.isCurrent !== true ? (
                     <Button id={imBotSettings.cindyFeishuWorkingDevice.targetId} data-setting-id={imBotSettings.cindyFeishuWorkingDevice.id}
                       variant="secondary" size="xs" compact type="button"
                       disabled={selectingWorkingDevice || !view.available || view.status !== 'connected'}
@@ -1663,13 +1783,29 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                   onClick={() => runHookAction(() => window.electronAPI.hookControl.providerBindStart(provider))}
                 >
                   {t(
-                    cs.state === 'none'
+                    cs.state === 'none' || storeAccounts
                       ? `settings.remoteControl.hook.${provider}.connect`
                       : `settings.remoteControl.hook.${provider}.retry`,
                   )}
                 </Button>
               ) : null}
             </div>
+          ) : null}
+
+          {storeAccounts && (view.bindings?.length ?? 0) > 0 ? (
+            <>
+              <SettingsCard id={imBotSettings.cindyFeishuWorkingDevice.targetId}>
+                {view.bindings!.map((account) => renderFeishuAccount(account, view))}
+              </SettingsCard>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button data-settings-search-action="Open the channel connection or group setup link"
+                  variant="secondary" size="xs" compact type="button"
+                  disabled={!view.enabled || !view.available || view.status !== 'connected'}
+                  onClick={() => handleProviderOpen('feishu', 'provider')}>
+                  {t('settings.remoteControl.hook.feishu.openBot')}
+                </Button>
+              </div>
+            </>
           ) : null}
 
           {/* 飞书关联码: 网页授权是主路径(已自动打开), 授权页进不去的外部用户把这串
@@ -1701,6 +1837,8 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
               </span>
             </div>
           ) : null}
+
+          </>}
 
           {/* X 专属: 用法与公开风险。两个刻意的选择 ——
               · 放在工作目录区**之前**: 风险那条讲的就是这张卡上那个默认工作目录,
@@ -1739,7 +1877,10 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                 // X / 飞书沿用标题行的 chip(它们的卡上没有别的行内控件可对齐)。
                 mode: provider === 'telegram' ? 'row' : 'chip',
                 provider,
-              })
+              }, provider === 'feishu' ? {
+                title: t('settings.remoteControl.hook.feishu.settingsTitle'),
+                description: t('settings.remoteControl.hook.feishu.settingsDescription'),
+              } : undefined)
             : null}
           {/* 存量 global override 的收尾入口。刻意不按 provider 也不按 cs.confirmed 收:
               global scope 是 Telegram 与 X 共用的那一份, 旧设置在绑定确认之前就已经在盘上
