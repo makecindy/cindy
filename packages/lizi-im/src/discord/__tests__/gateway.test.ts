@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { MockInstance } from 'vitest';
+import { Socket } from 'node:net';
+import type { ClientOptions, RESTOptions } from 'discord.js';
 
 import type { IMStatus } from '../../types.js';
 
@@ -60,32 +63,57 @@ const discordMock = vi.hoisted(() => {
   return { loginResults, MockDiscordClient };
 });
 
-vi.mock('discord.js', () => ({
-  ChannelType: {
-    DM: 1,
-    GuildText: 0,
-    GuildVoice: 2,
-    AnnouncementThread: 10,
-    PublicThread: 11,
-    PrivateThread: 12,
-    GuildForum: 15,
-  },
-  MessageType: { Default: 0, Reply: 19, ThreadCreated: 18 },
-  Client: discordMock.MockDiscordClient,
-  Events: {
-    ClientReady: 'clientReady',
-    Error: 'error',
-    InteractionCreate: 'interactionCreate',
-    MessageCreate: 'messageCreate',
-    ShardDisconnect: 'shardDisconnect',
-    ShardError: 'shardError',
-    ShardReady: 'shardReady',
-    ShardReconnecting: 'shardReconnecting',
-    ShardResume: 'shardResume',
-  },
-  GatewayIntentBits: { DirectMessages: 4096, GuildMessages: 512, Guilds: 1 },
-  Partials: { Channel: 1 },
-}));
+vi.mock('discord.js', async () => {
+  // Match Desktop's resolved undici v8 import before discord.js loads its nested v6.
+  const { createRequire } = await import('node:module');
+  const desktopRequire = createRequire(new URL('../../../../../apps/desktop/package.json', import.meta.url));
+  desktopRequire('undici');
+  const actual = await vi.importActual<typeof import('discord.js')>('discord.js');
+  return {
+    DefaultRestOptions: actual.DefaultRestOptions,
+    ChannelType: {
+      DM: 1,
+      GuildText: 0,
+      GuildVoice: 2,
+      AnnouncementThread: 10,
+      PublicThread: 11,
+      PrivateThread: 12,
+      GuildForum: 15,
+    },
+    MessageType: { Default: 0, Reply: 19, ThreadCreated: 18 },
+    Client: discordMock.MockDiscordClient,
+    Events: {
+      ClientReady: 'clientReady',
+      Error: 'error',
+      InteractionCreate: 'interactionCreate',
+      MessageCreate: 'messageCreate',
+      ShardDisconnect: 'shardDisconnect',
+      ShardError: 'shardError',
+      ShardReady: 'shardReady',
+      ShardReconnecting: 'shardReconnecting',
+      ShardResume: 'shardResume',
+    },
+    GatewayIntentBits: { DirectMessages: 4096, GuildMessages: 512, Guilds: 1 },
+    Partials: { Channel: 1 },
+  };
+});
+
+import { DefaultRestOptions } from 'discord.js';
+
+const actualDiscord = await vi.importActual<typeof import('discord.js')>('discord.js');
+const originalMakeRequest = actualDiscord.DefaultRestOptions.makeRequest;
+const { createRequire } = await import('node:module');
+const packageRequire = createRequire(new URL('../../../package.json', import.meta.url));
+const desktopRequire = createRequire(new URL('../../../../../apps/desktop/package.json', import.meta.url));
+const discordRequire = createRequire(packageRequire.resolve('discord.js'));
+const restRequire = createRequire(discordRequire.resolve('@discordjs/rest'));
+const { Response: SDKResponse } = restRequire('undici') as {
+  Response: new (body: string, init?: { headers: Record<string, string> }) => Awaited<ReturnType<RESTOptions['makeRequest']>>;
+};
+type BodyEncoder = {
+  extractBody(body: unknown): [{ source: unknown; length: number | null; stream: ReadableStream<Uint8Array> }, string | null];
+};
+const { extractBody } = desktopRequire('undici/lib/web/fetch/body.js') as BodyEncoder;
 
 import {
   connectedStatusForBotTag,
@@ -136,6 +164,146 @@ function emitReady(client: InstanceType<typeof discordMock.MockDiscordClient>, t
 beforeEach(() => {
   discordMock.loginResults.length = 0;
   discordMock.MockDiscordClient.instances.length = 0;
+});
+
+// Test value: createDiscordGateway -> real Client.rest -> real SDK multipart builder.
+// undici #5520: prior gateway mocks never exercised native FormData crossing v6/v8.
+// Minimal input: one in-memory file; unit tier, no socket/credentials/production encoder copy.
+// Standalone wall time: 0.6s locally (25 tests, including existing gateway guards).
+describe('discord gateway REST body compatibility', () => {
+  async function withClient(run: (
+    client: InstanceType<typeof actualDiscord.Client>,
+    request: MockInstance<RESTOptions['makeRequest']>,
+  ) => Promise<void>): Promise<void> {
+    vi.spyOn(Socket.prototype, 'connect').mockImplementation(() => {
+      throw new Error('Network is forbidden in the offline REST regression');
+    });
+    // REST snapshots this function in its constructor. Install before the real Client.
+    const request = vi.spyOn(DefaultRestOptions, 'makeRequest').mockImplementation(async () => {
+      throw new Error('Offline recorder was not configured');
+    });
+    const { gateway } = createGatewayHarness();
+    await gateway.connect('fake-offline-not-a-token');
+    const options = discordMock.MockDiscordClient.instances[0].options as unknown as ClientOptions;
+    const client = new actualDiscord.Client(options);
+    client.rest.setAgent({
+      dispatch() { throw new Error('Unexpected REST dispatch is forbidden'); },
+    } as unknown as Parameters<typeof client.rest.setAgent>[0]);
+    client.rest.setToken('fake-offline-not-a-token');
+    try {
+      await run(client, request);
+    } finally {
+      await client.destroy();
+      await gateway.destroy();
+      vi.restoreAllMocks();
+    }
+  }
+
+  it('delivers complete SDK multipart bytes with their matching boundary to Desktop v8', async () => {
+    await withClient(async (client, request) => {
+      const fileBytes = new Uint8Array([0, 1, 13, 10, 255]);
+      const payload = { content: 'offline attachment', allowed_mentions: { parse: [] } };
+      request.mockImplementation(async (_url, init) => {
+        expect(init.body).toBeInstanceOf(Uint8Array);
+        const [encoded] = extractBody(init.body);
+        expect(encoded.source).not.toBeNull();
+        const bytes = new Uint8Array(await new Response(encoded.stream).arrayBuffer());
+        expect(encoded.length).toBe(bytes.byteLength);
+        expect(bytes).toEqual(init.body);
+        const headers = new Headers(init.headers as HeadersInit);
+        expect(headers.get('content-type')).toMatch(/^multipart\/form-data; boundary=.+/);
+        const boundary = headers.get('content-type')?.split('boundary=')[1];
+        const wire = new TextDecoder().decode(bytes);
+        expect(wire.startsWith(`--${boundary}\r\n`)).toBe(true);
+        expect(wire.replace(/\r\n$/, '').endsWith(`--${boundary}--`)).toBe(true);
+        const form = await new Response(init.body as Uint8Array<ArrayBuffer>, { headers }).formData();
+        expect(form.get('payload_json')).toBe(JSON.stringify(payload));
+        const file = form.get('files[0]') as File;
+        expect(file.name).toBe('sample.bin');
+        expect(file.type).toBe('application/octet-stream');
+        expect(new Uint8Array(await file.arrayBuffer())).toEqual(fileBytes);
+        return new SDKResponse('{"id":"offline"}', { headers: { 'content-type': 'application/json' } });
+      });
+      await expect(client.rest.post('/channels/1/messages', {
+        body: payload,
+        files: [{ data: fileBytes, name: 'sample.bin', contentType: 'application/octet-stream' }],
+      })).resolves.toEqual({ id: 'offline' });
+      expect(request).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('forwards JSON and other non-FormData request options unchanged', async () => {
+    await withClient(async (client, request) => {
+      const response = new SDKResponse('{}', { headers: { 'content-type': 'application/json' } });
+      request.mockResolvedValue(response);
+      await expect(client.rest.post('/channels/1/messages', { body: { content: 'offline' } })).resolves.toEqual({});
+      expect(request.mock.calls[0][1].body).toBe('{"content":"offline"}');
+      const makeRequest = client.rest.options.makeRequest;
+      for (const body of ['{"content":"offline"}', null, new Uint8Array([1, 2])]) {
+        const init: Parameters<RESTOptions['makeRequest']>[1] = {
+          body, headers: { 'Content-Type': 'application/json', 'X-Test': 'offline' },
+          method: 'POST', signal: new AbortController().signal,
+        };
+        expect(await makeRequest('https://offline.invalid', init)).toBe(response);
+        expect(request.mock.calls.at(-1)?.[1]).toBe(init);
+      }
+    });
+  });
+
+  it('preserves multipart signal, other options and transport errors', async () => {
+    await withClient(async (client, request) => {
+      const failure = new Error('offline transport failure');
+      request.mockRejectedValue(failure);
+      const body = new FormData();
+      body.append('payload_json', '{}');
+      const init: Parameters<RESTOptions['makeRequest']>[1] = {
+        body: body as unknown as Parameters<RESTOptions['makeRequest']>[1]['body'],
+        headers: { 'X-Test': 'offline' }, method: 'POST', signal: new AbortController().signal,
+      };
+      await expect(client.rest.options.makeRequest('https://offline.invalid', init)).rejects.toBe(failure);
+      const forwarded = request.mock.calls[0][1];
+      expect(forwarded.signal).toBe(init.signal);
+      expect(forwarded.method).toBe(init.method);
+      expect(new Headers(forwarded.headers as HeadersInit).get('X-Test')).toBe('offline');
+      expect(forwarded.body).toBeInstanceOf(Uint8Array);
+      const aborted = new AbortController();
+      aborted.abort(new DOMException('offline abort', 'AbortError'));
+      request.mockRejectedValueOnce(aborted.signal.reason);
+      await expect(client.rest.options.makeRequest('https://offline.invalid', {
+        ...init, signal: aborted.signal,
+      })).rejects.toBe(aborted.signal.reason);
+      expect(request.mock.calls.at(-1)?.[1].signal).toBe(aborted.signal);
+    });
+  });
+
+  it('propagates encoding failures without dispatching a partial request', async () => {
+    await withClient(async (client, request) => {
+      const failure = new Error('offline encoding failure');
+      vi.spyOn(Response.prototype, 'arrayBuffer').mockRejectedValueOnce(failure);
+      request.mockResolvedValue(new SDKResponse('{}'));
+      await expect(client.rest.options.makeRequest('https://offline.invalid', {
+        body: new FormData() as unknown as Parameters<RESTOptions['makeRequest']>[1]['body'], method: 'POST',
+      })).rejects.toBe(failure);
+      expect(request).not.toHaveBeenCalled();
+    });
+  });
+
+  it('rejects a missed transport mock before socket or DNS access', async () => {
+    await withClient(async (client) => {
+      const dispatcher = client.rest.agent;
+      if (!dispatcher) throw new Error('Offline dispatcher was not installed');
+      const dispatch = vi.spyOn(dispatcher, 'dispatch');
+      await expect(originalMakeRequest('https://unexpected-host.example/channels/1/messages', {
+        method: 'POST', body: '{}', dispatcher,
+      })).rejects.toThrow('Unexpected REST dispatch is forbidden');
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      expect(Socket.prototype.connect).not.toHaveBeenCalled();
+      await expect(originalMakeRequest('https://unexpected-host.example/channels/1/messages', {
+        method: 'POST', body: '{}',
+      })).rejects.toThrow('Network is forbidden');
+      expect(Socket.prototype.connect).toHaveBeenCalledTimes(1);
+    });
+  });
 });
 
 describe('discord gateway pure logic', () => {

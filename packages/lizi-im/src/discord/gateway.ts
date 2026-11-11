@@ -1,6 +1,7 @@
 import {
   ChannelType,
   Client,
+  DefaultRestOptions,
   Events,
   GatewayIntentBits,
   MessageType,
@@ -13,6 +14,18 @@ import type { IMStatus } from '../types.js';
 
 const DEDUP_CAPACITY = 512;
 const log = defaultLogger('im:discord:gateway');
+
+const makeDiscordRequest: typeof DefaultRestOptions.makeRequest = async (url, init) => {
+  if (!(init.body instanceof FormData)) return DefaultRestOptions.makeRequest(url, init);
+
+  // The SDK's native FormData crosses undici versions via the shared dispatcher
+  // (#5520). Encode with its own realm and keep that encoder's exact boundary.
+  const response = new Response(init.body);
+  const body = new Uint8Array(await response.arrayBuffer());
+  const headers = new Headers(init.headers as HeadersInit);
+  headers.set('Content-Type', response.headers.get('Content-Type')!);
+  return DefaultRestOptions.makeRequest(url, { ...init, body, headers: Object.fromEntries(headers) });
+};
 
 export interface DiscordGatewayEvents {
   onStatus(s: IMStatus): void;
@@ -131,6 +144,7 @@ class DiscordJsGateway implements DiscordGateway {
       partials: [Partials.Channel],
       // 频道里是公共场合：模型或用户文本里的 @everyone / @here / 角色 / 用户都不得真的提醒别人。
       allowedMentions: { parse: [], repliedUser: false },
+      rest: { makeRequest: makeDiscordRequest },
     });
     this.#client = client;
     this.#dedup = createDedup(DEDUP_CAPACITY);
