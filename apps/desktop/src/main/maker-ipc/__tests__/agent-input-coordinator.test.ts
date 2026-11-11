@@ -2716,6 +2716,22 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.coordinator.isActiveInputOwnerContinuation(sid)).toBe(false);
   });
 
+  // 2026-11-11 acceptance: a task a companion opened from the owner's group request asked the
+  // owner to repeat it. The group round is a hidden host envelope beside the owner's verified
+  // words (chatServer leaves them empty for other members and companions).
+  it.each([['the owner', 'Add a line to README.md', true], ['another member', '', false]] as const)(
+    'lets a group round started by %s speak for the owner request', async (_who, ownerWords, expected) => {
+      const h = createHarness(), sid = `group-lane-${expected}`;
+      h.sendToAgent.mockImplementationOnce(async () => { h.setRunning(true); return sendSuccess(); });
+      h.coordinator.enqueue(sid, makeItem(BOT_GROUP_CLIENT_ID.memberTurn('room', 'execution', 'bot'),
+        `${UI_ACTION_TRIGGER_PREFIX}[group envelope]`, { agentOmitsTriggerPrefix: true, autoReviewUserText: ownerWords }));
+      await flush();
+      expect(h.coordinator.isActiveInputOwnerContinuation(sid)).toBe(expected);
+      // Never fresh owner input (app update and other owner-only Host actions).
+      expect(h.coordinator.isActiveInputOwnerAuthored(sid)).toBe(false);
+      expect(h.coordinator.getAcceptedInputProvenance(sid)?.authoredText).toBe(ownerWords);
+    });
+
   it('keeps a Worker Lead directive distinct from accepted human input', async () => {
     const h = createHarness(), sid = 'worker-input-origin';
     h.sendToAgent.mockImplementationOnce(async () => { h.setRunning(true); return sendSuccess(); });

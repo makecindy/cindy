@@ -4989,9 +4989,10 @@ export function getSessionInputProvenance(sessionId: string) {
 
 /**
  * Capture from the caller's accepted input before any asynchronous target work. A turn that
- * speaks for the owner (their own input, its continuation or relay, or an IM turn the owner
- * spoke in) hands its request on as is; any task can already open a Full Access task, so a
- * second review would not protect anything (2026-11-08). Plan mode sends without authority.
+ * speaks for the owner (their own input, its continuation or relay, an IM turn the owner
+ * spoke in, or a companion group round the owner's own message started) hands its request on
+ * as is; any task can already open a Full Access task, so a second review would not protect
+ * anything (2026-11-08). Plan mode sends without authority.
  */
 export async function captureSessionAgentRequest(sessionId: string, supplement: string,
   target?: DelegationTarget): Promise<CapturedAgentRequest> {
