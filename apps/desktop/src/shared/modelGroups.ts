@@ -10,8 +10,11 @@ export const MODEL_GROUPS_IPC = {
   RESOLVE: 'model-groups:resolve',
 } as const;
 
-export const MODEL_GROUP_STRATEGIES = ['expiring', 'order', 'rotate'] as const;
-/** expiring = 快作废的额度先用；order = 按顺序；rotate = 每个新任务换一个。 */
+export const MODEL_GROUP_STRATEGIES = ['expiring', 'order', 'rotate', 'cheapest'] as const;
+/**
+ * expiring = 快作废的额度先用；order = 按顺序；rotate = 每个新任务换一个；
+ * cheapest = 最省钱：还有配额的订阅不另外花钱，其余按该来源的标价从低到高。
+ */
 export type ModelGroupStrategy = (typeof MODEL_GROUP_STRATEGIES)[number];
 
 export type ModelGroupAgentKind = 'cc' | 'codex' | 'pi';
@@ -25,11 +28,21 @@ export interface ModelGroupCandidate {
   off?: boolean;
 }
 
+/**
+ * 例外：在路线的选法之前先看一遍，按列表顺序。
+ * image = 第一条消息带图片时只在能看图的来源里选(一个都没有就照常选)；
+ * hours = 本机时间落在 [from, to) 内(可跨午夜)时改走另一条路线。
+ */
+export type ModelGroupException =
+  | { when: { type: 'image' }; use: 'vision' }
+  | { when: { type: 'hours'; from: number; to: number }; use: { type: 'route'; routeId: string } };
+
 export interface ModelGroupRoute {
   id: string;
   name: string;
   strategy: ModelGroupStrategy;
   candidates: ModelGroupCandidate[];
+  exceptions?: ModelGroupException[];
 }
 
 export type ModelGroupModeTarget =
@@ -51,7 +64,7 @@ export interface ModelGroupsConfig {
 
 export const MODEL_GROUPS_DEFAULTS: ModelGroupsConfig = { routes: [], modes: [] };
 
-export const MODEL_GROUP_LIMITS = { routes: 32, modes: 32, candidates: 16, name: 40, id: 64, field: 256 } as const;
+export const MODEL_GROUP_LIMITS = { routes: 32, modes: 32, candidates: 16, exceptions: 8, name: 40, id: 64, field: 256 } as const;
 
 /** 草稿与选择器里选中的那一项。 */
 export interface ModelGroupSelection {
@@ -61,14 +74,15 @@ export interface ModelGroupSelection {
 
 export type ModelGroupTraceState = 'picked' | 'standby' | 'skipped';
 /**
- * picked：expiring / order / rotate 对应选法；only = 只有它能用；soonest = 全都用完了，选最早恢复的。
+ * picked：expiring / order / rotate / cheapest 对应选法(cheapestFree = 还有订阅配额，不另外花钱)；
+ * only = 只有它能用；soonest = 全都用完了，选最早恢复的。
  * standby：这次没轮到。skipped：off = 已停用；unavailable = 没连接或模型已不可选；limited = 额度用完；
- * tight = 5 小时额度快满、离重置还早。
+ * tight = 5 小时额度快满、离重置还早；noVision = 消息里有图片而它看不了图。
  */
 export type ModelGroupTraceWhy =
-  | 'expiring' | 'order' | 'rotate' | 'only' | 'soonest'
+  | 'expiring' | 'order' | 'rotate' | 'cheapest' | 'cheapestFree' | 'only' | 'soonest'
   | 'standby'
-  | 'off' | 'unavailable' | 'limited' | 'tight';
+  | 'off' | 'unavailable' | 'limited' | 'tight' | 'noVision';
 
 export interface ModelGroupTraceQuota {
   /** 0–100，已用。 */
@@ -98,6 +112,15 @@ export interface ModelGroupResolvedRoute {
   effort?: string;
 }
 
+/**
+ * 例外决定了这次的结果：image = 只在能看图的来源里选了；imageFallback = 有图片但没有能看图的来源，照常选；
+ * hours = 这个时段改走了另一条路线(viaRouteName)。
+ */
+export interface ModelGroupAppliedException {
+  type: 'image' | 'imageFallback' | 'hours';
+  viaRouteName?: string;
+}
+
 export type ModelGroupResolveResult =
   | {
       outcome: 'routed';
@@ -108,6 +131,8 @@ export type ModelGroupResolveResult =
       why: ModelGroupTraceWhy;
       quota: ModelGroupTraceQuota | null;
       trace: ModelGroupTraceEntry[];
+      /** 起作用的例外，按发生顺序(先改走路线，再按图片筛)；没有就省略。 */
+      exceptions?: ModelGroupAppliedException[];
     }
   /** missing = 这条路线或模式已被删除；unavailable = 里面没有现在能用的模型。两者都沿用用户原来选的模型。 */
   | { outcome: 'missing' | 'unavailable'; groupName: string; trace: ModelGroupTraceEntry[] };
@@ -116,6 +141,8 @@ export interface ModelGroupResolveRequest {
   selection: ModelGroupSelection;
   /** 只看会选谁：不推进「轮流」的顺序。 */
   dryRun?: boolean;
+  /** 第一条消息的情况；时间由主进程自己取，不信界面传来的。 */
+  context?: { hasImages?: boolean };
 }
 
 function text(value: unknown, max: number): string {
@@ -158,7 +185,51 @@ function normalizeModelGroupRoute(raw: unknown): ModelGroupRoute | null {
     })
     .slice(0, MODEL_GROUP_LIMITS.candidates);
   const strategy = MODEL_GROUP_STRATEGIES.find((item) => item === value.strategy) ?? 'expiring';
-  return { id, name, strategy, candidates };
+  const exceptions = (Array.isArray(value.exceptions) ? value.exceptions : [])
+    .map(exception)
+    .filter((item): item is ModelGroupException => !!item)
+    .slice(0, MODEL_GROUP_LIMITS.exceptions);
+  return { id, name, strategy, candidates, ...(exceptions.length > 0 ? { exceptions } : {}) };
+}
+
+function hour(value: unknown): number | null {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 23 ? value : null;
+}
+
+function exception(raw: unknown): ModelGroupException | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const value = raw as Record<string, unknown>;
+  const when = value.when && typeof value.when === 'object' ? value.when as Record<string, unknown> : null;
+  if (when?.type === 'image') return value.use === 'vision' ? { when: { type: 'image' }, use: 'vision' } : null;
+  if (when?.type !== 'hours') return null;
+  const from = hour(when.from);
+  const to = hour(when.to);
+  const use = value.use && typeof value.use === 'object' ? value.use as Record<string, unknown> : null;
+  const routeId = use?.type === 'route' ? text(use.routeId, MODEL_GROUP_LIMITS.id) : '';
+  // from === to 是一段空时间，不保存。
+  if (from === null || to === null || from === to || !routeId) return null;
+  return { when: { type: 'hours', from, to }, use: { type: 'route', routeId } };
+}
+
+/** 本机时刻 hour(0–23) 是否落在 [from, to) 内；from > to 时跨午夜。 */
+export function modelGroupHoursMatch(when: { from: number; to: number }, localHour: number): boolean {
+  return when.from < when.to
+    ? localHour >= when.from && localHour < when.to
+    : localHour >= when.from || localHour < when.to;
+}
+
+/** 去掉指向自己或已不存在路线的时段例外，以及重复的图片例外。 */
+function pruneExceptions(route: ModelGroupRoute, routeIds: ReadonlySet<string>): ModelGroupRoute {
+  if (!route.exceptions) return route;
+  let image = false;
+  const exceptions = route.exceptions.filter((item) => {
+    if (item.when.type === 'image') return !image && (image = true);
+    return item.use !== 'vision' && item.use.routeId !== route.id && routeIds.has(item.use.routeId);
+  });
+  if (exceptions.length > 0) return { ...route, exceptions };
+  const rest = { ...route };
+  delete rest.exceptions;
+  return rest;
 }
 
 function mode(raw: unknown, routeIds: ReadonlySet<string>): ModelGroupMode | null {
@@ -195,11 +266,12 @@ export function normalizeModelGroupsConfig(raw: unknown): ModelGroupsConfig {
     MODEL_GROUP_LIMITS.routes,
   );
   const routeIds = new Set(routes.map((route) => route.id));
+  const prunedRoutes = routes.map((route) => pruneExceptions(route, routeIds));
   const modes = uniqueById(
     (Array.isArray(value.modes) ? value.modes : []).map((item) => mode(item, routeIds)).filter((item): item is ModelGroupMode => !!item),
     MODEL_GROUP_LIMITS.modes,
   );
-  return { routes, modes };
+  return { routes: prunedRoutes, modes };
 }
 
 export function findModelGroupSelection(

@@ -19898,6 +19898,10 @@
       "rotate": {
         "title": "輪值",
         "hint": "每一新差事易一源，均其勞。"
+      },
+      "cheapest": {
+        "title": "最省",
+        "hint": "訂閱尚有限額者先用，不另費錢；餘者依標價由低至高，無標價者居後。"
       }
     },
     "picker": {
@@ -19918,7 +19922,14 @@
       "unavailable": "未連線，或此模型今不可擇",
       "limited": "限額已盡",
       "limitedUntil": "限額已盡，{{reset}} 復",
-      "tight": "五小時限額將滿，姑不用"
+      "tight": "五小時限額將滿，姑不用",
+      "cheapest": "標價最低",
+      "cheapestFree": "訂閱尚有限額，不另費錢",
+      "noVision": "訊中有圖，彼不能觀圖",
+      "exceptionImage": "訊中有圖，唯於能觀圖之源中擇",
+      "exceptionImageFallback": "訊中有圖，然無能觀圖之源，照常擇之",
+      "exceptionHours": "此時段改行「{{name}}」",
+      "separator": "；"
     },
     "settings": {
       "newRoute": "立路線",
@@ -19974,7 +19985,40 @@
         "effort": "思之深淺",
         "effortDefault": "從模型常例",
         "effortHint": "所擇模型不支此檔時，依其常例而行。"
+      },
+      "exceptions": {
+        "title": "例外",
+        "hint": "依擇法之前，先察此數事，自上而下。",
+        "empty": "尚無例外，每一新差事皆依上之擇法。",
+        "imageRule": "訊中有圖時，唯用能觀圖之源",
+        "hoursRule": "{{from}}–{{to}} 改行「{{name}}」",
+        "remove": "刪此例外",
+        "add": "增例外",
+        "choose": "擇一情形",
+        "kindImage": "訊中有圖",
+        "kindHours": "某時段",
+        "from": "自",
+        "to": "至",
+        "useRoute": "改行",
+        "addHours": "增",
+        "sameHour": "起訖不可同時。",
+        "full": "至多 {{count}} 條例外。",
+        "needOtherRoute": "再立一路線，方可依時段改行之。"
       }
+    },
+    "overview": {
+      "mapTitle": "今如何行",
+      "mapDescription": "自左而右：用何模式、行何路線，終落何源。點模式或路線可修之。",
+      "columnModes": "模式",
+      "columnRoutes": "路線或模型",
+      "columnSources": "源",
+      "columnEmpty": "尚無",
+      "openRoute": "啟路線「{{name}}」",
+      "openMode": "啟模式「{{name}}」",
+      "recentTitle": "近日所擇",
+      "recentEmpty": "尚無差事用過路線或模式。",
+      "keptOriginal": "其中今無可用之模型，仍用原擇之模型。",
+      "keptOriginalShort": "仍用原模型"
     }
   }
 }

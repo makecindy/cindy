@@ -12,8 +12,11 @@ import { activeOwnerScopeKey } from '../appSessionState.js';
 import { getPluginModelPickerAgents, isPluginRouteHarnessInstalled } from '../cindy-brain/ghostModelPicker.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { getQuotaOverviewService } from '../quota-overview/service.js';
+import { getGatewayModelPricing } from '../usage/modelPricing.js';
+import { getReferenceModelPricing } from '../usage/referenceModelPricing.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+import { recordModelGroupDecision } from './decisionLog.js';
 import { createModelGroupResolver } from './resolver.js';
 import { readModelGroupsConfig, writeModelGroupsConfig } from './store.js';
 
@@ -48,6 +51,7 @@ const resolver = createModelGroupResolver({
   quotaWindows: localQuotaWindows,
   scope: activeOwnerScopeKey,
   now: Date.now,
+  pricing: async () => ({ gateway: await getGatewayModelPricing(), reference: getReferenceModelPricing() }),
 });
 
 export function registerModelGroupsIpc(): void {
@@ -65,7 +69,15 @@ export function registerModelGroupsIpc(): void {
     const value = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
     const selection = sanitizeModelGroupSelection(value.selection);
     if (!selection) throwIpcError('INVALID_PARAMS', 'model group selection is required');
-    const request: ModelGroupResolveRequest = { selection, dryRun: value.dryRun === true };
-    return resolver.resolve(request);
+    const context = value.context && typeof value.context === 'object' ? value.context as Record<string, unknown> : null;
+    const request: ModelGroupResolveRequest = {
+      selection,
+      dryRun: value.dryRun === true,
+      ...(context?.hasImages === true ? { context: { hasImages: true } } : {}),
+    };
+    const result = await resolver.resolve(request);
+    // 设置页的「试一下」不算一次真实选择。
+    if (!request.dryRun) recordModelGroupDecision(selection, result);
+    return result;
   });
 }

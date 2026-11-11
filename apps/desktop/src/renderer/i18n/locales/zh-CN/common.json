@@ -19898,6 +19898,10 @@
       "rotate": {
         "title": "轮流",
         "hint": "每个新任务换下一个来源，平均分担。"
+      },
+      "cheapest": {
+        "title": "最省钱",
+        "hint": "还有配额的订阅先用，不另外花钱；其余按标价从低到高，没有标价的排在后面。"
       }
     },
     "picker": {
@@ -19918,7 +19922,14 @@
       "unavailable": "没有连接，或这个模型现在不可选",
       "limited": "配额用完了",
       "limitedUntil": "配额用完了，{{reset}} 恢复",
-      "tight": "5 小时配额快满了，先不用"
+      "tight": "5 小时配额快满了，先不用",
+      "cheapest": "标价最低",
+      "cheapestFree": "订阅还有配额，不另外花钱",
+      "noVision": "消息里有图片，它看不了图",
+      "exceptionImage": "消息里有图片，只在能看图的来源里选",
+      "exceptionImageFallback": "消息里有图片，但没有能看图的来源，照常选",
+      "exceptionHours": "这个时段改走「{{name}}」",
+      "separator": "；"
     },
     "settings": {
       "newRoute": "新建路线",
@@ -19974,7 +19985,40 @@
         "effort": "推理强度",
         "effortDefault": "跟随模型默认",
         "effortHint": "选中的模型不支持这一档时，按它的默认档运行。"
+      },
+      "exceptions": {
+        "title": "例外",
+        "hint": "按选法挑之前先看这些情况，从上到下。",
+        "empty": "还没有例外，每个新任务都按上面的选法挑。",
+        "imageRule": "消息里有图片时，只用能看图的来源",
+        "hoursRule": "{{from}}–{{to}} 改走「{{name}}」",
+        "remove": "删除这条例外",
+        "add": "添加例外",
+        "choose": "选择一种情况",
+        "kindImage": "消息里有图片",
+        "kindHours": "某个时段",
+        "from": "从",
+        "to": "到",
+        "useRoute": "改走",
+        "addHours": "添加",
+        "sameHour": "开始和结束不能是同一个时刻。",
+        "full": "最多 {{count}} 条例外。",
+        "needOtherRoute": "再建一条路线，才能按时段改走它。"
       }
+    },
+    "overview": {
+      "mapTitle": "现在怎么走",
+      "mapDescription": "从左到右：用哪个模式、走哪条路线，最后落到哪个来源。点模式或路线可以修改。",
+      "columnModes": "模式",
+      "columnRoutes": "路线或模型",
+      "columnSources": "来源",
+      "columnEmpty": "还没有",
+      "openRoute": "打开路线「{{name}}」",
+      "openMode": "打开模式「{{name}}」",
+      "recentTitle": "最近的选择",
+      "recentEmpty": "还没有任务用过路线或模式。",
+      "keptOriginal": "里面没有现在能用的模型，沿用了原来选的模型。",
+      "keptOriginalShort": "沿用原来的模型"
     }
   }
 }

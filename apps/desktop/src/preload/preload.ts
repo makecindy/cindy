@@ -1459,6 +1459,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('model-groups:set', config),
     resolve: (request: import('../shared/modelGroups').ModelGroupResolveRequest): Promise<import('../shared/modelGroups').ModelGroupResolveResult> =>
       ipcRenderer.invoke('model-groups:resolve', request),
+    /** 最近几次新任务从路线或模式里选了谁，最新在前。 */
+    decisions: (): Promise<import('../shared/modelGroupDecisions').ModelGroupDecision[]> => ipcRenderer.invoke('model-groups:decisions'),
   },
 
   ghosts: {

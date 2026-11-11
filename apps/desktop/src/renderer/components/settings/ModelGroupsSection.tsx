@@ -23,7 +23,7 @@ import {
 } from '@/components/ui/settings-rows';
 import { Switch } from '@/components/ui/switch';
 import { Tip } from '@/components/ui/tooltip';
-import { modelGroupWhyText, saveModelGroups, useModelGroups } from '@/features/model-groups/modelGroupsClient';
+import { modelGroupExceptionText, modelGroupWhyText, saveModelGroups, useModelGroups } from '@/features/model-groups/modelGroupsClient';
 import { useProviders } from '@/hooks/useProviders';
 import { createLogger } from '@/lib/logger';
 import { toast } from '@/lib/toast';
@@ -40,7 +40,9 @@ import {
   type ModelGroupsConfig,
   type ModelGroupStrategy,
 } from '../../../shared/modelGroups';
+import { ModelGroupRouteExceptions } from './ModelGroupRouteExceptions';
 import { modelGroupsSettings } from './ModelGroupsSection.settings-search';
+import { ModelGroupsOverview } from './ModelGroupsOverview';
 import { SettingsTextInput } from './SettingsTextInput';
 
 const log = createLogger('ModelGroupsSection');
@@ -304,6 +306,13 @@ export function ModelGroupsSection() {
               </SettingsCard>
             </SettingsSection>
 
+            <ModelGroupRouteExceptions
+              key={route.id}
+              route={route}
+              routes={config.routes}
+              onChange={(next) => updateRoute(route.id, (current) => ({ ...current, exceptions: next }))}
+            />
+
             <SettingsSection
               title={t('modelGroups.settings.try.title')}
               description={t('modelGroups.settings.try.hint')}
@@ -317,6 +326,11 @@ export function ModelGroupsSection() {
             >
               {shown && (
                 <SettingsCard data-testid="model-group-preview" className="animate-fade-in">
+                  {shown.outcome === 'routed' && shown.exceptions && shown.exceptions.length > 0 && (
+                    <SettingsBlock data-model-group-preview-exception className="text-13 leading-[1.5] text-[var(--text-secondary)]">
+                      {modelGroupExceptionText(shown.exceptions, t)}
+                    </SettingsBlock>
+                  )}
                   {shown.outcome !== 'routed' && (
                     <SettingsBlock className="text-13 leading-[1.5] text-[var(--text-secondary)]">{t('modelGroups.settings.try.unavailable')}</SettingsBlock>
                   )}
@@ -443,7 +457,11 @@ export function ModelGroupsSection() {
                         ...EFFORTS.map((value) => ({ value, label: t(`effortLevels.${value}`) })),
                       ]}
                       width="sm"
-                      onValueChange={(value) => void updateMode(mode.id, ({ effort: _old, ...current }) => (value === DEFAULT_EFFORT ? current : { ...current, effort: value }))}
+                      onValueChange={(value) => void updateMode(mode.id, (current) => {
+                        const { effort: _previous, ...rest } = current;
+                        void _previous;
+                        return value === DEFAULT_EFFORT ? rest : { ...rest, effort: value };
+                      })}
                     />
                   }
                 />
@@ -464,6 +482,7 @@ export function ModelGroupsSection() {
   // ── 列表 ───────────────────────────────────────────────────────────────────
   return (
     <SettingsSection variant="page" title={t('modelGroups.title')} description={t('modelGroups.description')} testId="model-groups-settings">
+      <ModelGroupsOverview config={config} onOpenRoute={(id) => setView({ kind: 'route', id })} onOpenMode={(id) => setView({ kind: 'mode', id })} />
       <SettingsSection
         title={t('modelGroups.routes')}
         titleId={modelGroupsSettings.routes.targetId}

@@ -23,6 +23,8 @@ export const modelGroupsSettings = defineSettings({
       'modelGroups.strategy.expiring.title',
       'modelGroups.strategy.order.title',
       'modelGroups.strategy.rotate.title',
+      'modelGroups.strategy.cheapest.title',
+      'modelGroups.settings.exceptions.title',
       'modelGroups.settings.sources',
       'modelGroups.settings.try.title',
     ],

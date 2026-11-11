@@ -1349,6 +1349,7 @@ interface ElectronAPI {
     get: () => Promise<import('../shared/modelGroups').ModelGroupsConfig>;
     set: (config: import('../shared/modelGroups').ModelGroupsConfig) => Promise<import('../shared/modelGroups').ModelGroupsConfig>;
     resolve: (request: import('../shared/modelGroups').ModelGroupResolveRequest) => Promise<import('../shared/modelGroups').ModelGroupResolveResult>;
+    decisions: () => Promise<import('../shared/modelGroupDecisions').ModelGroupDecision[]>;
   },
 
   ghosts: {

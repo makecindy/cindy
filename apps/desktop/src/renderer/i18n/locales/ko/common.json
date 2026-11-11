@@ -19898,6 +19898,10 @@
       "rotate": {
         "title": "번갈아",
         "hint": "새 작업마다 다음 소스로 바꿔 부담을 고르게 나눕니다."
+      },
+      "cheapest": {
+        "title": "가장 저렴하게",
+        "hint": "할당량이 남은 구독을 먼저 써서 추가 비용이 들지 않습니다. 나머지는 표시 가격이 낮은 순서이며, 가격이 없는 소스는 뒤로 갑니다."
       }
     },
     "picker": {
@@ -19918,7 +19922,14 @@
       "unavailable": "연결되지 않았거나 지금 이 모델을 선택할 수 없음",
       "limited": "할당량을 다 씀",
       "limitedUntil": "할당량을 다 씀, {{reset}}에 회복",
-      "tight": "5시간 할당량이 거의 차서 지금은 쓰지 않음"
+      "tight": "5시간 할당량이 거의 차서 지금은 쓰지 않음",
+      "cheapest": "표시 가격이 가장 낮음",
+      "cheapestFree": "구독 할당량이 남아 추가 비용 없음",
+      "noVision": "메시지에 이미지가 있는데 이 소스는 이미지를 볼 수 없음",
+      "exceptionImage": "메시지에 이미지가 있어 이미지를 볼 수 있는 소스 중에서 선택",
+      "exceptionImageFallback": "메시지에 이미지가 있지만 이미지를 볼 수 있는 소스가 없어 평소대로 선택",
+      "exceptionHours": "이 시간대에는 '{{name}}' 사용",
+      "separator": "; "
     },
     "settings": {
       "newRoute": "경로 만들기",
@@ -19974,7 +19985,40 @@
         "effort": "추론 강도",
         "effortDefault": "모델 기본값 따르기",
         "effortHint": "선택된 모델이 이 단계를 지원하지 않으면 해당 모델의 기본값으로 실행합니다."
+      },
+      "exceptions": {
+        "title": "예외",
+        "hint": "선택 방식보다 먼저, 위에서부터 차례로 확인합니다.",
+        "empty": "아직 예외가 없습니다. 새 작업은 모두 위의 선택 방식을 따릅니다.",
+        "imageRule": "메시지에 이미지가 있으면 이미지를 볼 수 있는 소스만 사용",
+        "hoursRule": "{{from}}–{{to}}에는 '{{name}}' 사용",
+        "remove": "이 예외 삭제",
+        "add": "예외 추가",
+        "choose": "상황 선택",
+        "kindImage": "메시지에 이미지가 있음",
+        "kindHours": "특정 시간대",
+        "from": "시작",
+        "to": "종료",
+        "useRoute": "대신 사용",
+        "addHours": "추가",
+        "sameHour": "시작과 종료는 같은 시각일 수 없습니다.",
+        "full": "예외는 최대 {{count}}개입니다.",
+        "needOtherRoute": "시간대별로 바꾸려면 경로를 하나 더 만드세요."
       }
+    },
+    "overview": {
+      "mapTitle": "새 작업이 모델을 정하는 방식",
+      "mapDescription": "왼쪽에서 오른쪽으로: 사용하는 모드, 거치는 경로, 마지막에 도달하는 소스. 모드나 경로를 클릭하면 변경할 수 있습니다.",
+      "columnModes": "모드",
+      "columnRoutes": "경로 또는 모델",
+      "columnSources": "소스",
+      "columnEmpty": "아직 없음",
+      "openRoute": "경로 '{{name}}' 열기",
+      "openMode": "모드 '{{name}}' 열기",
+      "recentTitle": "최근 선택",
+      "recentEmpty": "아직 경로나 모드를 사용한 작업이 없습니다.",
+      "keptOriginal": "지금 쓸 수 있는 모델이 없어 원래 선택한 모델을 사용했습니다.",
+      "keptOriginalShort": "원래 모델 사용"
     }
   }
 }

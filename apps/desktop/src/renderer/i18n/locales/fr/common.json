@@ -20159,6 +20159,10 @@
       "rotate": {
         "title": "À tour de rôle",
         "hint": "Chaque nouvelle tâche passe à la source suivante et répartit la charge."
+      },
+      "cheapest": {
+        "title": "Le moins cher",
+        "hint": "Utilise d'abord les abonnements qui ont encore du quota, sans coût supplémentaire ; le reste suit du prix affiché le plus bas au plus élevé, et les sources sans prix passent en dernier."
       }
     },
     "picker": {
@@ -20179,7 +20183,14 @@
       "unavailable": "Non connectée, ou ce modèle ne peut pas être choisi pour l'instant",
       "limited": "Quota épuisé",
       "limitedUntil": "Quota épuisé jusqu'au {{reset}}",
-      "tight": "Son quota de 5 heures est presque plein : ignorée pour l'instant"
+      "tight": "Son quota de 5 heures est presque plein : ignorée pour l'instant",
+      "cheapest": "Prix affiché le plus bas",
+      "cheapestFree": "Il reste du quota d'abonnement, sans coût supplémentaire",
+      "noVision": "Le message contient des images et cette source ne peut pas les voir",
+      "exceptionImage": "Le message contient des images : seules les sources capables de les voir ont été prises en compte",
+      "exceptionImageFallback": "Le message contient des images, mais aucune source ne peut les voir : choix habituel",
+      "exceptionHours": "Sur cette plage horaire, utilise « {{name}} »",
+      "separator": " ; "
     },
     "settings": {
       "newRoute": "Nouvel itinéraire",
@@ -20235,7 +20246,40 @@
         "effort": "Effort de raisonnement",
         "effortDefault": "Valeur par défaut du modèle",
         "effortHint": "Si le modèle choisi ne prend pas en charge ce niveau, il s'exécute avec sa valeur par défaut."
+      },
+      "exceptions": {
+        "title": "Exceptions",
+        "hint": "Vérifiées avant la règle de choix, de haut en bas.",
+        "empty": "Aucune exception pour l'instant. Chaque nouvelle tâche suit la règle de choix ci-dessus.",
+        "imageRule": "Quand le message contient des images, n'utiliser que les sources capables de les voir",
+        "hoursRule": "{{from}}–{{to}} : utiliser « {{name}} »",
+        "remove": "Supprimer cette exception",
+        "add": "Ajouter une exception",
+        "choose": "Choisir une situation",
+        "kindImage": "Le message contient des images",
+        "kindHours": "Une plage horaire",
+        "from": "De",
+        "to": "À",
+        "useRoute": "Utiliser à la place",
+        "addHours": "Ajouter",
+        "sameHour": "Le début et la fin ne peuvent pas être identiques.",
+        "full": "Jusqu'à {{count}} exceptions.",
+        "needOtherRoute": "Créez un autre itinéraire pour pouvoir y basculer selon l'heure."
       }
+    },
+    "overview": {
+      "mapTitle": "Comment les nouvelles tâches choisissent un modèle",
+      "mapDescription": "De gauche à droite : le mode, l'itinéraire emprunté et la source retenue. Cliquez sur un mode ou un itinéraire pour le modifier.",
+      "columnModes": "Modes",
+      "columnRoutes": "Itinéraires ou modèles",
+      "columnSources": "Sources",
+      "columnEmpty": "Aucun pour l'instant",
+      "openRoute": "Ouvrir l'itinéraire « {{name}} »",
+      "openMode": "Ouvrir le mode « {{name}} »",
+      "recentTitle": "Choix récents",
+      "recentEmpty": "Aucune tâche n'a encore utilisé d'itinéraire ou de mode.",
+      "keptOriginal": "Aucun modèle n'était disponible : la tâche a gardé le modèle que vous aviez choisi.",
+      "keptOriginalShort": "Votre modèle a été conservé"
     }
   }
 }

@@ -19971,6 +19971,10 @@
       "rotate": {
         "title": "Abwechselnd",
         "hint": "Jede neue Aufgabe geht an die nächste Quelle und verteilt die Last gleichmäßig."
+      },
+      "cheapest": {
+        "title": "Am günstigsten",
+        "hint": "Nutzt zuerst Abos mit verbleibendem Kontingent, ohne Zusatzkosten; der Rest folgt vom niedrigsten zum höchsten Listenpreis, Quellen ohne Preis kommen zuletzt."
       }
     },
     "picker": {
@@ -19991,7 +19995,14 @@
       "unavailable": "Nicht verbunden, oder dieses Modell ist gerade nicht wählbar",
       "limited": "Kontingent aufgebraucht",
       "limitedUntil": "Kontingent aufgebraucht bis {{reset}}",
-      "tight": "Das 5-Stunden-Kontingent ist fast voll und wird vorerst übersprungen"
+      "tight": "Das 5-Stunden-Kontingent ist fast voll und wird vorerst übersprungen",
+      "cheapest": "Niedrigster Listenpreis",
+      "cheapestFree": "Abo-Kontingent übrig, keine Zusatzkosten",
+      "noVision": "Die Nachricht enthält Bilder, und diese Quelle kann keine Bilder sehen",
+      "exceptionImage": "Die Nachricht enthält Bilder, daher wurden nur Quellen berücksichtigt, die Bilder sehen können",
+      "exceptionImageFallback": "Die Nachricht enthält Bilder, aber keine Quelle kann Bilder sehen – daher wie üblich gewählt",
+      "exceptionHours": "In diesem Zeitraum wird „{{name}}“ verwendet",
+      "separator": "; "
     },
     "settings": {
       "newRoute": "Neue Route",
@@ -20047,7 +20058,40 @@
         "effort": "Denkintensität",
         "effortDefault": "Standard des Modells",
         "effortHint": "Unterstützt das gewählte Modell diese Stufe nicht, läuft es mit seinem Standard."
+      },
+      "exceptions": {
+        "title": "Ausnahmen",
+        "hint": "Werden vor der Auswahlregel geprüft, von oben nach unten.",
+        "empty": "Noch keine Ausnahmen. Jede neue Aufgabe folgt der Auswahlregel oben.",
+        "imageRule": "Wenn die Nachricht Bilder enthält, nur Quellen verwenden, die Bilder sehen können",
+        "hoursRule": "{{from}}–{{to}}: „{{name}}“ verwenden",
+        "remove": "Diese Ausnahme entfernen",
+        "add": "Ausnahme hinzufügen",
+        "choose": "Situation auswählen",
+        "kindImage": "Die Nachricht enthält Bilder",
+        "kindHours": "Eine Tageszeit",
+        "from": "Von",
+        "to": "Bis",
+        "useRoute": "Stattdessen verwenden",
+        "addHours": "Hinzufügen",
+        "sameHour": "Beginn und Ende dürfen nicht gleich sein.",
+        "full": "Bis zu {{count}} Ausnahmen.",
+        "needOtherRoute": "Erstelle eine weitere Route, um nach Tageszeit dorthin zu wechseln."
       }
+    },
+    "overview": {
+      "mapTitle": "So wählen neue Aufgaben ein Modell",
+      "mapDescription": "Von links nach rechts: der Modus, die Route und die Quelle, bei der es landet. Klicke auf einen Modus oder eine Route, um sie zu ändern.",
+      "columnModes": "Modi",
+      "columnRoutes": "Routen oder Modelle",
+      "columnSources": "Quellen",
+      "columnEmpty": "Noch keine",
+      "openRoute": "Route „{{name}}“ öffnen",
+      "openMode": "Modus „{{name}}“ öffnen",
+      "recentTitle": "Letzte Auswahl",
+      "recentEmpty": "Noch keine Aufgabe hat eine Route oder einen Modus verwendet.",
+      "keptOriginal": "Darin war kein Modell verfügbar, daher blieb die Aufgabe beim Modell, das du gewählt hattest.",
+      "keptOriginalShort": "Dein Modell wurde beibehalten"
     }
   }
 }

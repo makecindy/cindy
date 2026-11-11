@@ -19971,6 +19971,10 @@
       "rotate": {
         "title": "Take turns",
         "hint": "Each new task goes to the next source, sharing the load evenly."
+      },
+      "cheapest": {
+        "title": "Cheapest",
+        "hint": "Uses subscriptions with quota left first, at no extra cost; the rest go from lowest to highest listed price, and sources without a price come last."
       }
     },
     "picker": {
@@ -19991,7 +19995,14 @@
       "unavailable": "Not connected, or this model cannot be selected now",
       "limited": "Out of quota",
       "limitedUntil": "Out of quota until {{reset}}",
-      "tight": "Its 5-hour quota is almost full, so it is skipped for now"
+      "tight": "Its 5-hour quota is almost full, so it is skipped for now",
+      "cheapest": "Lowest listed price",
+      "cheapestFree": "Subscription quota left, no extra cost",
+      "noVision": "The message has images and it cannot see images",
+      "exceptionImage": "The message has images, so only sources that can see images were considered",
+      "exceptionImageFallback": "The message has images, but no source can see images, so it picked as usual",
+      "exceptionHours": "During this time, it uses “{{name}}” instead",
+      "separator": "; "
     },
     "settings": {
       "newRoute": "New route",
@@ -20047,7 +20058,40 @@
         "effort": "Reasoning effort",
         "effortDefault": "Model default",
         "effortHint": "If the chosen model does not support this level, it runs at its own default."
+      },
+      "exceptions": {
+        "title": "Exceptions",
+        "hint": "Checked before the pick rule, from top to bottom.",
+        "empty": "No exceptions yet. Every new task uses the pick rule above.",
+        "imageRule": "When the message has images, use only sources that can see images",
+        "hoursRule": "{{from}}–{{to}}: use “{{name}}” instead",
+        "remove": "Remove this exception",
+        "add": "Add an exception",
+        "choose": "Choose a situation",
+        "kindImage": "The message has images",
+        "kindHours": "A time of day",
+        "from": "From",
+        "to": "To",
+        "useRoute": "Use instead",
+        "addHours": "Add",
+        "sameHour": "Start and end cannot be the same time.",
+        "full": "Up to {{count}} exceptions.",
+        "needOtherRoute": "Create another route to switch to it by time of day."
       }
+    },
+    "overview": {
+      "mapTitle": "How new tasks pick a model",
+      "mapDescription": "Left to right: the mode, the route it takes, and the source it lands on. Click a mode or route to change it.",
+      "columnModes": "Modes",
+      "columnRoutes": "Routes or models",
+      "columnSources": "Sources",
+      "columnEmpty": "None yet",
+      "openRoute": "Open route “{{name}}”",
+      "openMode": "Open mode “{{name}}”",
+      "recentTitle": "Recent choices",
+      "recentEmpty": "No task has used a route or mode yet.",
+      "keptOriginal": "Nothing in it was available, so the task kept the model you had chosen.",
+      "keptOriginalShort": "Kept your model"
     }
   }
 }

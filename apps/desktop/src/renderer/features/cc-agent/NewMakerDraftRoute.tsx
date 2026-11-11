@@ -3975,7 +3975,9 @@ export function NewMakerDraftRoute() {
             : null;
           if (pluginModelAtSend && !isCurrentDataOwner()) return;
           // 模型组：建任务前按路线的选法选一个现在能用的来源；里面都用不了或组已删除时沿用原来的模型。
-          const modelGroupRoute = modelGroupAtSend ? await resolveModelGroup(modelGroupAtSend) : null;
+          const modelGroupRoute = modelGroupAtSend
+            ? await resolveModelGroup(modelGroupAtSend, { hasImages: !!files?.some((file) => file.category === 'image') })
+            : null;
           if (modelGroupAtSend && !isCurrentDataOwner()) return;
           const routedTo: GhostModelRoute | null = pluginRoute?.outcome === 'routed'
             ? pluginRoute.route
@@ -5252,7 +5254,7 @@ export function NewMakerDraftRoute() {
         if (goalPluginModel && !isCurrentDataOwner()) return;
         // 模型组：与 handleSend 同一流程。
         const goalModelGroup = shouldEnableCollab || goalPluginModel ? null : activeModelGroup;
-        const modelGroupRoute = goalModelGroup ? await resolveModelGroup(goalModelGroup) : null;
+        const modelGroupRoute = goalModelGroup ? await resolveModelGroup(goalModelGroup, { hasImages: false }) : null;
         if (goalModelGroup && !isCurrentDataOwner()) return;
         const routedTo: GhostModelRoute | null = pluginRoute?.outcome === 'routed'
           ? pluginRoute.route

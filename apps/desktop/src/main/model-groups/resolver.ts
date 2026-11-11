@@ -2,11 +2,16 @@
  * 把选中的路线或模式解析成一个现在能用的具体模型。事实全部来自已有来源：供应商目录决定能不能选，
  * 额度总览给出订阅窗口；这里不发模型请求、不读凭证。读不到额度的来源按未知处理，不当作没用过。
  */
-import type { ProviderView } from '@cindy/model-providers';
+import { isByokProviderId, type AgentKind, type CatalogModel, type ProviderView } from '@cindy/model-providers';
 
+import { modelImageInputDefault } from '../../shared/modelImageInputOverride.js';
+import { getModelPriceQuote } from '../../shared/modelPriceQuote.js';
+import { USD_TO_CNY_FIXED_RATE, type ModelPricingCatalog } from '../../shared/regionalMoney.js';
 import {
   findModelGroupSelection,
   modelGroupCandidateKey,
+  modelGroupHoursMatch,
+  type ModelGroupAppliedException,
   type ModelGroupCandidate,
   type ModelGroupResolveRequest,
   type ModelGroupResolveResult,
@@ -29,9 +34,56 @@ export interface ModelGroupResolverDeps {
   /** 账号范围：换账号后不沿用上一个账号的轮流位置。 */
   scope(): string;
   now(): number;
+  /**
+   * 「最省钱」用的报价目录，与模型选择器显示价格同一来源：Cindy AI(xd)取网关报价，其余取参考价
+   * (注册表、连接自带价、用户自定价)。只在路线选法是 cheapest 时读取；没提供时一律按没有标价。
+   */
+  pricing?(): Promise<{ gateway: ModelPricingCatalog | null; reference: ModelPricingCatalog | null }>;
 }
 
-const agentOf = (kind: ModelGroupCandidate['agentKind']) => (kind === 'cc' ? 'claude-code' : kind);
+const agentOf = (kind: ModelGroupCandidate['agentKind']): AgentKind => (kind === 'cc' ? 'claude-code' : kind);
+
+type Pricing = Awaited<ReturnType<NonNullable<ModelGroupResolverDeps['pricing']>>>;
+
+const validPrice = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0;
+
+/**
+ * 这个来源下这个模型的标价：每百万输出 token 的美元价。订阅来源的「价值估算」不是要付的钱，按没有标价；
+ * Cindy AI 与企业 BYOK 的目录 cost 是折后的实际售价，有报价时以它为准(选择器同样如此)。
+ */
+function listedPrice(view: ProviderView | undefined, agent: AgentKind, model: CatalogModel | undefined, pricing: Pricing | null): number | null {
+  if (!view || !model || !pricing || view.access?.kind === 'subscription') return null;
+  const quote = getModelPriceQuote(view.id === 'xd' ? pricing.gateway : pricing.reference, view.id, model.id, agent);
+  if (!quote || quote.source === 'subscription-reference') return null;
+  const effective = (view.id === 'xd' || isByokProviderId(view.id)) && validPrice(model.cost?.output) ? model.cost.output : quote.outputPerMtok;
+  if (!validPrice(effective)) return null;
+  return quote.currency === 'CNY' ? effective / USD_TO_CNY_FIXED_RATE : effective;
+}
+
+function hoursTarget(route: ModelGroupRoute, localHour: number): string | null {
+  for (const item of route.exceptions ?? []) {
+    if (item.when.type === 'hours' && item.use !== 'vision' && modelGroupHoursMatch(item.when, localHour)) return item.use.routeId;
+  }
+  return null;
+}
+
+/**
+ * 时段例外：落在时段里就改走另一条路线，那条路线自己的时段例外接着看。指向的路线不存在或绕回走过的路线时，
+ * 整条改道作废，按原路线照常选。
+ */
+function followHours(start: ModelGroupRoute, config: ModelGroupsConfig, localHour: number) {
+  const visited = new Set([start.id]);
+  const via: ModelGroupAppliedException[] = [];
+  let route = start;
+  for (let targetId = hoursTarget(route, localHour); targetId; targetId = hoursTarget(route, localHour)) {
+    const next = config.routes.find((item) => item.id === targetId);
+    if (!next || visited.has(next.id)) return { route: start, via: [] };
+    visited.add(next.id);
+    via.push({ type: 'hours', viaRouteName: next.name });
+    route = next;
+  }
+  return { route, via };
+}
 
 export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
   /** 「轮流」上一次选中的候选；只在内存里，重启后从第一个开始。 */
@@ -40,6 +92,7 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
   async function facts(route: ModelGroupRoute, views: ProviderView[]): Promise<ModelGroupCandidateFacts[]> {
     const agents = deps.agents();
     const quota = await deps.quotaWindows().catch(() => new Map<string, never[]>());
+    const pricing = route.strategy === 'cheapest' && deps.pricing ? await deps.pricing().catch(() => null) : null;
     const installed = new Map<string, boolean>();
     for (const candidate of route.candidates) {
       const agent = agentOf(candidate.agentKind);
@@ -60,6 +113,9 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
         modelName,
         sourceName: view?.name ?? candidate.providerId,
         windows: windows && windows.length > 0 ? windows : null,
+        ...(route.strategy === 'cheapest' ? { price: listedPrice(view, agent, model, pricing) } : {}),
+        // 与设置里「能看图」开关同一判断：用户改过就按用户的，否则按目录声明，再按模型名推断。
+        acceptsImage: !!model && modelImageInputDefault({ ...model, imageInputDefault: undefined }, model.id) === true,
       };
     });
   }
@@ -71,34 +127,42 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
     if (!found) return { outcome: 'missing', groupName: '', trace: [] };
     const groupName = found.type === 'route' ? found.route.name : found.mode.name;
     const effort = found.type === 'mode' ? found.mode.effort : undefined;
-    let route: ModelGroupRoute;
-    if (found.type === 'route') route = found.route;
+    let base: ModelGroupRoute;
+    if (found.type === 'route') base = found.route;
     else if (found.mode.target.type === 'route') {
       const routeId = found.mode.target.routeId;
       const target = config.routes.find((item) => item.id === routeId);
       if (!target) return { outcome: 'missing', groupName, trace: [] };
-      route = target;
+      base = target;
     } else {
       const { agentKind, providerId, model } = found.mode.target;
-      route = { id: found.mode.id, name: groupName, strategy: 'order', candidates: [{ agentKind, providerId, model }] };
+      base = { id: found.mode.id, name: groupName, strategy: 'order', candidates: [{ agentKind, providerId, model }] };
     }
 
+    const now = deps.now();
+    const { route, via } = followHours(base, config, new Date(now).getHours());
+    const needsImage = request.context?.hasImages === true && !!route.exceptions?.some((item) => item.when.type === 'image');
     const views = await deps.views();
     const picked = pickModelGroupCandidate(route, await facts(route, views), {
-      now: deps.now(), lastPickedKey: lastPicked.get(`${scope}\u0000${route.id}`) ?? null,
+      now, lastPickedKey: lastPicked.get(`${scope}\u0000${route.id}`) ?? null, needsImage,
     });
+    const exceptions: ModelGroupAppliedException[] = [
+      ...via,
+      ...(picked.image ? [{ type: picked.image === 'applied' ? 'image' as const : 'imageFallback' as const }] : []),
+    ];
     if (scope !== deps.scope()) return { outcome: 'unavailable', groupName, trace: [] };
     if (picked.index === null) return { outcome: 'unavailable', groupName, trace: picked.trace };
     const candidate = route.candidates[picked.index];
     const entry = picked.trace[picked.index];
     if (!request.dryRun) lastPicked.set(`${scope}\u0000${route.id}`, modelGroupCandidateKey(candidate));
-    const base = { agentKind: candidate.agentKind, providerId: candidate.providerId, model: candidate.model };
-    const keepEffort = !!effort && isPluginModelPickerRouteAvailable({ ...base, effort, fastMode: false }, views, deps.agents());
+    const chosen = { agentKind: candidate.agentKind, providerId: candidate.providerId, model: candidate.model };
+    const keepEffort = !!effort && isPluginModelPickerRouteAvailable({ ...chosen, effort, fastMode: false }, views, deps.agents());
     return {
       outcome: 'routed', groupName,
-      route: { ...base, ...(keepEffort ? { effort } : {}) },
+      route: { ...chosen, ...(keepEffort ? { effort } : {}) },
       modelName: entry.modelName, sourceName: entry.sourceName,
       why: entry.why, quota: entry.quota, trace: picked.trace,
+      ...(exceptions.length > 0 ? { exceptions } : {}),
     };
   }
 

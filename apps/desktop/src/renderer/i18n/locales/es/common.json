@@ -20159,6 +20159,10 @@
       "rotate": {
         "title": "Por turnos",
         "hint": "Cada tarea nueva pasa a la siguiente fuente y reparte la carga."
+      },
+      "cheapest": {
+        "title": "Lo más barato",
+        "hint": "Usa primero las suscripciones con cuota disponible, sin coste adicional; el resto va del precio de lista más bajo al más alto, y las fuentes sin precio quedan al final."
       }
     },
     "picker": {
@@ -20179,7 +20183,14 @@
       "unavailable": "Sin conexión, o este modelo no se puede elegir ahora",
       "limited": "Cuota agotada",
       "limitedUntil": "Cuota agotada hasta el {{reset}}",
-      "tight": "Su cuota de 5 horas está casi llena, así que se omite por ahora"
+      "tight": "Su cuota de 5 horas está casi llena, así que se omite por ahora",
+      "cheapest": "Precio de lista más bajo",
+      "cheapestFree": "Queda cuota de suscripción, sin coste adicional",
+      "noVision": "El mensaje tiene imágenes y esta fuente no puede verlas",
+      "exceptionImage": "El mensaje tiene imágenes, así que solo se consideraron las fuentes que pueden verlas",
+      "exceptionImageFallback": "El mensaje tiene imágenes, pero ninguna fuente puede verlas, así que se eligió como siempre",
+      "exceptionHours": "En este horario usa «{{name}}»",
+      "separator": "; "
     },
     "settings": {
       "newRoute": "Nueva ruta",
@@ -20235,7 +20246,40 @@
         "effort": "Intensidad de razonamiento",
         "effortDefault": "Predeterminado del modelo",
         "effortHint": "Si el modelo elegido no admite este nivel, se ejecuta con su valor predeterminado."
+      },
+      "exceptions": {
+        "title": "Excepciones",
+        "hint": "Se comprueban antes de la regla de elección, de arriba abajo.",
+        "empty": "Aún no hay excepciones. Cada tarea nueva usa la regla de elección de arriba.",
+        "imageRule": "Cuando el mensaje tenga imágenes, usar solo fuentes que puedan verlas",
+        "hoursRule": "{{from}}–{{to}}: usar «{{name}}»",
+        "remove": "Quitar esta excepción",
+        "add": "Añadir una excepción",
+        "choose": "Elegir una situación",
+        "kindImage": "El mensaje tiene imágenes",
+        "kindHours": "Un horario",
+        "from": "Desde",
+        "to": "Hasta",
+        "useRoute": "Usar en su lugar",
+        "addHours": "Añadir",
+        "sameHour": "El inicio y el fin no pueden ser la misma hora.",
+        "full": "Hasta {{count}} excepciones.",
+        "needOtherRoute": "Crea otra ruta para poder cambiar a ella por horario."
       }
+    },
+    "overview": {
+      "mapTitle": "Cómo eligen modelo las tareas nuevas",
+      "mapDescription": "De izquierda a derecha: el modo, la ruta que sigue y la fuente a la que llega. Haz clic en un modo o una ruta para cambiarlo.",
+      "columnModes": "Modos",
+      "columnRoutes": "Rutas o modelos",
+      "columnSources": "Fuentes",
+      "columnEmpty": "Aún no hay",
+      "openRoute": "Abrir la ruta «{{name}}»",
+      "openMode": "Abrir el modo «{{name}}»",
+      "recentTitle": "Elecciones recientes",
+      "recentEmpty": "Ninguna tarea ha usado aún una ruta o un modo.",
+      "keptOriginal": "No había ningún modelo disponible, así que la tarea usó el modelo que habías elegido.",
+      "keptOriginalShort": "Se mantuvo tu modelo"
     }
   }
 }
