@@ -190,15 +190,14 @@ export class ChatBridgeToolContext {
     const selectorName = namespace === undefined ? name : namespace + '.' + name;
     const recorded = this.currentSelectors.get(`${selectorKind}\0${selectorName}`);
     if (recorded) return recorded;
-    const exact = this.chatNamesByResponseName.get(responseToolIdentity(kind, name, namespace));
-    if (exact !== undefined) return exact;
-    // Chat cannot express function vs custom, so a selector naming a different kind of tool
-    // would otherwise force it and be restored under that kind. Leave such a selector as the
-    // bare name so the provider rejects it instead of silently honouring the wrong tool.
-    const fallbackName = namespace === undefined ? name : `${namespace}__${name}`;
+    // Only declarations this turn made may answer a selector, and only under the name the Chat
+    // catalog actually advertises: the restoration map also holds replayed history and the raw
+    // fallback can differ from the clamped wire name.
+    const fallbackName = clampChatToolName(namespace === undefined ? name : `${namespace}__${name}`);
     const advertised = this.specsByChatName.get(fallbackName);
-    if (advertised !== undefined && advertised.kind !== selectorKind) return clampChatToolName(name);
-    return clampChatToolName(fallbackName);
+    if (advertised === undefined) return clampChatToolName(name);
+    if (advertised.kind !== selectorKind) return clampChatToolName(name);
+    return advertised.chatName;
   }
 
   private reserveName(preferred: string, identity: string): string {
