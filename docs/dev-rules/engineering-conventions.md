@@ -391,7 +391,7 @@ PR 门禁必须在 Windows 上用多个并行分片（当前为 4 个）完整�
 | --- | --- | --- | --- |
 | `protocol-compatibility.md` | 31 | 新记录都插在文首 | 已拆成每项能力一个文件，并由 `pnpm check:dev-docs` 守护 |
 | 大文件的 import 区 | `register.ts` 18、`mcp-providers.ts` 9、`bootstrap-electron.ts` 9 | 同一条 import 里各加一个名字，或都在末尾加一行 | 未治理 |
-| `BUILT_IN_SKILLS_BUNDLE_VERSION` | 10 | 每个改内置 Skill 的 PR 都把同一个整数加一（近 30 天 94 次） | 未治理 |
+| `BUILT_IN_SKILLS_BUNDLE_VERSION` | 10 | 每个改内置 Skill 的 PR 都把同一个整数加一（近 30 天 94 次） | 已改成基数 + 记录文件数，每次改动新增一个记录文件，由 `pnpm check:built-in-skills` 守护 |
 | `createLiziMcpProviders({ ... })` 的 `xdtHelper` | 8 | 每个新 helper 工具都往同一个 600 行的依赖对象里加属性 | 未治理 |
 | `HELPER_CATEGORY_DESCRIPTIONS` | 7 | 一个类目的说明写成一整行，增删该类目工具都改这一行 | 已改成一句一行再拼接，拼出的文字不变；新增内容单独起一行 |
 | `agent-user-parity.md`「现状台账」 | 7 | 每个 helper 工具改动都要写回同一张表，新行集中插在少数几处 | 未治理 |
