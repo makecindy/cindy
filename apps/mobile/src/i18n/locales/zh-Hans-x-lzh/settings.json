@@ -69,7 +69,8 @@
       "de": "Deutsch",
       "pt-PT": "Português (Portugal)",
       "pt-BR": "Português (Brasil)",
-      "classical": "文言"
+      "classical": "文言",
+      "ru": "Русский"
     },
     "classical": {
       "label": "简繁与文风",

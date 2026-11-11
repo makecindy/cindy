@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import { createInstance } from "i18next";
 
 import esCommon from "@/i18n/locales/es";
+import ruCommon from "@/i18n/locales/ru";
 import frCommon from "@/i18n/locales/fr";
 import deCommon from "@/i18n/locales/de";
 import ptPTCommon from "@/i18n/locales/pt-PT";
@@ -23,6 +24,7 @@ import lzhHansCommon from "@/i18n/locales/zh-Hans-x-lzh";
 import { SUPPORTED_LOCALES } from "@/i18n/locale";
 
 const CATALOGS: Record<string, unknown> = {
+  ru: ruCommon,
   en: enCommon,
   es: esCommon,
   fr: frCommon,

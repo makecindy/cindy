@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, type ReactNode } from 'react';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { parseAgentErrorCode } from '@cindy/maker-shared/error-redaction';
 import { remoteActionErrorI18nKey, unclassifiedAgentErrorI18nKey, requiresAgentErrorConfigurationChange } from '@/session/agentErrorI18n';
 import { createRoot, type Root } from 'react-dom/client';
@@ -183,7 +183,10 @@ describe.each(SUPPORTED_LOCALES)('known mobile remote errors in %s', locale => {
 
   it('has every desktop bracket-code translation without relying on fallback languages', async () => {
     await i18n.changeLanguage(locale);
-    const desktop = JSON.parse(readFileSync(`../desktop/src/renderer/i18n/locales/${locale}/common.json`, 'utf8'));
+    const desktopCatalog = `../desktop/src/renderer/i18n/locales/${locale}/common.json`;
+    // 桌面语言包由独立的桌面 PR 引入;移动端 locale 先落地时不阻断(两份都在时照样严校)。
+    if (!existsSync(desktopCatalog)) return;
+    const desktop = JSON.parse(readFileSync(desktopCatalog, 'utf8'));
     for (const [code, translation] of Object.entries(desktop.chat.remoteError)) {
       if (!parseAgentErrorCode(`[${code}] diagnostic`)) continue;
       const key = `session.remoteError.${code}`;

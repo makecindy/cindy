@@ -694,6 +694,10 @@ describe('messagePresentation', () => {
     };
 
     expect(summarizeWorkGroupPresentation(workGroup, localizerFor('en')).title).toBe('Worked for 1m 5s');
+    expect(summarizeWorkGroupPresentation(workGroup, {
+      ...localizerFor('en'),
+      formatDuration: () => '1 мин 5 с',
+    }).title).toBe('Worked for 1 мин 5 с');
     expect(summarizeWorkGroupPresentation({ ...workGroup, isStreaming: true }, localizerFor('en')).title)
       .toBe('Working…');
     expect(summarizeWorkGroupPresentation(workGroup, localizerFor('zh-CN')).title).toBe('已工作 1m 5s');

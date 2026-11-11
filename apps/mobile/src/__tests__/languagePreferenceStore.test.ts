@@ -30,7 +30,7 @@ describe('languagePreferenceStore', () => {
     await expect(readLanguagePreference()).resolves.toBe('system');
   });
 
-  it.each(['ja', 'es', 'pt-PT', 'pt-BR'] as const)('保存具体语言 %s 后读出该语言', async (locale) => {
+  it.each(['ru', 'ja', 'es', 'pt-PT', 'pt-BR'] as const)('保存具体语言 %s 后读出该语言', async (locale) => {
     await saveLanguagePreference(locale);
     await expect(readLanguagePreference()).resolves.toBe(locale);
     expect(store.get(__testing.storageKey)).toBe(locale);
