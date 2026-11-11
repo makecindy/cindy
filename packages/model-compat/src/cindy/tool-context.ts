@@ -183,6 +183,12 @@ export class ChatBridgeToolContext {
     const selectorKind = kind === 'custom' ? 'custom' : 'function';
     const recorded = this.currentSelectors.get(`${selectorKind}\0${selectorName}`);
     if (recorded) return recorded;
+    // A reserved-group selector and a bare selector that names no declaration fall through to
+    // the restoration map: those entries are what the catalog actually advertises.
+    if (reservedSelector) {
+      const bare = this.chatNamesByResponseName.get(responseToolIdentity(kind, name));
+      if (bare !== undefined) return bare;
+    }
     const exact = this.chatNamesByResponseName.get(responseToolIdentity(kind, name, namespace));
     if (exact !== undefined) return exact;
     return clampChatToolName(namespace ? `${namespace}__${name}` : name);
@@ -330,7 +336,14 @@ export class ChatBridgeToolContext {
   private recordCurrentSelectors(): void {
     for (const [identity, chatName] of this.chatNamesByResponseName) {
       const [kind, namespace, name] = identity.split('\0');
-      if (!namespace || !name) continue;
+      if (!name) continue;
+      // A bare declaration answers its own name; when a namespaced child claims the same bare
+      // name the snapshot records null, so the selector stays ambiguous instead of silently
+      // preferring whichever entry happened to be registered first.
+      if (!namespace) {
+        this.recordCurrentSelector(kind, name, chatName);
+        continue;
+      }
       // Codex accepts both the bare child name and the dotted `namespace.name` spelling for a
       // selector; index both so either choice resolves to the flattened Chat name, using the
       // same ambiguity rule for each. `exec` keeps only the dotted alias: a bare `exec` would
