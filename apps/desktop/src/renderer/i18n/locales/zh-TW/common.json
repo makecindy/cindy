@@ -1,4 +1,12 @@
 {
+  "runtimePlugins": {
+    "save": "儲存",
+    "promptUnsupported": "目前 Pi 執行位置不支援系統提示詞片段。",
+    "title": "任務插件",
+    "description": "為這個任務選擇插件。修改從下一則訊息起生效。",
+    "unsupported": "每次請求前處理僅支援本機 Pi，目前任務的引擎不支援。",
+    "failed": "無法讀取或儲存設定，請重新開啟此面板再試。"
+  },
   "sharedTaskRecovery": {
     "title": "無法在原電腦上恢復任務",
     "description": "可以選擇其他電腦或供應商，透過上下文交接繼續。原訊息保留，但切換不會移轉原電腦上的完整執行狀態。",
@@ -8048,8 +8056,18 @@
         "subscribeScheduleRunDetail": "在「前置檢查」裡選了它的自動化，執行前會先詢問它。它看得到這項自動化的名稱和指令，可以讓這次跳過或停止，但不能替你核准。",
         "subscribeRoutineRun": "可在你選定的夥伴例行任務執行前做檢查",
         "subscribeRoutineRunDetail": "在「前置檢查」裡選了它的例行任務，每次觸發後會先詢問它。它看得到例行任務的指令和觸發它的事件內容，可以讓這次跳過或停止，但不能替你核准。",
+        "systemPrompt": "可為所選任務補充系統提示詞",
+        "systemPromptDetail": "下方靜態片段只會進入選了這個插件的任務，放在 Cindy 固定提示詞之後，順序與引擎範圍依套件宣告。修改從下一則訊息起生效，出錯時依任務設定處理。",
+        "subscribeComposeContext": "可在所選任務回覆前補充資料",
+        "subscribeComposeContextDetail": "只有選了它的任務會將目前訊息交給它。回傳內容作為一般參考資料，不進入系統提示詞，也不代表主人授權。出錯時依任務設定處理。",
+        "subscribeSearchMemory": "可為所選任務提供記憶",
+        "subscribeSearchMemoryDetail": "在現有 memory_search 中合併完整項目並標明來源插件。需先啟用記憶檢索；只分享所選任務的查詢，插件失敗時保留 Cindy 自己的結果。",
+        "subscribeStartTurn": "可在選定任務的每次回覆前選擇模型",
+        "subscribeStartTurnDetail": "僅在你為任務選擇此插件時，讀取本則訊息並選擇已連接的模型、推理強度及 Fast。出錯按該任務的設定處理，不能替你批准操作。",
+        "subscribeModelRequest": "可在選定任務中處理每次模型請求",
+        "subscribeModelRequestDetail": "僅在你為任務選擇此插件時，讀取並處理傳送給模型的請求內容，調整模型和參數。目前僅支援本機 Pi；出錯按任務設定處理，不包含連接憑證。",
         "subscribeStartTask": "可為新任務選模型",
-        "subscribeStartTaskDetail": "新任務選了它提供的模型時，它會看第一則訊息，從你已連接的模型裡選一個。只選一次，任務中途不會換模型。",
+        "subscribeStartTaskDetail": "新任務選了它提供的模型時，它會看第一則訊息，從你已連接的模型裡選一個。這個節點只在第一則訊息送出前執行一次。",
         "card": "渲染訊息卡片",
         "cardExternalLink": "卡片內可宣告外鏈，經你確認後開啟瀏覽器",
         "cardExternalLinkDetail": "卡片中的連結點選後會彈出確認框，你同意後才會在系統瀏覽器中開啟；僅限 http/https 地址。",

@@ -1,11 +1,15 @@
 import { setPluginEnabled } from './pluginEnableService.js';
+import { createRuntimePluginControl } from './runtimeControl.js';
+import { createRuntimeContextProviders } from './runtimeContext.js';
+import { createStaticPromptProvider } from './staticPrompt.js';
+import { readRuntimePluginSettings, warmRuntimePluginSettings } from '../maker-host/runtime-plugin-settings.js';
 import { createGhostExecutionPipe } from './executionPipe.js';
 import { createPluginFileAccess } from '../mcp-apps/pluginFileAccess.js';
 import { ownsPersonalBuildMonitor } from '../personalBuildMonitor.js';
 import { importPickedFiles } from './pickedFiles.js';
 import { mediaTypeForLibraryPath } from './runtime/ghostFiles.js';
 import { pluginUiPromptDeclined, pluginUiPromptSuppressed, deferPluginUiPrompt, declinePluginUiPrompt } from './pluginUiPreferences.js';
-import { ghostPermissionItems } from '../../shared/ghost.js';
+import { ghostPermissionItems, declaredGhostControlPoints } from '../../shared/ghost.js';
 import { refreshPluginApps } from '../mcp-integrations/plugin-app-registry.js';
 import { revokePluginAppServers, stopPluginAppInstance } from '../mcp-apps/runtime.js';
 import { checkGhostSecret } from './runtime/ghostSecretCheck.js';
@@ -464,6 +468,7 @@ import {
   type GhostControlPointInfo,
   type GhostControlPointFailureAction,
   type GhostControlPointResult,
+  type GhostRuntimeControlPointResult,
 } from '../../shared/ghost.js';
 import { GhostPipeDispatcher } from './pipeDispatcher.js';
 import { GhostCardService, parseCardHeightReport } from './cardService.js';
@@ -3133,14 +3138,54 @@ export async function screenGhostUserMessage(
  * 插件不可用或出错时按任务的 onFailure 处理。owner 在询问期间切换时按放行收口，调用方的
  * 流程自己也会因 owner 失效而中止；网关本身异常同样按 onFailure 处理，不静默放行。
  */
+export function getGhostRuntimePluginControl(): ReturnType<typeof createRuntimePluginControl> {
+  return ghostRuntimeControl ??= createRuntimePluginControl({
+    readSettings: readRuntimePluginSettings,
+    captureOwner: () => {
+      const owner = getGhostOwnerPushStamp();
+      return () => isGhostOwnerStampCurrent(owner) && !isAppSessionBoundaryPending();
+    },
+    screen: (point, data, target, timeoutMs) => screenGhostControlPoint(point, data, target, timeoutMs),
+  });
+}
+let ghostRuntimeControl: ReturnType<typeof createRuntimePluginControl> | undefined;
+let ghostRuntimeContexts: ReturnType<typeof createRuntimeContextProviders> | undefined;
+function runtimeContextProviders() {
+  return ghostRuntimeContexts ??= createRuntimeContextProviders(getGhostRuntimePluginControl());
+}
+export function composeGhostRuntimeContext(sessionId: string, text: string | (() => string), signal?: AbortSignal): Promise<string> | undefined {
+  return runtimeContextProviders().compose(sessionId, text, signal);
+}
+export const ghostTaskSystemPrompt = createStaticPromptProvider({ readSettings: readRuntimePluginSettings,
+  find: id => findGhostNotificationTarget(id) ?? undefined });
+export function searchGhostRuntimeMemories(query: string,
+  opts: { type?: 'user' | 'feedback' | 'project' | 'reference'; limit?: number },
+  context?: { sessionId?: string }) {
+  if (!context?.sessionId) return undefined;
+  return runtimeContextProviders().search({ sessionId: context.sessionId, query, limit: opts.limit ?? 10,
+    ...(opts.type ? { type: opts.type } : {}) });
+}
+
+export function screenGhostControlPoint(
+  point: 'will-start-turn' | 'will-model-request' | 'will-compose-context' | 'will-search-memory',
+  data: GhostControlPointData,
+  target: { pluginId: string; onFailure: GhostControlPointFailureAction },
+  timeoutMs?: number,
+): Promise<GhostRuntimeControlPointResult>;
+export function screenGhostControlPoint(
+  point: Exclude<GhostControlPointId, 'will-start-turn' | 'will-model-request' | 'will-compose-context' | 'will-search-memory'>,
+  data: GhostControlPointData,
+  target: { pluginId: string; onFailure: GhostControlPointFailureAction },
+): Promise<GhostControlPointResult>;
 export async function screenGhostControlPoint(
   point: GhostControlPointId,
   data: GhostControlPointData,
   target: { pluginId: string; onFailure: GhostControlPointFailureAction },
-): Promise<GhostControlPointResult> {
+  timeoutMs?: number,
+): Promise<GhostRuntimeControlPointResult> {
   const ownerStamp = getGhostOwnerPushStamp();
   try {
-    const result = await getGhostSubscriptionGateway().screenControlPoint(point, data, target);
+    const result = await getGhostSubscriptionGateway().screenControlPoint(point, data, target, timeoutMs);
     return isGhostOwnerStampCurrent(ownerStamp) ? result : { action: 'allow' };
   } catch (err) {
     log.warn('ghost control point screen failed', {
@@ -3181,7 +3226,7 @@ export function ghostPickerModels(): GhostPickerModel[] {
 /** 某插件看到的控制节点目录(只读；不含其它插件信息)。 */
 export function ghostControlPointInfo(ghostId: string): GhostControlPointInfo[] {
   const ghost = findInstalledGhostByInstanceId(availableGhosts(), ghostId);
-  const declared = new Set(ghost?.manifest.subscribe?.hooks ?? []);
+  const declared = new Set(ghost ? declaredGhostControlPoints(ghost.manifest) : []);
   return GHOST_CONTROL_POINT_IDS.map((point) => ({
     id: point,
     actions: GHOST_CONTROL_POINTS[point].actions,
@@ -4304,7 +4349,7 @@ export function getGhostModelPicker(): GhostModelPicker {
 }
 
 /** 卡内模型下拉框回传的模型:远程位置还须是当前可选的位置。 */
-async function isPluginModelRouteAvailableNow(route: PluginModelPickerRoute): Promise<boolean> {
+export async function isPluginModelRouteAvailableNow(route: PluginModelPickerRoute): Promise<boolean> {
   const owner = activeOwnerScopeKey();
   const available = await isGhostCardModelRouteAvailable(route, {
     localViews: () => getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true }),
@@ -8920,6 +8965,7 @@ async function installRemoteGhostFile(peer: string, attachment: string, target: 
 const loadGitContextIpc = () => import('../git-context/ipc.js');
 
 export function registerGhostIpc(): void {
+  warmRuntimePluginSettings();
   registerGhostCardRemoteProvider((id) => {
     const ghost = findGhostForRemotePluginIdentity(availableGhosts(), id);
     return ghost ? { name: ghost.manifest.name, iconDataUrl: ghost.iconDataUrl } : undefined;
@@ -9599,6 +9645,8 @@ export function registerGhostIpc(): void {
   void app.whenReady().then(() => {
     bindForgePackStagingTempDir(() => app.getPath('temp'));
     onAuthStateChange(() => {
+      // Warm before publishing this owner; optional provisioning may still wait.
+      if (!isAppSessionBoundaryPending()) warmRuntimePluginSettings();
       // Login/logout, Membership switches, and refresh integration all cross
       // an auth notification boundary. Discard every short-lived Connection
       // assertion so a late request can never reuse the previous identity.
@@ -9617,6 +9665,7 @@ export function registerGhostIpc(): void {
   });
 
   stableOwnerPostCommitTask = async (reason, scope) => {
+    warmRuntimePluginSettings();
     scheduleHandoffSweep(scope);
     const outcome = await scheduleBuiltinReconcile(reason, scope);
     if (outcome === 'deferred') return outcome;

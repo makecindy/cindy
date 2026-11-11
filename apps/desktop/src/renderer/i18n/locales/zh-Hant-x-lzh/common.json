@@ -1,4 +1,12 @@
 {
+  "runtimePlugins": {
+    "save": "存之",
+    "promptUnsupported": "此 Pi 所在之處不支援系統提示詞片段。",
+    "title": "差事法器",
+    "description": "為此差事擇法器，改動自下條消息生效。",
+    "unsupported": "逐次請求前處置僅本機 Pi 可用，此差事引擎不支援。",
+    "failed": "設定未能讀取或儲存，請重開此頁再試。"
+  },
   "sharedTaskRecovery": {
     "title": "無法在原電腦上恢復任務",
     "description": "可以選擇其他電腦或供應商，透過上下文交接繼續。原訊息保留，但切換不會移轉原電腦上的完整執行狀態。",
@@ -8093,8 +8101,18 @@
         "subscribeRoutineRunDetail": "凡於「預檢」擇之之例行差事，每番觸發必先詢之。其可見差事之指令与觸發事件之內容，可令此番略過或止之，不能代君准允。",
         "subscribeScheduleRun": "可於君所擇之自動化運行前行檢",
         "subscribeScheduleRunDetail": "凡於「預檢」擇之之自動化，運行前必先詢之。其可見此自動化之名与指令，可令此番略過或止之，不能代君准允。",
+        "systemPrompt": "可為所選差事補系統提示詞",
+        "systemPromptDetail": "下列靜文唯入所選差事，置 Cindy 固定提示詞之後；次序與引擎之域依包中所載。改動自下條訊息生效，有誤依差事所設處置。",
+        "subscribeComposeContext": "可於所選差事答前補資料",
+        "subscribeComposeContextDetail": "唯所選差事交其當前消息。所返為參閱之材，不入系統提示詞，不作主人授權；有誤依差事所設處置。",
+        "subscribeSearchMemory": "可為所選差事供記憶",
+        "subscribeSearchMemoryDetail": "於既有 memory_search 合入全文，署法器之名。須先啟記憶檢索；唯交所選差事之查詢，法器失誤則留 Cindy 原果。",
+        "subscribeStartTurn": "可於所選差事每次回覆前擇模型",
+        "subscribeStartTurnDetail": "僅在差事選用此法器時，彼可閱本條訊息，擇已連之模型、思之深淺及 Fast。出錯依差事所設處理，不得代君批准操作。",
+        "subscribeModelRequest": "可處理所選差事之每次模型請求",
+        "subscribeModelRequestDetail": "僅在差事選用此法器時，彼可閱並調整模型請求之內容、模型及參數。現僅支援本機 Pi；出錯依差事所設處理，不含連接憑證。",
         "subscribeStartTask": "可為新差事擇模型",
-        "subscribeStartTaskDetail": "新任務擇其所供之模型時，彼閱首條訊息，於汝已連之模型中擇一。唯擇一次，任務中途不易模型。"
+        "subscribeStartTaskDetail": "新任務擇其所供之模型時，彼閱首條訊息，於汝已連之模型中擇一。此節唯於首條訊息發出前行一次。"
       },
       "connections": {
         "confirmTitle": "增連線位址",

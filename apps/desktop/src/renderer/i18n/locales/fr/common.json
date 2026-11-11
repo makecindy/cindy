@@ -1,4 +1,12 @@
 {
+  "runtimePlugins": {
+    "save": "Enregistrer",
+    "promptUnsupported": "Cet emplacement d’exécution de Pi ne prend pas en charge les fragments d’instructions système.",
+    "title": "Plugins de la tâche",
+    "description": "Choisissez les plugins de cette tâche. Les changements prennent effet au prochain message.",
+    "unsupported": "Le traitement de chaque requête est disponible uniquement avec Pi en local. Le moteur de cette tâche ne le prend pas en charge.",
+    "failed": "Impossible de charger ou d’enregistrer ces réglages. Rouvrez ce panneau pour réessayer."
+  },
   "sharedTaskRecovery": {
     "title": "Impossible de reprendre sur l’ordinateur d’origine",
     "description": "Choisissez un autre ordinateur ou fournisseur pour poursuivre avec un transfert de contexte. Vos messages restent, mais l’état d’exécution complet de l’ordinateur d’origine n’est pas transféré.",
@@ -8163,8 +8171,18 @@
         "subscribeScheduleRunDetail": "Les automatisations pour lesquelles tu le choisis dans Vérification préalable le consultent d’abord. Il voit leur nom et leurs instructions et peut ignorer ou arrêter cette exécution, sans rien approuver à ta place.",
         "subscribeRoutineRun": "Peut vérifier les routines choisies avant leur exécution",
         "subscribeRoutineRunDetail": "Les routines pour lesquelles tu le choisis dans Vérification préalable le consultent d’abord. Il voit leurs instructions et les événements déclencheurs et peut ignorer ou arrêter cette exécution, sans rien approuver à ta place.",
+        "systemPrompt": "Peut ajouter des instructions système aux tâches sélectionnées",
+        "systemPromptDetail": "Les textes statiques ci-dessous suivent les instructions fixes de Cindy uniquement dans les tâches où ce plugin est sélectionné. Le paquet définit l’ordre et les moteurs concernés. Les changements prennent effet au prochain message ; les erreurs suivent le réglage de la tâche.",
+        "subscribeComposeContext": "Peut ajouter des références avant les réponses des tâches sélectionnées",
+        "subscribeComposeContextDetail": "Seules les tâches sélectionnées partagent leur message actuel. Les résultats sont des références ordinaires, sans instruction système ni autorisation. Les erreurs suivent le réglage de la tâche.",
+        "subscribeSearchMemory": "Peut fournir des souvenirs aux tâches sélectionnées",
+        "subscribeSearchMemoryDetail": "Ajoute des résultats complets avec le nom du plugin à memory_search. La recherche en mémoire doit être activée. Seule la requête est partagée ; en cas d’échec, les résultats de Cindy sont conservés.",
+        "subscribeStartTurn": "Peut choisir un modèle avant chaque réponse dans les sessions sélectionnées",
+        "subscribeStartTurnDetail": "Seules les sessions où vous sélectionnez ce plugin lui transmettent le message actuel. Il peut choisir un modèle connecté, l’effort de raisonnement et Fast. Les erreurs suivent le réglage de la session ; il ne peut pas approuver d’actions à votre place.",
+        "subscribeModelRequest": "Peut traiter chaque requête au modèle dans les sessions sélectionnées",
+        "subscribeModelRequestDetail": "Seules les sessions où vous sélectionnez ce plugin lui transmettent leurs requêtes au modèle. Il peut ajuster les modèles, les paramètres et le contenu. Seul Pi local est actuellement pris en charge ; les erreurs suivent le réglage de la session. Les identifiants de connexion sont exclus.",
         "subscribeStartTask": "Peut choisir le modèle des nouvelles tâches",
-        "subscribeStartTaskDetail": "Lorsqu’une nouvelle tâche utilise un modèle qu’il propose, il lit le premier message et choisit l’un de vos modèles connectés. Il choisit une seule fois ; le modèle ne change pas pendant la tâche.",
+        "subscribeStartTaskDetail": "Lorsqu’une nouvelle tâche utilise un modèle qu’il propose, il lit le premier message et choisit l’un de vos modèles connectés. Ce point intervient uniquement avant le premier message.",
         "card": "Affiche des cartes de message",
         "cardExternalLink": "Les cartes peuvent déclarer des liens externes qui ouvrent votre navigateur après confirmation",
         "cardExternalLinkDetail": "Cliquer sur un lien de carte affiche une boîte de dialogue de confirmation ; l'URL ne s'ouvre dans le navigateur du système qu'après votre approbation. Seules les adresses http/https sont autorisées.",

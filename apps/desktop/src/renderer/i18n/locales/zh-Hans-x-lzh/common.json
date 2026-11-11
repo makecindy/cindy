@@ -1,4 +1,12 @@
 {
+  "runtimePlugins": {
+    "save": "存之",
+    "promptUnsupported": "此 Pi 所在之处不支持系统提示词片段。",
+    "title": "差事法器",
+    "description": "为此差事择法器，改动自下条消息生效。",
+    "unsupported": "逐次请求前处置仅本机 Pi 可用，此差事引擎不支持。",
+    "failed": "设置未能读取或保存，请重开此页再试。"
+  },
   "sharedTaskRecovery": {
     "title": "无法在原电脑上恢复任务",
     "description": "可以选择其他电脑或供应商，通过上下文交接继续。原消息保留，但切换不会迁移原电脑上的完整运行状态。",
@@ -8093,8 +8101,18 @@
         "subscribeRoutineRunDetail": "凡于「预检」择之之例行差事，每番触发必先询之。其可见差事之指令与触发事件之内容，可令此番略过或止之，不能代君准允。",
         "subscribeScheduleRun": "可于君所择之自动化运行前行检",
         "subscribeScheduleRunDetail": "凡于「预检」择之之自动化，运行前必先询之。其可见此自动化之名与指令，可令此番略过或止之，不能代君准允。",
+        "systemPrompt": "可为所选差事补系统提示词",
+        "systemPromptDetail": "下列静文唯入所选差事，置 Cindy 固定提示词之后；次序与引擎之域依包中所载。改动自下条消息生效，有误依差事所设处置。",
+        "subscribeComposeContext": "可于所选差事答前补资料",
+        "subscribeComposeContextDetail": "唯所选差事交其当前消息。所返为参阅之材，不入系统提示词，不作主人授权；有误依差事所设处置。",
+        "subscribeSearchMemory": "可为所选差事供记忆",
+        "subscribeSearchMemoryDetail": "于既有 memory_search 合入全文，署法器之名。须先启记忆检索；唯交所选差事之查询，法器失误则留 Cindy 原果。",
+        "subscribeStartTurn": "可于所选差事每次回复前择模型",
+        "subscribeStartTurnDetail": "仅在差事选用此法器时，彼可阅本条消息，择已连之模型、思之深浅及 Fast。出错依差事所设处理，不得代君批准操作。",
+        "subscribeModelRequest": "可处理所选差事之每次模型请求",
+        "subscribeModelRequestDetail": "仅在差事选用此法器时，彼可阅并调整模型请求之内容、模型及参数。现仅支持本机 Pi；出错依差事所设处理，不含连接凭证。",
         "subscribeStartTask": "可为新差事择模型",
-        "subscribeStartTaskDetail": "新任务择其所供之模型时，彼阅首条消息，于汝已连之模型中择一。唯择一次，任务中途不易模型。"
+        "subscribeStartTaskDetail": "新任务择其所供之模型时，彼阅首条消息，于汝已连之模型中择一。此节唯于首条消息发出前行一次。"
       },
       "connections": {
         "confirmTitle": "增连接地址",

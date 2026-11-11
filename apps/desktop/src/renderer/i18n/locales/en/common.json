@@ -1,4 +1,12 @@
 {
+  "runtimePlugins": {
+    "save": "Save",
+    "promptUnsupported": "This Pi execution location does not support system prompt fragments.",
+    "title": "Task plugins",
+    "description": "Select plugins for this task. Changes apply from your next message.",
+    "unsupported": "Per-request processing is supported only for local Pi. This task’s engine does not support it.",
+    "failed": "Could not load or save these settings. Reopen this panel to try again."
+  },
   "sharedTaskRecovery": {
     "title": "Cannot resume on the original computer",
     "description": "Choose another computer or provider to continue with a context handoff. Your messages stay, but switching does not transfer the original computer’s full running state.",
@@ -8091,8 +8099,18 @@
         "subscribeScheduleRunDetail": "Automations where you choose it under Pre-run check ask it first. It sees the automation's name and instructions and can skip or stop that run, but can't approve anything for you.",
         "subscribeRoutineRun": "Can check chosen teammate routines before they run",
         "subscribeRoutineRunDetail": "Routines where you choose it under Pre-run check ask it first. It sees the routine's instructions and the events that triggered it, and can skip or stop that run, but can't approve anything for you.",
+        "systemPrompt": "Can add system instructions to selected tasks",
+        "systemPromptDetail": "The static fragments below are added after Cindy’s fixed instructions only in tasks where you select this plugin. Order and engine scope come from the package. Changes apply from the next message; errors follow the task setting.",
+        "subscribeComposeContext": "Can add reference material before replies in selected tasks",
+        "subscribeComposeContextDetail": "Only selected tasks share their current message with this plugin. Its results are ordinary reference material, not system instructions or approval. Errors follow the task setting.",
+        "subscribeSearchMemory": "Can provide memories for selected tasks",
+        "subscribeSearchMemoryDetail": "Adds inline results with this plugin’s name to the existing memory_search tool. Memory search must be enabled. Only the selected task’s query is shared; failures keep Cindy’s results.",
+        "subscribeStartTurn": "Can choose a model before each reply in selected tasks",
+        "subscribeStartTurnDetail": "Only tasks where you select this plugin share the current message with it. It can choose a connected model, effort and Fast. Errors follow that task’s setting; it cannot approve actions for you.",
+        "subscribeModelRequest": "Can process each model request in selected tasks",
+        "subscribeModelRequestDetail": "Only tasks where you select this plugin share their model requests with it. It can adjust models, parameters and request content. Currently supported only for local Pi; errors follow the task’s setting. Connection credentials are excluded.",
         "subscribeStartTask": "Can choose the model for new tasks",
-        "subscribeStartTaskDetail": "When a new task uses a model it provides, it reads the first message and picks one of your connected models. It decides once; the model doesn’t change during the task.",
+        "subscribeStartTaskDetail": "When a new task uses a model it provides, it reads the first message and picks one of your connected models. This entry point runs only before the first message.",
         "card": "Renders message cards",
         "cardExternalLink": "Cards may declare external links that open your browser after confirmation",
         "cardExternalLinkDetail": "Clicking a card link shows a confirmation dialog; the URL opens in your system browser only after you approve. Only http/https addresses are allowed.",

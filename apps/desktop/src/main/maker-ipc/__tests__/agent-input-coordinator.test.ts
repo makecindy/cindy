@@ -3042,6 +3042,23 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.coordinator.getActiveInputClientId(sid)).toBeNull();
   });
 
+  // Runtime plugin contract, unit: skipping is a completed decision, not a
+  // dispatch failure to restore at queue head. No model request was accepted.
+  it('settles a runtime plugin skip without recovery or retrying the skipped input', async () => {
+    const h = createHarness();
+    const sid = 'runtime-plugin-skip';
+    h.sendToAgent.mockResolvedValueOnce(hostSendFailure('PLUGIN_TURN_SKIPPED', 'Skipped'));
+    h.coordinator.enqueue(sid, makeItem('skip', 'first'));
+    h.coordinator.enqueue(sid, makeItem('next', 'second'));
+    await flush();
+    const projection = latestProjection(h.projections);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1][1]).toEqual({ type: 'user', content: 'second' });
+    expect(projection.error).toBeNull();
+    expect(projection.recovery).toBeNull();
+    expect(projection.pendingQueue).toHaveLength(0);
+  });
+
   it('silently keeps a queue head when host dispatch returns SESSION_RUNNING', async () => {
     const h = createHarness();
     const sid = 'send-session-running-host-result';
