@@ -2479,7 +2479,12 @@ html[data-desktop-background='true'] .wallpaper-message-viewport [data-scroll-co
    area's color; only its 1px divider separates it (user decision, 2026-11-10). */
 html:is([data-theme='cindy-light'], [data-theme='cindy-dark'])[data-wallpaper-active='true']
   aside.bg-sidebar:not([data-sidebar-peek-drawer]) > .sidebar-frost {
-  background: transparent;
+  /* The docked sidebar normally shares the canvas veil, i.e. it is fully
+     see-through. An explicit sidebar transparency paints the tinted surface
+     back on top of it, so 0% reads as opaque chrome and 100% (= unset) keeps
+     today's behaviour. Fallback alpha 0 reproduces the current rule. */
+  background: rgb(from var(--surface-translucent-sidebar) r g b /
+    var(--sidebar-surface-alpha, 0));
 }
 /* On the desktop, the docked sidebar has the main area's hue and transparency,
    one step deeper: the same veil on the aside, a fixed shade on its frost layer

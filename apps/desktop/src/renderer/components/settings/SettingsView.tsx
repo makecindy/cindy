@@ -56,7 +56,9 @@ import { SetupMigrationSection } from './SetupMigrationSection';
 import { useAuth } from '@/contexts/AuthContext';
 import { useLocale } from '@/hooks/useLocale';
 import { useWallpaperSettings } from '@/hooks/useWallpaperSettings';
+import { useIsCindyTheme } from '@/hooks/useIsCindyTheme';
 import { isSceneWallpaper } from '@/lib/wallpaper';
+import { isSidebarTransparencyAvailable } from '@/../shared/appearanceSettings';
 import { isCustomWallpaperVideo } from '../../../shared/appearanceSettings';
 import { getLastWorkingDir, subscribeToLastWorkingDir } from '@/state/lastWorkingDir';
 import { BotsGlobalSettingsSection } from '@/features/bots/BotsGlobalSettingsSection';
@@ -115,6 +117,10 @@ export function SettingsView() {
 function SettingsViewContent() {
   const { locale } = useLocale();
   const { wallpaperId, customWallpaperUrl } = useWallpaperSettings();
+  const isCindyTheme = useIsCindyTheme();
+  // Mirrors WallpaperSection: the sidebar transparency row only mounts for the CINDY
+  // theme family with a wallpaper selected, and search must not offer a dead hit.
+  const sidebarTransparencyAvailable = isSidebarTransparencyAvailable(isCindyTheme, wallpaperId);
   const wallpaperMotionAvailable = isSceneWallpaper(wallpaperId) ||
     (wallpaperId === 'custom' && isCustomWallpaperVideo(customWallpaperUrl));
   const voiceModelSelection = useVoiceInputModelSelection();
@@ -316,6 +322,7 @@ function SettingsViewContent() {
   const searchContext = useMemo<SettingsSearchContext>(() => ({
     locale,
     wallpaperMotionAvailable,
+    sidebarTransparencyAvailable,
     region: CURRENT_CINDY_REGION,
     mode,
     membershipKind: user?.membershipKind ?? null,
@@ -336,7 +343,7 @@ function SettingsViewContent() {
       serviceMode: voiceModelSelection.selection.serviceMode,
       asrProvider: voiceModelSelection.selection.asrProvider,
     } : undefined,
-  }), [locale, wallpaperMotionAvailable, mode, user?.membershipKind, voiceModelSelection.ready, voiceModelSelection.selection, voiceRefinementEnabled, speakerFilterStatus?.supported, speakerFilterStatus?.enrolled, agentIslandEnabled, agentIslandSupported, agentIslandSoundEnabled, agentIslandLiveActivitySupported, agentIslandLiveActivity]);
+  }), [locale, wallpaperMotionAvailable, sidebarTransparencyAvailable, mode, user?.membershipKind, voiceModelSelection.ready, voiceModelSelection.selection, voiceRefinementEnabled, speakerFilterStatus?.supported, speakerFilterStatus?.enrolled, agentIslandEnabled, agentIslandSupported, agentIslandSoundEnabled, agentIslandLiveActivitySupported, agentIslandLiveActivity]);
   const requestedEntry = resolveSettingsSearchEntry(activeTab, searchParams.get('section'));
   const searchEntry = piExtensionsPanelOpen || (requestedEntry?.isVisible && !requestedEntry.isVisible(searchContext))
     ? null : requestedEntry;

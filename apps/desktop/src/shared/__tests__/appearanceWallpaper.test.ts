@@ -5,6 +5,7 @@ import {
   clampAppearanceWallpaperOverlay,
   getWallpaperVisibility,
   getBackgroundVisibility,
+  getSidebarTransparency,
 } from '../appearanceSettings';
 
 describe('wallpaper catalog compatibility', () => {
@@ -47,6 +48,20 @@ describe('wallpaper catalog compatibility', () => {
       );
     },
   );
+  it('reports the sidebar transparency the slider shows', () => {
+    // Unset means the docked sidebar shares the canvas veil, so the control starts
+    // fully see-through and only an explicit value makes it opaque.
+    expect(getSidebarTransparency(normalizeAppearanceSettings({}))).toBe(1);
+    expect(getSidebarTransparency(normalizeAppearanceSettings({ sidebarVisibility: null }))).toBe(1);
+    for (const value of [0, 0.37, 1])
+      expect(
+        getSidebarTransparency(normalizeAppearanceSettings({ sidebarVisibility: value })),
+      ).toBe(value);
+    // Out-of-range input is clamped, never surfaced raw to the control.
+    expect(
+      getSidebarTransparency(normalizeAppearanceSettings({ sidebarVisibility: 4 })),
+    ).toBe(1);
+  });
   it('accepts a managed custom MP4 and rejects video URLs outside the wallpaper scope', () => {
     const url = `cindy-media://client-wallpaper/${'a'.repeat(64)}.mp4`;
     expect(normalizeAppearanceSettings({ customWallpaperUrl: url }).customWallpaperUrl).toBe(url);
@@ -119,6 +134,7 @@ describe('wallpaper catalog compatibility', () => {
         uiSize: 18,
         codeSize: 16,
         windowZoom: 1.2,
+        sidebarVisibility: null,
       });
     },
   );

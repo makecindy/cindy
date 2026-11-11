@@ -2327,6 +2327,8 @@
         "visibilityHint": "0% oculta o papel de parede; 100% o exibe sem sobreposição.",
         "desktopVisibilityLabel": "Transparência da área de trabalho",
         "desktopVisibilityHint": "Mostra a área de trabalho e as janelas atrás da Cindy. Textos e controles permanecem nítidos.",
+        "sidebarVisibilityLabel": "Transparência da barra lateral",
+        "sidebarVisibilityHint": "0% mantém a barra lateral opaca; 100% a deixa totalmente transparente.",
         "desktopBlurLabel": "Desfoque da área de trabalho",
         "desktopBlurHint": "Desfoca a área de trabalho atrás da janela. 0 desativa; valores maiores aumentam o desfoque. Sistemas sem ajuste de intensidade usam o efeito padrão.",
         "desktopBlurSwitchHint": "Desfoca a área de trabalho atrás da janela com o efeito do sistema do Windows. Requer o Windows 11 versão 22H2 ou posterior.",

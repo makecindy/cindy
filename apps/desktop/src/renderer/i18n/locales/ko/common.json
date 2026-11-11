@@ -2259,6 +2259,8 @@
         "visibilityHint": "0%에서는 배경화면을 숨기고, 100%에서는 원본 그대로 표시합니다.",
         "desktopVisibilityLabel": "바탕 화면 투명도",
         "desktopVisibilityHint": "Cindy 뒤의 바탕 화면과 창이 비칩니다. 텍스트와 컨트롤은 선명하게 유지됩니다.",
+        "sidebarVisibilityLabel": "사이드바 투명도",
+        "sidebarVisibilityHint": "0%이면 사이드바가 완전히 불투명하고, 100%이면 완전히 비칩니다.",
         "desktopBlurLabel": "바탕 화면 흐림",
         "desktopBlurHint": "창 뒤의 바탕 화면을 흐리게 합니다. 0이면 꺼지고 값이 클수록 더 흐려집니다. 강도 조절을 지원하지 않는 시스템은 기본 효과를 사용합니다.",
         "desktopBlurSwitchHint": "Windows 시스템 효과로 창 뒤의 바탕 화면을 흐리게 합니다. Windows 11 버전 22H2 이상이 필요합니다.",

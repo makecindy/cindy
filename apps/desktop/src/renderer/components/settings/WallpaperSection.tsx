@@ -13,19 +13,23 @@ import { Switch } from '@/components/ui/switch';
 import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import { useWallpaperSettings } from '@/hooks/useWallpaperSettings';
+import { useIsCindyTheme } from '@/hooks/useIsCindyTheme';
 import { getBuiltinWallpaperPreview, isCdnWallpaper, isSceneWallpaper } from '@/lib/wallpaper';
 import {
   APPEARANCE_LIMITS,
   DEFAULT_APPEARANCE_SETTINGS,
+  isSidebarTransparencyAvailable,
   isCustomWallpaperVideo,
   RETIRED_WALLPAPER_IDS,
   SELECTABLE_WALLPAPER_IDS,
   type WallpaperId,
 } from '@/../shared/appearanceSettings';
 import { SETTINGS_HINT, SettingsBlock, SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
+import { DefaultOverrideControls } from './DefaultOverrideControls';
 
 export function WallpaperSection() {
   const { t } = useTranslation();
+  const isCindyTheme = useIsCindyTheme();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const feedbackId = useId();
@@ -51,9 +55,17 @@ export function WallpaperSection() {
     setBlur,
     previewBlur,
     setMotion,
+    sidebarVisibility,
+    sidebarTransparency,
+    setSidebarVisibility,
+    resetSidebarVisibility,
+    previewSidebarVisibility,
     resetWallpaper,
-  } = useWallpaperSettings();
-  // A retired wallpaper stays visible (and selected) only while it is in use.
+  } = useWallpaperSettings();  // A retired wallpaper stays visible (and selected) only while it is in use.
+  // The frosted sidebar is a CINDY-theme surface, and the rule this control drives
+  // only applies while a wallpaper is active; elsewhere it would persist a value with
+  // no visible effect, so the row stays hidden there.
+  const sidebarTransparencyAvailable = isSidebarTransparencyAvailable(isCindyTheme, wallpaperId);
   const retiredInUse = RETIRED_WALLPAPER_IDS.find((id) => id === wallpaperId);
   const pickerIds: readonly WallpaperId[] = retiredInUse
     ? [SELECTABLE_WALLPAPER_IDS[0], retiredInUse, ...SELECTABLE_WALLPAPER_IDS.slice(1)]
@@ -67,18 +79,23 @@ export function WallpaperSection() {
   const cancelVisibilityPreview = useCallback(() => {
     queueMicrotask(() => previewVisibility(null));
   }, [previewVisibility]);
+  const cancelSidebarVisibilityPreview = useCallback(() => {
+    queueMicrotask(() => previewSidebarVisibility(null));
+  }, [previewSidebarVisibility]);
   useEffect(() => {
     const cancelPreviews = () => {
       cancelBlurPreview();
       cancelVisibilityPreview();
+      cancelSidebarVisibilityPreview();
     };
     window.addEventListener('blur', cancelPreviews);
     return () => {
       window.removeEventListener('blur', cancelPreviews);
       previewBlur(null);
       previewVisibility(null);
+      previewSidebarVisibility(null);
     };
-  }, [cancelBlurPreview, cancelVisibilityPreview, previewBlur, previewVisibility]);
+  }, [cancelBlurPreview, cancelVisibilityPreview, cancelSidebarVisibilityPreview, previewBlur, previewVisibility, previewSidebarVisibility]);
   useEffect(() => {
     if (visibility === 0) previewBlur(null);
   }, [visibility, previewBlur]);
@@ -144,6 +161,7 @@ export function WallpaperSection() {
               wallpaperOverlay === DEFAULT_APPEARANCE_SETTINGS.wallpaperOverlay &&
               wallpaperVisibility == null &&
               wallpaperBlur == null &&
+              sidebarVisibility == null &&
               wallpaperMotion === DEFAULT_APPEARANCE_SETTINGS.wallpaperMotion)
           }
         >
@@ -439,6 +457,43 @@ export function WallpaperSection() {
               </div>
               <p id="wallpaper-blur-hint" className={SETTINGS_HINT}>
                 {t(wallpaperId === 'none' ? 'settings.appearance.wallpaper.desktopBlurHint' : 'settings.appearance.wallpaper.blurHint')}
+              </p>
+            </>
+          )}
+          {/* 独立左侧栏透明度控制：默认（未设置）就是主内容区那层共享 veil，侧栏全透；
+              显式值把带染色的面重新铺回来，0% 即完全不透明。 */}
+          {sidebarTransparencyAvailable && (
+            <>
+              <div className="flex items-center gap-3">
+                <span id={appearanceSettings.sidebarVisibility.targetId} className="shrink-0 text-12 text-[var(--settings-section-sublabel)]">
+                  {t('settings.appearance.wallpaper.sidebarVisibilityLabel')}
+                </span>
+                <Slider data-setting-id={appearanceSettings.sidebarVisibility.id}
+                  min={APPEARANCE_LIMITS.sidebarVisibility.min}
+                  max={APPEARANCE_LIMITS.sidebarVisibility.max}
+                  step={APPEARANCE_LIMITS.sidebarVisibility.step}
+                  value={[sidebarTransparency]}
+                  onValueChange={([value]) => {
+                    if (typeof value === 'number') previewSidebarVisibility(value);
+                  }}
+                  onValueCommit={([value]) => {
+                    if (typeof value === 'number') setSidebarVisibility(value);
+                  }}
+                  onPointerCancel={cancelSidebarVisibilityPreview}
+                  onLostPointerCapture={cancelSidebarVisibilityPreview}
+                  aria-label={t('settings.appearance.wallpaper.sidebarVisibilityLabel')}
+                  aria-describedby="sidebar-visibility-hint"
+                />
+                <span className="w-10 shrink-0 text-right font-mono text-12 text-[var(--settings-section-sublabel)]">
+                  {Math.round(sidebarTransparency * 100)}%
+                </span>
+                <DefaultOverrideControls
+                  isCustomized={sidebarVisibility != null}
+                  onReset={resetSidebarVisibility}
+                />
+              </div>
+              <p id="sidebar-visibility-hint" className={SETTINGS_HINT}>
+                {t('settings.appearance.wallpaper.sidebarVisibilityHint')}
               </p>
             </>
           )}

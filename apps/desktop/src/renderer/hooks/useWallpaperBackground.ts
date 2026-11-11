@@ -12,6 +12,7 @@ export function useWallpaperBackground({
   blur,
   reducedMotion,
   decodeUrl,
+  sidebarVisibility = null,
 }: {
   background: string | undefined;
   desktopBackground?: boolean;
@@ -19,6 +20,7 @@ export function useWallpaperBackground({
   blur: number;
   reducedMotion: boolean;
   decodeUrl?: string;
+  sidebarVisibility?: number | null;
 }) {
   const transitionTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const decoded = useRef(new Set<string>());
@@ -48,6 +50,13 @@ export function useWallpaperBackground({
   useLayoutEffect(() => {
     const root = document.documentElement;
     root.style.setProperty('--background-visibility', String(visibility));
+    // The control is a transparency: 0 = opaque chrome, 1 = fully see-through.
+    // The CSS variable carries the surface alpha, so invert it here.
+    if (sidebarVisibility !== null) {
+      root.style.setProperty('--sidebar-surface-alpha', String(1 - sidebarVisibility));
+    } else {
+      root.style.removeProperty('--sidebar-surface-alpha');
+    }
     const stopTransition = () => {
       clearTimeout(transitionTimer.current);
       delete root.dataset.wallpaperTransition;
@@ -115,7 +124,7 @@ export function useWallpaperBackground({
       delete root.dataset.wallpaperBlur;
       root.style.removeProperty('--app-wallpaper-blur');
     }
-  }, [background, desktopBackground, visibility, blur, reducedMotion, imageReady]);
+  }, [background, desktopBackground, visibility, blur, reducedMotion, imageReady, sidebarVisibility]);
 
   useLayoutEffect(() => {
     const root = document.documentElement;
@@ -135,6 +144,7 @@ export function useWallpaperBackground({
       root.style.removeProperty('--desktop-background-veil');
       delete root.dataset.wallpaperActive;
       root.style.removeProperty('--background-visibility');
+      root.style.removeProperty('--sidebar-surface-alpha');
       delete root.dataset.wallpaperBlur;
       delete root.dataset.wallpaperTransition;
       for (const name of [

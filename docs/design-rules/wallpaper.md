@@ -88,8 +88,14 @@ macOS passes the numeric radius to the native window backdrop. See
 [`desktop-backdrop-blur-research.md`](../desktop-backdrop-blur-research.md).
 Text and controls are never faded.
 The left task sidebar follows the same visibility and blur controls as the main area
-(user decision, 2026-11-10). Do not add a separate sidebar preference, and do not add a
-shadow to the docked sidebar (owner decision, 2026-11-10: a trialed `--shadow-menu`
+(user decision, 2026-11-10), and gains one explicit exception (user request #9859 / #9635,
+2026-11-11, superseding the earlier “do not add a separate sidebar preference” ruling):
+`sidebarVisibility` (0–1, default `null`) lets the user paint the sidebar's own
+`--surface-translucent-sidebar` tint back over the shared veil, so 0% is opaque chrome and
+100% (the default) keeps the see-through sidebar above. The row only mounts where that rule
+can take effect — the CINDY theme family with a wallpaper selected; without a wallpaper the
+sidebar keeps its own semantic tint, and other theme families paint their own chrome. Do not
+violate this by adding a shadow to the docked sidebar (owner decision, 2026-11-10: a trialed `--shadow-menu`
 edge was rejected); only its 1px divider separates it. With artwork, the docked
 sidebar paints no tint of its own and shows the same blurred canvas as the main area.
 On the desktop (user decision, 2026-11-11), the docked sidebar has the main area's hue

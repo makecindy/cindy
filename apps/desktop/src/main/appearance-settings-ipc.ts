@@ -229,6 +229,7 @@ function parsePatch(rawPatch: unknown): AppearanceOverrides {
     'desktopVisibility',
     'wallpaperBlur',
     'wallpaperMotion',
+    'sidebarVisibility',
     'appIcon',
   ]);
   for (const key of Object.keys(raw)) {
@@ -311,6 +312,17 @@ function parsePatch(rawPatch: unknown): AppearanceOverrides {
             'desktopVisibility',
             clampAppearanceWallpaperVisibility,
             APPEARANCE_LIMITS.wallpaperVisibility,
+          );
+  }
+  if ('sidebarVisibility' in raw) {
+    patch.sidebarVisibility =
+      raw.sidebarVisibility === null
+        ? null
+        : parseNumber(
+            raw.sidebarVisibility,
+            'sidebarVisibility',
+            clampAppearanceWallpaperVisibility,
+            APPEARANCE_LIMITS.sidebarVisibility,
           );
   }
   if ('wallpaperBlur' in raw) {

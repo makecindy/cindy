@@ -25,6 +25,8 @@ export interface AppearanceOverrides {
   wallpaperBlur?: number | null;
   wallpaperMotion?: WallpaperMotion;
   appIcon?: AppIcon;
+  /** Control sidebar transparency independently; 0=opaque, 1=fully transparent, null=use default. */
+  sidebarVisibility?: number | null;
 }
 
 /** macOS Dock icon choices; mark and wordmark also have light and dark artwork. */
@@ -67,6 +69,8 @@ export interface AppearanceSettings {
   appIcon: AppIcon;
   /** Read-only, host-owned media reference; never accepted by set-patch. */
   customWallpaperUrl?: string;
+  /** Independent sidebar transparency; 0=opaque, 1=fully transparent, null=use default. */
+  sidebarVisibility?: number | null;
 }
 
 /** Keep the terminal's existing platform fallbacks independent of code fonts. */
@@ -86,6 +90,7 @@ export const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {
   wallpaperMotion: 'static',
   appIcon: 'default',
   customWallpaperUrl: '',
+  sidebarVisibility: null,
 };
 
 export const APPEARANCE_LIMITS = {
@@ -96,6 +101,7 @@ export const APPEARANCE_LIMITS = {
   wallpaperOverlay: { min: 0, max: 1, step: 0.05 },
   wallpaperVisibility: { min: 0, max: 1, step: 0.01 },
   wallpaperBlur: { min: 0, max: 20, step: 1 },
+  sidebarVisibility: { min: 0, max: 1, step: 0.01 },
 } as const;
 
 /** Current picker order; saved selections also accept the hidden compatibility IDs below. */
@@ -174,6 +180,33 @@ export function getBackgroundVisibility(
   return settings.wallpaperId === 'none'
     ? clampAppearanceWallpaperVisibility(settings.desktopVisibility ?? 0)
     : getWallpaperVisibility(settings, isDark);
+}
+
+/**
+ * Whether the sidebar transparency control can take effect at all: the tinted
+ * rule it overrides only applies to the CINDY theme family with a wallpaper
+ * active. Both the settings page (mounting the row) and settings search
+ * (offering the hit) must ask this one question so they cannot drift apart.
+ */
+export function isSidebarTransparencyAvailable(
+  isCindyTheme: boolean,
+  wallpaperId: WallpaperId,
+): boolean {
+  return isCindyTheme && wallpaperId !== 'none';
+}
+
+/**
+ * Effective sidebar transparency the slider shows (0 = opaque chrome, 1 = fully
+ * see-through). Unset (`null`) means the docked sidebar shares the canvas veil,
+ * i.e. it is already fully see-through, so the control starts at 100% and only
+ * an explicit value paints the tinted surface back (see `globals.css`).
+ */
+export function getSidebarTransparency(
+  settings: Pick<AppearanceSettings, 'sidebarVisibility'>,
+): number {
+  return settings.sidebarVisibility == null
+    ? 1
+    : clampAppearanceWallpaperVisibility(settings.sidebarVisibility);
 }
 
 export function clampAppearanceWallpaperOverlay(
@@ -278,6 +311,9 @@ export function normalizeAppearanceSettings(raw: unknown): AppearanceSettings {
     ...(typeof value.desktopVisibility === 'number' && Number.isFinite(value.desktopVisibility)
       ? { desktopVisibility: clampAppearanceWallpaperVisibility(value.desktopVisibility) }
       : {}),
+    sidebarVisibility: typeof value.sidebarVisibility === 'number' && Number.isFinite(value.sidebarVisibility)
+      ? clampAppearanceWallpaperVisibility(value.sidebarVisibility)
+      : DEFAULT_APPEARANCE_SETTINGS.sidebarVisibility,
     customWallpaperUrl: normalizeCustomWallpaperUrl(value.customWallpaperUrl),
   };
 }

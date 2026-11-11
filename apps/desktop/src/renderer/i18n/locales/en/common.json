@@ -2289,6 +2289,8 @@
         "visibilityHint": "0% hides the wallpaper; 100% shows it without an overlay.",
         "desktopVisibilityLabel": "Desktop Transparency",
         "desktopVisibilityHint": "Reveal the desktop and windows behind Cindy. Text and controls stay clear.",
+        "sidebarVisibilityLabel": "Sidebar Transparency",
+        "sidebarVisibilityHint": "0% makes the sidebar opaque; 100% makes it fully transparent.",
         "desktopBlurLabel": "Desktop Blur",
         "desktopBlurHint": "Blur the desktop behind the window. 0 turns it off; higher values increase blur. Systems without adjustable blur use their default effect.",
         "desktopBlurSwitchHint": "Blur the desktop behind the window with the Windows system effect. Requires Windows 11 version 22H2 or later.",

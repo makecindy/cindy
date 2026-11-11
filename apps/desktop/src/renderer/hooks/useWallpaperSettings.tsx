@@ -20,6 +20,7 @@ import {
   normalizeCustomWallpaperUrl,
   isCustomWallpaperVideo,
   getBackgroundVisibility,
+  getSidebarTransparency,
 } from '@/../shared/appearanceSettings';
 
 import { getBuiltinWallpaperBackground } from '@/lib/wallpaper';
@@ -37,6 +38,7 @@ export interface WallpaperSettings {
   wallpaperBlur?: number | null;
   wallpaperMotion: WallpaperMotion;
   customWallpaperUrl?: string;
+  sidebarVisibility?: number | null;
 }
 
 interface WallpaperSettingsContextValue extends WallpaperSettings {
@@ -48,12 +50,18 @@ interface WallpaperSettingsContextValue extends WallpaperSettings {
   visibility: number;
   /** Last nonzero saved blur; survives settings-section remounts (default 10). */
   lastBlur: number;
+  /** Sidebar transparency actually in effect (unset means see-through chrome). */
+  sidebarTransparency: number;
   setWallpaper: (id: WallpaperId) => void;
   setVisibility: (value: number) => void;
   previewVisibility: (value: number | null) => void;
   setBlur: (value: number) => void;
   previewBlur: (value: number | null) => void;
   setMotion: (value: WallpaperMotion) => void;
+  setSidebarVisibility: (value: number) => void;
+  /** Drop the explicit override so the sidebar follows the shared veil again. */
+  resetSidebarVisibility: () => void;
+  previewSidebarVisibility: (value: number | null) => void;
   resetWallpaper: () => void;
 }
 
@@ -81,6 +89,7 @@ function pickWallpaperSettings(settings: AppearanceSettings): WallpaperSettings 
     wallpaperBlur: settings.wallpaperBlur,
     wallpaperMotion: settings.wallpaperMotion,
     customWallpaperUrl: settings.customWallpaperUrl,
+    sidebarVisibility: settings.sidebarVisibility,
   };
 }
 
@@ -96,6 +105,7 @@ export function WallpaperSettingsProvider({
   const [settings, setSettings] = useState<WallpaperSettings>(getInitialWallpaperSettings);
   const [blurPreview, setBlurPreview] = useState<number | null>(null);
   const [visibilityPreview, setVisibilityPreview] = useState<number | null>(null);
+  const [sidebarPreview, setSidebarPreview] = useState<number | null>(null);
   const [failedUrl, setFailedUrl] = useState('');
   const lastBlurRef = useRef(10);
   if (settings.wallpaperBlur) lastBlurRef.current = settings.wallpaperBlur;
@@ -108,6 +118,7 @@ export function WallpaperSettingsProvider({
   const isDarkRef = useRef(isDark);
   isDarkRef.current = isDark;
   const visibility = visibilityPreview ?? getBackgroundVisibility(settings, isDark);
+  const sidebarTransparency = sidebarPreview ?? getSidebarTransparency(settings);
   const reducedMotion = useReducedMotion();
   const imageAsset = useWallpaperAsset(settings.wallpaperId, 'image', visibility > 0);
   const videoAsset = useWallpaperAsset(
@@ -147,6 +158,7 @@ export function WallpaperSettingsProvider({
       settings.wallpaperId === 'custom' && !isCustomWallpaperVideo(customUrl)
         ? customUrl || undefined
         : undefined,
+    sidebarVisibility: sidebarPreview ?? settings.sidebarVisibility,
   });
   const settingsRef = useRef(settings);
   const confirmedRef = useRef(settings);
@@ -236,12 +248,27 @@ export function WallpaperSettingsProvider({
     },
     [patch],
   );
+  // Keyboard commit precedes change in Radix. Read the optimistic committed value
+  // synchronously so a failed save cannot leave a stale preview behind.
   const previewVisibility = useCallback((value: number | null) => {
     const next = value === null ? null : clampAppearanceWallpaperVisibility(value);
-    // Keyboard commit precedes change in Radix. Read the optimistic committed
-    // value synchronously so a failed save cannot leave a stale preview behind.
     setVisibilityPreview(next === getBackgroundVisibility(settingsRef.current, isDarkRef.current) ? null : next);
   }, []);
+  const previewSidebarVisibility = useCallback((value: number | null) => {
+    const next = value === null ? null : clampAppearanceWallpaperVisibility(value);
+    setSidebarPreview(next === getSidebarTransparency(settingsRef.current) ? null : next);
+  }, []);
+  const setSidebarVisibility = useCallback(
+    (value: number) => {
+      setSidebarPreview(null);
+      patch({ sidebarVisibility: clampAppearanceWallpaperVisibility(value) });
+    },
+    [patch],
+  );
+  const resetSidebarVisibility = useCallback(() => {
+    setSidebarPreview(null);
+    patch({ sidebarVisibility: null });
+  }, [patch]);
   const setMotion = useCallback(
     (value: WallpaperMotion) => patch({ wallpaperMotion: value }),
     [patch],
@@ -266,6 +293,7 @@ export function WallpaperSettingsProvider({
   const resetWallpaper = useCallback(() => {
     setBlurPreview(null);
     setVisibilityPreview(null);
+    setSidebarPreview(null);
     patch({
       wallpaperId: DEFAULT_APPEARANCE_SETTINGS.wallpaperId,
       wallpaperOverlay: DEFAULT_APPEARANCE_SETTINGS.wallpaperOverlay,
@@ -273,6 +301,7 @@ export function WallpaperSettingsProvider({
       desktopVisibility: null,
       wallpaperBlur: null,
       wallpaperMotion: DEFAULT_APPEARANCE_SETTINGS.wallpaperMotion,
+      sidebarVisibility: null,
     });
   }, [patch]);
 
@@ -282,6 +311,7 @@ export function WallpaperSettingsProvider({
       wallpaperBlur: blurPreview ?? settings.wallpaperBlur,
       visibility,
       lastBlur: lastBlurRef.current,
+      sidebarTransparency,
       playbackFailed: !!failedUrl && failedUrl === settings.customWallpaperUrl,
       downloadPending,
       downloadFailed,
@@ -293,6 +323,10 @@ export function WallpaperSettingsProvider({
       setBlur,
       previewBlur,
       setMotion,
+      sidebarVisibility: sidebarPreview ?? settings.sidebarVisibility,
+      setSidebarVisibility,
+      resetSidebarVisibility,
+      previewSidebarVisibility,
       resetWallpaper,
     }),
     [
@@ -308,10 +342,15 @@ export function WallpaperSettingsProvider({
       settings.wallpaperBlur,
       failedUrl,
       visibility,
+      sidebarTransparency,
       downloadPending,
       downloadFailed,
       downloadProgress,
       retryDownload,
+      sidebarPreview,
+      setSidebarVisibility,
+      resetSidebarVisibility,
+      previewSidebarVisibility,
     ],
   );
 
