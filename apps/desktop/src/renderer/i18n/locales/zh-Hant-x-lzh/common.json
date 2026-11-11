@@ -6603,8 +6603,27 @@
             "copied": "關聯碼已錄",
             "hint": "或於飛書中將關聯碼私遣予 Cindy 機器人"
           },
+          "linkedAccounts": "已繫帳號：{{count}}",
+          "connectionTenant": "所屬企業：{{tenant}}",
           "setWorkingDevice": "設為工作電腦",
-          "workingDeviceSet": "已設為工作電腦"
+          "workingDeviceSet": "已設為工作電腦",
+          "appType": {
+            "self_built": "組織自建應用",
+            "store": "商店應用"
+          },
+          "linkedBotsSummary": "已聯機器人 {{bots}} · 飛書帳號 {{accounts}}",
+          "chooseBot": "擇機器人以聯，可並用多者。",
+          "connectBot": "聯此機器人",
+          "linkAnotherAccount": "另聯飛書帳號",
+          "botFallback": "Cindy 機器人",
+          "bridgeTitle": "飛書機器人",
+          "bridgeDescription": "機器人惟轉飛書之訊於 Cindy。各飛書帳號之訊，交其工作電腦處理；差事依機器人與飛書帳號各立。",
+          "settingsTitle": "工作目錄與模型",
+          "settingsDescription": "屬爾之 Cindy 帳號與此臺電腦，不隨機器人或飛書帳號而易：諸飛書機器人共用一份。工作目錄清單亦與他渠道共用。",
+          "workingDeviceLabel": "工作電腦：{{name}}",
+          "workingDeviceThisComputer": "本機",
+          "workingDeviceUnknown": "工作電腦尚未同步",
+          "workingDeviceUnnamed": "未命名電腦"
         }
       },
       "summary": {

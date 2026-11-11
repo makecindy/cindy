@@ -6586,7 +6586,7 @@
             "unavailable": "組織未設定",
             "unavailablePersonal": "暫未開放",
             "disabled": "已停用",
-            "none": "未繫結",
+            "none": "未關聯",
             "pending": "在瀏覽器裡授權，或把關聯碼傳給飛書機器人",
             "awaiting_confirmation": "請在飛書 / Lark 裡確認更換這台電腦關聯的帳號",
             "confirmed": "{{user}} 已關聯飛書機器人",
@@ -6603,8 +6603,27 @@
             "copied": "關聯碼已複製",
             "hint": "或者在飛書裡把關聯碼私訊傳給 Cindy 機器人"
           },
+          "linkedAccounts": "已關聯帳號：{{count}}",
+          "connectionTenant": "所屬企業：{{tenant}}",
           "setWorkingDevice": "設為工作電腦",
-          "workingDeviceSet": "已設為工作電腦"
+          "workingDeviceSet": "已設為工作電腦",
+          "appType": {
+            "self_built": "組織自建應用程式",
+            "store": "商店應用程式"
+          },
+          "linkedBotsSummary": "已關聯 {{bots}} 個機器人 · {{accounts}} 個飛書帳號",
+          "chooseBot": "選擇要關聯的機器人，可以同時使用多個機器人。",
+          "connectBot": "關聯此機器人",
+          "linkAnotherAccount": "關聯其他飛書帳號",
+          "botFallback": "Cindy 機器人",
+          "bridgeTitle": "飛書機器人",
+          "bridgeDescription": "機器人只負責把飛書裡的訊息轉給 Cindy。每個飛書帳號的訊息交給它的工作電腦處理，任務按機器人和飛書帳號分開。",
+          "settingsTitle": "工作目錄與模型",
+          "settingsDescription": "屬於你的 Cindy 帳號和這臺電腦，不隨機器人或飛書帳號變化：所有飛書機器人共用同一份。工作目錄清單也與其他渠道共用。",
+          "workingDeviceLabel": "工作電腦：{{name}}",
+          "workingDeviceThisComputer": "本機",
+          "workingDeviceUnknown": "工作電腦尚未同步",
+          "workingDeviceUnnamed": "未命名電腦"
         }
       },
       "summary": {

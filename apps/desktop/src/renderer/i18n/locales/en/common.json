@@ -6646,8 +6646,27 @@
             "copied": "Link code copied",
             "hint": "Or send this code to the Cindy bot in a direct message in Feishu / Lark"
           },
+          "linkedAccounts": "Linked Accounts: {{count}}",
+          "connectionTenant": "Company: {{tenant}}",
           "setWorkingDevice": "Set as working computer",
-          "workingDeviceSet": "Working computer set"
+          "workingDeviceSet": "Working computer set",
+          "appType": {
+            "self_built": "Organization app",
+            "store": "Store app"
+          },
+          "linkedBotsSummary": "Linked bots: {{bots}} · accounts: {{accounts}}",
+          "chooseBot": "Choose a bot to link. You can use multiple bots at the same time.",
+          "connectBot": "Link This Bot",
+          "linkAnotherAccount": "Link Another Feishu Account",
+          "botFallback": "Cindy bot",
+          "bridgeTitle": "Feishu / Lark Bots",
+          "bridgeDescription": "Bots only pass your Feishu / Lark messages to Cindy. Each linked account’s messages go to its working computer, and sessions stay separate for each bot and account.",
+          "settingsTitle": "Working Directories and Models",
+          "settingsDescription": "These belong to your Cindy account on this computer, not to a bot or a Feishu / Lark account, so every Feishu / Lark bot uses the same ones. The directory list is also shared with other channels.",
+          "workingDeviceLabel": "Working computer: {{name}}",
+          "workingDeviceThisComputer": "This computer",
+          "workingDeviceUnknown": "Working computer not yet synced",
+          "workingDeviceUnnamed": "Unnamed computer"
         }
       },
       "summary": {

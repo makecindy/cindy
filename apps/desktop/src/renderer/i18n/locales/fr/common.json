@@ -6713,8 +6713,27 @@
             "copied": "Code d'association copié",
             "hint": "Ou envoyez ce code au bot Cindy en message privé dans Feishu / Lark"
           },
+          "linkedAccounts": "Comptes associés : {{count}}",
+          "connectionTenant": "Entreprise : {{tenant}}",
           "setWorkingDevice": "Définir comme ordinateur de travail",
-          "workingDeviceSet": "Ordinateur de travail défini"
+          "workingDeviceSet": "Ordinateur de travail défini",
+          "appType": {
+            "self_built": "Application de l’organisation",
+            "store": "Application de la boutique"
+          },
+          "linkedBotsSummary": "Bots liés : {{bots}} · comptes : {{accounts}}",
+          "chooseBot": "Choisissez un bot à lier. Vous pouvez utiliser plusieurs bots en même temps.",
+          "connectBot": "Lier ce bot",
+          "linkAnotherAccount": "Lier un autre compte Feishu",
+          "botFallback": "Bot Cindy",
+          "bridgeTitle": "Bots Feishu / Lark",
+          "bridgeDescription": "Les bots se contentent de transmettre vos messages Feishu / Lark à Cindy. Les messages de chaque compte lié sont traités par son ordinateur de travail, et les sessions restent séparées par bot et par compte.",
+          "settingsTitle": "Répertoires de travail et modèles",
+          "settingsDescription": "Ils dépendent de votre compte Cindy sur cet ordinateur, pas d’un bot ni d’un compte Feishu / Lark : tous les bots Feishu / Lark utilisent les mêmes. La liste des répertoires est aussi partagée avec les autres canaux.",
+          "workingDeviceLabel": "Ordinateur de travail : {{name}}",
+          "workingDeviceThisComputer": "Cet ordinateur",
+          "workingDeviceUnknown": "Ordinateur de travail pas encore synchronisé",
+          "workingDeviceUnnamed": "Ordinateur sans nom"
         }
       },
       "summary": {

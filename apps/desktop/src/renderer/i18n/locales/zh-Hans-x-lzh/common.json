@@ -6603,8 +6603,27 @@
             "copied": "关联码已录",
             "hint": "或于飞书中将关联码私遣予 Cindy 机器人"
           },
+          "linkedAccounts": "已系账号：{{count}}",
+          "connectionTenant": "所属企业：{{tenant}}",
           "setWorkingDevice": "设为工作电脑",
-          "workingDeviceSet": "已设为工作电脑"
+          "workingDeviceSet": "已设为工作电脑",
+          "appType": {
+            "self_built": "组织自建应用",
+            "store": "商店应用"
+          },
+          "linkedBotsSummary": "已联机器人 {{bots}} · 飞书账号 {{accounts}}",
+          "chooseBot": "择机器人以联，可并用多者。",
+          "connectBot": "联此机器人",
+          "linkAnotherAccount": "另联飞书账号",
+          "botFallback": "Cindy 机器人",
+          "bridgeTitle": "飞书机器人",
+          "bridgeDescription": "机器人惟转飞书之讯于 Cindy。各飞书账号之讯，交其工作电脑处理；差事依机器人与飞书账号各立。",
+          "settingsTitle": "工作目录与模型",
+          "settingsDescription": "属尔之 Cindy 账号与此台电脑，不随机器人或飞书账号而易：诸飞书机器人共用一份。工作目录清单亦与他渠道共用。",
+          "workingDeviceLabel": "工作电脑：{{name}}",
+          "workingDeviceThisComputer": "本机",
+          "workingDeviceUnknown": "工作电脑尚未同步",
+          "workingDeviceUnnamed": "未命名电脑"
         }
       },
       "summary": {

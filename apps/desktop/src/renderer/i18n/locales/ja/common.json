@@ -6603,8 +6603,27 @@
             "copied": "連携コードをコピーしました",
             "hint": "または Feishu / Lark で Cindy bot にこのコードをダイレクトメッセージで送信してください"
           },
+          "linkedAccounts": "連携済みアカウント：{{count}}",
+          "connectionTenant": "所属企業：{{tenant}}",
           "setWorkingDevice": "作業用パソコンに設定",
-          "workingDeviceSet": "作業用パソコンに設定しました"
+          "workingDeviceSet": "作業用パソコンに設定しました",
+          "appType": {
+            "self_built": "組織のカスタムアプリ",
+            "store": "ストアアプリ"
+          },
+          "linkedBotsSummary": "連携済みボット: {{bots}} · アカウント: {{accounts}}",
+          "chooseBot": "連携するボットを選んでください。複数のボットを同時に使えます。",
+          "connectBot": "このボットを連携",
+          "linkAnotherAccount": "別の Feishu アカウントを連携",
+          "botFallback": "Cindy ボット",
+          "bridgeTitle": "Feishu / Lark ボット",
+          "bridgeDescription": "ボットは Feishu / Lark のメッセージを Cindy に届けるだけです。各アカウントのメッセージはその作業用パソコンで処理され、セッションはボットとアカウントごとに分かれます。",
+          "settingsTitle": "作業ディレクトリとモデル",
+          "settingsDescription": "Cindy アカウントとこのパソコンに属する設定で、ボットや Feishu / Lark アカウントごとには変わりません。すべての Feishu / Lark ボットで共通です。ディレクトリ一覧は他のチャンネルとも共通です。",
+          "workingDeviceLabel": "作業用パソコン：{{name}}",
+          "workingDeviceThisComputer": "このパソコン",
+          "workingDeviceUnknown": "作業用パソコンはまだ同期されていません",
+          "workingDeviceUnnamed": "名前のないパソコン"
         }
       },
       "summary": {

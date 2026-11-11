@@ -6646,8 +6646,27 @@
             "copied": "Verknüpfungscode kopiert",
             "hint": "Oder sende diesen Code in Feishu / Lark per Direktnachricht an den Cindy-Bot"
           },
+          "linkedAccounts": "Verknüpfte Konten: {{count}}",
+          "connectionTenant": "Unternehmen: {{tenant}}",
           "setWorkingDevice": "Als Arbeitscomputer festlegen",
-          "workingDeviceSet": "Arbeitscomputer festgelegt"
+          "workingDeviceSet": "Arbeitscomputer festgelegt",
+          "appType": {
+            "self_built": "Organisations-App",
+            "store": "Store-App"
+          },
+          "linkedBotsSummary": "Verknüpfte Bots: {{bots}} · Konten: {{accounts}}",
+          "chooseBot": "Wähle einen Bot zum Verknüpfen. Du kannst mehrere Bots gleichzeitig verwenden.",
+          "connectBot": "Diesen Bot verknüpfen",
+          "linkAnotherAccount": "Weiteres Feishu-Konto verknüpfen",
+          "botFallback": "Cindy-Bot",
+          "bridgeTitle": "Feishu-/Lark-Bots",
+          "bridgeDescription": "Bots leiten deine Feishu-/Lark-Nachrichten nur an Cindy weiter. Die Nachrichten jedes verknüpften Kontos gehen an dessen Arbeitscomputer; Sitzungen bleiben je Bot und Konto getrennt.",
+          "settingsTitle": "Arbeitsverzeichnisse und Modelle",
+          "settingsDescription": "Sie gehören zu deinem Cindy-Konto auf diesem Computer, nicht zu einem Bot oder Feishu-/Lark-Konto. Alle Feishu-/Lark-Bots verwenden dieselben. Die Verzeichnisliste wird auch mit anderen Kanälen geteilt.",
+          "workingDeviceLabel": "Arbeitscomputer: {{name}}",
+          "workingDeviceThisComputer": "Dieser Computer",
+          "workingDeviceUnknown": "Arbeitscomputer noch nicht synchronisiert",
+          "workingDeviceUnnamed": "Unbenannter Computer"
         }
       },
       "summary": {
