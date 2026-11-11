@@ -4,14 +4,21 @@
  * The embedded registrations stay untouched; in client mode each registered
  * channel is answered by forwarding to the Host's generic route. The proxy:
  *
- * - admits the sender with the same check the embedded handler uses;
+ * - admits the sender with the entry's check: the embedded handler's, or the
+ *   registered-app-window check where the embedded handler has none;
  * - negotiates once per Host instance (manifest of channel fingerprints) and
- *   treats anything the Host does not list as UNSUPPORTED_CAPABILITY;
+ *   treats anything the Host does not list as UNSUPPORTED_CAPABILITY. Only a
+ *   definite answer is kept (a valid manifest, 404 from an older Host, another
+ *   protocol); a failed negotiation fails this call and the next call asks again;
  * - stamps every call with the instance and the account the windows currently
  *   show, so a Host that switched account rejects instead of answering;
- * - after an instance change or a lost connection re-attaches once for all
- *   waiting calls, and retries a read only when the same account and the same
- *   contract are confirmed. Writes are never replayed (none exist in batch 1a).
+ * - after a lost connection re-attaches once for all waiting calls, and retries
+ *   a read only when the same account and the same contract are confirmed.
+ *   Writes are never replayed (none exist in batch 1a);
+ * - when the launcher pinned an instance, never moves to another one: the event
+ *   stream and the dedicated routes of this window stay on the pinned instance,
+ *   so a replaced Host is CONNECTION_FAILED until the window itself is handed
+ *   over. Only an unpinned proxy learns and follows the instance.
  *
  * Client-mode difference: embedded IPC has no timeout; a proxied call aborts
  * after the entry's timeout (default HOST_IPC_DEFAULT_TIMEOUT_MS).
@@ -60,7 +67,7 @@ export interface HostIpcProxy {
   invalidate(): void;
 }
 
-/** Instance changed or the connection failed: the only failures that may re-attach. */
+/** Instance changed, the Host is stopping, or the connection failed: the only failures that may re-attach. */
 class ReattachNeeded extends Error {}
 
 interface Reply { readonly status: number; readonly body: unknown }
@@ -69,9 +76,12 @@ const unsupported = (entry: HostIpcEntry) => createIpcError(
   'UNSUPPORTED_CAPABILITY', `Capability ${entry.channel} is not supported in host client mode`,
 );
 
+const HOST_STOPPING = 'host_stopping';
+
 export function createHostIpcProxy(deps: HostIpcProxyDeps): HostIpcProxy {
   const doFetch = deps.fetch ?? fetch;
-  let instanceId: string | null = deps.instanceId ?? null;
+  const pinned = deps.instanceId ?? null;
+  let instanceId: string | null = pinned;
   let manifest: { instanceId: string; load: Promise<Map<string, string>> } | null = null;
   const mismatched = new Set<string>();
   let attaching: Promise<boolean> | null = null;
@@ -114,8 +124,18 @@ export function createHostIpcProxy(deps: HostIpcProxyDeps): HostIpcProxy {
       try {
         const reply = await post('/control/attachment', null, { timeoutMs: HOST_IPC_MANIFEST_TIMEOUT_MS });
         const body = reply.body as { protocol?: unknown; instanceId?: unknown; ready?: unknown } | null;
-        if (reply.status !== 200 || body?.protocol !== 1 || typeof body.instanceId !== 'string' || body.ready !== true) {
-          deps.log?.('Host attachment not ready', { status: reply.status });
+        if (reply.status !== 200 || body?.protocol !== 1 || typeof body.instanceId !== 'string') {
+          deps.log?.('Host attachment unavailable', { status: reply.status });
+          return false;
+        }
+        if (pinned && body.instanceId !== pinned) {
+          // Rebinding is the window's handover, not this proxy's: the rest of the
+          // window would still talk to the pinned instance.
+          deps.log?.('Host instance changed; staying on the pinned instance', { pinned, attached: body.instanceId });
+          return false;
+        }
+        if (body.ready !== true) {
+          deps.log?.('Host attachment not ready', { instanceId: body.instanceId });
           return false;
         }
         if (body.instanceId !== instanceId) { manifest = null; mismatched.clear(); }
@@ -129,26 +149,32 @@ export function createHostIpcProxy(deps: HostIpcProxyDeps): HostIpcProxy {
     return attaching;
   }
 
-  /** One negotiation per instance; any failure means "nothing supported" until the next reconnect. */
+  /**
+   * One negotiation per instance, shared by concurrent calls. A definite answer
+   * is kept until invalidate(); a failure is not, so a single timeout or drop
+   * cannot leave every channel unsupported for the life of the window.
+   */
   function negotiated(instance: string): Promise<Map<string, string>> {
     if (manifest?.instanceId === instance) return manifest.load;
     const load = (async () => {
-      let reply: Reply;
-      try {
-        reply = await post(HOST_IPC_MANIFEST_PATH, null, { timeoutMs: HOST_IPC_MANIFEST_TIMEOUT_MS, instance });
-      } catch (error) {
-        deps.log?.('Host IPC manifest unavailable', { reason: error instanceof Error ? error.message : 'unknown' });
-        return new Map<string, string>();
-      }
+      // Throws CONNECTION_TIMEOUT or ReattachNeeded; neither is a definite answer.
+      const reply = await post(HOST_IPC_MANIFEST_PATH, null, { timeoutMs: HOST_IPC_MANIFEST_TIMEOUT_MS, instance });
       const body = reply.body as { protocol?: unknown; instanceId?: unknown; entries?: unknown; error?: unknown } | null;
-      if (reply.status === 409 && body?.error === HOST_IPC_REJECTION.instanceChanged) {
-        manifest = null;
-        throw new ReattachNeeded('Host instance changed');
-      }
-      if (reply.status !== 200 || body?.protocol !== HOST_IPC_PROTOCOL || body.instanceId !== instance || !Array.isArray(body.entries)) {
-        // An older Host has no route (404): its dedicated routes keep working.
+      if (reply.status === 409 && body?.error === HOST_IPC_REJECTION.instanceChanged) throw new ReattachNeeded('Host instance changed');
+      if (reply.status === 503 && body?.error === HOST_STOPPING) throw new ReattachNeeded('Host is stopping');
+      if (reply.status === 404) {
+        // An older Host has no route: its dedicated routes keep working.
         deps.log?.('Host IPC manifest not offered', { status: reply.status });
         return new Map<string, string>();
+      }
+      if (reply.status === 200 && body?.protocol !== HOST_IPC_PROTOCOL) {
+        deps.log?.('Host IPC manifest has another protocol', { protocol: body?.protocol });
+        return new Map<string, string>();
+      }
+      if (reply.status !== 200 || body?.instanceId !== instance || !Array.isArray(body.entries)) {
+        deps.log?.('Host IPC manifest unusable', { status: reply.status });
+        if (reply.status === 401) throw createIpcError('PERMISSION_DENIED', 'The Host refused this window');
+        throw createIpcError('CONNECTION_FAILED', 'Host did not negotiate; try again');
       }
       const offered = new Map<string, string>();
       for (const item of body.entries as Array<{ channel?: unknown; fingerprint?: unknown }>) {
@@ -157,6 +183,7 @@ export function createHostIpcProxy(deps: HostIpcProxyDeps): HostIpcProxy {
       return offered;
     })();
     manifest = { instanceId: instance, load };
+    load.catch(() => { if (manifest?.load === load) manifest = null; });
     return load;
   }
 
@@ -195,6 +222,8 @@ export function createHostIpcProxy(deps: HostIpcProxyDeps): HostIpcProxy {
     switch (code) {
       case HOST_IPC_REJECTION.instanceChanged:
         throw new ReattachNeeded('Host instance changed');
+      case HOST_STOPPING:
+        throw new ReattachNeeded('Host is stopping');
       case HOST_IPC_REJECTION.ownerScopeChanged:
         // A missed auth event must not leave this window failing forever.
         void refreshOwner();
@@ -240,7 +269,8 @@ export function createHostIpcProxy(deps: HostIpcProxyDeps): HostIpcProxy {
           throw createIpcError('CONNECTION_FAILED', 'Lost the connection to the Host; try again');
         }
         const after = deps.readOwner();
-        // Same account required; generations only compare within one Host process.
+        // Same account required; generations only compare within one Host process
+        // (an unpinned proxy may have followed a replaced Host).
         const sameAccount = after.canEnterApp && after.dataOwnerId === before.owner.dataOwnerId
           && (instanceId !== before.instanceId || after.ownerGeneration === before.owner.ownerGeneration);
         if (!sameAccount) throw createIpcError('OWNER_CHANGED', 'The active account changed; try again');

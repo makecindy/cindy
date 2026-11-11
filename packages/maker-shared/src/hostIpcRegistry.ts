@@ -4,17 +4,31 @@
  *
  * Pure data and validation only: the web client, the desktop proxy and the Host
  * all load this file, and none of them may pull in Node or Electron through it.
- * Handlers are bound on the Node side (`apps/host`).
+ * Handlers are bound on the Node side (`apps/host/src/ipc-bindings/`).
+ *
+ * Entries live one family per file in `hostIpcEntries/`, listed in
+ * HOST_IPC_FAMILIES by family name; entries inside a family are sorted by
+ * channel. The registry test keeps both orders and the fingerprint snapshot
+ * sorted, so parallel changes land in different places.
  *
  * A registered entry is a long-lived wire contract. A window can be newer or
  * older than the Host it attaches to, for as long as a task keeps that Host
- * running, so:
- * - backward-compatible changes keep the channel and fingerprint;
- * - a change to arguments or result shape changes the fingerprint, and the
- *   fingerprint snapshot test fails on purpose;
- * - a breaking change takes a new channel name, and the window treats the old
- *   name as unsupported on Hosts that lack the new one.
+ * running. The fingerprint matches exactly, so:
+ * - any change to arguments or result shape, including one added optional
+ *   field, changes the fingerprint and the snapshot test fails on purpose;
+ * - such a change takes a new channel name. A window on a Host that lacks the
+ *   new name treats it as unsupported; a window that still needs the old
+ *   Hosts keeps calling the old name until they are gone;
+ * - a change of meaning without a shape change bumps `contractVersion`.
+ *
+ * Handlers receive the checked positional arguments only. Before a write
+ * channel or a long-running read is registered, the handler signature must
+ * gain a context (caller audience, ingress owner stamp, AbortSignal): today a
+ * proxy timeout or abort does not cancel the Host-side handler.
  */
+
+import { MAKER_SESSION_BACKGROUND_TASKS_IPC } from './hostIpcEntries/makerSessionBackgroundTasks.js';
+import { MAKER_SIDE_CHAT_IPC } from './hostIpcEntries/makerSideChat.js';
 
 /** Who may call an entry. Only the profile bearer (`local-api:*`) exists in batch 1a. */
 export type HostIpcAudience = 'local';
@@ -24,16 +38,25 @@ export type HostIpcAccess = 'read';
 
 /**
  * Sender admission the desktop proxy applies before forwarding. It names the
- * check the embedded handler uses, so client mode is never looser.
+ * check the embedded handler uses, or a stricter one where the embedded handler
+ * has none, so client mode is never looser.
  */
 export type HostIpcSenderKind = 'trusted-app-renderer';
 
-export type HostIpcSchema =
-  | { readonly type: 'string'; readonly nonBlank?: boolean; readonly maxLength?: number }
+export type HostIpcSchema = (
+  | {
+    readonly type: 'string'; readonly nonBlank?: boolean; readonly maxLength?: number;
+    /** Closed set of values, e.g. a TypeScript string union. */
+    readonly enum?: readonly string[];
+  }
   | { readonly type: 'number'; readonly integer?: boolean }
   | { readonly type: 'boolean' }
   | { readonly type: 'array'; readonly items: HostIpcSchema; readonly maxItems?: number }
-  | { readonly type: 'object'; readonly properties: Readonly<Record<string, HostIpcSchema>> };
+  | { readonly type: 'object'; readonly properties: Readonly<Record<string, HostIpcSchema>> }
+) & {
+  /** Object property only: may be absent (JSON drops `undefined`). */
+  readonly optional?: boolean;
+};
 
 export interface HostIpcEntry {
   readonly channel: string;
@@ -89,18 +112,16 @@ export interface HostIpcManifest {
   readonly entries: readonly { readonly channel: string; readonly fingerprint: string }[];
 }
 
-export const HOST_IPC_ENTRIES: readonly HostIpcEntry[] = [
-  {
-    // Side-chat tabs restore from this list when a task opens.
-    channel: 'maker:side-chat:list:v1',
-    contractVersion: 1,
-    audience: ['local'],
-    access: 'read',
-    sender: 'trusted-app-renderer',
-    params: [{ type: 'string', nonBlank: true }],
-    result: { type: 'array', items: { type: 'object', properties: { id: { type: 'string', nonBlank: true } } } },
-  },
-];
+/** One file per family in `hostIpcEntries/`; keys sorted (registry test). */
+export const HOST_IPC_FAMILIES: Readonly<Record<string, readonly HostIpcEntry[]>> = {
+  'maker-session-background-tasks': MAKER_SESSION_BACKGROUND_TASKS_IPC,
+  'maker-side-chat': MAKER_SIDE_CHAT_IPC,
+};
+
+const byChannel = (a: HostIpcEntry, b: HostIpcEntry) => (a.channel < b.channel ? -1 : a.channel > b.channel ? 1 : 0);
+
+/** Every registered entry, sorted by channel (the manifest order). */
+export const HOST_IPC_ENTRIES: readonly HostIpcEntry[] = Object.values(HOST_IPC_FAMILIES).flat().sort(byChannel);
 
 export function findHostIpcEntry(channel: string, entries = HOST_IPC_ENTRIES): HostIpcEntry | undefined {
   return entries.find((entry) => entry.channel === channel);
@@ -150,6 +171,7 @@ export function checkHostIpcValue(schema: HostIpcSchema, value: unknown, at = 'v
   switch (schema.type) {
     case 'string':
       if (typeof value !== 'string') return `${at} must be a string`;
+      if (schema.enum && !schema.enum.includes(value)) return `${at} is not an allowed value`;
       if (schema.nonBlank && value.trim() === '') return `${at} must not be blank`;
       if (schema.maxLength !== undefined && value.length > schema.maxLength) return `${at} is too long`;
       return null;
@@ -175,6 +197,7 @@ export function checkHostIpcValue(schema: HostIpcSchema, value: unknown, at = 'v
         if (!Object.prototype.hasOwnProperty.call(schema.properties, key)) return `${at}.${key} is not part of the contract`;
       }
       for (const [key, property] of Object.entries(schema.properties)) {
+        if (property.optional && record[key] === undefined) continue;
         const problem = checkHostIpcValue(property, record[key], `${at}.${key}`);
         if (problem) return problem;
       }

@@ -1,12 +1,15 @@
 /*
  * 测试价值
  * - 生产入口与可观察结果：createHostServer + createHostIpcRoute 的 `POST /api/ipc/<channel>` 与
- *   `POST /control/ipc-manifest`；调用方看到的状态码、拒绝码，以及处理函数是否被执行。
+ *   `POST /control/ipc-manifest`；调用方看到的状态码、拒绝码，以及处理函数是否被执行；
+ *   桌面代理 createHostIpcProxy 用真实 fetch 连真实 server + 生产绑定（createHostIpcBindings）时窗口拿到的结果。
  * - Bug／规则依据：docs/host/headless-runtime-plan.md 第 1a 批准入设计（受众先于查表、必须带实例头、
  *   合同指纹、owner 入口与出口两次比对、参数校验先于处理函数、不允许空成功）。
- * - 现有覆盖缺口：新路由；server.test.mjs 只覆盖既有专用路由的实例头。
- * - 最小失败输入：网页 cookie 调用、缺实例头、旧指纹、处理期间切账号、空白会话 id。
- * - tier：unit（真实 loopback HTTP 与内存 SQLite，无外部进程）。
+ * - 现有覆盖缺口：新路由；server.test.mjs 只覆盖既有专用路由的实例头；代理与路由各自的测试都用假对象，
+ *   路径编码、头名与信封是否对得上只靠共享常量。
+ * - 最小失败输入：网页 cookie 调用、缺实例头、旧指纹、处理期间切账号、空白会话 id、处理函数多返回一个字段、
+ *   某族绑定了别族的通道、同一通道绑定两次。
+ * - tier：unit + 进程内联调（真实 loopback HTTP 与内存 SQLite，无外部进程；真实进程见 scripts/ipc-route.e2e.mjs）。
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -18,11 +21,13 @@ import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { getTableColumns, getTableName } from 'drizzle-orm';
 import {
-  HOST_IPC_ENTRIES, checkHostIpcValue, findHostIpcEntry, hostIpcFingerprint, hostIpcPath,
+  HOST_IPC_ENTRIES, HOST_IPC_FAMILIES, checkHostIpcValue, findHostIpcEntry, hostIpcFingerprint, hostIpcPath,
 } from '@cindy/maker-shared/host-ipc-registry';
 
 import { createHostServer } from './server.mjs';
 import { createHostIpcRoute } from './ipc-route.mjs';
+import { createHostIpcBindings, createHostIpcFamilyBindings, mergeHostIpcBindings } from './ipc-bindings/index.ts';
+import { createHostIpcProxy } from '../../desktop/src/main/host-ipc-proxy.ts';
 import { createWebAuth } from './web-auth.mjs';
 import { projectHostAuthState } from './auth-state.ts';
 import { getActiveAppSession, getActiveDataOwnerPushStamp } from '../../desktop/src/main/appSessionState.ts';
@@ -36,6 +41,9 @@ const TOKEN = 'ipc-test-token';
 const CHANNEL = 'maker:side-chat:list:v1';
 const ENTRY = findHostIpcEntry(CHANNEL);
 const OWNER = { dataOwnerId: 'owner-1', ownerGeneration: 3 };
+const BACKGROUND = 'maker:session-background-tasks:list';
+/** Unit tests below bind the side-chat channel only; every other entry is declared unsupported. */
+const OTHERS = HOST_IPC_ENTRIES.map(entry => entry.channel).filter(channel => channel !== CHANNEL);
 
 async function serve(t, deps) {
   const server = createHostServer({ token: TOKEN, instanceId: 'host-a', probe: () => ({}), isOwnerReady: () => true, ...deps });
@@ -60,7 +68,7 @@ const pinned = (extra = {}) => ({ authorization: `Bearer ${TOKEN}`, 'x-cindy-hos
 test('admission runs in order and the handler only runs for an admitted call', async t => {
   let calls = 0;
   let owner = OWNER;
-  const route = createHostIpcRoute({ instanceId: 'host-a', readOwnerStamp: () => owner,
+  const route = createHostIpcRoute({ instanceId: 'host-a', readOwnerStamp: () => owner, unsupported: OTHERS,
     bindings: { [CHANNEL]: async ([id]) => { calls++; return [{ id: `${id}-child` }]; } } });
   const webAuth = createWebAuth();
   const cookie = `cindy_host_web=${webAuth.exchange(webAuth.pair())}`;
@@ -104,7 +112,7 @@ test('admission runs in order and the handler only runs for an admitted call', a
 
 test('a read that straddles an account switch is dropped, and typed errors keep their code', async t => {
   let owner = OWNER;
-  const route = createHostIpcRoute({ instanceId: 'host-a', readOwnerStamp: () => owner,
+  const route = createHostIpcRoute({ instanceId: 'host-a', readOwnerStamp: () => owner, unsupported: OTHERS,
     bindings: { [CHANNEL]: async ([id]) => {
       if (id === 'switch') { owner = { dataOwnerId: 'owner-2', ownerGeneration: 4 }; return [{ id: 'leaked' }]; }
       if (id === 'typed') throw Object.assign(new Error('[NOT_FOUND] Source task is unavailable'), { code: 'NOT_FOUND' });
@@ -123,7 +131,7 @@ test('a read that straddles an account switch is dropped, and typed errors keep 
 });
 
 test('manifest needs the bearer and the pin, lists bound entries, and an old Host answers 404', async t => {
-  const route = createHostIpcRoute({ instanceId: 'host-a', readOwnerStamp: () => OWNER,
+  const route = createHostIpcRoute({ instanceId: 'host-a', readOwnerStamp: () => OWNER, unsupported: OTHERS,
     bindings: { [CHANNEL]: () => [] } });
   const request = await serve(t, { ipcRoute: route });
   assert.equal((await request('/control/ipc-manifest', { headers: { 'x-cindy-host-instance': 'host-a' } })).status, 401);
@@ -141,9 +149,10 @@ test('manifest needs the bearer and the pin, lists bound entries, and an old Hos
 
 test('every registered entry is bound or explicitly unsupported; unsupported answers instead of empty success', async t => {
   assert.throws(() => createHostIpcRoute({ instanceId: 'h', readOwnerStamp: () => OWNER, bindings: {} }), /bound or declared unsupported/);
-  assert.throws(() => createHostIpcRoute({ instanceId: 'h', readOwnerStamp: () => OWNER,
+  assert.throws(() => createHostIpcRoute({ instanceId: 'h', readOwnerStamp: () => OWNER, unsupported: OTHERS,
     bindings: { [CHANNEL]: () => [], 'maker:nope': () => [] } }), /not a registered entry/);
-  const route = createHostIpcRoute({ instanceId: 'host-a', readOwnerStamp: () => OWNER, bindings: {}, unsupported: [CHANNEL] });
+  const route = createHostIpcRoute({ instanceId: 'host-a', readOwnerStamp: () => OWNER, bindings: {},
+    unsupported: HOST_IPC_ENTRIES.map(entry => entry.channel) });
   assert.deepEqual(route.manifest().entries, []);
   const request = await serve(t, { ipcRoute: route });
   const response = await request(hostIpcPath(CHANNEL), { headers: pinned(), body: { args: ['p'], owner: OWNER } });
@@ -180,4 +189,82 @@ test('side-chat binding returns the contract shape from a real database, unchang
   assert.equal(checkHostIpcValue(ENTRY.result, result), null);
   assert.deepEqual(JSON.parse(JSON.stringify(result)), result);
   assert.ok(HOST_IPC_ENTRIES.includes(ENTRY));
+});
+
+test('a result outside the contract is still returned, but logged as result_mismatch naming the field only', async t => {
+  const events = [];
+  const route = createHostIpcRoute({ instanceId: 'host-a', readOwnerStamp: () => OWNER, unsupported: OTHERS,
+    log: event => events.push(event), bindings: { [CHANNEL]: () => [{ id: 'child', title: 'private title' }] } });
+  const request = await serve(t, { ipcRoute: route });
+  const response = await request(hostIpcPath(CHANNEL), { headers: pinned(), body: { args: ['parent'], owner: OWNER } });
+  assert.deepEqual(response.body, { ok: true, result: [{ id: 'child', title: 'private title' }] });
+  assert.deepEqual(events.map(({ ms: _ms, ...event }) => event), [{ channel: CHANNEL, caller: 'local', outcome: 'result_mismatch',
+    detail: 'result[0].title is not part of the contract' }]);
+});
+
+test('Host bindings mirror the registry families, and the production table binds every entry once', () => {
+  const families = createHostIpcFamilyBindings({ getLiveSession: () => undefined });
+  assert.deepEqual(Object.keys(families), Object.keys(HOST_IPC_FAMILIES));
+  for (const [family, bindings] of Object.entries(families)) {
+    assert.deepEqual(Object.keys(bindings).sort(), HOST_IPC_FAMILIES[family].map(entry => entry.channel).sort(), family);
+  }
+  assert.throws(() => mergeHostIpcBindings({ a: { [CHANNEL]: () => [] }, b: { [CHANNEL]: () => [] } }), /bound twice \(again in b\)/);
+  // Every registered entry bound, none left unsupported: the route's own startup check passes.
+  assert.doesNotThrow(() => createHostIpcRoute({ instanceId: 'h', readOwnerStamp: () => OWNER,
+    bindings: createHostIpcBindings({ getLiveSession: () => undefined }) }));
+});
+
+test('desktop proxy and Host route agree over real HTTP with the production bindings', async t => {
+  const sqlite = new Database(':memory:');
+  t.after(() => sqlite.close());
+  sqlite.exec(`CREATE TABLE "${getTableName(sessions)}" (${Object.values(getTableColumns(sessions))
+    .map(column => `"${column.name}" ${column.getSQLType()}`).join(',')})`);
+  sqlite.exec(`INSERT INTO sessions(id,parent_session_id,source,status,created_at,updated_at) VALUES
+    ('child','parent','side-chat','active',1,1)`);
+  const client = createDbClientForHandle({ db: sqlite, drizzle: drizzle(sqlite) });
+  setCurrentDbClient(client, 'isolated');
+  t.after(() => clearCurrentDbClient(client));
+  const tasks = [{ taskId: 't1', taskType: 'local_bash', backgroundCommandKind: 'service', toolUseId: 'u1', title: 'dev server',
+    provider: 'claude-code', outputFile: '/tmp/t1.out' }, { taskId: 't2' }];
+  const live = { listBackgroundTasks: () => tasks, countPendingWakeContinuations: () => 1 };
+  let owner = OWNER;
+  const events = [];
+  const route = createHostIpcRoute({ instanceId: 'host-a', readOwnerStamp: () => owner, log: event => events.push(event),
+    bindings: createHostIpcBindings({ getLiveSession: id => (id === 'running' ? live : undefined) }) });
+  const server = createHostServer({ token: TOKEN, instanceId: 'host-a', probe: () => ({ runtime: { state: 'ready' } }),
+    isOwnerReady: () => true, ipcRoute: route, getAuthState: () => ({ ...owner, canEnterApp: true }) });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => server.close());
+  let view = { ...OWNER, canEnterApp: true };
+  const proxy = createHostIpcProxy({ baseUrl: `http://127.0.0.1:${server.address().port}`, token: TOKEN, instanceId: 'host-a',
+    readOwner: () => view, applyAuthState: state => { view = state; } });
+  const background = findHostIpcEntry(BACKGROUND);
+
+  assert.deepEqual(await proxy.invoke(ENTRY, ['parent']), [{ id: 'child' }]);
+  assert.deepEqual(await proxy.invoke(background, ['running']), { tasks, pendingContinuations: 1 });
+  // Embedded parity: a session this Host does not run has no background tasks.
+  assert.deepEqual(await proxy.invoke(background, ['']), { tasks: [], pendingContinuations: 0 });
+  // The Host validator's rejection reaches the window as the IPC error the renderer decodes.
+  await assert.rejects(proxy.invoke(ENTRY, ['  ']),
+    { code: 'INVALID_PARAMS', message: '[INVALID_PARAMS] argument 1 must not be blank' });
+
+  // An account boundary on the Host: this call fails, the window state is refreshed once, the next call passes.
+  owner = { ...OWNER, ownerGeneration: OWNER.ownerGeneration + 1 };
+  await assert.rejects(proxy.invoke(background, ['running']), { code: 'OWNER_CHANGED' });
+  for (let tries = 0; view.ownerGeneration !== owner.ownerGeneration && tries < 100; tries++) await new Promise(r => setTimeout(r, 10));
+  assert.equal((await proxy.invoke(background, ['running'])).pendingContinuations, 1);
+
+  // A contract the Host does not have never reaches the route.
+  const calls = events.length;
+  await assert.rejects(proxy.invoke({ ...ENTRY, contractVersion: 2 }, ['parent']), { code: 'UNSUPPORTED_CAPABILITY' });
+  assert.equal(events.length, calls);
+  assert.deepEqual([...new Set(events.map(event => event.outcome))].sort(), ['INVALID_PARAMS', 'ok', 'owner_scope_changed']);
+
+  // An older Host without the route: unsupported, not a raw error.
+  const old = createHostServer({ token: TOKEN, instanceId: 'host-old', probe: () => ({}), isOwnerReady: () => true });
+  await new Promise(resolve => old.listen(0, '127.0.0.1', resolve));
+  t.after(() => old.close());
+  const oldProxy = createHostIpcProxy({ baseUrl: `http://127.0.0.1:${old.address().port}`, token: TOKEN, instanceId: 'host-old',
+    readOwner: () => view, applyAuthState: () => undefined });
+  await assert.rejects(oldProxy.invoke(background, ['running']), { code: 'UNSUPPORTED_CAPABILITY' });
 });

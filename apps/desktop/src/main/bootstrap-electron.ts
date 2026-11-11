@@ -1333,6 +1333,7 @@ function installHostClientMode(): boolean {
   const installed = registerHostDelegatedIpc({ client: hostClient, ipcMain, assertTrusted: assertTrustedAppRendererEvent });
   // Registered channels (host-ipc-registry) use the Host's generic route, pinned
   // to the Host instance and to the account the windows show.
+  const hostIpcLog = createLogger('host-ipc');
   const ipcProxy = createHostIpcProxy({
     baseUrl: delegation.baseUrl,
     token: delegation.token,
@@ -1342,7 +1343,7 @@ function installHostClientMode(): boolean {
       return { dataOwnerId: state.dataOwnerId, ownerGeneration: state.ownerGeneration, canEnterApp: state.canEnterApp };
     },
     applyAuthState: (state) => authManager.receiveHostAuthState(state as authManager.AuthState),
-    log: (message, meta) => console.warn(`[host-ipc] ${message}`, meta ?? {}),
+    log: (message, meta) => hostIpcLog.warn(message, meta ?? {}),
   });
   const routed = registerHostIpcProxies({
     ipcMain,

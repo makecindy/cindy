@@ -60,8 +60,8 @@ import { createHostMcpRuntime } from './agent/mcp-runtime.js';
 import { createHostAgentAuth } from './agent/auth-service.js';
 import { createLogger, initLogger } from '../../desktop/src/main/logger.js';
 import { createHostIpcRoute } from './ipc-route.mjs';
+import { createHostIpcBindings } from './ipc-bindings/index.js';
 import { projectHostAuthState } from './auth-state.js';
-import { listSideChats } from '../../desktop/src/main/maker-orchestration/side-chat-list.js';
 import { createHostModelAccess } from './agent/model-access.js';
 import { MODEL_ACCESS_STATUS_CHANNEL } from '../../desktop/src/shared/modelAccess.js';
 import { createProviderCatalog } from './agent/providers.mjs';
@@ -932,12 +932,11 @@ const ipcLog = createLogger('host-ipc');
 /** Registered desktop IPC channels; local bearer callers only (see ipc-route.mjs). */
 const ipcRoute = createHostIpcRoute({
   instanceId,
-  bindings: {
-    'maker:side-chat:list:v1': ([sourceSessionId]) => listSideChats(sourceSessionId as string),
-  },
+  bindings: createHostIpcBindings({ getLiveSession: id => agentGraph?.maker.getSession(id) }),
   readOwnerStamp: getActiveDataOwnerPushStamp,
   isOwnerBoundaryPending: isAppSessionBoundaryPending,
-  log: event => ipcLog.info('ipc call', event),
+  // Every window call passes here: successes at debug, anything else stays visible.
+  log: event => (event.outcome === 'ok' ? ipcLog.debug('ipc call', event) : ipcLog.warn('ipc call', event)),
 });
 
 const serverDeps = {

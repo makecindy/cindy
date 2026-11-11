@@ -5,6 +5,11 @@
  * module binds it to Node handlers and enforces admission in a fixed order:
  * caller audience, Host instance, registration, contract fingerprint, owner,
  * arguments. Results are dropped when the owner changes while a handler runs.
+ * A result that does not match the registered shape is still returned but
+ * logged as `result_mismatch`, so a handler that quietly grows a field shows up.
+ *
+ * Handlers get the checked arguments only; a proxy timeout does not cancel
+ * them. Add a handler context before binding writes or long reads.
  *
  * Deliberately served by the HTTP server only. Device Link dispatches through
  * `service.mjs` and never reaches this table, so remote callers stay out of it
@@ -18,6 +23,7 @@ import {
   HOST_IPC_PROTOCOL,
   HOST_IPC_REJECTION,
   checkHostIpcArgs,
+  checkHostIpcValue,
   hostIpcFingerprint,
   isHostIpcOwnerStamp,
 } from '@cindy/maker-shared/host-ipc-registry';
@@ -53,7 +59,7 @@ function handlerFailure(error) {
  *   entries?: readonly import('@cindy/maker-shared/host-ipc-registry').HostIpcEntry[],
  *   readOwnerStamp: () => { dataOwnerId: string | null, ownerGeneration: number },
  *   isOwnerBoundaryPending?: () => boolean,
- *   log?: (event: { channel: string, caller: string, outcome: string, ms: number }) => void,
+ *   log?: (event: { channel: string, caller: string, outcome: string, ms: number, detail?: string }) => void,
  *   now?: () => number,
  * }} deps
  */
@@ -112,7 +118,9 @@ export function createHostIpcRoute(deps) {
     if (!egress || !sameOwner(ingress, egress)) {
       return reject(409, HOST_IPC_REJECTION.ownerScopeChanged, 'Active account changed');
     }
-    return { status: 200, body: { ok: true, result } };
+    // Names the field, never the value.
+    const mismatch = checkHostIpcValue(entry.result, result, 'result');
+    return { status: 200, body: { ok: true, result }, ...(mismatch ? { mismatch } : {}) };
   }
 
   return {
@@ -129,12 +137,13 @@ export function createHostIpcRoute(deps) {
     /** Never logs arguments or results. */
     async handle(request) {
       const started = now();
-      const response = await admit(request);
+      const { mismatch, ...response } = await admit(request);
       deps.log?.({
         channel: byChannel.has(request.channel) ? request.channel : '(unregistered)',
         caller: callerAudience(request.caller),
-        outcome: response.body.ok ? 'ok' : response.body.error.code,
+        outcome: mismatch ? 'result_mismatch' : response.body.ok ? 'ok' : response.body.error.code,
         ms: now() - started,
+        ...(mismatch ? { detail: mismatch } : {}),
       });
       return response;
     },

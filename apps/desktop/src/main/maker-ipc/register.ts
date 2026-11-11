@@ -437,6 +437,7 @@ import {
   runSessionCloseCleanup,
 } from './sessionBindingLifecycle.js';
 import { readCanonicalSessionActivity } from './sessionActivityProjection.js';
+import { snapshotSessionBackgroundTasks } from './sessionBackgroundTasksSnapshot.js';
 import {
   listAtBrowserTabs,
   parseAtContextCatalogRequest,
@@ -7381,14 +7382,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // taskUpdates 后据此补回存量任务(实时增量仍走 agent_task_update 事件流)。
   ipcMain.handle(MAKER_INVOKE.LIST_SESSION_BACKGROUND_TASKS, (_e, sessionId: unknown) => {
     if (typeof sessionId !== 'string') throwIpcError('INVALID_PARAMS', 'sessionId required');
-    const live = maker.getSession(sessionId);
     // pendingContinuations:「任务已终态、wake turn 尚未启动或仍在跑」的
     // continuation claim 数。tasks 在任务终态后立即不含该任务,renderer 的
     // 唤醒桥接对账不能拿空 tasks 当「无后续」—— 必须本字段为 0 才允许收口。
-    return {
-      tasks: live ? live.listBackgroundTasks() : [],
-      pendingContinuations: live ? live.countPendingWakeContinuations() : 0,
-    };
+    // 与 Host 共用(客户端模式经 host-ipc-registry 转给 Host)。
+    return snapshotSessionBackgroundTasks(maker.getSession(sessionId));
   });
 
   // 后台命令输出尾部(只读)。任务卡展开区据此显示「最近输出」与最后写入时间。
