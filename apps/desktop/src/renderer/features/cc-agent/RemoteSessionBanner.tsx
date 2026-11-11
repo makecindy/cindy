@@ -28,12 +28,18 @@ interface Props {
    * 有明确原因时把笼统的「重连中」替换成具体原因文案,避免无限重连横幅无法行动。
    */
   issue?: DeviceLinkConnectionIssuePayload | null;
+  /**
+   * degraded 态的出站路径诊断(#9537):仅当本机跨设备通道 origin 已确证经 Proxy 出站时非空
+   * (kind='proxy' + 脱敏地址)。帮助用户区分「对端不可达」与「本机网络 / Proxy 问题」;
+   * unknown / direct / 探测失败不展示 —— 诊断只陈述已核实的事实。
+   */
+  proxyVerdict?: DeviceLinkProxyVerdict | null;
   onResync: () => void;
   /** 仅 suspect-stall:用户手动收尾卡死的远程 turn。 */
   onFinalize?: () => void;
 }
 
-export function RemoteSessionBanner({ status, issue, onResync, onFinalize }: Props) {
+export function RemoteSessionBanner({ status, issue, proxyVerdict, onResync, onFinalize }: Props) {
   const { t } = useTranslation();
   const activeIssue = status === 'reconnecting' ? (issue ?? null) : null;
   const dotColor =
@@ -49,6 +55,10 @@ export function RemoteSessionBanner({ status, issue, onResync, onFinalize }: Pro
         : status === 'degraded'
           ? t('ccAgent.remoteSession.degraded')
           : t('ccAgent.remoteSession.suspectStall');
+  const proxyHint =
+    status === 'degraded' && proxyVerdict?.kind === 'proxy'
+      ? t('ccAgent.remoteSession.proxyHint', { proxy: proxyVerdict.proxy ?? '' })
+      : null;
   const pulse =
     !activeIssue &&
     (status === 'reconnecting' || status === 'degraded' || status === 'suspect-stall');
@@ -65,6 +75,14 @@ export function RemoteSessionBanner({ status, issue, onResync, onFinalize }: Pro
         aria-hidden
       />
       <span className="flex-1 truncate text-12 text-[var(--text-secondary)]">{label}</span>
+      {proxyHint && (
+        <span
+          className="max-w-[46%] shrink-0 truncate text-12 text-[var(--text-tertiary)]"
+          title={proxyHint}
+        >
+          {proxyHint}
+        </span>
+      )}
       {status === 'suspect-stall' && onFinalize && (
         <Button
           variant="secondary"

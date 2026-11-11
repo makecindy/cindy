@@ -3,11 +3,11 @@
  * remoteConnectionStatus.test.ts —— 远程会话连接状态派生(控制端 banner 依据)。
  * 本机链路非 online 优先级最高(reconnecting);本机在线但被控端离线 → host-offline;都在线 → connected。
  */
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { act, cleanup, renderHook } from '@testing-library/react';
 import { sharedTaskHostPeer } from '@cindy/device-link';
 
-import { deriveRemoteConnectionStatus, useRemoteSessionConnection, useDeviceLinkConnectionIssue } from '@/features/cc-agent/hooks/useRemoteSessionConnection';
+import { deriveRemoteConnectionStatus, useRemoteSessionConnection, useDeviceLinkConnectionIssue, useOutboundProxyVerdict } from '@/features/cc-agent/hooks/useRemoteSessionConnection';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import type { Session } from '@/lib/ccAgent.types';
 
@@ -67,5 +67,47 @@ describe('deriveRemoteConnectionStatus', () => {
   });
   it('本机 online + 被控端在线 → connected', () => {
     expect(deriveRemoteConnectionStatus('online', true)).toBe('connected');
+  });
+});
+
+describe('useOutboundProxyVerdict (#9537 degraded 诊断)', () => {
+  // Issue #9537:连接反复失败只说「设备无响应」,用户无法区分「对端不可达」与「本机网络 /
+  // Proxy 问题」。banner 只在 degraded 时探一次出站路径判定,且只把已确证的 kind='proxy'
+  // 当事实展示;unknown 是 fail-open 兜底(「没问出判定」≠「确认无代理」),direct / 失败
+  // 同样不提示 —— 诊断不得替用户猜。
+  it('仅确证 kind=proxy 时给出判定;unknown / 失败 / 非降级一律 null,且不降级不探测', async () => {
+    const getProxyVerdict = vi.fn(
+      async (): Promise<DeviceLinkProxyVerdict | null> => ({ kind: 'proxy', proxy: 'http://127.0.0.1:7890' }),
+    );
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: { deviceLink: { getProxyVerdict } },
+    });
+    const hook = renderHook((active: boolean) => useOutboundProxyVerdict(active), { initialProps: false });
+    await act(async () => {});
+    expect(getProxyVerdict).not.toHaveBeenCalled(); // 非 degraded 不探测
+    expect(hook.result.current).toBeNull();
+
+    hook.rerender(true);
+    await act(async () => {});
+    expect(getProxyVerdict).toHaveBeenCalledTimes(1);
+    expect(hook.result.current).toEqual({ kind: 'proxy', proxy: 'http://127.0.0.1:7890' });
+
+    // unknown(fail-open 兜底)不得当「确认走 Proxy」展示
+    getProxyVerdict.mockResolvedValue({ kind: 'unknown', proxy: null });
+    hook.rerender(false);
+    await act(async () => {});
+    expect(hook.result.current).toBeNull(); // 降级恢复即清空
+    hook.rerender(true);
+    await act(async () => {});
+    expect(hook.result.current).toBeNull();
+
+    // 探测失败静默 → null(banner 不得因诊断自身报错打扰用户)
+    getProxyVerdict.mockRejectedValue(new Error('probe failed'));
+    hook.rerender(false);
+    await act(async () => {});
+    hook.rerender(true);
+    await act(async () => {});
+    expect(hook.result.current).toBeNull();
   });
 });

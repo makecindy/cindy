@@ -65,8 +65,13 @@ import {
   type DeviceLinkPeerPathPreference,
   type DeviceLinkState,
   type DeviceLinkPeerLinksSnapshot,
+  type DeviceLinkProxyVerdict,
 } from '../../shared/deviceLinkIpc';
 import type { AgentNetRejoinOutcome } from './deviceRejoin.js';
+import {
+  probeOutboundPathFor,
+  type OutboundPathSnapshot,
+} from '../maker-host/outbound-proxy-resolver.js';
 import {
   getDeviceLinkStatus,
   getDirectDataDeviceIds,
@@ -199,6 +204,8 @@ export interface DeviceLinkIpcDeps {
   getPeerLinks(): DeviceLinkPeerLinksSnapshot;
   /** 远程连接拓扑:持久化并立即应用单台设备的 Agent-Net 选路偏好 */
   setPeerPathPreference?(deviceId: string, preference: DeviceLinkPeerPathPreference): Promise<void>;
+  /** 出站路径诊断探针(#9537):解析跨设备通道 origin 的当前代理判定,不发业务请求。 */
+  probeProxyVerdict(upstreamUrl: string): Promise<OutboundPathSnapshot | null>;
   setEnabled(enabled: boolean): Promise<void>;
   setKeepAwake(enabled: boolean): Promise<void>;
   /** 本机被移除后「重新加入」(deviceRejoin.ts)。 */
@@ -278,6 +285,7 @@ export function defaultDeps(): DeviceLinkIpcDeps {
       await setPeerPathPreference(deviceId, preference);
       setAgentNetPeerPathPreference(deviceId, preference);
     },
+    probeProxyVerdict: probeOutboundPathFor,
     setEnabled: setRemoteControlEnabled,
     setKeepAwake: setKeepAwakeEnabled,
     rejoin: rejoinThisDevice,
@@ -398,6 +406,17 @@ export async function handleSetPeerPathPreference(
   }
   await deps.setPeerPathPreference?.(id, preference);
   return { deviceId: id, preference };
+}
+
+/**
+ * 出站路径判定(#9537):按跨设备通道 origin 解析当前系统/env 代理,给渲染侧在连接
+ * 反复失败时提示「本机可能在走代理」。null = 没判定(同 origin 判定冲突 / 解析未落
+ * 快照),渲染侧按无提示处理;`unknown`(没问出来)照实透传,渲染侧不得当事实用。
+ */
+export async function handleGetProxyVerdict(deps: DeviceLinkIpcDeps): Promise<DeviceLinkProxyVerdict | null> {
+  const snap = await deps.probeProxyVerdict(resolveDeviceLinkApiBase());
+  if (!snap) return null;
+  return { kind: snap.kind, proxy: snap.proxy ?? null };
 }
 
 export function handleGetState(deps: DeviceLinkIpcDeps): DeviceLinkState {
@@ -2053,6 +2072,11 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
     requireDeviceLinkCapability();
     const p = (payload ?? {}) as { deviceId?: unknown; preference?: unknown };
     return handleSetPeerPathPreference(deps, p.deviceId, p.preference);
+  });
+  ipcMain.handle(DEVICE_LINK_INVOKE.GET_PROXY_VERDICT, (e) => {
+    // 本机只读诊断(系统/env 代理判定,不进隧道):与 GET_PEER_LINKS 同门槛。
+    assertTrustedAppRendererEvent(e);
+    return gated(() => handleGetProxyVerdict(deps))();
   });
   ipcMain.handle(DEVICE_LINK_INVOKE.RENAME_DEVICE, (_e, payload: unknown) => {
     requireDeviceLinkCapability();
