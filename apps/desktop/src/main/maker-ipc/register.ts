@@ -1,3 +1,4 @@
+import { needsSubscriptionAccountHandoff } from '../subscription-accounts/runtime.js';
 import { prepareSubscriptionAccountForSend } from '../subscription-accounts/prepareSend.js';
 import { createSchedulerQueueBridge, type SchedulerQueueBridge, type SchedulerQueuedPromptRequest, type SchedulerEnqueueResult } from './schedulerQueueBridge.js';
 import { markCindyOfficialSkills } from '../maker-host/managed-skills.js';
@@ -18962,6 +18963,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         botHiddenAt: botProfiles.hiddenAt,
         agentKind: sessions.agentKind,
         remoteHostId: sessions.remoteHostId,
+        agentDeviceId: sessions.agentDeviceId,
         clearedAt: sessions.clearedAt,
         sdkSessionId: sessions.sdkSessionId,
         contextTokens: sessions.contextTokens,
@@ -18986,6 +18988,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     hasExternalRecoveryOwner: (sessionId) =>
       isHeadlessGhostSetupTurn(sessionId) || !!bindingStore.findByTarget(sessionId),
     getSessionRow: readContextRecoverySession,
+    needsNativeSessionHandoff: (id, row) => needsSubscriptionAccountHandoff(id, row, remoteBackgroundInvoke),
     classifyCodexHistory: async (threadId) => {
       const ownerScope = captureDataOwnerBroadcastScope();
       const dbSnapshot = getCurrentDbClientSnapshot();

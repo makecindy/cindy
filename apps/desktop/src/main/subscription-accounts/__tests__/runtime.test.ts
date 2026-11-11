@@ -28,6 +28,7 @@ const h = vi.hoisted(() => ({
   importedLogin: vi.fn(),
   accountAllowed: vi.fn(),
   setLegacyPaused: vi.fn(),
+  remote: vi.fn(),
   cooling: {} as Record<string, Record<string, Record<string, number>>>,
   writeCooling: vi.fn<(cooling: Record<string, Record<string, Record<string, number>>>) => Promise<undefined>>(async () => undefined),
   clearCooling: vi.fn<(provider: string, accountId: string) => Promise<undefined>>(async () => undefined),
@@ -39,6 +40,7 @@ vi.mock('../../provider-group/coolingStore.js', () => ({
   writeSubscriptionAccountCooling: h.writeCooling,
   clearSubscriptionAccountCooling: h.clearCooling,
 }));
+vi.mock('../../device-link/index.js', () => ({ remoteBackgroundInvoke: h.remote }));
 vi.mock('../../appSessionState.js', () => ({
   activeOwnerScopeKey: () => h.owner,
   isAppSessionBoundaryPending: () => false,
@@ -95,6 +97,7 @@ vi.mock('../store.js', () => ({
 }));
 import {
   acquireSubscriptionAccount,
+  needsSubscriptionAccountHandoff as probeSubscriptionAccountHandoff,
   readSubscriptionPool,
   disconnectSubscriptionPool,
   readSubscriptionPoolUsage,
@@ -140,6 +143,7 @@ beforeEach(() => {
   h.importedLogin.mockReset().mockResolvedValue(undefined);
   h.accountAllowed.mockReset().mockReturnValue(true);
   h.setLegacyPaused.mockReset();
+  h.remote.mockReset();
   h.cooling = {};
   h.writeCooling.mockReset().mockResolvedValue(undefined);
   h.clearCooling.mockReset().mockResolvedValue(undefined);
@@ -203,6 +207,112 @@ describe('account handoff concurrency', () => {
     h.cooling = { anthropic: { second: { '': Date.now() + 60_000 } } };
     await runSubscriptionAccountCommand({ action: 'login', providerId: 'anthropic', accountId: 'second', loginKey: 'reconnect' });
     expect(h.clearCooling).toHaveBeenCalledExactlyOnceWith('anthropic', 'second');
+  });
+});
+
+// Unit, 2026-11-11 pause report: exercise the pre-send probe and real agent
+// wrapper. Earlier coverage intentionally kept paused native sessions pinned;
+// now the host must hand off first, then a fresh context may choose another account.
+const needsSubscriptionAccountHandoff = (id: string, row: Parameters<typeof probeSubscriptionAccountHandoff>[1]) => probeSubscriptionAccountHandoff(id, row, h.remote);
+
+describe('paused account next-turn handoff', () => {
+  it.each(['anthropic', 'openai'] as const)('moves a fresh %s context while preserving native history ownership', async provider => {
+    h.pools[provider] = { strategy: 'order', accounts: [account('default'), account('second')] };
+    const first = await acquireSubscriptionAccount(provider, undefined, []);
+    await first!.bind(['task:task-a', 'native:old-history']);
+    first!.release();
+    h.pools[provider]!.accounts[0].paused = true;
+    expect(await needsSubscriptionAccountHandoff('task-a', { providerId: provider, agentKind: provider === 'anthropic' ? 'cc' : 'codex', sdkSessionId: 'old-history' })).toBe(true);
+    const next = await acquireSubscriptionAccount(provider, undefined, ['task:task-a'], false, { resuming: false });
+    expect(next!.account.configDir).toBe(`${provider}/second`);
+    await next!.bind(['task:task-a', 'native:new-history']);
+    expect(h.bindings.get('native:old-history')?.accountId).toBe('default');
+    expect(h.bindings.get('task:task-a')?.accountId).toBe('second');
+    next!.release();
+    h.pools[provider]!.accounts[1].paused = true;
+    await expect(needsSubscriptionAccountHandoff('task-a', { providerId: provider, agentKind: provider === 'anthropic' ? 'cc' : 'codex', sdkSessionId: 'new-history' })).rejects.toThrow('No subscription account');
+  });
+
+  it('checks the executing computer for a paused remote task and leaves shared providers alone', async () => {
+    h.remote.mockResolvedValueOnce({ ok: true, result: { providerId: 'anthropic', state: 'bound',
+      account: { isDefault: false, number: 2, paused: true, status: 'ready' } } })
+      .mockResolvedValueOnce({ ok: true, result: { providerId: 'anthropic', model: 'claude-sonnet', available: true } });
+    const row = { providerId: 'anthropic', model: 'claude-sonnet', agentKind: 'cc', sdkSessionId: 'remote-native', agentDeviceId: 'my-other-computer' };
+    expect(await needsSubscriptionAccountHandoff('task', row)).toBe(true);
+    expect(h.remote.mock.calls[0][2]).toEqual([{ action: 'session', providerId: 'anthropic', nativeSessionId: 'remote-native' }]);
+    expect(h.bindings.size).toBe(0);
+    h.remote.mockClear();
+    expect(await needsSubscriptionAccountHandoff('task', { ...row, agentDeviceId: 'share:someone' })).toBe(false);
+    expect(h.remote).not.toHaveBeenCalled();
+  });
+
+  // Review regressions: replacement is a new authorization route, and remote
+  // readiness must use the requested model's bucket rather than generic status.
+  it('checks imported replacement permissions as a new route', async () => {
+    h.pools.openai = { strategy: 'order', accounts: [{ ...account('default'), paused: true }, account('blocked'), account('allowed')], legacyCodexAccounts: { 'old-blocked': 'blocked' } };
+    h.bindings.set('task:paused', { providerId: 'openai', accountId: 'default' });
+    h.accountAllowed.mockImplementation((id, model, options) => id !== 'old-blocked' || model !== 'gpt-6' || !options.newRoute);
+    const next = await acquireSubscriptionAccount('openai', 'gpt-6', ['task:paused'], false, { resuming: false });
+    expect(next!.account.configDir).toBe('openai/allowed');
+    expect(h.accountAllowed).toHaveBeenCalledWith('old-blocked', 'gpt-6', expect.objectContaining({ newRoute: true }));
+    next!.release();
+  });
+
+  // Standard: old controller-side status checks missed remote new-route grants.
+  // Exercise the existing executor availability predicate, including quota buckets.
+  it.each([
+    { limited: false, allowed: true },
+    { limited: true, allowed: true },
+    { limited: false, allowed: false },
+  ])('uses executor quota and permissions before handoff (%j)', async ({ limited, allowed }) => {
+    const model = 'gpt-5.3-codex-spark';
+    const bucket = (usedPercent: number, limitName: string) => ({ limitName, updatedAt: Date.now(), primary: { usedPercent, windowMinutes: 300, resetsAt: Date.now() / 1000 + 3600 }, secondary: null });
+    h.pools.openai = { strategy: 'order', accounts: [{ ...account('default'), paused: true }, account('imported')], legacyCodexAccounts: { 'old-imported': 'imported' } };
+    h.usage.mockResolvedValue({ codexUsage: { appServerBuckets: { codex: bucket(limited ? 5 : 100, 'Codex'), spark: bucket(limited ? 100 : 5, 'GPT-5.3-Codex-Spark') }, webSnapshot: null } });
+    h.accountAllowed.mockReturnValue(allowed);
+    h.remote.mockResolvedValueOnce({ ok: true, result: { providerId: 'openai', state: 'bound', account: { isDefault: false, number: 1, paused: true, status: 'ready' } } })
+      .mockImplementationOnce(async () => ({ ok: true, result: { providerId: 'openai', model, available: await readSubscriptionPoolModelAvailability('openai', model, { remote: true }) } }));
+    const result = needsSubscriptionAccountHandoff('task', { providerId: 'openai', agentKind: 'codex', model, sdkSessionId: 'native', agentDeviceId: 'mini' });
+    if (limited || !allowed) await expect(result).rejects.toThrow('No subscription account');
+    else expect(await result).toBe(true);
+    expect(h.remote.mock.calls[1].slice(0, 3)).toEqual(['mini', 'maker:subscription-pool:quota', ['openai', model]]);
+    expect(h.accountAllowed).toHaveBeenCalledWith('old-imported', model, { remote: true, newRoute: true });
+    expect(h.bindings.size).toBe(0);
+  });
+
+  it.each([
+    { ok: false },
+    { ok: true, result: { providerId: 'openai', pooled: true, usage: {} } },
+    { ok: true, result: { providerId: 'openai', model: 'other', available: true } },
+  ])('keeps the native recovery path when executor confirmation is absent (%j)', async reply => {
+    h.remote.mockResolvedValueOnce({ ok: true, result: { providerId: 'openai', state: 'bound', account: { isDefault: false, number: 1, paused: true, status: 'ready' } } }).mockResolvedValueOnce(reply);
+    await expect(needsSubscriptionAccountHandoff('task', { providerId: 'openai', agentKind: 'codex', model: 'gpt-6', sdkSessionId: 'native', agentDeviceId: 'mini' })).rejects.toThrow('No subscription account');
+    expect(h.bindings.size).toBe(0);
+  });
+
+  it('starts a new task on an enabled account even when its draft already has a paused binding', async () => {
+    h.bindings.set('task:draft', { providerId: 'anthropic', accountId: 'default' });
+    h.pools.anthropic!.accounts[0].paused = true;
+    const start = vi.fn<BaseAgent['startSession']>(async () => ({ id: 'new-native', close: async () => {} } as unknown as AgentSessionHandle));
+    const agent = withSubscriptionAccounts({ kind: 'claude-code', startSession: start } as unknown as BaseAgent);
+    const handle = await agent.startSession({ providerId: 'anthropic', model: 'claude-sonnet', sessionId: 'draft', workingDir: '.' });
+    expect(start.mock.calls[0][0][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir).toBe('anthropic/second');
+    expect(h.bindings.get('task:draft')?.accountId).toBe('second');
+    await handle.close();
+  });
+
+  it('blocks the next send on an old handle but allows a turn already in progress to finish', async () => {
+    const send = vi.fn(async () => {});
+    const native = { kind: 'claude-code', startSession: async () => ({ id: 'native', send, close: async () => {} }) } as unknown as BaseAgent;
+    const agent = withSubscriptionAccounts(native);
+    const handle = await agent.startSession({ providerId: 'anthropic', model: 'claude-sonnet', sessionId: 'task-a', workingDir: '.' });
+    await handle.send({ type: 'user', content: 'first' });
+    h.pools.anthropic!.accounts[0].paused = true;
+    // In-flight protocol calls may still use the selected credentials.
+    expect(() => getSessionSubscriptionAccount('task-a')?.assertCurrent()).not.toThrow();
+    await expect(handle.send({ type: 'user', content: 'next' })).rejects.toThrow('disabled');
+    expect(send).toHaveBeenCalledOnce();
+    await handle.close();
   });
 });
 
@@ -1611,6 +1721,20 @@ describe('native account assignment on the executing computer', () => {
   });
   // Regression: settings showed one weekly bar per account. Each account must carry every
   // window of its own snapshot, and sharing must list only accounts that can serve tasks.
+  // Unit, user report 2026-11-11: a pause while CLI reads are pending must
+  // affect group quota and shared account listings. Existing tests paused first.
+  it.each(['aggregate', 'shared'] as const)('rechecks paused accounts after pending %s quota reads', async kind => {
+    let finish!: (value: object) => void;
+    const pending = new Promise<object>(resolve => { finish = resolve; });
+    h.usage.mockReturnValue(pending);
+    const read = kind === 'aggregate' ? readSubscriptionPoolUsage : readSubscriptionPoolAccountUsages;
+    const result = read('anthropic');
+    await vi.waitFor(() => expect(h.usage).toHaveBeenCalled());
+    h.pools.anthropic = { ...h.pools.anthropic!, accounts: h.pools.anthropic!.accounts.map(a => ({ ...a, paused: true })) };
+    finish({ claudeUsage: { updatedAt: Date.now(), fiveHour: { utilization: 10, resetsAt: Date.now() / 1000 + 3600 } } });
+    expect(await result).toEqual(kind === 'aggregate' ? null : []);
+  });
+
   it('reports every usage window per account and lists only assignable accounts for sharing', async () => {
     h.pools.anthropic!.accounts.push({ ...account('paused'), paused: true }, account('signed-out'));
     h.read.mockImplementation(async (_provider: string, dir: string) => ({
