@@ -631,7 +631,7 @@ export function BotGroupComposer({
 
   return (
     <div className={cn(BOT_GROUP_COMPOSER_DOCK, thread && 'px-4')}>
-      <div className={BOT_GROUP_COMPOSER_COLUMN}>
+      <div className={cn(BOT_GROUP_COMPOSER_COLUMN, thread && 'max-w-none')}>
         {error ? <p role="alert" className="mb-2 text-13 text-[var(--error-fg)]">{error}</p> : null}
         {/* Same floating slot above the card as a task's composer: files that did not attach. */}
         {attachmentState.rejections.length > 0 ? (

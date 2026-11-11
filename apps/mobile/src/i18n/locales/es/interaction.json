@@ -193,6 +193,7 @@
     "fromLead": "Mensaje de Lead",
     "fromWorkerNamed": "Mensaje de Worker “{{role}}”",
     "fromWorker": "Mensaje de Worker",
+    "fromWorkerBatch": "Informe del sistema: {{count}} resultados de Worker",
     "emptyMessageBody": "(Mensaje vacío)"
   },
   "contextSheet": {

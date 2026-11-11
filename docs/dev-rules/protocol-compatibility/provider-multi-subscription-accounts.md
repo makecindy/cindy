@@ -65,3 +65,16 @@ OpenAI 池快照增加可选 `nativeAccountPool` 标记，当前控制端让三�
 原生额度桶；旧控制端仍可读取 `webSnapshot` 的通用桶，不含账号身份。
 官方及自建 relay 均只透传已有 invoke/push 帧，无需服务端协议变更。原生手机目前没有本机
 供应商连接设置页；执行和远控通道复用上述协议，浏览器登录仍在执行电脑完成。
+
+## Claude 百分比来源（2026-11-11）
+
+`ClaudeUsageWindow` 可选追加 `utilizationSource`（`oauth-endpoint` / `unified-headers`），
+记录该窗口百分比的来源；快照级 `source` 仍表示最近一次更新来源。同一有效额度周期内，
+已知端点百分比不被 SDK 事件覆盖；事件仍即时更新限额状态，端点缺失、窗口已失效或新周期
+时可补充百分比。端点后续回包可修正数值，不采用只升不降的最大值策略。
+
+旧快照无字段时沿用快照级来源；旧端忽略新字段，照旧读取百分比与重置时刻。
+不同窗口分别记录来源，避免 5 小时重置影响仍有效的周窗口。
+字段随现有用量快照传递，无新增 channel、能力门或中转行为；官方与自建中转继续透传。
+账号池的运行时事件不更新账号查询的缓存时间，保持已有 30 秒账号检查与 180 秒额度复用周期。
+回归入口：`claudeSubscriptionUsageMerge.test.ts`、`subscription-accounts/__tests__/runtime.test.ts`。

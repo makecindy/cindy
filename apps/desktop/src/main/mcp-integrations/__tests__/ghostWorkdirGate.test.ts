@@ -166,6 +166,10 @@ vi.mock('../../maker-ipc/botAuthorizationService.js', () => ({
 
 const WORKDIR = '/proj/alpha';
 const listMock = vi.fn<() => unknown[]>(() => []);
+const listInstalledMock = vi.fn(() => listMock());
+const listInstalledAsyncMock = vi.fn(async () => listMock());
+const findInstalledInstanceMock = vi.fn((id: string) =>
+  listMock().find(ghost => installedGhostStoragePart(ghost as InstalledGhost) === id));
 const approvedReceiptMock = vi.fn<(...args: unknown[]) => { manifest: InstalledGhost["manifest"] } | null>(() => null);
 const activeSessionAvailableMock = vi.fn<(ghostId: string) => boolean>(() => true);
 const dispatchMock = vi.fn(async () => ({ ok: true as const, result: 'done' }));
@@ -198,10 +202,10 @@ const sessionSnapshotMock = vi.fn(async (): Promise<{
   remoteHostId: null,
 }));
 vi.mock('../../cindy-brain/index.js', () => ({
-  getGhostManager: () => ({ list: listMock,
-    findInstalledInstance: (id: string) => listMock().find(ghost => installedGhostStoragePart(ghost as InstalledGhost) === id),
+  getGhostManager: () => ({ list: listInstalledMock,
+    findInstalledInstance: findInstalledInstanceMock,
     readApprovedInstallReceipt: approvedReceiptMock, managedRootDirs: () => [] }),
-  listInstalledGhostsAsync: async () => listMock(),
+  listInstalledGhostsAsync: listInstalledAsyncMock,
   ghostForgeForbiddenRootDirs: () => [],
   listAvailableGhostsForAuthorization: () => listMock(),
   findAvailableGhostForAuthorization: (id: string) =>
@@ -384,6 +388,9 @@ beforeEach(() => {
   fs.mkdirSync(outsideDir, { recursive: true });
   approvedReceiptMock.mockReset();
   approvedReceiptMock.mockReturnValue(null);
+  listInstalledMock.mockClear();
+  listInstalledAsyncMock.mockClear();
+  findInstalledInstanceMock.mockClear();
   listMock.mockReset();
   listMock.mockReturnValue([chipGhost('art'), chipGhost('other')]);
   activeSessionAvailableMock.mockReset();
@@ -3854,6 +3861,122 @@ describe('plugin page audience and shared tool execution', () => {
       manifest: { ...(chipGhost('art') as InstalledGhost).manifest,
         mcpApps: { ui: { resources: [], tools: { run: { visibility: ['app'] } } } } } };
   }
+  // Regression: a page tool call scanned every installation, including a second
+  // synchronous scan for sessionContext. Existing audience tests did not check IO.
+  // Unit: real ticket + callGhostTool entry, fake install store (50 instances),
+  // one session-context tool; preserve dispatch and all mutable-state denials.
+  function callPage(ghost: InstalledGhost) {
+    const grant = { instance: installedGhostStoragePart(ghost), revision: 'approved-ui',
+      sessionId: 's1', clientId: 'card', tool: 'run', assertCurrent: async () => {} };
+    return withPluginPageTicket(grant, ticket => consumePluginPageTicket(ticket,
+      grant.instance, grant.revision, grant.tool, pageCall =>
+        getCindyGhostsMcpDeps({ sessionId: 's1', sessionInstanceId: 's1-instance',
+          agentKind: 'claude-code', workingDir: WORKDIR }, {}, pageCall)
+          .callGhostTool({ ghostId: grant.instance, tool: grant.tool, args: {} })));
+  }
+  it('dispatches a page tool with session context without scanning other installations', async () => {
+    const ghost = pageGhost();
+    ghost.manifest.sessionContext = true;
+    ghost.instanceKey = '_root__art';
+    ghost.namespace = null;
+    const newerCopy = { ...ghost, instanceKey: '_ns__local__art', namespace: 'local',
+      manifest: { ...ghost.manifest, version: '99.0.0' } };
+    listMock.mockReturnValue([ghost, newerCopy, ...Array.from({ length: 48 }, (_, i) => chipGhost(`other-${i}`))]);
+    expect(await callPage(ghost)).toMatchObject({ ok: true, result: 'done' });
+    expect(dispatchMock).toHaveBeenCalledWith(expect.objectContaining({
+      ghostId: installedGhostStoragePart(ghost), tool: 'run',
+      args: expect.objectContaining({ session_context: expect.objectContaining({ session_id: 's1' }) }),
+    }));
+    expect(listInstalledAsyncMock).not.toHaveBeenCalled();
+    expect(listInstalledMock).not.toHaveBeenCalled();
+  });
+  function legacyPageCopies(): [InstalledGhost, InstalledGhost] {
+    const bound: InstalledGhost = { ...pageGhost(), instanceKey: 'art', namespace: null };
+    const other: InstalledGhost = { ...bound, instanceKey: '_ns__acme__art', namespace: 'acme',
+      dir: path.join(tmpUserData, '_ns', 'acme', 'art') };
+    return [bound, other];
+  }
+  // Unit regression: a legacy bare storage key became ambiguous after installing
+  // a namesake. A page ticket already binds an instance; model name lookup does not.
+  // Existing modern-key coverage missed this case. Minimum: two same-name copies.
+  it('keeps a legacy page bound to its instance while model name lookup remains ambiguous', async () => {
+    const [bound, other] = legacyPageCopies();
+    listMock.mockReturnValue([bound, other]);
+    expect(await callPage(bound)).toMatchObject({ ok: true, result: 'done' });
+    expect(dispatchMock).toHaveBeenCalledOnce();
+    expect(dispatchMock).toHaveBeenCalledWith(expect.objectContaining({ ghostId: bound.instanceKey, tool: 'run' }));
+    expect(listInstalledAsyncMock).not.toHaveBeenCalled();
+    expect(listInstalledMock).not.toHaveBeenCalled();
+
+    dispatchMock.mockClear();
+    expect(await makeDeps().callGhostTool({ ghostId: bound.manifest.id, tool: 'run', args: {} }))
+      .toMatchObject({ ok: false, errorCode: 'GHOST_AMBIGUOUS' });
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+  // PR #9936: undefined also means the registry is not populated. Previous
+  // fixtures only modeled missing installs, so an approved page could fail cold.
+  // Unit: real ticket/call entry; one cache miss before setup or after the DB await,
+  // with another same-name copy first in the list to detect accidental redirection.
+  it.each(['initial', 'session-context'] as const)('recovers a page instance after an %s registry cache miss', async phase => {
+    const [bound, other] = legacyPageCopies();
+    bound.manifest.sessionContext = true;
+    listMock.mockReturnValue([other, bound]);
+    if (phase === 'initial') findInstalledInstanceMock.mockReturnValueOnce(undefined);
+    else sessionSnapshotMock.mockImplementationOnce(async () => {
+      findInstalledInstanceMock.mockReturnValueOnce(undefined);
+      return { workingDir: WORKDIR, permissionMode: 'auto', planModeEnabled: false, remoteHostId: null };
+    });
+    expect(await callPage(bound)).toMatchObject({ ok: true, result: 'done' });
+    expect(dispatchMock).toHaveBeenCalledOnce();
+    expect(dispatchMock).toHaveBeenCalledWith(expect.objectContaining({
+      ghostId: bound.instanceKey, tool: 'run',
+      args: expect.objectContaining({ session_context: expect.objectContaining({ session_id: 's1' }) }),
+    }));
+    expect(listInstalledMock).toHaveBeenCalledOnce();
+    expect(listInstalledAsyncMock).not.toHaveBeenCalled();
+  });
+  // The initial lookup must retain the same errors before setup can run;
+  // revision drift here is a page authorization error, unlike drift after await.
+  // Keep the other copy available throughout: neither gate may redirect to it.
+  it.each([
+    ['disabled', 'GHOST_ASLEEP'],
+    ['revision', 'PERMISSION_DENIED'],
+    ['workdir', 'GHOST_DISABLED_IN_WORKDIR'],
+    ['missing', 'GHOST_NOT_FOUND'],
+  ] as const)('rejects an initially %s page target before setup', async (change, errorCode) => {
+    const [ghost, other] = legacyPageCopies();
+    listMock.mockReturnValue([ghost, other]);
+    if (change === 'disabled') listMock.mockReturnValue([{ ...ghost, enabled: false }, other]);
+    if (change === 'revision') listMock.mockReturnValue([{ ...ghost, approval: { state: 'approved', revision: 'replacement' } }, other]);
+    if (change === 'workdir') setGhostDisabledForWorkdir(WORKDIR, installedGhostStoragePart(ghost), true);
+    if (change === 'missing') listMock.mockReturnValue([other]);
+    expect(await callPage(ghost)).toMatchObject({ ok: false, errorCode });
+    expect(ensureReadyMock).not.toHaveBeenCalled();
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(listInstalledAsyncMock).not.toHaveBeenCalled();
+    expect(listInstalledMock).toHaveBeenCalledTimes(change === 'missing' ? 1 : 0);
+  });
+  it.each([
+    ['disabled', 'GHOST_ASLEEP'],
+    ['revision', 'GHOST_NOT_FOUND'],
+    ['workdir', 'GHOST_DISABLED_IN_WORKDIR'],
+    ['missing', 'GHOST_NOT_FOUND'],
+  ] as const)('rejects a page tool when %s changes during session context lookup', async (change, errorCode) => {
+    const [ghost, other] = legacyPageCopies();
+    ghost.manifest.sessionContext = true;
+    listMock.mockReturnValue([ghost, other]);
+    sessionSnapshotMock.mockImplementationOnce(async () => {
+      if (change === 'disabled') listMock.mockReturnValue([{ ...ghost, enabled: false }, other]);
+      if (change === 'revision') listMock.mockReturnValue([{ ...ghost, approval: { state: 'approved', revision: 'replacement' } }, other]);
+      if (change === 'workdir') setGhostDisabledForWorkdir(WORKDIR, installedGhostStoragePart(ghost), true);
+      if (change === 'missing') listMock.mockReturnValue([other]);
+      return { workingDir: WORKDIR, permissionMode: 'auto', planModeEnabled: false, remoteHostId: null };
+    });
+    expect(await callPage(ghost)).toMatchObject({ ok: false, errorCode });
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(listInstalledAsyncMock).not.toHaveBeenCalled();
+    expect(listInstalledMock).toHaveBeenCalledTimes(change === 'missing' ? 1 : 0);
+  });
   // C14/X01: a cold page call used to bootstrap with no business id, then leak
   // its ALS grant into long-lived MCP callbacks. Existing tests only used live
   // tasks. Unit: real ticket/restore/ghost dispatch, bootstrap and IO are fakes.
