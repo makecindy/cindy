@@ -11,7 +11,7 @@ describe('botMarketLocale', () => {
     ['zh-TW', 'zh-TW'], ['zh_TW', 'zh-TW'], ['zh-Hant', 'zh-TW'], ['zh-HK', 'zh-TW'],
     ['en', 'en'], ['en-US', 'en'], ['ja', 'ja'], ['ja-JP', 'ja'], ['ko', 'ko'], ['ko-KR', 'ko'],
     ['fr', 'fr'], ['fr-CA', 'fr'], ['es-MX', 'es'], ['de-AT', 'de'],
-    ['pt-Latn-BR', 'pt-BR'], ['pt-AO', 'pt-PT'], ['', 'en'], [undefined, 'en'], [null, 'en'],
+    ['pt-Latn-BR', 'pt-BR'], ['pt-AO', 'pt-PT'], ['tr', 'tr'], ['tr-TR', 'tr'], ['', 'en'], [undefined, 'en'], [null, 'en'],
   ])('maps %s to %s', (language, expected) => { expect(botMarketLocale(language)).toBe(expected); });
 });
 

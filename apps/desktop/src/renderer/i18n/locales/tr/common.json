@@ -6877,28 +6877,28 @@
         },
         "commands": {
           "session.selectPrevious": {
-            "name": "Previous task",
-            "description": "Open the task above the current one in the sidebar"
+            "name": "Önceki görev",
+            "description": "Kenar çubuğunda mevcut görevin üstündeki görevi aç"
           },
           "session.selectNext": {
-            "name": "Next task",
-            "description": "Open the task below the current one in the sidebar"
+            "name": "Sonraki görev",
+            "description": "Kenar çubuğunda mevcut görevin altındaki görevi aç"
           },
           "toggleRightSidebar": {
             "name": "Sağ kenar çubuğunu aç/kapat",
             "description": "Sağ kenar çubuğunu göster veya gizle"
           },
           "composer.toggleFastMode": {
-            "name": "Toggle Fast mode",
-            "description": "Turn Fast mode on or off in the current composer"
+            "name": "Hızlı modu aç/kapat",
+            "description": "Mevcut mesaj yazma alanında Hızlı modu aç veya kapat"
           },
           "approval.approve": {
-            "name": "Approve request",
-            "description": "Approve the active request"
+            "name": "İsteği onayla",
+            "description": "Etkin isteği onayla"
           },
           "approval.decline": {
-            "name": "Decline request",
-            "description": "Decline the active request"
+            "name": "İsteği reddet",
+            "description": "Etkin isteği reddet"
           },
           "forkTask": {
             "name": "Yeni görevde devam et",
@@ -6906,7 +6906,7 @@
           },
           "composer.submit": {
             "name": "Mesaj gönder",
-            "description": "Send the composer message, or approve the pending request"
+            "description": "Yazma alanındaki mesajı gönder veya bekleyen isteği onayla"
           },
           "feedback": {
             "name": "Geri bildirim gönder",
@@ -6944,8 +6944,8 @@
             "description": "Mevcut görev için incelemeyi göster veya gizle"
           },
           "composer.addPhotos": {
-            "name": "Add photos",
-            "description": "Add photos to the composer"
+            "name": "Fotoğraf ekle",
+            "description": "Mesaj yazma alanına fotoğraf ekle"
           },
           "settings": {
             "name": "Ayarlar",
@@ -6956,28 +6956,28 @@
             "description": "Zamanlanmış görev oluştur veya yönet"
           },
           "composer.increaseReasoningEffort": {
-            "name": "Increase reasoning effort",
-            "description": "Raise the reasoning effort for the current composer"
+            "name": "Akıl yürütme yoğunluğunu artır",
+            "description": "Mevcut mesaj yazma alanı için akıl yürütme yoğunluğunu artır"
           },
           "composer.decreaseReasoningEffort": {
-            "name": "Decrease reasoning effort",
-            "description": "Lower the reasoning effort for the current composer"
+            "name": "Akıl yürütme yoğunluğunu azalt",
+            "description": "Mevcut mesaj yazma alanı için akıl yürütme yoğunluğunu azalt"
           },
           "openFolder": {
             "name": "Klasör aç",
             "description": "Cindy'ye yerel bir proje ekle"
           },
           "composer.addFiles": {
-            "name": "Attach files and folders",
-            "description": "Attach files and folders to the composer"
+            "name": "Dosya ve klasör ekle",
+            "description": "Mesaj yazma alanına dosya ve klasör ekle"
           },
           "openSkills": {
             "name": "Becerilere git",
             "description": "Yüklü ve önerilen becerilere göz at"
           },
           "composer.togglePlanMode": {
-            "name": "Toggle plan mode",
-            "description": "Turn plan mode on or off in the current composer"
+            "name": "Plan modunu aç/kapat",
+            "description": "Mevcut mesaj yazma alanında plan modunu aç veya kapat"
           },
           "navigateForward": {
             "name": "İleri",
@@ -6996,20 +6996,20 @@
             "description": "Tam ekrana geç veya tam ekrandan çık"
           },
           "composer.focus": {
-            "name": "Focus composer",
-            "description": "Move the cursor into the composer"
+            "name": "Mesaj yazma alanına odaklan",
+            "description": "İmleci mesaj yazma alanına taşı"
           },
           "conversation.scrollUp": {
             "name": "Yukarı kaydır",
-            "description": "Scroll the conversation up"
+            "description": "Sohbeti yukarı kaydır"
           },
           "conversation.scrollDown": {
             "name": "Aşağı kaydır",
-            "description": "Scroll the conversation down"
+            "description": "Sohbeti aşağı kaydır"
           },
           "conversation.scrollBottom": {
-            "name": "Jump to latest",
-            "description": "Scroll to the latest message"
+            "name": "En yeniye git",
+            "description": "En son mesaja kaydır"
           },
           "session": {
             "selectPrevious": {

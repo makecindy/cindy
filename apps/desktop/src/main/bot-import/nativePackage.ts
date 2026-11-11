@@ -73,12 +73,12 @@ export interface NativeLocalizedCopy { name: string; description: string; welcom
 export interface NativeBotPackage { identity: BotPackageIdentity; entry: BotMarketEntry; snapshot: ImportSnapshot; localized: BotMarketTranslations<NativeLocalizedCopy> }
 
 const LEGACY_LOCALES = ['en', 'ja', 'ko', 'zh-TW'] as const;
-const LOCALES: readonly BotMarketLocale[] = [...LEGACY_LOCALES, 'es', 'fr', 'de', 'pt-PT', 'pt-BR'];
-const LOCALE_SCALE: Record<BotMarketLocale, number> = { en: 3, ja: 1.5, ko: 1.5, 'zh-TW': 1, es: 3, fr: 3, de: 3, 'pt-PT': 3, 'pt-BR': 3 };
-const VALUE_MAX: Record<BotMarketLocale, number> = { en: 200, ja: 160, ko: 160, 'zh-TW': 120, es: 200, fr: 200, de: 200, 'pt-PT': 200, 'pt-BR': 200 };
-const LABEL_MAX: Record<BotMarketLocale, number> = { en: 48, ja: 24, ko: 24, 'zh-TW': 16, es: 48, fr: 48, de: 48, 'pt-PT': 48, 'pt-BR': 48 };
+const LOCALES: readonly BotMarketLocale[] = [...LEGACY_LOCALES, 'es', 'fr', 'de', 'pt-PT', 'pt-BR', 'tr'];
+const LOCALE_SCALE: Record<BotMarketLocale, number> = { en: 3, ja: 1.5, ko: 1.5, 'zh-TW': 1, es: 3, fr: 3, de: 3, 'pt-PT': 3, 'pt-BR': 3, tr: 3 };
+const VALUE_MAX: Record<BotMarketLocale, number> = { en: 200, ja: 160, ko: 160, 'zh-TW': 120, es: 200, fr: 200, de: 200, 'pt-PT': 200, 'pt-BR': 200, tr: 200 };
+const LABEL_MAX: Record<BotMarketLocale, number> = { en: 48, ja: 24, ko: 24, 'zh-TW': 16, es: 48, fr: 48, de: 48, 'pt-PT': 48, 'pt-BR': 48, tr: 48 };
 /** The onboarding Skill is not part of the authored detail copy; its name only shows in a partial-save notice. */
-const ONBOARDING_NAME: Record<BotMarketLocale, string> = { en: 'Getting started', ja: 'はじめの設定', ko: '시작 설정', 'zh-TW': '開場設定', es: 'Primeros pasos', fr: 'Premiers pas', de: 'Erste Schritte', 'pt-PT': 'Primeiros passos', 'pt-BR': 'Primeiros passos' };
+const ONBOARDING_NAME: Record<BotMarketLocale, string> = { en: 'Getting started', ja: 'はじめの設定', ko: '시작 설정', 'zh-TW': '開場設定', es: 'Primeros pasos', fr: 'Premiers pas', de: 'Erste Schritte', 'pt-PT': 'Primeiros passos', 'pt-BR': 'Primeiros passos', tr: 'Başlarken' };
 
 type Detail = ReturnType<typeof readDetail>;
 /** One language of `presentation.i18n`: same shape and limits family as the base copy, and it must mirror `detailZh`. */

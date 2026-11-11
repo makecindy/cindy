@@ -24,7 +24,7 @@ export interface BotMarketReference { title: string; summary: string }
 export interface BotMarketTool { id: string; purpose: string }
 /** `cron` is the package's example expression; its timezone is deliberately dropped. */
 export interface BotMarketRoutine { name: string; summary: string; cron?: string }
-export type BotMarketLocale = 'en' | 'ja' | 'ko' | 'zh-TW' | 'es' | 'fr' | 'de' | 'pt-PT' | 'pt-BR';
+export type BotMarketLocale = 'en' | 'ja' | 'ko' | 'zh-TW' | 'es' | 'fr' | 'de' | 'pt-PT' | 'pt-BR' | 'tr';
 /** Old packages remain valid; new authored translations are optional. */
 export type BotMarketTranslations<T> = Record<'en' | 'ja' | 'ko' | 'zh-TW', T> & Partial<Record<BotMarketLocale, T>>;
 /** The language-dependent fields of a catalog entry: the entry holds them in Simplified Chinese, `locales` in the others. */
