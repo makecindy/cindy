@@ -2258,6 +2258,8 @@
         "visibilityHint": "0% 隐壁纸，100% 尽显壁纸。",
         "desktopVisibilityLabel": "桌面透明度",
         "desktopVisibilityHint": "透见 Cindy 后之桌面与窗口，文字控件仍清晰。",
+        "sidebarVisibilityLabel": "左侧栏透明度",
+        "sidebarVisibilityHint": "0% 使侧栏完全不透明；100% 使侧栏全透",
         "desktopBlurLabel": "桌面模糊",
         "desktopBlurHint": "模糊窗后桌面；0 则关闭，值愈大则愈朦胧。系统若不可调，仍用预设之效。",
         "blurLabel": "壁纸朦胧",

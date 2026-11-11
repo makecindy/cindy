@@ -2258,6 +2258,8 @@
         "visibilityHint": "0% 隱藏桌布，100% 完全顯示桌布。",
         "desktopVisibilityLabel": "桌面透明度",
         "desktopVisibilityHint": "透出 Cindy 後面的桌面與視窗，文字和控制項保持清晰。",
+        "sidebarVisibilityLabel": "左側欄透明度",
+        "sidebarVisibilityHint": "0% 使側欄完全不透明；100% 使側欄完全透明",
         "desktopBlurLabel": "桌面模糊",
         "desktopBlurHint": "模糊視窗後面的桌面，0 為關閉，數值越大越模糊。不支援強度調整的系統使用預設效果。",
         "blurLabel": "桌布模糊",

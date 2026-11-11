@@ -2326,6 +2326,8 @@
         "visibilityHint": "0 % masque le fond d'écran ; 100 % l'affiche sans superposition.",
         "desktopVisibilityLabel": "Transparence du bureau",
         "desktopVisibilityHint": "Laisse voir le bureau et les fenêtres derrière Cindy. Le texte et les commandes restent nets.",
+        "sidebarVisibilityLabel": "Transparence de la barre latérale",
+        "sidebarVisibilityHint": "0 % garde la barre latérale opaque ; 100 % la rend entièrement transparente.",
         "desktopBlurLabel": "Flou du bureau",
         "desktopBlurHint": "Floute le bureau derrière la fenêtre. 0 désactive le flou ; une valeur plus élevée le renforce. Les systèmes sans réglage utilisent leur effet par défaut.",
         "blurLabel": "Flou du fond d'écran",

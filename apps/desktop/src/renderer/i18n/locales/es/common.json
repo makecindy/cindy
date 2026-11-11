@@ -2326,6 +2326,8 @@
         "visibilityHint": "0% oculta el fondo de pantalla; El 100% lo muestra sin superposición.",
         "desktopVisibilityLabel": "Transparencia del escritorio",
         "desktopVisibilityHint": "Muestra el escritorio y las ventanas detrás de Cindy. El texto y los controles se mantienen nítidos.",
+        "sidebarVisibilityLabel": "Transparencia de la barra lateral",
+        "sidebarVisibilityHint": "0% mantiene la barra lateral opaca; 100% la deja totalmente transparente.",
         "desktopBlurLabel": "Desenfoque del escritorio",
         "desktopBlurHint": "Desenfoca el escritorio detrás de la ventana. 0 lo desactiva; un valor mayor aumenta el desenfoque. Los sistemas sin ajuste de intensidad usan su efecto predeterminado.",
         "blurLabel": "Fondo de pantalla borroso",

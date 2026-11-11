@@ -2326,6 +2326,8 @@
         "visibilityHint": "0% oculta a imagem de fundo; 100% mostra-a sem sobreposição.",
         "desktopVisibilityLabel": "Transparência do ambiente de trabalho",
         "desktopVisibilityHint": "Mostra o ambiente de trabalho e as janelas atrás da Cindy. O texto e os controlos mantêm-se nítidos.",
+        "sidebarVisibilityLabel": "Transparência da barra lateral",
+        "sidebarVisibilityHint": "0% mantém a barra lateral opaca; 100% torna-a totalmente transparente.",
         "desktopBlurLabel": "Desfoque do ambiente de trabalho",
         "desktopBlurHint": "Desfoca o ambiente de trabalho atrás da janela. 0 desativa; valores maiores aumentam o desfoque. Sistemas sem ajuste de intensidade usam o efeito predefinido.",
         "blurLabel": "Desfoque da imagem de fundo",

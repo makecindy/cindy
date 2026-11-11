@@ -2288,6 +2288,8 @@
         "visibilityHint": "0% hides the wallpaper; 100% shows it without an overlay.",
         "desktopVisibilityLabel": "Desktop Transparency",
         "desktopVisibilityHint": "Reveal the desktop and windows behind Cindy. Text and controls stay clear.",
+        "sidebarVisibilityLabel": "Sidebar Transparency",
+        "sidebarVisibilityHint": "0% makes the sidebar opaque; 100% makes it fully transparent.",
         "desktopBlurLabel": "Desktop Blur",
         "desktopBlurHint": "Blur the desktop behind the window. 0 turns it off; higher values increase blur. Systems without adjustable blur use their default effect.",
         "blurLabel": "Wallpaper Blur",
@@ -2306,9 +2308,7 @@
         "customFailed": "Could not save the wallpaper. Please try again.",
         "downloading": "Downloading wallpaper…",
         "downloadFailed": "Some wallpaper assets are unavailable. Using the available background.",
-        "retryDownload": "Retry Download",
-        "sidebarVisibilityLabel": "Sidebar Transparency",
-        "sidebarVisibilityHint": "0% makes the sidebar opaque; 100% makes it fully transparent."
+        "retryDownload": "Retry Download"
       },
       "layout": {
         "label": "Panel layout",

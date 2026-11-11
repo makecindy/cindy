@@ -2258,6 +2258,8 @@
         "visibilityHint": "0% で壁紙を非表示にし、100% でそのまま表示します。",
         "desktopVisibilityLabel": "デスクトップの透明度",
         "desktopVisibilityHint": "Cindy の背後にあるデスクトップやウィンドウを透かします。文字や操作部分は鮮明に保たれます。",
+        "sidebarVisibilityLabel": "サイドバーの透明度",
+        "sidebarVisibilityHint": "0% でサイドバーは完全に不透明、100% で完全に透けます。",
         "desktopBlurLabel": "デスクトップのぼかし",
         "desktopBlurHint": "背後のデスクトップをぼかします。0 でオフ、値が大きいほど強くなります。強さを調整できない OS では標準の効果を使います。",
         "blurLabel": "壁紙のぼかし",

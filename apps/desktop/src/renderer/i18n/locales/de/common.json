@@ -2288,6 +2288,8 @@
         "visibilityHint": "0 % blendet das Hintergrundbild aus; 100 % zeigt es ohne Überlagerung.",
         "desktopVisibilityLabel": "Desktop-Transparenz",
         "desktopVisibilityHint": "Zeigt den Desktop und Fenster hinter Cindy. Text und Bedienelemente bleiben klar.",
+        "sidebarVisibilityLabel": "Seitenleisten-Transparenz",
+        "sidebarVisibilityHint": "0 % lässt die Seitenleiste deckend; 100 % macht sie vollständig durchsichtig.",
         "desktopBlurLabel": "Desktop-Unschärfe",
         "desktopBlurHint": "Verwischt den Desktop hinter dem Fenster. 0 schaltet den Effekt aus, höhere Werte verstärken ihn. Systeme ohne einstellbare Stärke verwenden ihren Standardeffekt.",
         "blurLabel": "Unschärfe des Hintergrundbilds",
