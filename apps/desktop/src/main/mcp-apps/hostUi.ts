@@ -10,6 +10,7 @@ import { getDeepLinkMainWindow } from '../deepLink.js';
 import { isRsbWindowWebContentsId } from '../right-sidebar-window/registry.js';
 import { readPluginUiRegions, setPluginUiRegions } from './visibility.js';
 import { configurePluginAppearanceApply, editPluginAppearance, getPluginAppearanceService } from './appearance.js';
+import { onPagePermissionSessionChanged } from './pagePermissions.js';
 
 type Reply = { caller: string; finish(value: unknown, error?: string): void };
 const replies = new Map<string, Reply>();
@@ -124,7 +125,12 @@ export function bindPluginUiResource(caller: string, sessionId: string | null, i
     ...(sessionId !== null && capabilities.includes('draft') ? {
       async observeContext(changed: () => void, signal: AbortSignal) {
         const watching = new AbortController();
-        const stop = () => { signal.removeEventListener('abort', stop); watching.abort(); };
+        const stop = () => { signal.removeEventListener('abort', stop); unlistenSession(); watching.abort(); };
+        const unlistenSession = onPagePermissionSessionChanged((id, patch) => {
+          if (id !== sessionId || !('clearedAt' in patch || 'status' in patch && patch.status !== 'active')) return;
+          stop();
+          draft = null;
+        });
         signal.addEventListener('abort', stop, { once: true });
         if (signal.aborted) stop();
         try {

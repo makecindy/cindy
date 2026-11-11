@@ -16,6 +16,7 @@ vi.mock('../../appearance-settings-ipc.js', () => ({ updateAppearanceFromSetting
 import { bindPluginUiResource, finishPluginUiAction } from '../hostUi';
 import { releasePluginUiRegions } from '../visibility';
 import { markRsbWindowWebContentsId } from '../../right-sidebar-window/registry';
+import { pagePermissionSessionChanged } from '../pagePermissions';
 
 // 生产入口：Main 的资源来源绑定和真实宿主工具，观察给所属编辑器的命令与拒绝结果。
 // 规则：页面不能自选任务/操作、缺能力不开放、任务清空/owner 切换撤权。
@@ -178,6 +179,55 @@ it('takes draft context from the original composer stream and releases it with t
     expect(boundary.send).toHaveBeenLastCalledWith('plugin-ui:action', expect.objectContaining({ kind: 'draft-unwatch', requestId: action.requestId }));
     expect(() => finishPluginUiAction('renderer:1', action.requestId, first)).toThrow('MCP_APP_ACTION_UNAVAILABLE');
   } finally { stop?.(); abort.abort(); await watching.catch(() => {}); }
+});
+
+// PR #9496 / discussion_r4536628104: View teardown coverage alone misses a
+// cleared task whose page remains open. Real committed-session notification;
+// no database checks on editor pushes. Minimum: one active draft observer. tier: unit.
+it.each([
+  ['clear', { clearedAt: 1 }], ['archive', { status: 'archived' }],
+] as const)('releases the old draft observer when its task is %s', async (_kind, patch) => {
+  const assertScope = vi.fn(async () => {});
+  const binding = bindPluginUiResource('renderer:1', 'task-a', 'plugin', 'task', () => 'rev', assertScope);
+  const changed = vi.fn(), abort = new AbortController();
+  const watching = binding.observeContext!(changed, abort.signal);
+  let stop: (() => void) | undefined;
+  try {
+    await vi.waitFor(() => expect(boundary.send).toHaveBeenCalledTimes(1));
+    const action = boundary.send.mock.calls[0][1];
+    finishPluginUiAction('renderer:1', action.requestId, { revision: 'before', selection: null });
+    stop = await watching;
+    pagePermissionSessionChanged('other-task', patch);
+    pagePermissionSessionChanged('task-a', { title: 'Renamed', status: 'active' });
+    expect(boundary.send).toHaveBeenCalledTimes(1);
+
+    const changes = changed.mock.calls.length;
+    pagePermissionSessionChanged('task-a', patch);
+    expect(boundary.send).toHaveBeenLastCalledWith('plugin-ui:action', expect.objectContaining({ kind: 'draft-unwatch', requestId: action.requestId }));
+    expect(binding.projectContext!({}).draft).toBeNull();
+    expect(() => finishPluginUiAction('renderer:1', action.requestId,
+      { revision: 'after', selection: { from: 1, to: 4, text: 'new' } })).toThrow('MCP_APP_ACTION_UNAVAILABLE');
+    pagePermissionSessionChanged('task-a', patch);
+    expect(changed).toHaveBeenCalledTimes(changes);
+    expect(assertScope).not.toHaveBeenCalled();
+  } finally { stop?.(); abort.abort(); await watching.catch(() => {}); }
+});
+
+it('cancels a draft observer when the task clears before its initial snapshot arrives', async () => {
+  const binding = bindPluginUiResource('renderer:1', 'task-a', 'plugin', 'task', () => 'rev');
+  const changed = vi.fn(), abort = new AbortController();
+  const watching = binding.observeContext!(changed, abort.signal);
+  const settled = watching.catch(() => {});
+  try {
+    await vi.waitFor(() => expect(boundary.send).toHaveBeenCalledTimes(1));
+    const action = boundary.send.mock.calls[0][1];
+    pagePermissionSessionChanged('task-a', { clearedAt: 1 });
+    expect(boundary.send).toHaveBeenLastCalledWith('plugin-ui:action', expect.objectContaining({ kind: 'draft-unwatch', requestId: action.requestId }));
+    await expect(watching).rejects.toThrow('MCP_APP_ACTION_CANCELLED');
+    expect(changed).not.toHaveBeenCalled();
+    expect(() => finishPluginUiAction('renderer:1', action.requestId, { revision: 'late', selection: null }))
+      .toThrow('MCP_APP_ACTION_UNAVAILABLE');
+  } finally { abort.abort(); await settled; }
 });
 
 // Complete application windows own their composer; both sidebar factories use
