@@ -12,7 +12,8 @@
  *
  * Usage:
  *   node --import tsx scripts/eval-browser-tasks.mjs --live --baseline-ref origin/main \
- *     [--model claude-sonnet-5-5] [--repeats 3] [--only form,vault] [--variants A,C] [--parallel 3]
+ *     [--model claude-sonnet-5-5] [--effort medium] [--repeats 3] [--only form,vault] [--variants A,C] [--parallel 3]
+ *     --effort is passed to the CLI as its reasoning effort; without it the CLI default applies.
  *     --real-sites adds eight read tasks on public websites (GitHub, crates.io, PyPI, Hacker News search,
  *     Tailscale docs, Apple support, Wikipedia). Their answers are fetched from the sites' public APIs and
  *     pages right before the runs. They need the network, depend on what those sites serve that day and
@@ -21,7 +22,7 @@
  *     No model and no usage: drives batch and cdp through the MCP entry on the same real browser and
  *     fixture pages, and fails if a result is wrong. Run it after touching either action.
  *   node --import tsx scripts/eval-browser-tasks.mjs --serve
- *     Only serves the fixture pages and prints their address, one run id and its answers, for trying
+ *     Only serves the fixture pages and prints their address, one run id, its prompts and answers, for trying
  *     the sidebar and "My browser" by hand from a running Cindy. /__state?run=<id> shows what the
  *     pages recorded.
  *
@@ -42,7 +43,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const { values } = parseArgs({ options: {
   live: { type: 'boolean' }, mcp: { type: 'boolean' }, check: { type: 'boolean' }, serve: { type: 'boolean' },
-  'baseline-ref': { type: 'string' }, model: { type: 'string', default: 'claude-sonnet-5-5' },
+  'baseline-ref': { type: 'string' }, model: { type: 'string', default: 'claude-sonnet-5-5' }, effort: { type: 'string' },
   repeats: { type: 'string', default: '3' }, only: { type: 'string' },
   variants: { type: 'string', default: 'A,C' }, parallel: { type: 'string', default: '3' },
   'real-sites': { type: 'boolean' },
@@ -438,7 +439,8 @@ if (!TASKS.length) throw new Error('No tasks selected');
 if (values.serve) {
   const state = newRun();
   console.log(JSON.stringify({ base, run: state.id, pages: ['form', 'catalog', 'orders', 'report', 'settings', 'vault', 'badge', 'embed', 'directory', 'late', 'spinner', 'manual', 'status.json']
-    .map((name) => `${base}/${name}?run=${state.id}`), state: `${base}/__state?run=${state.id}`, answers: state }, null, 2));
+    .map((name) => `${base}/${name}?run=${state.id}`), state: `${base}/__state?run=${state.id}`,
+    prompts: Object.fromEntries(TASKS.map((task) => [task.id, task.prompt(state)])), answers: state }, null, 2));
   await new Promise(() => {});
 }
 
@@ -562,7 +564,7 @@ if (values.check) {
   process.exit(failures.length ? 1 : 0);
 }
 const baselineSha = execFileSync('git', ['rev-parse', values['baseline-ref']], { cwd: root, encoding: 'utf8' }).trim();
-const manifest = { kind: 'live-model-real-browser-fixture-pages', model: values.model, repeats, variants, baselineRef: values['baseline-ref'], baselineSha,
+const manifest = { kind: 'live-model-real-browser-fixture-pages', model: values.model, effort: values.effort ?? null, repeats, variants, baselineRef: values['baseline-ref'], baselineSha,
   head: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(),
   dirty: execFileSync('git', ['status', '--porcelain', '--', browserDir], { cwd: root, encoding: 'utf8' }).split('\n').filter(Boolean),
   tasks: TASKS.map((task) => ({ id: task.id, focus: task.focus })),
@@ -585,7 +587,7 @@ async function runOne(task, variant, repetition) {
     fileURLToPath(import.meta.url), '--mcp', '--variant', variant, '--baseline-ref', baselineSha, '--runtime-dir', path.join(dir, 'runtime'),
     '--trace', trace, '--cdp-port', String(await freePort())] } } }));
   const started = Date.now();
-  const child = spawn('claude', ['-p', task.prompt(state), '--output-format', 'stream-json', '--verbose', '--model', values.model,
+  const child = spawn('claude', ['-p', task.prompt(state), '--output-format', 'stream-json', '--verbose', '--model', values.model, ...(values.effort ? ['--effort', values.effort] : []),
     '--system-prompt', SYSTEM, '--tools', '', '--strict-mcp-config', '--mcp-config', config,
     '--allowedTools', 'mcp__cindy_browser__list_tools', 'mcp__cindy_browser__call_tool',
     '--no-session-persistence', '--setting-sources', 'project', '--max-turns', '40'],

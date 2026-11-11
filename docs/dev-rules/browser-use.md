@@ -246,8 +246,11 @@ A 是基线提交的工具层，C 是当前工作区；两组都经生产 MCP �
 | 真实网站 | 13.4 → 6.3 秒 | 4.3 → 2.3 | $0.151 → $0.044 |
 | 本机夹具 | 16.3 → 11.8 秒 | 6.0 → 4.2 | $0.165 → $0.050 |
 
-费用是连续运行、提示缓存命中时的数字；样本少，没有做显著性检验。这组数字来自对比用的临时脚本
-（同时跑了另一款产品）。同一批真实网站题和四道读取题现在在评测脚本里，可以复现主干与当前工作区的对比：
+费用是连续运行、提示缓存命中时的数字；样本少，没有做显著性检验。这组数字来自对比用的脚本
+（`scripts/benchmarks/browser-task-bro-compare.mjs`，同时跑了开源项目 bro）。公开的方法、逐次数据、
+复现步骤，以及和 bro、Claude App、Codex App 放在一起的结果见
+[docs/benchmarks/browser-read-2026-11-11](../benchmarks/browser-read-2026-11-11/README.md)。
+同一批真实网站题和四道读取题也在评测脚本里，可以复现主干与当前工作区的对比（`--effort` 指定推理强度）：
 
 ```sh
 node --import tsx scripts/eval-browser-tasks.mjs --live --baseline-ref origin/main --model claude-opus-5-5 \
