@@ -15,11 +15,15 @@ import { describe, expect, it } from 'vitest';
 import { maskPath } from '../logger';
 
 describe('maskPath', () => {
+  // platform 参数显式注入：断言不得依赖测试宿主（Windows 分片上 process.platform
+  // 是 win32，POSIX 用例若走默认值会按 `\` 连接尾部而失败，2026-11-11 review）。
   it('keeps only the trailing 2 segments of POSIX paths (host semantics)', () => {
-    expect(maskPath('/home/sam/projects/cindy/apps/desktop/resources/icon.png')).toBe(
+    expect(
+      maskPath('/home/sam/projects/cindy/apps/desktop/resources/icon.png', 'linux'),
+    ).toBe('.../resources/icon.png');
+    expect(maskPath('/home/sam/checkout/resources/icon.png', 'darwin')).toBe(
       '.../resources/icon.png',
     );
-    expect(maskPath('/home/sam/checkout/resources/icon.png')).toBe('.../resources/icon.png');
   });
 
   it('keeps only the trailing 2 segments of Windows paths (both separators)', () => {
@@ -33,7 +37,7 @@ describe('maskPath', () => {
   });
 
   it('returns already-short paths as-is', () => {
-    expect(maskPath('/tmp')).toBe('/tmp');
+    expect(maskPath('/tmp', 'linux')).toBe('/tmp');
     expect(maskPath('C:\\cindy', 'win32')).toBe('C:\\cindy');
   });
 
@@ -46,10 +50,12 @@ describe('maskPath', () => {
   it('⚠️ POSIX 路径含字面反斜杠的目录名时不得整条返回（2026-11-11 review 第一轮）', () => {
     // 反斜杠在 POSIX 文件名里合法；旧的「见 `\` 即按 Windows 切」会让此路径只剩
     // 2 段、经 already-short 分支把完整绝对路径（含用户名与目录结构）交给调用方。
-    expect(maskPath('/home/alice/proj\\private/resources/icon.png')).toBe(
+    expect(maskPath('/home/alice/proj\\private/resources/icon.png', 'linux')).toBe(
       '.../resources/icon.png',
     );
-    expect(maskPath('/home/alice/proj\\private/resources/icon.png')).not.toContain('alice');
+    expect(maskPath('/home/alice/proj\\private/resources/icon.png', 'linux')).not.toContain(
+      'alice',
+    );
   });
 
   it('⚠️ 目录名内反斜杠再多也按 POSIX 语义遮蔽，不翻转到反斜杠切分（review 第二轮）', () => {
@@ -58,9 +64,9 @@ describe('maskPath', () => {
     // 宿主语义下反斜杠只是目录名字符，整个目录随前缀一起被丢弃。
     const adversarial =
       '/home/alice/a\\client-one\\client-two\\client-three\\client-four\\client-five/resources/icon.png';
-    expect(maskPath(adversarial)).toBe('.../resources/icon.png');
-    expect(maskPath(adversarial)).not.toContain('client-one');
-    expect(maskPath(adversarial)).not.toContain('client-five');
-    expect(maskPath(adversarial)).not.toContain('alice');
+    expect(maskPath(adversarial, 'linux')).toBe('.../resources/icon.png');
+    expect(maskPath(adversarial, 'linux')).not.toContain('client-one');
+    expect(maskPath(adversarial, 'linux')).not.toContain('client-five');
+    expect(maskPath(adversarial, 'linux')).not.toContain('alice');
   });
 });
