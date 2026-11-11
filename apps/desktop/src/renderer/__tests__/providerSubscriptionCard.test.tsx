@@ -69,7 +69,7 @@ describe('settings subscription card', () => {
     const hook = renderHook(() => useProviderSubscriptionCard(provider));
     expect(hook.result.current).not.toBeNull();
     render(<QuotaHoverCard variant="embedded" account={hook.result.current!} />);
-    expect(screen.getByRole('status').textContent).toBe('quotaCard.codexRefreshFailed');
+    expect(screen.getByRole('status').textContent).toContain('quotaCard.codexRefreshFailed');
     fireEvent.click(screen.getByRole('button', { name: 'quotaCard.retryQuota' }));
     expect(refresh).toHaveBeenCalledTimes(1);
   });

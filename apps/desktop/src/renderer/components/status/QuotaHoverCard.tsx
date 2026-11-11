@@ -11,6 +11,7 @@ import { useTranslation } from 'react-i18next';
 import { computeQuotaPace, type QuotaPace } from '@/lib/quotaPace';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
+import { ErrorNotice } from '@/components/ui/error-notice';
 import {
   formatQuotaResetCountdown,
   formatQuotaResetDuration,
@@ -567,18 +568,20 @@ export function QuotaHoverCard({
           <div className="flex justify-end px-4">{windowAction}</div>
         ) : null}
         {account.refreshFailure ? (
-          <div className="space-y-2 px-4 py-2">
-            <div role="status" className="text-[var(--text-secondary)]">
-              {t('quotaCard.codexRefreshFailed')}
-            </div>
-            <Button
-              variant="secondary"
-              disabled={account.refreshFailure.retrying}
-              onClick={account.refreshFailure.retry}
-            >
-              {t(account.refreshFailure.retrying ? 'quotaCard.retryingQuota' : 'quotaCard.retryQuota')}
-            </Button>
-          </div>
+          <ErrorNotice
+            role="status"
+            className="mx-4 my-2"
+            message={t('quotaCard.codexRefreshFailed')}
+            actions={
+              <Button
+                variant="secondary"
+                disabled={account.refreshFailure.retrying}
+                onClick={account.refreshFailure.retry}
+              >
+                {t(account.refreshFailure.retrying ? 'quotaCard.retryingQuota' : 'quotaCard.retryQuota')}
+              </Button>
+            }
+          />
         ) : emptyText ? (
           <div className="px-4 py-2 text-[var(--text-secondary)]">{emptyText}</div>
         ) : null}

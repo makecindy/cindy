@@ -108,13 +108,16 @@ describe('QuotaHoverCard', () => {
     };
     const view = render(<UsageCard {...props} />);
     expect(screen.queryByText('Waiting for quota')).toBeNull();
-    expect(screen.getByRole('status').textContent).toBe('quotaCard.codexRefreshFailed');
+    expect(screen.getByRole('status').textContent).toContain('quotaCard.codexRefreshFailed');
     expect(screen.getByTestId('quota-session-usage').textContent).toContain('5,678');
     expect(screen.getByTestId('quota-turn-usage').textContent).toContain('1,234');
     fireEvent.click(screen.getByRole('button', { name: 'quotaCard.retryQuota' }));
     expect(retry).toHaveBeenCalledTimes(1);
     view.rerender(<UsageCard {...props} account={{ ...account, refreshFailure: { retry, retrying: true } }} />);
-    expect((screen.getByRole('button', { name: 'quotaCard.retryingQuota' }) as HTMLButtonElement).disabled).toBe(true);
+    const busyButton = screen.getByRole('button', { name: 'quotaCard.retryingQuota' }) as HTMLButtonElement;
+    expect(busyButton.disabled).toBe(true);
+    fireEvent.click(busyButton);
+    expect(retry).toHaveBeenCalledTimes(1);
     view.rerender(<UsageCard {...props} account={{ windows: [] }} />);
     expect(screen.queryByRole('status')).toBeNull();
     expect(screen.queryByRole('button', { name: 'quotaCard.retryQuota' })).toBeNull();

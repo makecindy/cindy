@@ -458,7 +458,7 @@ describe('TodaySpendChip Claude subscription popover', () => {
     fireEvent.mouseEnter(screen.getByRole('button', { name: '用量明细' }));
     act(() => vi.advanceTimersByTime(300));
     const card = screen.getByTestId('quota-hover-card');
-    expect(within(card).getByRole('status').textContent).toBe('quotaCard.codexRefreshFailed');
+    expect(within(card).getByRole('status').textContent).toContain('quotaCard.codexRefreshFailed');
     expect(within(card).getByRole('progressbar').getAttribute('aria-valuenow')).toBe('75');
     mocks.refreshCodexRateLimits.mockClear();
     const retryButton = within(card).getByRole('button', { name: 'quotaCard.retryQuota' });

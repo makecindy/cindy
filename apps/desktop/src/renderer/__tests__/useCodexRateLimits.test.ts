@@ -26,6 +26,51 @@ afterEach(() => {
 });
 
 describe('useCodexRateLimits', () => {
+  // PR #9916: a read with no reply must release the Retry button and discard
+  // any late reply. Fake time keeps this unit regression network-free.
+  it('releases a stalled read, retains usage and ignores the late response after retry', async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveLate!: (value: MobileCodexRateLimitsResult) => void;
+      const recovered = { ...result, rateLimits: { primary: { usedPercent: 40 } } };
+      const reader = vi.fn().mockResolvedValueOnce(result)
+        .mockImplementationOnce(() => new Promise(resolve => { resolveLate = resolve; }))
+        .mockResolvedValueOnce(recovered);
+      vi.stubGlobal('electronAPI', { maker: { usage: { getCodexRateLimits: reader } } });
+      const hook = renderHook(() => useCodexRateLimits(true));
+      await act(async () => {});
+      expect(hook.result.current.snapshot).toBe(result);
+      act(() => hook.result.current.refresh());
+      await act(async () => vi.advanceTimersByTimeAsync(15_000));
+      expect(hook.result.current).toMatchObject({ snapshot: result, failed: true, refreshing: false });
+      await act(async () => hook.result.current.refresh());
+      expect(hook.result.current).toMatchObject({ snapshot: recovered, failed: false, refreshing: false });
+      await act(async () => resolveLate(result));
+      expect(hook.result.current.snapshot).toBe(recovered);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // The same refresh callback is used after consuming a reset credit. That
+  // authoritative reread must not be dropped behind an older in-flight read.
+  it('honors a post-reset refresh while a pre-reset read is still pending', async () => {
+    let resolveBeforeReset!: (value: MobileCodexRateLimitsResult) => void;
+    const afterReset = { ...result, rateLimitResetCredits: { availableCount: 1, credits: [] } };
+    const reader = vi.fn().mockImplementationOnce(() => new Promise(resolve => { resolveBeforeReset = resolve; }))
+      .mockResolvedValueOnce(afterReset);
+    vi.stubGlobal('electronAPI', { maker: { usage: { getCodexRateLimits: reader } } });
+    const hook = renderHook(() => useCodexRateLimits(true));
+    act(() => {
+      hook.result.current.refresh();
+      hook.result.current.refresh();
+    });
+    expect(reader).toHaveBeenCalledTimes(1);
+    await act(async () => resolveBeforeReset(result));
+    expect(reader).toHaveBeenCalledTimes(2);
+    expect(hook.result.current.snapshot).toBe(afterReset);
+  });
+
   // F13 unit regression: the old hook swallowed a rejected read. Exercise the
   // public hook with no cache and with a cache, then retry without losing data.
   it.each([false, true])('reports failed reads and recovers on retry (cached=%s)', async (cached) => {
@@ -46,7 +91,6 @@ describe('useCodexRateLimits', () => {
     act(() => hook.result.current.refresh());
     expect(hook.result.current.refreshing).toBe(true);
     expect(hook.result.current.failed).toBe(true);
-    act(() => hook.result.current.refresh());
     expect(reader).toHaveBeenCalledTimes(cached ? 3 : 2);
     await act(async () => finishRetry(result));
     expect(hook.result.current).toMatchObject({ snapshot: result, failed: false, refreshing: false });

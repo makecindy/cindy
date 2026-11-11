@@ -32,6 +32,9 @@ function readCodexAuthStateSubscriber(): CodexAuthStateSubscriber | undefined {
   }).electronAPI?.maker?.auth?.onStateChanged;
 }
 
+// A stalled read must not leave the recovery button disabled indefinitely.
+const CODEX_RATE_LIMIT_READ_TIMEOUT_MS = 15_000;
+
 /** Never expose raw account RPC errors; older preloads remain a silent fallback. */
 export async function readCodexRateLimitsSafely(
   reader: CodexRateLimitsReader | undefined,
@@ -39,12 +42,21 @@ export async function readCodexRateLimitsSafely(
   onFailure?: () => void,
 ): Promise<MobileCodexRateLimitsResult | null> {
   if (!reader) return null;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
-    const result = await (providerId && providerId !== 'openai' ? reader(providerId) : reader());
+    const read = providerId && providerId !== 'openai' ? reader(providerId) : reader();
+    const result = await Promise.race([
+      read,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error('Codex quota read timed out')), CODEX_RATE_LIMIT_READ_TIMEOUT_MS);
+      }),
+    ]);
     return providerId && providerId !== 'openai' && result.providerId !== providerId ? null : result;
   } catch {
     onFailure?.();
     return null;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -68,7 +80,7 @@ interface CachedRateLimits {
   pendingReads: number;
   liveObservers: number;
   hasLiveObservation: boolean;
-  queuedRefreshes: Set<{ version: number }>;
+  queuedRefreshes: Set<{ version: number; manual?: true }>;
   listeners: Set<() => void>;
   unsubscribe: Array<() => void>;
   providerId: string;
@@ -183,7 +195,16 @@ export function useCodexRateLimits(
   const readSnapshot = useCallback(() => enabled ? entry.state : EMPTY_STATE, [entry, enabled]);
   const state = useSyncExternalStore(subscribe, readSnapshot, readSnapshot);
   const refresh = useCallback(() => {
-    if (enabled && !entry.state.refreshing) refreshEntry(entry);
+    if (!enabled || entry.awaitingAuthCompletion) return;
+    if (entry.pendingReads === 0) {
+      refreshEntry(entry);
+      return;
+    }
+    // Reset completion needs a read started after older requests settle. Reuse
+    // the live-card queue, keeping one manual request independent of its unmount tokens.
+    if (![...entry.queuedRefreshes].some(request => request.manual && request.version === entry.version)) {
+      entry.queuedRefreshes.add({ version: entry.version, manual: true });
+    }
   }, [enabled, entry]);
   useEffect(() => {
     if (!enabled) return;
