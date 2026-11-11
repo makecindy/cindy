@@ -3593,7 +3593,7 @@
         },
         "local": {
           "title": "自本机应用导入",
-          "note": "读取本机所存 API 配置，不改来源应用。",
+          "note": "只读此机已存 API 配置，不改来源应用。Claude Code 仅读用户级 settings.json（含 CLAUDE_CONFIG_DIR），不读 shell 环境变量、项目或托管设置。",
           "review": "审阅并导入（{{count}}）",
           "scanning": "正读取所存配置…",
           "empty": "未见所存 API 配置。",
@@ -3613,7 +3613,7 @@
             "readFailed": "读取不成，请核权限或重试",
             "invalid": "格式未识，请核验或编辑配置",
             "limit": "已逾读取上限，此来源未读全",
-            "unsupported": "此配置暂不可导入",
+            "unsupported": "此配置不可自动导入。不执行命令或 apiKeyHelper，请手动添加 API 配置。",
             "needsInput": "配置尚待补全",
             "changed": "来源已变，请重新扫描",
             "duplicate": "相同连接已存"

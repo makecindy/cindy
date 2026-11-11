@@ -59,6 +59,13 @@ const clickOpen = () =>
   fireEvent.click(screen.getByRole('button', { name: 'settings.providers.import.local.title' }));
 
 describe('local configuration import selection', () => {
+  it('explains a helper-only source instead of silently showing an empty result', async () => {
+    maker.scanLocalProviderImports.mockResolvedValue({ items: [], sources: [{ source: 'claude-code', issue: 'unsupported' }] });
+    render(<LocalProviderImportButton onImported={vi.fn()} />);
+    clickOpen();
+    expect(await screen.findByText(/Claude Code · settings.providers.import.local.status.unsupported/)).toBeTruthy();
+  });
+
   it('only reads on explicit open, reports a broken source, and hands selected IDs to existing review', async () => {
     const onImported = vi.fn();
     render(<LocalProviderImportButton onImported={onImported} />);

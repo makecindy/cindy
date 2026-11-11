@@ -8,6 +8,7 @@ import { open } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import Database from 'better-sqlite3';
+import { localImportClaudeConfigDirectory } from './sourceEnvironment.js';
 import { resolveBetterSqliteNativeBinding } from '../../localDb/betterSqliteFactory.js';
 import { stripJsonComments } from '../../../shared/theme-import/vscode.js';
 import { parse as parseToml } from 'smol-toml';
@@ -61,7 +62,10 @@ export const localSourceContext = (): LocalSourceContext => ({
   platform: process.platform,
   env: Object.fromEntries(
     ['CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'APPDATA'].map(
-      (key) => [key, process.env[key]],
+      (key) => [
+        key,
+        key === 'CLAUDE_CONFIG_DIR' ? localImportClaudeConfigDirectory() : process.env[key],
+      ],
     ),
   ),
 });
@@ -196,6 +200,29 @@ function endpoint(
     models: models(ms),
   };
 }
+// Claude CLI modes are not API model IDs. Only resolve aliases using mappings
+// saved in this file; account/provider defaults require runtime discovery.
+// https://code.claude.com/docs/en/model-config
+function claudeStaticModels(value: unknown, env: ObjectMap): string[] {
+  const id = str(value).trim();
+  const alias = id.replace(/\[1m\]$/, '');
+  if (!id || ['default', 'inherit'].includes(alias)) return [];
+  if (alias === 'opusplan') {
+    return ['opus', 'sonnet'].flatMap((family) => claudeStaticModels(family, env));
+  }
+  const family = alias === 'best' ? 'opus' : alias;
+  if (['opus', 'sonnet', 'haiku', 'fable'].includes(family)) {
+    const mapped = str(env[`ANTHROPIC_DEFAULT_${family.toUpperCase()}_MODEL`]).trim();
+    // An unresolved/self-referential alias is not a statically known wire ID.
+    return mapped &&
+      !['default', 'inherit', 'opusplan', 'best', 'opus', 'sonnet', 'haiku', 'fable'].includes(
+        mapped.replace(/\[1m\]$/, ''),
+      )
+      ? [mapped.replace(/\[1m\]$/, '')]
+      : [];
+  }
+  return [id.replace(/\[1m\]$/, '')];
+}
 function claude(ref: string, name: string, config: ObjectMap): LocalSourceEntry {
   const env = obj(config.env);
   const base =
@@ -204,14 +231,14 @@ function claude(ref: string, name: string, config: ObjectMap): LocalSourceEntry 
   const token = str(env.ANTHROPIC_AUTH_TOKEN),
     key = str(env.ANTHROPIC_API_KEY);
   const ms = [
-    'ANTHROPIC_MODEL',
-    'ANTHROPIC_DEFAULT_OPUS_MODEL',
-    'ANTHROPIC_DEFAULT_SONNET_MODEL',
-    'ANTHROPIC_DEFAULT_HAIKU_MODEL',
-    'ANTHROPIC_SMALL_FAST_MODEL',
-  ]
-    .map((k) => env[k])
-    .filter(Boolean);
+    first(env.ANTHROPIC_MODEL, config.model),
+    ...[
+      'ANTHROPIC_DEFAULT_OPUS_MODEL',
+      'ANTHROPIC_DEFAULT_SONNET_MODEL',
+      'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+      'ANTHROPIC_SMALL_FAST_MODEL',
+    ].map((k) => env[k]),
+  ].flatMap((value) => claudeStaticModels(value, env));
   const hs = token ? { Authorization: `Bearer ${token}` } : undefined;
   const ep = endpoint('claude-code', base, 'anthropic-messages', token ? undefined : key, ms, hs);
   if (env.ANTHROPIC_CUSTOM_HEADERS) {
@@ -402,9 +429,25 @@ async function read(
       !Object.keys(obj(cfg.env)).some((k) =>
         ['ANTHROPIC_BASE_URL', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'].includes(k),
       )
-    )
+    ) {
+      if (cfg.apiKeyHelper) throw new SourceError('unsupported');
       return [];
-    return [claude('settings', 'Claude Code', cfg)];
+    }
+    const entry = claude('settings', 'Claude Code', cfg);
+    if (
+      cfg.apiKeyHelper &&
+      !entry.endpoints.some(
+        (ep) =>
+          ep.apiKey ||
+          Object.entries(ep.headers ?? {}).some(
+            ([key, value]) =>
+              /^(authorization|x-api-key|api-key|x-goog-api-key)$/i.test(key) && !!value,
+          ),
+      )
+    ) {
+      throw new SourceError('unsupported');
+    }
+    return [entry];
   }
   if (source === 'codex') {
     const dir = c.env.CODEX_HOME || join(c.home, '.codex');

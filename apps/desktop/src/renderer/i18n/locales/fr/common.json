@@ -3683,7 +3683,7 @@
         },
         "local": {
           "title": "Importer depuis des applications locales",
-          "note": "Lire les configurations API enregistrées sur cet ordinateur sans modifier les applications sources.",
+          "note": "Lire les configurations API enregistrées sur cet ordinateur sans modifier les applications sources. Claude Code : uniquement le fichier settings.json utilisateur, y compris CLAUDE_CONFIG_DIR. Les variables du shell et les paramètres de projet ou administrés ne sont pas lus.",
           "review": "Vérifier et importer ({{count}})",
           "scanning": "Lecture des configurations enregistrées…",
           "empty": "Aucune configuration API enregistrée trouvée.",
@@ -3703,7 +3703,7 @@
             "readFailed": "Lecture impossible ; vérifiez les autorisations ou réessayez",
             "invalid": "Format non reconnu ; vérifiez ou modifiez la configuration",
             "limit": "Limite atteinte ; cette source n’a pas été entièrement lue",
-            "unsupported": "Cette configuration ne peut pas encore être importée",
+            "unsupported": "Cette configuration ne peut pas être importée automatiquement. Les commandes et apiKeyHelper ne sont pas exécutés ; ajoutez la configuration API manuellement.",
             "needsInput": "Configuration à compléter",
             "changed": "La source a changé ; relancez la recherche",
             "duplicate": "Une connexion identique existe déjà"

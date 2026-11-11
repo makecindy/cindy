@@ -60,6 +60,101 @@ describe('saved API sources (isolated fake credentials only)', () => {
     });
     expect(result.entries[0].endpoints[0].apiKey).toBe('FAKE-KEY');
   });
+  it('retains only the source directory across the real Desktop Anthropic environment scrub', async () => {
+    const full = await put('alternative/settings.json', {
+      model: 'f10-startup-model',
+      env: { ANTHROPIC_API_KEY: 'FAKE-SAVED-KEY' },
+    });
+    const { stripSensitiveAnthropicEnv } = await import('@cindy/maker-core');
+    const { stripAnthropicEnvPreservingImportDirectory } = await import('../sourceEnvironment.js');
+    const { localSourceContext } = await import('../sources.js');
+    const startupEnv = {
+      CLAUDE_CONFIG_DIR: dirname(full),
+      ANTHROPIC_API_KEY: 'NEVER-INHERIT-KEY',
+      ANTHROPIC_AUTH_TOKEN: 'NEVER-INHERIT-TOKEN',
+      ANTHROPIC_BASE_URL: 'https://never-inherit.test',
+      KEEP_UNRELATED: 'kept',
+    };
+    try {
+      stripAnthropicEnvPreservingImportDirectory(stripSensitiveAnthropicEnv, startupEnv);
+      expect(startupEnv).toEqual({ KEEP_UNRELATED: 'kept' });
+      // Use the production context builder after scrubbing, not an injected directory.
+      const retained = localSourceContext().env;
+      expect(retained.CLAUDE_CONFIG_DIR).toBe(dirname(full));
+      expect(retained).not.toHaveProperty('ANTHROPIC_API_KEY');
+      expect(retained).not.toHaveProperty('ANTHROPIC_AUTH_TOKEN');
+      const result = await readLocalProviderSource('claude-code', { ...context, env: retained });
+      expect(result.entries[0].endpoints[0]).toMatchObject({
+        apiKey: 'FAKE-SAVED-KEY',
+        models: [{ id: 'f10-startup-model' }],
+      });
+      expect(JSON.stringify(result)).not.toContain('NEVER-INHERIT');
+    } finally {
+      stripAnthropicEnvPreservingImportDirectory(stripSensitiveAnthropicEnv, {});
+    }
+  });
+  // Settings model names are wire IDs; Claude CLI aliases are resolved only
+  // when this same saved file supplies an explicit family mapping.
+  it.each([
+    [{ model: 'f10-custom-model' }, ['f10-custom-model']],
+    [{ model: 'ignored', env: { ANTHROPIC_MODEL: 'env-model' } }, ['env-model']],
+    [
+      { model: 'sonnet', env: { ANTHROPIC_DEFAULT_SONNET_MODEL: 'relay-sonnet' } },
+      ['relay-sonnet'],
+    ],
+    [
+      { model: 'sonnet[1m]', env: { ANTHROPIC_DEFAULT_SONNET_MODEL: 'relay-sonnet' } },
+      ['relay-sonnet'],
+    ],
+    [
+      {
+        model: 'opusplan',
+        env: {
+          ANTHROPIC_DEFAULT_OPUS_MODEL: 'relay-opus',
+          ANTHROPIC_DEFAULT_SONNET_MODEL: 'relay-sonnet',
+        },
+      },
+      ['relay-opus', 'relay-sonnet'],
+    ],
+    [{ model: 'sonnet' }, []],
+    [{ model: 'default' }, []],
+  ])(
+    'imports static Claude model settings without sending CLI modes as wire IDs: %j',
+    async (config, expected) => {
+      await put('.claude/settings.json', {
+        ...config,
+        env: { ANTHROPIC_API_KEY: 'FAKE-F10-KEY', ...('env' in config ? config.env : {}) },
+      });
+      const result = await readLocalProviderSource('claude-code', context);
+      expect(result.entries[0].endpoints[0].models.map((m) => m.id)).toEqual(expected);
+    },
+  );
+  it.each([{}, { ANTHROPIC_BASE_URL: 'https://relay.test' }])(
+    'explains helper-only authentication without running it or reading shell/project settings: %j',
+    async (env) => {
+      await put('.claude/settings.json', { apiKeyHelper: 'NEVER_EXECUTE_F10', env });
+      await put('project/.claude/settings.local.json', {
+        env: { ANTHROPIC_API_KEY: 'NEVER-PROJECT' },
+      });
+      const result = await readLocalProviderSource('claude-code', {
+        ...context,
+        env: { ANTHROPIC_API_KEY: 'NEVER-SHELL' },
+      });
+      expect(result).toEqual({ source: 'claude-code', entries: [], issue: 'unsupported' });
+    },
+  );
+  it('imports saved authentication headers even when a helper is also configured', async () => {
+    await put('.claude/settings.json', {
+      apiKeyHelper: 'NEVER_EXECUTE_F10',
+      env: {
+        ANTHROPIC_BASE_URL: 'https://relay.test',
+        ANTHROPIC_CUSTOM_HEADERS: 'x-api-key: FAKE-HEADER-KEY',
+      },
+    });
+    const result = await readLocalProviderSource('claude-code', context);
+    expect(result.issue).toBeUndefined();
+    expect(result.entries[0].endpoints[0].headers).toEqual({ 'x-api-key': 'FAKE-HEADER-KEY' });
+  });
   it('reads Codex providers/profile models and API key only for its selected provider', async () => {
     await put(
       '.codex/config.toml',

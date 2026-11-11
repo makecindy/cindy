@@ -3634,7 +3634,7 @@
         },
         "local": {
           "title": "Aus lokalen Apps importieren",
-          "note": "Gespeicherte API-Konfigurationen auf diesem Computer lesen. Die Quell-Apps bleiben unverändert.",
+          "note": "Gespeicherte API-Konfigurationen auf diesem Computer lesen, ohne die Quell-Apps zu ändern. Claude Code: nur die settings.json des Benutzers, auch unter CLAUDE_CONFIG_DIR. Shell-Variablen sowie Projekt- und verwaltete Einstellungen werden nicht gelesen.",
           "review": "Prüfen und importieren ({{count}})",
           "scanning": "Gespeicherte Konfigurationen werden gelesen…",
           "empty": "Keine gespeicherten API-Konfigurationen gefunden.",
@@ -3654,7 +3654,7 @@
             "readFailed": "Lesen nicht möglich; Berechtigungen prüfen oder erneut versuchen",
             "invalid": "Unbekanntes Format; Konfiguration prüfen oder bearbeiten",
             "limit": "Leselimit erreicht; diese Quelle wurde nicht vollständig gelesen",
-            "unsupported": "Diese Konfiguration kann noch nicht importiert werden",
+            "unsupported": "Diese Konfiguration kann nicht automatisch importiert werden. Befehle und apiKeyHelper werden nicht ausgeführt; fügen Sie die API-Konfiguration manuell hinzu.",
             "needsInput": "Konfiguration muss ergänzt werden",
             "changed": "Quelle geändert; erneut suchen",
             "duplicate": "Eine identische Verbindung ist bereits vorhanden"

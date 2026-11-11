@@ -3634,7 +3634,7 @@
         },
         "local": {
           "title": "Import from local apps",
-          "note": "Read saved API configurations on this computer. Source apps are left unchanged.",
+          "note": "Read saved API configurations on this computer without changing source apps. Claude Code: user settings.json only, including CLAUDE_CONFIG_DIR. Shell variables, project and managed settings are not read.",
           "review": "Review and import ({{count}})",
           "scanning": "Reading saved configurations…",
           "empty": "No saved API configurations found.",
@@ -3654,7 +3654,7 @@
             "readFailed": "Could not read; check permissions or retry",
             "invalid": "Unrecognized format; check or edit the configuration",
             "limit": "Limit reached; this source was not fully read",
-            "unsupported": "This configuration cannot be imported yet",
+            "unsupported": "This configuration cannot be imported automatically. Commands and apiKeyHelper are not run; add the API configuration manually.",
             "needsInput": "Configuration needs completion",
             "changed": "Source changed; scan again",
             "duplicate": "An identical connection already exists"

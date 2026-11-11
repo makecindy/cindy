@@ -3593,7 +3593,7 @@
         },
         "local": {
           "title": "從本機應用程式匯入",
-          "note": "讀取這台電腦上已儲存的 API 設定，不會修改來源應用程式。",
+          "note": "唯讀匯入這台電腦已儲存的 API 設定，不修改來源應用程式。Claude Code 僅讀取使用者層級 settings.json（含 CLAUDE_CONFIG_DIR），不讀取 shell 環境變數、專案或受管理設定。",
           "review": "檢視並匯入（{{count}}）",
           "scanning": "正在讀取已儲存的設定…",
           "empty": "找不到已儲存的 API 設定。",
@@ -3613,7 +3613,7 @@
             "readFailed": "無法讀取，請檢查權限或重試",
             "invalid": "無法辨識格式，請檢查或編輯設定",
             "limit": "超過讀取上限，未完整讀取此來源",
-            "unsupported": "此設定暫不支援匯入",
+            "unsupported": "此設定無法自動匯入。不會執行命令或 apiKeyHelper，請手動新增 API 設定。",
             "needsInput": "需要補齊設定",
             "changed": "來源已變更，請重新掃描",
             "duplicate": "已存在相同連線"
