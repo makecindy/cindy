@@ -1741,6 +1741,56 @@ describe('landed user route selection', () => {
 });
 
 describe('远程 Agent:选模型时换 Agent 所在电脑', () => {
+  // Unit, #9854: an old runtime snapshot is not mutation admission. Exercise the
+  // real handoff path: expiry leaves route/history untouched, while our own
+  // successful close must not invalidate an admitted relocation.
+  it.each(['handoff-expired', 'drained-expired', 'no-live-expired', 'closing-expired',
+    'runtime-replaced', 'own-close', 'user-takeover'] as const)(
+    'admits forced shared relocation at its first actual mutation: %s', async mode => {
+      let clock = 0, grantActive = true, inputCurrent = true, admitted = false;
+      let historyRead = false, checksAfterHistory = 0;
+      const source = { isTurnRunning: () => false, hasStartedClosing: () => mode === 'closing-expired' };
+      let live: typeof source | null = mode === 'no-live-expired' ? null : source;
+      const mutations: string[] = [];
+      const assertCurrent = () => {
+        if (!inputCurrent || (!admitted && (!grantActive || clock >= 10))) throw new Error('recovery is not current');
+      };
+      const { deps } = makeDeps({
+        getSessionRow: vi.fn(async () => makeRow({ source: 'bot', agentDeviceId: 'share:owner' })),
+        getLiveSession: () => live,
+        listMessagesForHandoff: vi.fn(async () => {
+          historyRead = true;
+          if (mode === 'handoff-expired') clock = 11;
+          if (mode === 'drained-expired') live = null;
+          if (mode === 'runtime-replaced') live = { ...source };
+          return [{ role: 'user', content: 'continue', createdAt: 1 }];
+        }),
+        closeSession: vi.fn(async () => {
+          if (!live || live.hasStartedClosing()) return;
+          mutations.push('close'); live = null; grantActive = false;
+          if (mode === 'user-takeover') inputCurrent = false;
+        }),
+        applyAgentSwitchToDb: vi.fn(async () => { mutations.push('db'); }),
+      });
+      const result = performSessionAgentSwitch(deps, {
+        sessionId: 's1', targetAgentKind: 'claude-code', model: 'claude-fable-5',
+        providerId: 'xd', agentDeviceId: 'share:owner', applyNow: true,
+        providerGroupRelocation: true, forceRelocation: true, assertSelectionCurrent: assertCurrent,
+        beforeMutation: async () => {
+          if (historyRead && ++checksAfterHistory === 2
+            && ['drained-expired', 'no-live-expired', 'closing-expired'].includes(mode)) clock = 11;
+        },
+        onRelocationMutationStart: () => { assertCurrent(); admitted = true; },
+      });
+      if (mode === 'own-close') await expect(result).resolves.toMatchObject({ switched: true, engineReady: true });
+      else await expect(result).rejects.toThrow(mode === 'runtime-replaced' ? 'runtime changed' : 'not current');
+      expect(mutations).toEqual(mode === 'own-close' ? ['close', 'db'] : mode === 'user-takeover' ? ['close'] : []);
+      expect(deps.insertBoundaryMessage).toHaveBeenCalledTimes(mode === 'own-close' ? 1 : 0);
+      expect(deps.setPendingHandoff).toHaveBeenCalledTimes(mode === 'own-close' ? 1 : 0);
+      expect(deps.bootstrapSwitchedSession).toHaveBeenCalledTimes(mode === 'own-close' ? 1 : 0);
+    },
+  );
+
   // Unit regression for provider-groups §6.1: companion eligibility can change
   // while history or the target is read. Earlier cancellation tests only changed
   // the synchronous lease, not the host's asynchronous companion-state guard.

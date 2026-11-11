@@ -1729,6 +1729,49 @@ describe('onTurnError for a shared user (the sharer’s group picks the computer
     },
   );
 
+  // Unit, #9854: O's token can arrive before the send lock/history wait ends.
+  // Earlier close-during-request cases did not invalidate the grant after receipt
+  // or distinguish our own close from user takeover.
+  it.each(['expired-wait', 'gate-expired', 'own-close', 'user-takeover', 'missing-grant-with-offer'] as const)(
+    'keeps direct authorization until relocation admission: %s', async mode => {
+      const h = guestHarness();
+      let clock = 0, grantActive = true;
+      const mutations: string[] = [];
+      const validity: boolean[] = [];
+      const direct = { ownerRoute: SHARE_ROUTE,
+        requestSwitch: vi.fn(async () => 'token-direct-aaaaaaaaaaaa'),
+        captureRecovery: () => mode === 'missing-grant-with-offer' ? null : ({
+          ownerRoute: SHARE_ROUTE, requestSwitch: async () => direct.requestSwitch(),
+          isCurrent: () => grantActive && clock < 10,
+        }),
+      };
+      const move = vi.fn<ProviderGroupServiceDeps['switchAgentLocation']>(async (_id, _route, options) => {
+        await Promise.resolve(); // the production adapter may wait for the send lock
+        if (mode === 'expired-wait') clock = 11;
+        validity.push(options?.isCurrent?.() === true);
+        if (!validity.at(-1)) throw new Error(PROVIDER_GROUP_SUPERSEDED_ERROR);
+        if (mode === 'gate-expired') clock = 11;
+        options?.onRelocationMutationStart?.();
+        mutations.push('close');
+        grantActive = false;
+        if (mode === 'user-takeover') h.deps.isLeaseCurrent.mockReturnValue(false);
+        validity.push(options?.isCurrent?.() === true);
+        if (!validity.at(-1)) throw new Error(PROVIDER_GROUP_SUPERSEDED_ERROR);
+        mutations.push('db');
+      });
+      if (mode === 'missing-grant-with-offer') h.guestSwitch.offer('s1', 'token-direct-aaaaaaaaaaaa');
+      const service = createProviderGroupService({ ...h.deps, guestSwitch: h.guestSwitch,
+        directGuestSession: () => direct, switchAgentLocation: move });
+      await service.onTurnError('s1', { message: 'You have hit your usage limit' }, 7);
+      expect(validity).toEqual(mode === 'own-close' ? [true, true] : mode === 'user-takeover' ? [true, false]
+        : mode === 'expired-wait' ? [false] : mode === 'gate-expired' ? [true] : []);
+      expect(mutations).toEqual(mode === 'own-close' ? ['close', 'db'] : mode === 'user-takeover' ? ['close'] : []);
+      expect(h.deps.continueSession).toHaveBeenCalledTimes(mode === 'own-close' ? 1 : 0);
+      expect(h.guestSwitch.takeForOpen('s1')).toBe(mode === 'own-close' ? 'token-direct-aaaaaaaaaaaa' : undefined);
+      expect(h.deps.fallback).toHaveBeenCalledTimes(['expired-wait', 'gate-expired', 'missing-grant-with-offer'].includes(mode) ? 1 : 0);
+    },
+  );
+
   it('ignores a stale token, a token the user already took over from, and failures any computer would hit', async () => {
     const stale = guestHarness();
     stale.guestSwitch.offer('s1', 'token-aaaaaaaaaaaaaaaa');

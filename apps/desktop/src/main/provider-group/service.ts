@@ -57,6 +57,7 @@ import {
   type ProviderGroupRouter,
 } from './router.js';
 import {
+  PROVIDER_GROUP_SUPERSEDED_ERROR,
   decideProviderGroupFailure,
   describeProviderGroupFailure,
   providerGroupUnavailableError,
@@ -211,7 +212,9 @@ export interface ProviderGroupServiceDeps {
      * `relocate`：位置不变也重新交接、新建会话(分享的人换电脑，实际运行的电脑由组所在电脑重新选)。
      * `reason: 'quota-rebalance'`：用户确认为了先用那台的配额换过去，分隔条写明原因。
      */
-    options?: { beforeSend?: boolean; isCurrent?: () => boolean; relocate?: boolean; reason?: 'quota-rebalance' },
+    options?: { beforeSend?: boolean; isCurrent?: () => boolean; relocate?: boolean; reason?: 'quota-rebalance';
+      /** Synchronous admission at an actual source close or route commit; may be called again. */
+      onRelocationMutationStart?: () => void },
   ): Promise<void>;
   /** 这个任务选过「以后自动换，不再询问」(provider-groups.md §6.2「任务进行中换号」)。不提供 = 都没选过。 */
   readAutoRebalance?(sessionId: string): boolean;
@@ -1503,8 +1506,17 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       guestSwitch.release(sessionId);
       return true;
     }
+    if (directRecovery === null || (directRecovery && !directRecovery.isCurrent())) {
+      guestSwitch.release(sessionId);
+      return false;
+    }
     const model = row.model;
     await withSwitchRun(sessionId, signals, token, lease, run, hooks, async (isCurrent, handBack) => {
+      // Keep the original grant through lock/history waits. Our own source close
+      // may retire it; after admission the input lease and new route fence the move.
+      let mutationStarted = false;
+      const selectionCurrent = () => isCurrent()
+        && (mutationStarted || !directRecovery || directRecovery.isCurrent());
       try {
         // 位置仍是同一个分享：强制重新交接、新建会话，打开时带上凭证，由组所在电脑换一台。
         await deps.switchAgentLocation(sessionId, {
@@ -1512,7 +1524,12 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
           model,
           providerId: row.providerId,
           agentDeviceId: shareRoute,
-        }, { isCurrent, relocate: true });
+        }, { isCurrent: selectionCurrent, relocate: true,
+          ...(directRecovery ? { onRelocationMutationStart: () => {
+            if (!selectionCurrent()) throw new Error(PROVIDER_GROUP_SUPERSEDED_ERROR);
+            mutationStarted = true;
+          } } : {}),
+        });
       } catch (error) {
         guestSwitch.release(sessionId);
         deps.log.info('provider group: switching computer for a shared task stopped', { sessionId, error: errorText(error) });
