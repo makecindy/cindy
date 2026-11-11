@@ -79,7 +79,8 @@ Auto 有自己的审核及部分引擎的目录边界，但可能自动放行；
     pnpm check:test-hygiene
     pnpm check:dco
 
-本地全量门禁未执行，等待 PR CI。上述测试使用平台内存 fake，不是线上平台互发测试。
+本地全量门禁未执行；`86cf013d88` 的 20 项 PR CI 已通过。新增测试后的提交仍须等待对应 head 的 CI。
+上述测试使用平台内存 fake，不是线上平台互发测试。
 
 ### 测试价值
 
@@ -89,6 +90,54 @@ Auto 有自己的审核及部分引擎的目录边界，但可能自动放行；
 | packages/lizi-im/src/feishu/__tests__/wsClientGroup.test.ts | SDK 注册的入站 handler；原默认 scope 未覆盖开放群成员的伙伴配置 | guests=true 加已绑定后的非 owner p2p；必须无业务事件，owner p2p / 群 @ 保持可用；unit | 18 例整文件测试执行 19 ms |
 
 Telegram 现有大文件超过单文件建议预算；新用例没有新增真实等待或测试文件，不为本次热修重构无关连接 / 轮询用例。
+
+## 补充：公用飞书应用的两个已授权用户
+
+2026-11-11 按 review 中提出的 A / B 场景补测。客户端产品实现仍为 `92d2ce114f`，
+仅新增回归测试与本文说明；服务端测试冻结在 `xindong/cindy-server` 的
+`b6539e62acd1b021a90c6eb4e06fe5a6e0fee4e9`，未修改或发布服务端代码。
+
+这里区分两条实际入口：
+
+- 官方公用应用：服务端按 `appId + senderOpenId` 查各自关联，再经官方 hook 派发。
+  [服务端入口](https://github.com/xindong/cindy-server/blob/b6539e62acd1b021a90c6eb4e06fe5a6e0fee4e9/feishu-hook-server/src/feishu/controller.ts#L2069)
+  与本 PR 修改的自建 bot `wsClient` 私聊门禁不同。
+- 自建机器人接入伙伴：同一连接只认绑定的主人。B 仅获准使用飞书应用，仍不等于获得
+  A 伙伴的私聊访问权；原先多人可私聊同一伙伴的用法会被本热修关闭，群 @ 准入保留。
+
+### 实际运行的自动验证
+
+| 层级 | 执行与观察 | 结果 |
+| --- | --- | --- |
+| 客户端新增组合回归 | 同一 `cli_app`，A / B 分别有已确认绑定和独立 Cindy 账号 / 设备；各自私聊可派发，交叉投递被拒，解绑 B 后 A 仍可派发 | 新用例通过，2.76 s，其中测试执行 7 ms |
+| 客户端相关整文件 | `transport-manager.test.ts` 完整运行，包含新增组合回归 | 138 项通过，总时长 14.09 s |
+| 服务端生产控制流 | 现有 `controller.test.ts` 中双用户关联等选集；经 `handleBindStart`、`handleOAuthCallback`、消息接收、任务派发与回执路径 | 14 项通过，144 项未选中，总时长 642 ms |
+| Desktop 类型检查、测试卫生、diff 检查 | 本次新增测试后的版本 | 通过 |
+| 测试文件 ESLint | 与未补测试的 `86cf013d88` 比较完整 ESLint 结果 | 两者均有相同 3 项既有 unused findings，无新增；文件级 ESLint 未全绿 |
+
+客户端命令：
+
+    pnpm --filter desktop exec vitest run src/main/hook-control/__tests__/transport-manager.test.ts -t '同一公用飞书应用' --maxWorkers=1
+    pnpm --filter desktop exec vitest run src/main/hook-control/__tests__/transport-manager.test.ts --maxWorkers=1
+    pnpm --filter desktop typecheck
+    pnpm check:test-hygiene
+
+服务端命令（在上述冻结版本的独立测试 worktree 运行）：
+
+    pnpm --filter @cindy/auth-verify build
+    pnpm --filter feishu-hook-server exec vitest run src/__tests__/controller.test.ts -t 'store app multiple Feishu accounts|binds through the OAuth callback|dispatches bound DMs' --maxWorkers=1
+
+新增客户端测试的价值：生产入口是官方 hook manager 的入站帧处理；要保护公用应用多个用户
+各自的绑定、派发和解绑隔离，防止将伙伴单主人规则误用到公用应用。原测试只覆盖一个
+manager 下的本机用户 / 其他用户判定，没有两个 manager 并存的组合。最小输入为同一应用的
+两份已确认绑定和两条私聊；测试属于 unit tier，纯内存帧，不新增 socket、子进程或真实等待。
+整文件包含原有真实 loopback WebSocket / 看门狗用例，实测超过 10 s；新用例自身执行 7 ms，
+本次未改动这些既有资源测试或提高 timeout。
+
+服务端的 OAuth code exchange、用户资料与飞书发送 API 均由内存 fake 提供；关联回调、
+绑定存储控制流、派发与回执使用生产代码。客户端新增测试直接输入已确认绑定快照，
+不验证真实 OAuth。以上结果不能等同于真实飞书账号授权或平台互发通过，也不能证明当前
+线上服务与该冻结服务端版本一致。真实 A / B 互发仍为未验证。
 
 ## 待执行的真实账号复测
 
@@ -101,6 +150,7 @@ Telegram 现有大文件超过单文件建议预算；新用例没有新增真�
 | Telegram 群 / 话题 | A / B 按既有允许的方式 @ bot 或回复 | 正常进入对应群 / 话题专线，成员不会被当成主人；不将本项通过解释为资料沙箱 |
 | 个人 Telegram 回归 | 在设置中的个人 bot 重复 A / B 私聊 | A 正常，B 仍只走固定拒绝 |
 | 飞书 / Lark 伙伴 | A 绑定后，B 发 p2p，再在已准入群 @；A 发 p2p | B 私聊无业务派发；A 私聊和已有群 @ 正常 |
+| 官方公用飞书应用双用户 | A / B 各自完成与自己 Cindy 的关联，在同一公用应用里分别私聊发送不同的本轮测试标记 | 两人都能收到各自回复；B 不被当作 A 的陌生人拒绝；任务与回复不串到另一人的 Cindy |
 | 旧连接升级 | 保留现有配置升级 / 重启后再次执行以上步骤 | 无需重绑；旧 guest 私信放行不会恢复 |
 | 完全访问 | 对伙伴切换至完全访问，再由 B 私聊 | 仍在传输层拒绝，不受工具权限档位影响 |
 | 界面说明 | 伙伴设置 → 消息平台，Light / Dark 查看更新说明 | 不再声称所有人可私聊或隐藏任务自动隔离资料；检查中英文等长文换行 |
