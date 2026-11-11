@@ -3590,30 +3590,6 @@ describe('Cindy Make task note', () => {
     expect(vi.mocked(session.send).mock.calls[2][0]).toContain('[Side chat context]');
   });
 
-  // Unit / #7253: only wire context explains delivery reporting. The previous
-  // source-note coverage did not protect all harnesses, dedupe, or persistence.
-  it.each(['claude-code', 'codex', 'pi'] as const)('adds deduplicated delivery context to %s without saving it as user text', async (agentKind) => {
-    const memory = createWireNoteMemory();
-    const session = createSession({ agentKind });
-    const note = '[Task delivery] Report newly delivered results before ending.';
-    const { deps } = createDeps({
-      getSession: () => session,
-      readTaskDeliveryNote: async () => note,
-      planRepeatableWireNotes: (id, notes, opts) => memory.plan(id, notes, opts),
-    });
-    const transaction = createMakerSendTransaction(deps);
-    await transaction.sendToAgentAccepted('session-1', 'Complete the work', undefined, {
-      persistUserMessage: { clientId: 'delivery-1', content: 'Complete the work' },
-    });
-    expect(vi.mocked(session.send).mock.calls[0][0]).toContain(note);
-    expect(vi.mocked(deps.createDbMessage).mock.calls[0][1].content).toBe('Complete the work');
-    await transaction.sendToAgentAccepted('session-1', 'Continue');
-    expect(vi.mocked(session.send).mock.calls[1][0]).toBe('Continue');
-    memory.reset('session-1');
-    await transaction.sendToAgentAccepted('session-1', 'Continue after compaction');
-    expect(vi.mocked(session.send).mock.calls[2][0]).toContain(note);
-  });
-
   it('tells the agent the owner\'s message closed its input handoff card, on that message only and without saving it', async () => {
     const session = createSession({ agentKind: 'codex' });
     let note: string | null = '[Card closed]';
@@ -4788,65 +4764,6 @@ it('persists coordination audit metadata and dispatches the model without a prom
   });
 });
 
-describe('working memory refresh after native compaction', () => {
-  const note = '[Working memory refresh · internal context]\n- 周五前改完周报模板';
-
-  it('prepends the refresh note once and consumes that generation only after the engine accepted the turn', async () => {
-    const session = createSession({ agentKind: 'codex' });
-    const { deps } = createDeps({
-      getSession: vi.fn(() => session),
-      peekWorkingMemoryRefresh: vi.fn(async () => ({ generation: 7, note })),
-      consumeWorkingMemoryRefresh: vi.fn(),
-    });
-    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello');
-    expect(vi.mocked(session.send).mock.calls[0]?.[0]).toBe(`${uiLanguageNote()}\n\n${note}\n\nhello`);
-    expect(deps.consumeWorkingMemoryRefresh).toHaveBeenCalledWith('session-1', 7);
-
-    const rejecting = createSession({ agentKind: 'codex', send: vi.fn(async () => ({ accepted: false }) as SessionSendResult) });
-    const { deps: rejectedDeps } = createDeps({
-      getSession: vi.fn(() => rejecting),
-      peekWorkingMemoryRefresh: vi.fn(async () => ({ generation: 7, note })),
-      consumeWorkingMemoryRefresh: vi.fn(),
-    });
-    await createMakerSendTransaction(rejectedDeps).sendToAgentAccepted('session-1', 'hello').catch(() => undefined);
-    expect(rejectedDeps.consumeWorkingMemoryRefresh).not.toHaveBeenCalled();
-  });
-
-  it('skips the refresh when a rebuild handoff already carries the ledger, but still consumes that generation', async () => {
-    const session = createSession({ agentKind: 'codex' });
-    const { deps } = createDeps({
-      getSession: vi.fn(() => session),
-      peekPendingHandoff: vi.fn(async () => 'HANDOFF'),
-      peekWorkingMemoryRefresh: vi.fn(async () => ({ generation: 3, note })),
-      consumeWorkingMemoryRefresh: vi.fn(),
-    });
-    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello');
-    const sent = vi.mocked(session.send).mock.calls[0]?.[0] as string;
-    expect(sent).toContain('HANDOFF');
-    expect(sent).not.toContain('Working memory refresh');
-    expect(deps.consumeWorkingMemoryRefresh).toHaveBeenCalledWith('session-1', 3);
-  });
-
-  it('consumes the marker even when the session has no ledger, and nothing when none is pending', async () => {
-    const session = createSession({ agentKind: 'codex' });
-    const { deps } = createDeps({
-      getSession: vi.fn(() => session),
-      peekWorkingMemoryRefresh: vi.fn(async () => ({ generation: 2, note: null })),
-      consumeWorkingMemoryRefresh: vi.fn(),
-    });
-    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello');
-    expect(vi.mocked(session.send).mock.calls[0]?.[0]).toBe(withUiLanguageNote('hello'));
-    expect(deps.consumeWorkingMemoryRefresh).toHaveBeenCalledWith('session-1', 2);
-
-    const { deps: idle, session: idleSession } = createDeps({
-      peekWorkingMemoryRefresh: vi.fn(async () => null),
-      consumeWorkingMemoryRefresh: vi.fn(),
-    });
-    await createMakerSendTransaction(idle).sendToAgentAccepted('session-1', 'hello');
-    expect(idleSession.send).toHaveBeenCalledOnce();
-    expect(idle.consumeWorkingMemoryRefresh).not.toHaveBeenCalled();
-  });
-});
 
 describe('repeatable environment notes are sent only when they change', () => {
   const host = { deviceId: 'mac-1', name: 'Mac' };

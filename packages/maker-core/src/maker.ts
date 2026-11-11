@@ -1714,6 +1714,8 @@ export class Maker {
   async listAgentSkills(
     agentKind: AgentKind,
     opts: ListAgentSkillsOptions & { sessionId?: string },
+    /** Host-only request-scoped verification; never part of renderer/remote options. */
+    readDisabledSkillPaths?: () => Promise<readonly string[]>,
   ): Promise<ListAgentSkillsResult> {
     const { sessionId, ...agentOpts } = opts;
     const sessionMeta = sessionId ? await this.storage.get(sessionId) : null;
@@ -1725,11 +1727,13 @@ export class Maker {
       ));
     const agent = this.requireAgent(agentKind);
     const session = sessionId ? this.getSession(sessionId) : undefined;
-    const filter = (result: ListAgentSkillsResult) => agent.filterActiveSkillCommands(
-      result, agentOpts.remoteHostId ?? sessionMeta?.remoteHostId ?? undefined,
-      session?.agentKind === agentKind ? session.getDisabledSkillPaths() : undefined,
-    );
-    const result = filter(await agent.listAgentSkills({
+    const filter = async (result: ListAgentSkillsResult) => {
+      const remoteHostId = agentOpts.remoteHostId ?? sessionMeta?.remoteHostId ?? undefined;
+      const snapshot = session?.agentKind === agentKind ? session.getDisabledSkillPaths() : undefined;
+      const current = !remoteHostId && snapshot === undefined ? await readDisabledSkillPaths?.() : undefined;
+      return agent.filterActiveSkillCommands(result, remoteHostId, snapshot, current);
+    };
+    const result = await filter(await agent.listAgentSkills({
       ...agentOpts,
       includeManagedPiPackages,
     }));

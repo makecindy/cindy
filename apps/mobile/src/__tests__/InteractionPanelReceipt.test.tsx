@@ -19,6 +19,9 @@ import { i18n } from '@/i18n';
 import { AskCardAuthContext } from '@/session/askCardAuth';
 import { darkColors, lightColors } from '@/theme/tokens';
 
+// Markdown rendering/native media are exercised by the simulator; these tests cover decisions.
+vi.mock('@/session/MessageRenderer', () => ({ MarkdownBody: ({ text }: { text: string }) => <span>{text}</span> }));
+
 const voiceStarter = vi.hoisted(() => ({ start: vi.fn() }));
 const theme = vi.hoisted(() => ({ mode: 'light' as 'light' | 'dark' }));
 vi.mock('@/session/askCardVoiceStart', () => ({ startAskCardDictation: voiceStarter.start }));
@@ -81,7 +84,7 @@ vi.mock('@/components/AppText', async () => {
 });
 vi.mock('lucide-react-native', async () => {
   const { createElement } = await import('react');
-  return { ShieldCheck: () => null, MessageCircle: () => null, ChevronDown: () => null, ChevronUp: () => null, Check: () => null, CornerDownLeft: () => null,
+  return { Globe2: () => null, ShieldCheck: () => null, MessageCircle: () => null, ChevronDown: () => null, ChevronUp: () => null, Check: () => null, CornerDownLeft: () => null,
     Maximize2: () => null, Minimize2: () => null, Minus: () => null, Mic: ({ color }: { color: string }) => createElement('span', { 'data-mic-color': color }), Square: ({ color }: { color: string }) => createElement('span', { 'data-stop-color': color }), Pencil: () => null, Plus: () => null };
 });
 vi.mock('react-i18next', async (importOriginal) => ({
@@ -671,6 +674,9 @@ it.each(['send', 'close', 'stopped', 'stopped-empty', 'already-answered', 'uncon
     expect(text.split('\n\n<cindy_question_context>')[0]).toBe('> Original?\n\nFinished');
     expect(text).toContain('This is a delayed answer');
     expect(text).toContain('do not repeat work already completed');
+    // The note is for the model only: the message people see is the question and the answer.
+    expect(asyncReply.input.enqueue.mock.calls[0][1].chatMessage.content).toBe('> Original?\n\nFinished');
+    expect(asyncReply.input.enqueue.mock.calls[0][1].persistedContent).not.toContain('cindy_question_context');
     expect(asyncReply.input.resume).toHaveBeenCalledTimes(action === 'stopped' ? 1 : 0);
   } else expect(asyncReply.input.enqueue).not.toHaveBeenCalled();
 });
@@ -731,10 +737,59 @@ it('submits the host-provided Codex session approval from the shared guest alway
 });
 
 it.each(['plugin_setup', 'issue_confirm', 'ghost_grant_confirm', 'rename_sessions_confirm'])('keeps shared guest %s confirmation read-only', async (kind) => {
-  remoteSessionStore.setPendingInteractions('s1', [{ request: { kind, requestId } }]);
+  remoteSessionStore.setPendingInteractions('s1', [{ request: { kind, requestId, remoteConfirmSupported: true } }]);
   await act(async () => root.render(<Harness deviceId={sharedTaskHostPeer('shared', 'd1')} />));
   expect(host.querySelector('[data-testid="interaction.readOnlyCard"]')).not.toBeNull();
   expect(resolveInteraction).not.toHaveBeenCalled();
+});
+
+// Regression: mobile previously rendered feedback as an unsupported desktop-only card.
+// Tier: UI unit; actual panel -> transport, including preview, collapse and public identity.
+it('reviews and submits feedback on mobile, retaining edits after a failed receipt', async () => {
+  remoteSessionStore.setPendingInteractions('s1', [{ request: { kind: 'issue_confirm', requestId,
+    remoteConfirmSupported: true, draft: { title: 'Bug', body: 'Steps', type: 'bug' },
+    env: { appVersion: '1', platform: 'darwin', arch: 'arm64', osVersion: '1' },
+    submissionIdentity: { kind: 'platform', login: 'bot' }, suggestedPublicName: 'Reporter',
+    githubUserIdentity: { kind: 'github-user', login: 'octocat' },
+  } }]);
+  await act(async () => root.render(<CollapsibleHarness />));
+  expect(host.querySelector('[data-testid="interaction.panelHeader"]')).toBeNull();
+  await click('interaction.panel.collapseButton');
+  expect(host.querySelector('[data-testid="interaction.panel.collapsedBar"]')).not.toBeNull();
+  await click('interaction.panel.collapsedBar');
+  expect(host.querySelector('[data-testid="interaction.issue.title"]')).toBeNull();
+  expect(resolveInteraction).not.toHaveBeenCalled();
+  await click('interaction.issue.edit');
+  await click('interaction.issue.feature');
+  await type('interaction.issue.title', 'Edited bug');
+  await type('interaction.issue.body', 'Edited steps');
+  expect(host.querySelector('[data-testid="interaction.issue.submit"]')).toBeNull();
+  await click('interaction.issue.done');
+  resolveInteraction.mockRejectedValueOnce(new Error('PERMISSION_DENIED'));
+  await click('interaction.issue.submit');
+  expect(resolveInteraction).toHaveBeenCalledWith(requestId, { kind: 'issue_confirm', confirmed: true,
+    title: 'Edited bug', body: 'Edited steps', type: 'feature', submissionIdentity: { kind: 'platform', login: 'bot' },
+    publicName: 'Reporter', uiLanguage: 'en' });
+  expect(host.textContent).toContain('Edited steps');
+  await click('interaction.issue.identity');
+  await click('interaction.issue.github-user');
+  resolveInteraction.mockResolvedValueOnce({ accepted: true });
+  await click('interaction.issue.submit');
+  expect(resolveInteraction).toHaveBeenLastCalledWith(requestId, expect.objectContaining({
+    submissionIdentity: { kind: 'github-user', login: 'octocat' }, type: 'feature',
+  }));
+  expect(resolveInteraction.mock.calls.at(-1)![1]).not.toHaveProperty('publicName');
+});
+
+it('cancels mobile feedback without requiring public-content approval', async () => {
+  remoteSessionStore.setPendingInteractions('s1', [{ request: { kind: 'issue_confirm', requestId,
+    remoteConfirmSupported: true, draft: { title: 'Bug', body: 'Steps', type: 'bug' },
+    env: {}, submissionIdentity: { kind: 'platform', login: 'bot' },
+  } }]);
+  await act(async () => root.render(<Harness />));
+  resolveInteraction.mockResolvedValueOnce({ accepted: true });
+  await click('interaction.issue.cancel');
+  expect(resolveInteraction).toHaveBeenCalledExactlyOnceWith(requestId, { kind: 'issue_confirm', confirmed: false });
 });
 
 // Bug #1493: collapse belongs to the caller and must survive a card being replaced.

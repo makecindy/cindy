@@ -1,0 +1,35 @@
+name: Agent-Net native interop
+on:
+  pull_request:
+    paths:
+      - 'packages/agent-net*/**'
+      - 'packages/device-link*/**'
+      - 'apps/mobile/modules/cindy-agent-net/**'
+      - 'pnpm-lock.yaml'
+      - 'scripts/check-agent-net-native.mjs'
+      - '.github/workflows/agent-net-native.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-host:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      XDT_SKIP_AGENT_BIN_INSTALL: '1'
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: rustup toolchain install stable --profile minimal
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test:agent-net-native

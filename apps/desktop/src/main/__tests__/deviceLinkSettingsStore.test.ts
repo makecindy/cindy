@@ -68,6 +68,8 @@ const h = vi.hoisted(() => {
 const SETTINGS_PATH = path.join('/tmp/userdata', 'device-link-settings.json');
 
 const DEFAULT_SETTINGS = {
+  agentNetEnabled: false,
+  agentNetOnlyEncrypted: false,
   remoteDesktopEnabled: false,
   remoteControlEnabled: false,
   keepAwake: false,
@@ -141,6 +143,8 @@ describe('readDeviceLinkSettings', () => {
     );
     const { readDeviceLinkSettings } = await load();
     expect(readDeviceLinkSettings()).toEqual({
+      agentNetEnabled: false,
+      agentNetOnlyEncrypted: false,
       remoteControlEnabled: true,
       remoteDesktopEnabled: false,
       keepAwake: false,

@@ -127,6 +127,7 @@ import {
   migrateLegacyBotProfileFolder,
   readBotProfileFolder,
 } from '../maker-ipc/botProfileFolder.js';
+import { readBotLinkedProjects } from '../maker-ipc/botLinkedProjectStore.js';
 import {
   listBotTeammates,
 } from '../localDb/botHistoryScope.js';
@@ -228,6 +229,7 @@ import {
   resolvePiGatewayDescriptorProviderId,
   resolveVerifiedContextWindow,
   resolveModelDefaultContextWindow,
+  resolveModelMaxOutputTokens,
 } from './catalog-to-descriptors.js';
 import { readModelContextLimit, resolveModelCompactionPct } from './model-context-limit-store.js';
 import { resolveDesktopModelContextProviderId, resolveDesktopModelEfforts, readStoredSessionContextWindowBudget, resolveConfiguredContextWindow, applySessionContextWindowBudgetToCreateOpts } from './model-context-settings.js';
@@ -1515,6 +1517,11 @@ export function getMaker(): Maker {
         return source ? readModelContextLimit('claude-code', source, modelId)
           ?? resolveModelDefaultContextWindow(catalog, 'claude-code', source, modelId) : null;
       },
+      resolveModelMaxOutputTokens: (providerId, modelId) => {
+        const catalog = getDesktopSelectableCatalog();
+        const source = resolveDesktopModelContextProviderId(catalog, 'claude-code', providerId, modelId);
+        return resolveModelMaxOutputTokens(catalog, 'claude-code', source, modelId);
+      },
       resolveModelCompactionPct: (providerId, modelId) => {
         const source = resolveDesktopModelContextProviderId(getDesktopSelectableCatalog(), 'claude-code', providerId, modelId);
         return resolveModelCompactionPct(getDesktopSelectableCatalog(), 'claude-code', source, modelId);
@@ -2615,6 +2622,16 @@ export function getMaker(): Maker {
           systemPromptOverride: folder.systemPromptOverride,
         };
       },
+      // 项目模式:本机的关联项目作为只读附加目录;另一台电脑上的只是引用,不在这里挂载。
+      listLinkedProjectDirs: async ({ botId }) => {
+        const linked = await readBotLinkedProjects(ownerScopedUserDataPath(), botId);
+        const dirs: string[] = [];
+        for (const project of linked) {
+          if (project.deviceId) continue;
+          if (await fs.stat(project.path).then((value) => value.isDirectory(), () => false)) dirs.push(project.path);
+        }
+        return dirs;
+      },
       readMemoryIndex: async (scopeKey) =>
         (await makerMemoryManager.getStore(scopeKey)).getIndex(),
       // 队友名册进提示词(见 buildBotTeammateRoster)。
@@ -2708,9 +2725,9 @@ export function getMaker(): Maker {
           const providerReady = await ensureCurrentAccountProviderReadiness();
           if (!providerReady) {
             // 未登录 / 正在切账号时这里恒 false。主机通路只把失败压成 errorCode +
-            // message 两个字符串，所以稳定标记必须写进 message 本身：调用方（如 Bot
-            // 委派）据此把「这不会自愈，得让用户去登录」和「瞬时故障，值得重试」分开，
-            // 而不是无差别重试到天荒地老。见 botDelegationDispatchOutcome.ts。
+            // message 两个字符串，所以稳定标记必须写进 message 本身：调用方据此把
+            // 「这不会自愈，得让用户去登录」和「瞬时故障，值得重试」分开，
+            // 而不是无差别重试到天荒地老。
             throw Object.assign(
               new Error(
                 `${ACCOUNT_PROVIDER_NOT_READY_CODE}: account provider models are not ready `
@@ -2804,7 +2821,8 @@ export function getMaker(): Maker {
           opts.vendorOptions = {
             ...(opts.vendorOptions ?? {}),
             [CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY]: disabledPluginIds,
-            ...(botRuntimeSnapshot
+            // V2 teammates (projectContext) get the ordinary task's MCP and plugin surface.
+            ...(botRuntimeSnapshot && !createOpts.botRuntimeProfile?.projectContext
               ? {
                   [RUNTIME_MCP_NAMES_KEY]: (_mcpProviders[createOpts.agentKind] ?? [])
                     .filter((provider) => isBotMcpServerAllowed(createOpts.botRuntimeProfile?.mcpPolicy, provider.name))

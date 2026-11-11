@@ -261,26 +261,6 @@ export class CompanionCallDialogue {
     try {
       if (!this.current() || this.ended || !this.context || !this.db) return;
       for (const task of this.context.record.handoffs.filter((item) => item.state === 'accepted')) {
-        // Background tasks inherit the protected user-source receipt. Match
-        // that provenance, never titles, text similarity or the latest child.
-        const delegated = await this.db.client.query<{ status: string; result: string | null }>(
-          `SELECT status, result_summary AS result FROM bot_delegations
-            WHERE parent_session_id = ?
-              AND json_extract(permission_snapshot_json, '$.taskInput.requestSource.sessionId') = ?
-              AND json_extract(permission_snapshot_json, '$.taskInput.requestSource.clientId') = ?`,
-          [this.input.sessionId, this.input.sessionId, task.inputId],
-        );
-        if (!this.current() || this.ended) return;
-        if (delegated.length) {
-          if (
-            delegated.every((item) =>
-              ['completed', 'failed', 'cancelled', 'timed-out'].includes(item.status),
-            )
-          ) {
-            this.context.deliverResult(task.id, JSON.stringify(delegated).slice(0, 32_000));
-          }
-          continue;
-        }
         // Observe only the canonical reply after this exact accepted input,
         // stopping at the next user input. Unrelated replies cannot flow back.
         const rows = await this.db.client.query<{
