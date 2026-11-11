@@ -284,7 +284,23 @@ _Positioning note: the Display / Section Heading / Sub-heading rows are conceptu
 以下漂移**已知且本轮明确不治理**,后人见到不要当「漏网」顺手修,治理需另立 issue:
 
 - line-height **档位统一**:桌面存在 `leading-[1.45]` / `leading-[1.55]` 等微调档与无单位 / px 混轨,本轮不收敛成统一阶梯。
-  - **但有一条例外,已在 #1553 治理完毕**:`text-<n>` 与**固定 px 行高**(`leading-[Mpx]`)并存属于**功能缺陷**,不是风格漂移 —— `text-<n>` 经 `--text-<n>` 响应「外观 → UI 字号」设置,固定 px 行框不跟随,用户放大字号时文字会裁切/重叠。原设计未考虑用户可自行调整字号,故留下这个洞。**该组合一律改为无单位比例**(比例 = 原 px ÷ 字号),渲染在默认字号下不变而放大时正确。#1553 已把当时全部 38 处清零(其中 14 处为字号归一新引入、24 处先于其存在);后续新增 `text-<n>` 时**不得再配固定 px 行高**,该约束由 `typographyDiscipline.test.ts` 的 `fixed-leading` 规则做机器门禁,**按 `className` / `cn(...)` 整块区域跨行判定**(只比对同一行会漏掉 `cn()` 分行写法,#1553 实际漏过一处)。行高被 JS 布局计算写死引用时(如按行高算 auto-grow 上限),须同时改成读计算值,否则上限不跟随缩放。
+  - **但有一条例外,不属于本 non-goal**:会缩放的字号(`text-<n>`、`text-xs/sm/base/lg`)与**固定行高**并存属于**功能缺陷**,不是风格漂移 —— 字号经 `--text-*` 响应「外观 → UI 字号」设置,固定行框不跟随,用户放大字号时多行文字会挤在一起、裁切或重叠。原设计未考虑用户可自行调整字号,故留下这个洞。**固定行高**包括:
+    - 任意值 px:`leading-[Mpx]`;
+    - 任意值 rem:`leading-[Nrem]`;
+    - Tailwind 数字档 `leading-3…10`(= `0.75rem…2.5rem`,如 `leading-5` = 20px)。字号设置只改写 `--text-*` 变量、不改根字号,rem 同样不跟随:UI 字号调到 24 时 `text-13` 变为 22px,`leading-5` 仍是 20px。
+
+    **正确写法是无单位比例**,比例 = 原行高 px ÷ 默认字号 px,精度以乘回默认字号仍得原 px 为准:`text-13 leading-5` → `leading-[1.54]`,`text-12 leading-5` → `leading-[1.667]`。默认字号下渲染不变,放大时行距随字号等比增长。`leading-none` / `leading-tight` 等无单位关键字与 `em` 行高本就跟随字号,不受此限。行高被 JS 布局计算写死引用时(如按行高算 auto-grow 上限),须同时改成读计算值,否则上限不跟随缩放。
+
+    **门禁**:`typographyDiscipline.test.ts` 的 `fixed-leading` 规则拦截上述三种写法,**按 `className` / `cn(...)` 整块区域跨行判定**,也检查单行 class 字符串常量(只比对同一行会漏掉 `cn()` 分行写法,#1553 实际漏过一处)。px 写法已由 #1553 清零(当时 38 处),零容忍;rem 与数字档在 2026-11 纳入门禁时的存量逐条登记在同文件 `FIXED_LEADING_DEBT`(文件 + 写法 + 次数),新增一处即红,迁移后须同步下调,**基线只减不增**。
+
+    **存量债务与分批迁移(2026-11 维护者裁决方案 A)**:`components/ui/` 共享组件(ErrorNotice、DownloadToast)已先行改为比例行高;登记基线为 **119 个文件、375 处**(`leading-5` 236、`leading-4` 88、`leading-6` 47、`leading-7` 2、`leading-8` 2;rem 写法 0)。按区域分批,每批一个 PR,附默认字号与最大 UI 字号(24)的单页对照,并在同一 PR 下调基线:
+    1. 聊天与输入框:`components/chat`、`components/new-chat`(47 处),用户放大字号后最常看到;
+    2. 插件:`features/plugin`(120 处);
+    3. 伙伴:`features/bots`(70 处);
+    4. 右侧栏与设置:`features/right-sidebar`、`components/settings`(71 处);
+    5. 其余零散区域(67 处,`features/billing`、`cindy-brain`、`features/skillhub`、`voice-input` 等)。
+
+    基线清零后删除 `FIXED_LEADING_DEBT`,本条只保留规则与门禁。
 - 语义类 `text-xs/sm/base/lg` → `text-<n>` 的机械统一:等值改写零收益,收编即可。
 - letter-spacing 与 font-family 治理。
 - 原生层排版:macOS agent-island helper 等 Swift / 原生 UI 的字号字重不在本白名单域(Web 白名单与守卫均不覆盖,治理需另立 issue)。
