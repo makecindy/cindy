@@ -4013,6 +4013,27 @@ describe('Telegram / Slack-grade timeline', () => {
     }
   });
 
+  // #9990 / unit: the real View -> Timeline must segment historical broadcasts
+  // before a member sharing their prefix, otherwise hover targets the wrong person.
+  it.each([
+    ['All', 'All teammates'], ['Al', 'Alle Teammitglieder'],
+    ['Tous', 'Tous les coéquipiers'], ['Todos', 'Todos los compañeros'],
+    ['Todos', 'Todos os colegas'], ['诸', '诸同僚'], ['諸', '諸同僚'],
+    ['모든', '모든 동료'],
+  ])('keeps the historical @%s / @%s highlight ranges separate', async (name, broadcast) => {
+    const registry = new Map<string, { ranges: Range[] }>();
+    vi.stubGlobal('Highlight', class { ranges: Range[]; constructor(...ranges: Range[]) { this.ranges = ranges; } });
+    vi.stubGlobal('CSS', { ...(globalThis.CSS ?? {}), highlights: registry });
+    const data = detail({ messages: [msg({ id: 'u1', content: `@${name} @${broadcast}`,
+      mentions: { all: false, allBots: true, botIds: ['mimi'] } })] });
+    data.members[0] = { ...data.members[0]!, botId: 'mimi', name };
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: data });
+    renderView();
+    await screen.findByText(`@${name} @${broadcast}`);
+    await waitFor(() => expect(registry.get('bot-group-mention')?.ranges.map(range => range.toString()))
+      .toEqual([`@${name}`, `@${broadcast}`]));
+  });
+
   it('highlights @mentions of members in teammates’ messages too', async () => {
     const registry = new Map<string, { ranges: Range[] }>();
     vi.stubGlobal('Highlight', class { ranges: Range[]; constructor(...ranges: Range[]) { this.ranges = ranges; } });
