@@ -1216,6 +1216,9 @@ it.each(['claude-code', 'codex', 'pi'] as const)('opens MCP Settings through the
     } }));
     expect(savedStale).toMatchObject({ ok: true, status: 'saved', serverId: 'custom_example', runtimeState: 'not-mounted' });
     expect(String(savedStale.hint)).toContain('不是连接失败');
+    // This host exposes no fixed entry, so the hint must not promise `next`.
+    expect(String(savedStale.hint)).not.toContain('next');
+    expect(savedStale.next).toBeUndefined();
     request.mockResolvedValueOnce({ status: 'saved', serverId: 'custom_example', runtimeState: 'connected', toolCount: 2 } as Awaited<ReturnType<typeof request>>);
     const savedFresh = parsePayload(await client.callTool({ name: 'call_tool', arguments: {
       name: 'request_mcp_setup', args: {},
@@ -1432,6 +1435,8 @@ it.each(['codex', 'claude-code', 'pi'] as const)('discovers and invokes a newly 
     expect(receipt).toMatchObject({ status: 'saved', runtimeState: 'not-mounted', next: {
       tool: 'list_mcp_tools', args: { server: 'custom_example' }, callWith: 'call_mcp_tool',
     } });
+    // Only a host that actually returns `next` may point the model at it.
+    expect(String(receipt.hint)).toContain('list_mcp_tools');
     expect(parsePayload(await call('list_mcp_tools', { server: 'custom_example' }))).toMatchObject({ ok: true, action: 'list' });
     expect(parsePayload(await call('call_mcp_tool', { server: 'custom_example', tool: 'ping', arguments: {} }))).toMatchObject({ ok: true, pong: true });
     expect(gateway).toHaveBeenLastCalledWith(expect.objectContaining(context), {

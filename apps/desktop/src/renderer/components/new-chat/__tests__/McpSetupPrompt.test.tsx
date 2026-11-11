@@ -83,6 +83,32 @@ it('creates a second entry when the owner explicitly asks instead of repairing',
   expect(api.updateCustomMcpServer).not.toHaveBeenCalled();
 });
 
+// Ambiguous layouts must not be “repaired” on the owner's behalf: two entries on one endpoint are
+// that owner's own choice, and a same-name entry on another endpoint is a different connection.
+it('does not reuse when several entries share the endpoint', async () => {
+  api.listCustomMcpServers.mockResolvedValue({ servers: [
+    { id: 'custom_a', name: 'A', url: 'https://example.test/mcp', transport: 'http', headers: {} },
+    { id: 'custom_b', name: 'B', url: 'https://example.test/mcp/', transport: 'http', headers: {} },
+  ] });
+  render(<McpSetupPrompt request={request} />);
+  expect(await screen.findByText('settings.mcp.dialog.createTitle')).toBeTruthy();
+  expect(screen.queryByText('settings.mcp.dialog.matchNotice')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'settings.mcp.save' }));
+  await waitFor(() => expect(api.createCustomMcpServer).toHaveBeenCalledWith(
+    expect.objectContaining({ id: 'custom_example', url: 'https://example.test/mcp' })));
+});
+
+it('does not reuse a same-name entry that points at another endpoint', async () => {
+  api.listCustomMcpServers.mockResolvedValue({ servers: [
+    { id: 'custom_old', name: 'Example', url: 'https://old.test/mcp', transport: 'http', headers: {} },
+  ] });
+  render(<McpSetupPrompt request={request} />);
+  expect(await screen.findByText('settings.mcp.dialog.createTitle')).toBeTruthy();
+  // The form keeps this request's endpoint, not the stored entry's.
+  expect((screen.getByLabelText('settings.mcp.fields.url') as HTMLInputElement).value)
+    .toBe('https://example.test/mcp');
+});
+
 // Teammates get the tools in this chat on the next message, so they must not see "start a new session".
 it.each([
   [true, 'settings.mcp.dialog.teammateDesc', 'settings.mcp.dialog.desc'],

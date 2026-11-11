@@ -9,20 +9,19 @@ import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerPushCu
 import type { McpSetupRequest } from '../../../shared/mcpSetup';
 import type { CustomMcpConfig } from '../../../shared/customMcp';
 
-/** Same endpoint (ignoring trailing slashes) or same display name means “this is that entry”. */
+/**
+ * Re-running setup for the same endpoint repairs that entry instead of forking `custom_x-2`.
+ * Matching stays strict: same endpoint, or (when the proposal carries no endpoint) same name.
+ * Several entries on one endpoint are the owner's own layout — never pick one for them.
+ */
 function findReusableServer(servers: CustomMcpConfig[], request: McpSetupRequest): CustomMcpConfig | null {
   const normalize = (value: string | undefined) => (value ?? '').trim().replace(/\/+$/, '');
   const url = normalize(request.proposal.url);
   const name = normalize(request.proposal.name).toLowerCase();
-  if (url) {
-    const byUrl = servers.find(server => normalize(server.url) === url);
-    if (byUrl) return byUrl;
-  }
-  if (name) {
-    const byName = servers.find(server => normalize(server.name).toLowerCase() === name);
-    if (byName) return byName;
-  }
-  return null;
+  const matches = servers.filter(server => (url
+    ? normalize(server.url) === url
+    : !!name && normalize(server.name).toLowerCase() === name));
+  return matches.length === 1 ? matches[0] : null;
 }
 
 /** Only public request metadata lives here; form values stay in McpServerDialog. */

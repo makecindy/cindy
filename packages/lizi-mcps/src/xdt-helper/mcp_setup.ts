@@ -69,7 +69,9 @@ export function registerMcpSetupTool(
         // runtimeState 只描述引擎原生工具列表。把这件事写进回执，避免模型把
         // pending / not-mounted / unverified 读成“连接失败”而要求重装或新建任务。
         const nativeListHint = result.status === 'saved' && result.runtimeState && result.runtimeState !== 'connected'
-          ? { hint: `配置已保存。runtimeState=${result.runtimeState} 只描述引擎原生工具列表，不是连接失败；直接用 next 的 list_mcp_tools → call_mcp_tool 即可，无需“继续”、新任务、worker 或重装。` }
+          ? { hint: gatewayAvailable
+            ? `配置已保存。runtimeState=${result.runtimeState} 只描述引擎原生工具列表，不是连接失败；直接用 next 的 list_mcp_tools → call_mcp_tool 即可，无需“继续”、新任务、worker 或重装。`
+            : `配置已保存。runtimeState=${result.runtimeState} 只描述引擎原生工具列表，不是连接失败；本宿主未提供固定入口，需要通过引擎下一次加载该服务（或由用户确认后重试），不要判定为配置失败、要求重装或新建任务。` }
           : {};
         return okPayload({
           ...result,
