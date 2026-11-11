@@ -19,7 +19,11 @@ void mountPage({
     maker: {
       codexRuntimeRouteGet: async () => ({ authInjection: 'env-key' }),
       onCodexRuntimeRouteChanged: subscription('codexRuntimeRouteChanged'),
-      auth: { onStateChanged: subscription('authStateChanged') },
+      auth: {
+        getState: async () => ({ authenticated: false }),
+        onStateChanged: subscription('authStateChanged'),
+        onLoginProgress: subscription('loginProgress'),
+      },
     },
   },
   render: ctx => <Fixture kind={ctx.case} />,

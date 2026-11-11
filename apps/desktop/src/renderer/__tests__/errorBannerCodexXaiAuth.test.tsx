@@ -45,6 +45,11 @@ vi.mock('@/hooks/useProviders', () => ({
   }),
 }));
 
+vi.mock('@/hooks/useCodexAuth', async importOriginal => ({
+  ...await importOriginal<typeof import('@/hooks/useCodexAuth')>(),
+  useCodexAuth: () => ({ state: { kind: 'unauthenticated' }, recoveryCheck: 'idle' }),
+}));
+
 vi.mock('@/hooks/useCodexSessionExpiredPrompt', () => ({
   isCodexSessionExpiredError: () => false,
   useCodexSessionExpiredPrompt: () => vi.fn(),
@@ -91,6 +96,9 @@ describe('ErrorBanner Codex xAI auth classification', () => {
 
     expect(screen.queryByTitle('chat.errorBanner.retryTitle')).toBeNull();
     expect(screen.getByText('chat.errorBanner.codexAuthMissingLocal')).toBeTruthy();
+    // SplitGroup uses this contract to prevent its focus navigation racing settings.
+    expect(screen.getByRole('button', { name: 'logic.confirm.goToSettings' })
+      .getAttribute('data-split-pane-route-action')).toBe('');
     fireEvent.click(screen.getByRole('button', { name: 'logic.confirm.goToSettings' }));
     expect(screen.getByTestId('location').textContent).toBe('/settings?tab=providers&connect=openai');
   });

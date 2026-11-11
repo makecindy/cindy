@@ -153,7 +153,7 @@ function OpenAiConnectionSettingsAction({ providerId }: { providerId: string }) 
   const navigate = useNavigate();
   const { t } = useTranslation();
   return (
-    <Button size="sm" compact type="button"
+    <Button size="sm" compact type="button" data-split-pane-route-action=""
       onClick={() => navigate(`/settings?tab=providers&connect=${encodeURIComponent(providerId)}`)}>
       {t('logic.confirm.goToSettings')}
     </Button>
@@ -349,6 +349,7 @@ export function ErrorBanner({
     isLocalAuthSession &&
     ((isCodexOpenAiSource && isCodexSessionExpiredError(error)) ||
       (isClaudeChatgptBridgeModel && isCodexSessionExpiredError(error)));
+  const isOpenAiAuthFailure = isOpenAiConnectionExpired || isCodexLocalOAuthAuthMissing;
   // 以共享的 Codex OAuth 状态机为唯一真相源：设置页、横幅或其它入口完成重连时，
   // AUTH_STATE_CHANGED 都会让现存横幅同步恢复 Retry；后续失效 / 登出广播也会撤销恢复态。
   // 非连接错误期间暂停订阅时 hook 会同时清掉旧快照；下次失效先保持“需重连”，直到
@@ -359,11 +360,11 @@ export function ErrorBanner({
     recoveryCheck: openAiRecoveryCheck,
     refresh: refreshOpenAiAuth,
   } = useCodexAuth({
-    enabled: isOpenAiConnectionExpired && !independentOpenAiAccount,
-    recoveryHint: isOpenAiConnectionExpired ? { reason: error } : undefined,
+    enabled: isOpenAiAuthFailure && !independentOpenAiAccount,
+    recoveryHint: isOpenAiAuthFailure ? { reason: error } : undefined,
   });
   const openAiConnectionRecoveredSinceError =
-    isOpenAiConnectionExpired && (independentOpenAiAccount ? selectedOpenAiAccount?.connected === true : isChatGptConnectionConnected(openAiAuthState, false));
+    isOpenAiAuthFailure && (independentOpenAiAccount ? selectedOpenAiAccount?.connected === true : isChatGptConnectionConnected(openAiAuthState, false));
   const openAiReconnectRequired = isOpenAiConnectionExpired && !openAiConnectionRecoveredSinceError;
   const openAiAuthLoading = openAiAuthState.kind === 'loading';
   const openAiLoginPending = openAiAuthState.kind === 'login-pending';
@@ -457,7 +458,7 @@ export function ErrorBanner({
     isOversizedHistoryError ||
     (isCodexRemoteAuthMissing && !syncedSinceError) ||
     openAiReconnectRequired ||
-    isCodexLocalOAuthAuthMissing;
+    (isCodexLocalOAuthAuthMissing && !openAiConnectionRecoveredSinceError);
   const safeRetryText = !hideRetry && retryText ? retryText : null;
   const retryAction = safeRetryText
     ? () => onRetry(safeRetryText)
@@ -547,9 +548,11 @@ export function ErrorBanner({
       ? t('chatgptAuthRecovery.recovered')
       : t(codexRecoveryDescriptionKey(openAiCredentialScope));
   } else if (isCodexLocalOAuthAuthMissing) {
-    displayError = t('chat.errorBanner.codexAuthMissingLocal', {
-      provider: providerDisplayNameById(authProviderId ?? 'openai', errorProviders, t),
-    });
+    displayError = openAiConnectionRecoveredSinceError
+      ? t('chatgptAuthRecovery.recovered')
+      : t('chat.errorBanner.codexAuthMissingLocal', {
+          provider: providerDisplayNameById(authProviderId ?? 'openai', errorProviders, t),
+        });
   } else if (isClaudeGatewayOpusPlanMismatch) {
     displayError = t('chat.errorBanner.claudeGatewayOpusPlanMismatch');
   } else if (isClaudeSubscriptionOpusPlanMismatch) {
@@ -831,7 +834,7 @@ export function ErrorBanner({
               )}
             </Button>
           )}
-          {isCodexLocalOAuthAuthMissing && !isOpenAiConnectionExpired && (
+          {isCodexLocalOAuthAuthMissing && !isOpenAiConnectionExpired && !openAiConnectionRecoveredSinceError && (
             <OpenAiConnectionSettingsAction providerId={authProviderId ?? 'openai'} />
           )}
           {isClaudeGatewayOpusPlanMismatch && onSwitchToClaudeSubscription && (
