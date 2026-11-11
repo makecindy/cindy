@@ -396,8 +396,9 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     }
   }
 
+  // FSReq* covers fs calls; a FileHandle close() is listed separately as CloseReq.
   const fileIoPending = (): boolean =>
-    process.getActiveResourcesInfo().some((resource) => resource.startsWith('FSReq'));
+    process.getActiveResourcesInfo().some((resource) => resource.startsWith('FSReq') || resource === 'CloseReq');
 
   /** Drive the poll clock until `promise` settles; resolves or rejects with it. */
   async function settle<T>(promise: Promise<T>): Promise<T> {
