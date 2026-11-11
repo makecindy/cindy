@@ -22,7 +22,7 @@ vi.mock('../../cindy-media/ledger.js', () => ({
   deleteZeroRefBlobRecord: vi.fn(),
 }));
 vi.mock('../../cindy-media/ingest.js', () => ({ ingestMedia: vi.fn() }));
-vi.mock('../../device-link/mediaTransfer.js', () => ({
+vi.mock('../../device-link/mediaTransfer.desktop.js', () => ({
   downloadToFile: vi.fn(),
   removeRemote: vi.fn(),
 }));
@@ -39,13 +39,15 @@ import {
   normalizeUserMessage,
   tempAttachmentRootPath,
   writeTempFile,
-} from '../normalizeAttachments.js';
+} from '../normalizeAttachments.desktop.js';
 import * as imageCacheStore from '../../imageCacheStore.desktop.js';
 import * as cindyMediaBlobStore from '../../cindy-media/blobStore.desktop.js';
 import { ingestMedia } from '../../cindy-media/ingest.js';
-import { downloadToFile, removeRemote } from '../../device-link/mediaTransfer.js';
+import { downloadToFile, removeRemote } from '../../device-link/mediaTransfer.desktop.js';
 import { buildAttachmentOssRef } from '../../../shared/attachmentOssRef.js';
 import { configureMailAttachmentHost, prepareMailAttachmentSelection } from '../../cindy-brain/mailAttachmentUpload.js';
+import { createAttachmentNormalizer, type AttachmentNormalizerIO } from '../normalizeAttachments.js';
+import { isRemoteAttachmentRef, parseRemoteAttachmentRef } from '../../device-link/remoteAttachment.js';
 
 const tempDirs: string[] = [];
 
@@ -65,6 +67,85 @@ afterEach(async () => {
 });
 
 describe('inline attachment temporary files', () => {
+  // Unit: Host account switches may occur during preparation or before deferred
+  // cleanup. Existing tests use a single desktop store. Two isolated IO owners
+  // must retain their own writes, resolutions and rollback, even for one task.
+  it('binds attachment preparation and deferred cleanup to the captured IO owner', async () => {
+    const source = path.join(tempRoot.value, 'captured.png');
+    const secondSource = path.join(tempRoot.value, 'captured-second.png');
+    await fs.writeFile(source, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    await fs.copyFile(source, secondSource);
+    const hash = 'a'.repeat(64);
+    const mediaUrl = `cindy-media://blobs/${hash}.png`;
+    const refs = { first: new Set<string>(), second: new Set<string>() };
+    let current: AttachmentNormalizerIO;
+    const makeIO = (owner: keyof typeof refs): AttachmentNormalizerIO => ({
+      imageCacheStore: {
+        resolveSafe: () => { throw new Error('unexpected legacy cache read'); },
+        copyFromPath: async () => { throw new Error('unexpected legacy cache write'); },
+        removeFile: async () => { throw new Error('unexpected legacy cache removal'); },
+      },
+      cindyMediaBlobStore: {
+        resolveSafe: () => ({ hash, absPath: path.join(tempRoot.value, owner, 'blob.png'), mimeType: 'image/png' }),
+        deleteBlobFile: vi.fn(async () => {}),
+        mimeForExt: () => 'image/png',
+        supportedMime: () => true,
+      },
+      cindyMediaLedger: {
+        removeRefById: vi.fn(async (id) => Number(refs[owner].delete(id))),
+        deleteZeroRefBlobRecord: vi.fn(async () => refs[owner].size === 0),
+      },
+      ingestMedia: vi.fn(async () => {
+        const id = `${owner}-${refs[owner].size}`;
+        refs[owner].add(id);
+        current = second;
+        return { hash, ext: '.png', mimeType: 'image/png', bytes: 4, url: mediaUrl, deduplicated: false, refIds: [id] };
+      }),
+      materializeRemoteAttachment: vi.fn(async (_ref, destination) => {
+        await fs.copyFile(source, destination);
+        current = second;
+      }),
+      removeRemote: vi.fn(async () => {}),
+    });
+    const first = makeIO('first');
+    const second = makeIO('second');
+    current = first;
+    const captureIO = vi.fn(() => current);
+    const normalizer = createAttachmentNormalizer({
+      ...second, getTempDir: () => tempRoot.value, isRemoteAttachmentRef, parseRemoteAttachmentRef, captureIO,
+    });
+    const item = { files: [source, secondSource].map(p => ({ category: 'image', ext: '.png', path: p, mimeType: 'image/png' })) };
+    const old = await normalizer.materializeQueuedOssAttachmentsDeferred('same-task', item);
+    expect(refs.first.size).toBe(2);
+    expect(refs.second.size).toBe(0);
+    const next = await normalizer.materializeQueuedOssAttachmentsDeferred('same-task', item);
+    expect(refs.second.size).toBe(2);
+    await old.cleanupBeforeAcceptance?.();
+    expect(refs.first.size).toBe(0);
+    expect(refs.second.size).toBe(2);
+    expect(second.cindyMediaLedger.removeRefById).not.toHaveBeenCalled();
+    expect(second.cindyMediaBlobStore.deleteBlobFile).not.toHaveBeenCalled();
+    await next.cleanupBeforeAcceptance?.();
+    expect(refs.second.size).toBe(0);
+    expect(captureIO).toHaveBeenCalledTimes(2);
+
+    current = first;
+    const normalized = await normalizer.normalizeUserMessage('same-task', {
+      type: 'user', content: [
+        { type: 'image', path: buildAttachmentOssRef({ ossKey: 'captured/image.png', mimeType: 'image/png' }) },
+        { type: 'image', path: mediaUrl },
+      ],
+    });
+    expect(normalized).toMatchObject({ content: [
+      { type: 'image' }, { path: path.join(tempRoot.value, 'first', 'blob.png') },
+    ] });
+    expect(first.materializeRemoteAttachment).toHaveBeenCalledTimes(1);
+    expect(first.removeRemote).toHaveBeenCalledWith('captured/image.png');
+    expect(second.removeRemote).not.toHaveBeenCalled();
+    expect(captureIO).toHaveBeenCalledTimes(3);
+    await normalizer.cleanupSessionTempAttachments('same-task');
+  });
+
   // Unit, real isolated bytes: PR #6404 selected-file path disclosure/TOCTOU.
   // Existing temp tests did not traverse the mail picker handoff. Replacing the
   // selected source must not change the delivered file; rollback removes only

@@ -14,11 +14,13 @@ export function PluginVirtualGrid({ count, scrollRef, renderItem, onRange, cache
   groupAt?(index: number): boolean;
   renderGroup?(index: number): ReactNode;
 }) {
-  const grid = useRef<HTMLDivElement>(null);
+  // Commit the grid node through state so the next layout pass can also see
+  // the ancestor scroller's ref when both mount together after detail.
+  const [grid, setGrid] = useState<HTMLDivElement | null>(null);
   const [columns, setColumns] = useState(cache?.columns ?? 2);
   const [margin, setMargin] = useState(0);
   useLayoutEffect(() => {
-    const element = grid.current;
+    const element = grid;
     const scroller = scrollRef.current;
     if (!element || !scroller) return;
     const update = () => {
@@ -30,7 +32,7 @@ export function PluginVirtualGrid({ count, scrollRef, renderItem, onRange, cache
     observer.observe(element);
     observer.observe(scroller);
     return () => observer.disconnect();
-  }, [scrollRef, count]);
+  }, [grid, scrollRef, count]);
   const groups = useMemo(() => {
     if (!groupAt) return null;
     const result: Array<{ header?: number; items: number[] }> = [];
@@ -70,7 +72,7 @@ export function PluginVirtualGrid({ count, scrollRef, renderItem, onRange, cache
     const items = visible.flatMap(row => indices(row.index));
     if (items.length) range.current?.(items[0]!, items.at(-1)!);
   }, [visible[0]?.index, visible.at(-1)?.index, columns, count]);
-  if (!visible.length && count > 0) return <div ref={grid} style={{ height: rows.getTotalSize(), position: 'relative', width: '100%' }}>
+  if (!visible.length && count > 0) return <div ref={setGrid} style={{ height: rows.getTotalSize(), position: 'relative', width: '100%' }}>
     <div style={{ display: 'grid', gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`, gap: 16 }}>
       {Array.from({ length: Math.min(count, columns * 3) }, (_, index) => <Fragment key={index}>
         {groupAt?.(index) ? <div className="col-span-full">{renderGroup?.(index)}</div> : null}
@@ -78,7 +80,7 @@ export function PluginVirtualGrid({ count, scrollRef, renderItem, onRange, cache
       </Fragment>)}
     </div>
   </div>;
-  return <div ref={grid} style={{ height: rows.getTotalSize(), position: 'relative', width: '100%' }}>
+  return <div ref={setGrid} style={{ height: rows.getTotalSize(), position: 'relative', width: '100%' }}>
     {visible.map(row => <div key={row.key} ref={rows.measureElement} data-index={row.index}
       style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${row.start - margin}px)`,
         display: 'grid', gridTemplateColumns: groups?.[row.index]?.header !== undefined ? '1fr' : `repeat(${columns}, minmax(0, 1fr))`, gap: 16, paddingBottom: 16 }}>

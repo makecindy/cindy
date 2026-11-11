@@ -73,6 +73,15 @@ binary checks run through `package:release`; no live model benchmark is implied.
 
 ## Available in Headless
 
+The host prompt now owns user-facing plan guidance for all three harnesses;
+the Claude/Codex supplement files are empty. Pi's frozen prompt includes the
+shared plan guidance and its MCP gateway instructions. All three frozen prompts
+and their profile digests remove commit attribution and application-update
+procedures: attribution belongs to the GitHub plugin's PR Skill, and update
+instructions belong to Desktop tool discovery and receipts. This focused prompt
+sync does not add Desktop settings tools to Headless or advance the broader
+upstream baseline.
+
 | Cindy capability | Claude Code | Codex | Pi | Headless evidence |
 |---|---:|---:|---:|---|
 | Multi-turn Maker session | Yes | Yes | Yes | `run --turns-file`, structured terminal events |

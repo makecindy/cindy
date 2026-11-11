@@ -1434,6 +1434,26 @@ describe('group timeline', () => {
     expect(h.chat.act).toHaveBeenLastCalledWith('plan-edit', { planId: 'p1', position: 2, action: 'skip', executionId: undefined });
   });
 
+  // #9909: a turn that answered NO_REPLY posts no group message at all, so the queue must say it
+  // was skipped instead of spoken — same rule as the desktop card and the shared step state.
+  it('marks a discussion turn that published nothing as skipped', async () => {
+    const data = group();
+    data.openPlan = { id: 'p1', status: 'running', currentStep: 1, stepCount: 3, currentBotName: '阿布', currentStepStatus: 'running' };
+    data.plans[0] = { ...data.plans[0]!, kind: 'talk', status: 'running', currentStep: 1, canManage: true,
+      steps: [
+        { position: 0, botId: 'mimi', botName: '咪咪', task: '', status: 'done', resultMessageId: null },
+        { position: 1, botId: 'abu', botName: '阿布', task: '', status: 'running' },
+        { position: 2, botId: 'xiaoman', botName: '小满', task: '', status: 'pending' },
+      ] };
+    // Through the computer's projection: an explicit null must survive parsing, not become "missing".
+    await render(parseBotGroupChatData(data)!);
+    const steps = [...byId('botGroup.plan')!.querySelectorAll('[data-testid="botGroup.plan.step"]')];
+    // The skipped turn keeps its mark and label; nothing claims it spoke.
+    expect(steps[0]?.textContent).toContain('groupChat.plan.stepSkipped');
+    expect(steps[0]?.textContent).not.toContain('groupChat.plan.stepSpoken');
+    expect(steps[1]?.textContent).toContain('groupChat.plan.stepExecuting');
+  });
+
   it('shows one row per speaker with its lane session', async () => {
     await render(group({ round: { status: 'running', canContinue: false, speakers: [
       { botId: 'abu', sessionId: 's-abu', activity: 'reply' },
