@@ -298,6 +298,8 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
   // A later transport teardown must close the handle without replacing that error.
   let terminalErrorDelivered = false;
   let activeTurn = state.turnRunning === true;
+  // Abort can resolve before the remote turn ends; busy snapshots may still arrive.
+  let turnAbortRequested = false;
   let interruption = 0;
 
   const dispose = (): Promise<void> => {
@@ -412,6 +414,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
     const beforeInterruption = interruption;
     if (method === 'send') {
       terminalErrorDelivered = false;
+      turnAbortRequested = false;
       activeTurn = true;
     }
     try {
@@ -470,6 +473,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
     steer: (message, opts) => sendLikeTracked('steer', message, opts),
     // 已让出名额时对方没有在跑的回合，停止什么也不用做。
     abort: async () => {
+      turnAbortRequested = true;
       activeTurn = false;
       deps.cancelPendingConfirmations?.();
       await callIfLive('abort');
@@ -707,7 +711,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       // A transport end (including supersession) is not a foreground terminal.
       // Local teardown and already settled turns keep their quiet close semantics.
       const normalClose = reason === 'closed' || reason === 'detached' || reason === 'ended' || reason === 'superseded';
-      if (!teardownRequested && !terminalErrorDelivered && (activeTurn || !normalClose)) {
+      if (!teardownRequested && !terminalErrorDelivered && ((activeTurn && !turnAbortRequested) || !normalClose)) {
         // The close error owns the pending send too, just as onInterrupted does.
         // Do not let its RPC rejection race in and replace the terminal details.
         interruption += 1;

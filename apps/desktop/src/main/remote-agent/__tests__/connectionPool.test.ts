@@ -670,6 +670,55 @@ describe('remote connection pool with a real host', () => {
     },
   );
 
+  // #9985 review: abort ACK does not mean the remote turn has stopped. A late
+  // busy snapshot must not turn Stop into an error, or mask the next explicit send.
+  it.each([false, true])('retains Stop intent across a late busy snapshot, next turn: %s', async nextTurn => {
+    let interrupt = false;
+    intercept = request => request.op !== 'poll' ? undefined : host.handle(CONTROLLER, request).then(result => {
+      if (!interrupt) return result;
+      interrupt = false;
+      const data = Buffer.from([
+        { t: 'state', state: { turnRunning: true } },
+        { t: 'closed', reason: 'ended' },
+      ].map(item => JSON.stringify(item)).join('\n') + '\n');
+      return { runs: (request.runs as Array<{ runId: string; cursor: number }>).map(run => ({
+        ...run, cursor: run.cursor + data.length, data: data.toString('base64'), done: true,
+      })) };
+    });
+    const handle = await start(undefined);
+    const logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return logger; } };
+    const session = new Session({ id: 'stop-late-busy', agentKind: 'claude-code', workDir: project,
+      handle, capabilities: {} as never, logger, turnStallMs: 0 });
+    const seen: AgentEvent[] = [];
+    session.onEvent(event => seen.push(event));
+    try {
+      let sending = session.send('hold').catch(() => undefined);
+      await vi.waitFor(() => expect(scenario.releaseHold).not.toBeNull());
+      await session.abort();
+      if (nextTurn) {
+        scenario.releaseHold?.();
+        await sending;
+        await vi.waitFor(() => expect(seen.some(event => event.type === 'done')).toBe(true));
+        scenario.releaseHold = null;
+        sending = session.send('hold').catch(() => undefined);
+        await vi.waitFor(() => expect(scenario.releaseHold).not.toBeNull());
+      }
+      interrupt = true;
+      await host.abortAll();
+      await sending;
+      await vi.waitFor(() => expect(session.getStatus()).toBe('closed'));
+      const errors = seen.filter(event => event.type === 'error');
+      expect(errors).toHaveLength(nextTurn ? 1 : 0);
+      if (nextTurn) expect(errors[0].data).toMatchObject({ reason: 'remote_agent_closed', remoteCloseReason: 'ended' });
+      else expect(seen.filter(event => event.type === 'done')).toEqual([expect.objectContaining({ data: expect.objectContaining({ status: 'cancelled' }) })]);
+      expect(scenario.calls.filter(call => call.method === 'send')).toHaveLength(nextTurn ? 2 : 1);
+      expect(opens).toBe(1);
+    } finally {
+      scenario.releaseHold?.();
+      await session.close();
+    }
+  });
+
   // R3 regression: a failed remote close used to leave a disposed handle in the
   // Maker with a permanently running turn. Fake time exercises the real 15s Stop
   // recovery without waiting; reconnect uses the original native conversation.
