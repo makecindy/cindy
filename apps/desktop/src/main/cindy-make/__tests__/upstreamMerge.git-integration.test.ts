@@ -1,7 +1,7 @@
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, rm, stat, symlink, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, unlink, writeFile } from 'node:fs/promises';
 import { expect, it } from 'vitest';
 import {
   applyUpstreamMerge,
@@ -19,7 +19,8 @@ import { runSourceGit } from '../sourceGit';
 import type { CindyMakeMergeState } from '../../../shared/cindyMakeMerge';
 
 async function fixture(conflict: boolean) {
-  const userData = await mkdtemp(path.join(os.tmpdir(), 'cindy-upstream-merge-'));
+  // The profile path is canonical because the managed checkout is compared with `realpath`.
+  const userData = await realpath(await mkdtemp(path.join(os.tmpdir(), 'cindy-upstream-merge-')));
   const source = makeSourceCheckoutPath(userData);
   const remote = path.join(userData, 'official');
   const env = {
@@ -265,6 +266,22 @@ it('does not force through a lock on a stopped feature candidate', async () => {
     expect(await stat(worktree)).toBeTruthy();
     expect(await h.git(['rev-parse', '--verify', mergeBranch(state.id)], h.source)).toBeTruthy();
   } finally {
+    await h.clean();
+  }
+}, 30_000);
+
+it('accepts a profile directory reached through a symlinked parent', async () => {
+  const h = await fixture(false);
+  const alias = h.userData + '-alias';
+  await symlink(h.userData, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  try {
+    await writeFile(path.join(h.source, 'feature.txt'), 'base\n');
+    const result = await prepareUpstreamMerge(alias, h.state, h.git, async () => {});
+    expect(result.status).toBe('merged');
+    expect(result.commit).toBe(h.state.upstreamCommit);
+    expect(await readFile(path.join(h.source, 'upstream.txt'), 'utf8')).toBe('upstream fix\n');
+  } finally {
+    await rm(alias, { recursive: true, force: true });
     await h.clean();
   }
 }, 30_000);

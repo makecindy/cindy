@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { lstat, mkdir, readFile, realpath, rm } from 'node:fs/promises';
+import { lstat, mkdir, readFile, realpath } from 'node:fs/promises';
 import type {
   CindyMakeMergeError,
   CindyMakeMergeState,
@@ -52,8 +52,16 @@ export const mergeBranch = (id: string) => {
   return `cindy-merge/${id}`;
 };
 
+/**
+ * Managed paths are compared with `realpath`, so they are derived from the resolved profile
+ * directory: the profile can sit under a symlinked parent (macOS temp dirs, linked homes),
+ * while the managed directory itself must still not be a link.
+ */
+const managedWorktree = async (userData: string, id: string) =>
+  mergeWorktree(await realpath(userData), id);
+
 async function assertSource(userData: string, git: MergeGit): Promise<string> {
-  const source = makeSourceCheckoutPath(userData);
+  const source = makeSourceCheckoutPath(await realpath(userData));
   if (
     !samePath(await realpath(source), source) ||
     !samePath((await git(['rev-parse', '--show-toplevel'], source)).trim(), source) ||
@@ -70,14 +78,14 @@ export async function verifyMergeWorktree(
   state: CindyMakeMergeState,
   git: MergeGit,
 ): Promise<string> {
-  const worktree = mergeWorktree(userData, state.id);
+  const worktree = await managedWorktree(userData, state.id);
   if (
     !state.baselineCommit ||
     !COMMIT.test(state.baselineCommit) ||
     !COMMIT.test(state.upstreamCommit)
   )
     throw mergeError('unavailable');
-  const source = makeSourceCheckoutPath(userData);
+  const source = makeSourceCheckoutPath(await realpath(userData));
   let branch = (await git(['branch', '--show-current'], worktree)).trim();
   if (!branch && rebases(state)) {
     for (const backend of ['rebase-merge', 'rebase-apply']) {
@@ -124,7 +132,7 @@ export async function cleanupMergedCandidate(
   )
     return false;
   git = ownedGit(git, canCleanup);
-  const worktree = mergeWorktree(userData, state.id);
+  const worktree = await managedWorktree(userData, state.id);
   const branchRef = 'refs/heads/' + mergeBranch(state.id);
   const source = await assertSource(userData, git);
   const exists = (target: string) =>
@@ -241,7 +249,7 @@ export async function cancelUpstreamMerge(
   )
     throw mergeError('unavailable');
   git = ownedGit(git, isCurrent);
-  const worktree = mergeWorktree(userData, state.id);
+  const worktree = await managedWorktree(userData, state.id);
   const source = await assertSource(userData, git);
   const branchRef = 'refs/heads/' + mergeBranch(state.id);
   const workspace = await lstat(worktree).catch((error) => {
@@ -290,7 +298,7 @@ export async function discardFeatureMerge(
     return false;
   git = ownedGit(git, canCleanup);
   const source = await assertSource(userData, git);
-  const worktree = mergeWorktree(userData, state.id);
+  const worktree = await managedWorktree(userData, state.id);
   const branchRef = 'refs/heads/' + mergeBranch(state.id);
   const exists = (target: string) =>
     lstat(target).catch((error) => {
@@ -576,7 +584,7 @@ export async function prepareFeatureMerge(
   git = ownedGit(git, isCurrent);
   const source = await assertSource(userData, git);
   const baseline = await commitPersonalFiles(git, source);
-  const worktree = mergeWorktree(userData, initial.id);
+  const worktree = await managedWorktree(userData, initial.id);
   await mkdir(path.dirname(worktree), { recursive: true });
   if (!samePath(await realpath(path.dirname(worktree)), path.dirname(worktree)))
     throw mergeError('unavailable');
@@ -768,7 +776,8 @@ export async function prepareUpstreamMerge(
   options: { journal?: MergeJournal } = {},
 ): Promise<CindyMakeMergeState> {
   git = ownedGit(git, isCurrent);
-  const worktree = mergeWorktree(userData, initial.id);
+  // Reject an invalid operation id before any git call; the candidate path is derived from it.
+  if (!ID.test(initial.id)) throw mergeError('unavailable');
   if (!COMMIT.test(initial.upstreamCommit)) throw mergeError('unavailable');
   const source = await assertSource(userData, git);
   await assertNoGitOperation(git, source);
@@ -850,7 +859,7 @@ async function startRebaseCandidate(
   const { source, baselineCommit, baselineTree } = start;
   const previousUpstream = start.rebaseBase;
   const replay = start.replay ?? baselineCommit;
-  const worktree = mergeWorktree(userData, initial.id);
+  const worktree = await managedWorktree(userData, initial.id);
   const merges = (await git(['rev-list', '--merges', previousUpstream + '..' + replay], source))
     .trim()
     .split(/\s+/)

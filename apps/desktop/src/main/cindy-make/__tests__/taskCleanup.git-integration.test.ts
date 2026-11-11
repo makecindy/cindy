@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, writeFile, readFile, access, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, access, realpath, rm, symlink } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { expect, it } from 'vitest';
@@ -7,7 +7,7 @@ import { manageCindyMakeWorkspace } from '../taskCleanup.js';
 import { makeSourceCheckoutPath, makeTaskWorktreePath, makeTaskBranch } from '../sourcePaths.js';
 
 it('preserves archives and finished unintegrated changes, and completely removes discarded work with real Git', async () => {
-  const profile = await mkdtemp(path.join(os.tmpdir(), 'cindy-make-cleanup-'));
+  const profile = await realpath(await mkdtemp(path.join(os.tmpdir(), 'cindy-make-cleanup-')));
   const source = makeSourceCheckoutPath(profile);
   const env: NodeJS.ProcessEnv = {
     PATH: process.env.PATH,
