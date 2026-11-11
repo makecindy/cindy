@@ -868,6 +868,7 @@
       "assignLocalAria": "Allow {{name}} to accept new tasks from other computers",
       "moreAria": "More actions for {{name}}",
       "remove": "Remove from Group",
+      "removeLocalBlocked": "The computer that hosts the group can't be removed",
       "status": {
         "checking": "Checking…",
         "idle": "Idle",

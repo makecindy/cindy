@@ -878,6 +878,7 @@
       "assignLocalAria": "Permitir que {{name}} aceite novas tarefas de outros computadores",
       "moreAria": "Mais ações para {{name}}",
       "remove": "Remover do grupo",
+      "removeLocalBlocked": "O computador que aloja o grupo não pode ser removido",
       "status": {
         "checking": "A verificar…",
         "idle": "Inativo",

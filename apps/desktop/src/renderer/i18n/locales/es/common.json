@@ -878,6 +878,7 @@
       "assignLocalAria": "Permitir que {{name}} acepte nuevas tareas de otras computadoras",
       "moreAria": "Otras acciones para {{name}}",
       "remove": "Eliminar del grupo",
+      "removeLocalBlocked": "El ordenador que acoge el grupo no se puede eliminar",
       "status": {
         "checking": "Comprobando…",
         "idle": "Inactivo",

@@ -878,6 +878,7 @@
       "assignLocalAria": "Autoriser {{name}} à accepter de nouvelles tâches provenant d'autres ordinateurs",
       "moreAria": "Plus d'actions pour {{name}}",
       "remove": "Retirer du groupe",
+      "removeLocalBlocked": "L'ordinateur qui héberge le groupe ne peut pas être retiré",
       "status": {
         "checking": "Vérification…",
         "idle": "Inactif",

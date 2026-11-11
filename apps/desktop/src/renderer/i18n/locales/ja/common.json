@@ -860,6 +860,7 @@
       "assignLocalAria": "{{name}} で他のパソコンからの新しいタスクを受け付ける",
       "moreAria": "{{name}} の他の操作",
       "remove": "グループから外す",
+      "removeLocalBlocked": "グループを作成したパソコンはグループから外せません",
       "status": {
         "checking": "確認中…",
         "idle": "待機中",

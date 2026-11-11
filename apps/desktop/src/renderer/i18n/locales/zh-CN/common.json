@@ -860,6 +860,7 @@
       "assignLocalAria": "允许 {{name}} 接收外部新任务",
       "moreAria": "{{name}} 的更多操作",
       "remove": "移出组",
+      "removeLocalBlocked": "组所在的电脑不能移出组",
       "status": {
         "checking": "正在检查…",
         "idle": "空闲",

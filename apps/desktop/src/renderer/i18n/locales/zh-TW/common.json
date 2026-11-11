@@ -860,6 +860,7 @@
       "assignLocalAria": "允許 {{name}} 接收外部新任務",
       "moreAria": "{{name}} 的更多操作",
       "remove": "移出組",
+      "removeLocalBlocked": "組所在的電腦無法移出組",
       "status": {
         "checking": "正在檢查…",
         "idle": "空閒",

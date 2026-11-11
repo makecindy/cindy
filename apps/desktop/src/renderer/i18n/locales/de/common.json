@@ -868,6 +868,7 @@
       "assignLocalAria": "{{name}} erlauben, neue Aufgaben von anderen Computern anzunehmen",
       "moreAria": "Weitere Aktionen für {{name}}",
       "remove": "Aus Gruppe entfernen",
+      "removeLocalBlocked": "Der Computer, der die Gruppe hostet, kann nicht entfernt werden",
       "status": {
         "checking": "Wird geprüft…",
         "idle": "Inaktiv",
