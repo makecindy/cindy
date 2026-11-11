@@ -60,6 +60,7 @@ export function createUsageLimitRecoveryStore(options: {
   return {
     async flush() { await Promise.all([...writes]); },
     readAll() { file.invalidateIfChanged(); return Object.values(file.read().waits); },
+    readAllStrict() { return Object.values(file.readStrict().waits); },
     async save(value: SavedUsageLimitWait, isCurrent = () => true): Promise<boolean> {
       let saved = false;
       await track(file.updateAtomic(current => {

@@ -1,8 +1,8 @@
 // Standard tier: real atomic files, restart and competing consumers. No user profile is touched.
-import { mkdtempSync, rmSync } from 'node:fs';
+import fs, { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createUsageLimitRecoveryStore, type SavedUsageLimitWait } from '../usageLimitRecoveryStore.js';
 
 const dirs: string[] = [];
@@ -22,10 +22,36 @@ function fixture() {
       chatMessage: { role: 'user', content: 'work', clientId: 'input-1' },
       createOpts: { agentKind: 'claude-code', model: 'model', workingDir: '/test' } },
   };
-  return { create, record, setOwner: (next: string) => { owner = next; } };
+  return { create, record, filePath: () => join(root, `${owner}.json`), setOwner: (next: string) => { owner = next; } };
 }
 
 describe('durable quota waiting', () => {
+  // #9346 cold INPUT_STOP must not confirm absence from tolerant read defaults.
+  // Unit: malformed or inaccessible existing ledgers remain intact and reject
+  // strict cancellation discovery; ordinary startup retains its empty fallback.
+  it('distinguishes missing and unreadable quota ledgers without overwriting them', async () => {
+    const h = fixture(), store = h.create();
+    expect(store.readAllStrict()).toEqual([]);
+    await store.save(h.record);
+    writeFileSync(h.filePath(), '{unreadable');
+    expect(h.create().readAll()).toEqual([]);
+    expect(() => store.readAllStrict()).toThrow('unavailable');
+    expect(readFileSync(h.filePath(), 'utf8')).toBe('{unreadable');
+    writeFileSync(h.filePath(), JSON.stringify({ waits: { [h.record.sessionId]: h.record } }));
+    expect(store.readAllStrict()).toEqual([h.record]);
+  });
+
+  it('does not trust a cached readable quota ledger after an access failure', async () => {
+    const h = fixture(), store = h.create();
+    await store.save(h.record);
+    expect(store.readAll()).toEqual([h.record]);
+    const stat = vi.spyOn(fs, 'statSync').mockImplementationOnce(() => {
+      throw Object.assign(new Error('access unavailable'), { code: 'EACCES' });
+    });
+    try { expect(() => store.readAllStrict()).toThrow('unavailable'); }
+    finally { stat.mockRestore(); }
+    expect(h.create().readAllStrict()).toEqual([h.record]);
+  });
   it('restores deadline/input after restart and only one instance can take it', async () => {
     const h = fixture();
     await h.create().save(h.record);

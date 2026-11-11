@@ -1791,6 +1791,15 @@ export class AgentInputCoordinator {
     if (restored.length === 0) {
       // 快照为空 / 全部与内存态重复:同步一次收口点,让内存态成为权威快照。
       this.queueRestorePromises.delete(sessionId);
+      if (state.orcaReportsStopped === true && state.queuePaused
+        && state.pendingQueue.length === 0 && state.pendingCompacts.length === 0) {
+        // A cold Stop reserved its pause until the unknown queue was read.
+        // An actually empty queue keeps the warm empty-Stop input behavior.
+        state.queuePaused = false;
+        state.queuePausedByRestore = false;
+        this.emit(sessionId);
+        return;
+      }
       this.maybePersistQueueSnapshot(sessionId);
       return;
     }
@@ -1816,7 +1825,9 @@ export class AgentInputCoordinator {
     state.pendingQueue = quotaHead
       ? [quotaHead, ...restored, ...state.pendingQueue.filter(item => item !== quotaHead)]
       : [...restored, ...state.pendingQueue];
-    if (wasQuiet) {
+    // A cold Stop may finish aborting after this read. Keep recovered inputs
+    // paused even while the old vendor turn still reports itself as running.
+    if (!state.queuePaused && (wasQuiet || state.orcaReportsStopped === true)) {
       state.queuePaused = true;
       state.queuePausedByRestore = true;
     }
@@ -3303,7 +3314,10 @@ export class AgentInputCoordinator {
     if (state.activeTurn && state.activeTurn.continuationOwnerClientId !== null) {
       state.activeTurn.continuationOwnerClientId = null;
     }
-    const shouldPause = Boolean(preserveQueue && opts?.pauseQueue && state.pendingQueue.length > 0);
+    const shouldPause = Boolean(preserveQueue && opts?.pauseQueue && (
+      state.pendingQueue.length > 0
+      || (this.deps.loadQueueSnapshot && !this.restoredQueueSessions.has(sessionId))
+    ));
     state.queuePaused = shouldPause;
     // Ordinary Stop remains explicit. Restart, like crash recovery, may be
     // released by the next deliberate user input, never by background enqueue.
@@ -7469,7 +7483,9 @@ export class AgentInputCoordinator {
   /** Rehydrate only an untouched task. The expired scheduler FireContext is never replayed. */
   restoreUsageLimitRecovery(sessionId: string, snapshot: UsageLimitRecoverySnapshot, generation: number): number | null {
     const state = this.getState(sessionId);
-    if (state.generation !== generation || state.activeTurn || state.recovery || state.error || this.isExecutionPaused(sessionId) ||
+    // Stop can win while the host validates a saved quota wait during a cold
+    // queue read. It must not re-arm that older automatic continuation.
+    if (state.orcaReportsStopped === true || state.generation !== generation || state.activeTurn || state.recovery || state.error || this.isExecutionPaused(sessionId) ||
       state.pendingQueue.some(item => item.clientId !== snapshot.item.clientId)) return null;
     const queued = snapshot.kind === 'queue-head'
       ? state.pendingQueue.find(item => item.clientId === snapshot.item.clientId) : undefined;

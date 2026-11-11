@@ -1,4 +1,4 @@
-import { createInputEnqueueHarness } from './inputEnqueueHarness.js';
+import { createInputEnqueueHarness, createInputStopHarness, createSavedQuotaRestoreHarness } from './inputEnqueueHarness.js';
 import { FORWARDED_REQUEST_RECEIPT } from '../../../shared/forwardedRequest.js';
 import { BOT_GROUP_CLIENT_ID } from '../../../shared/botGroupChat.js';
 import { authorizeGroupTool, registerGroupToolAuthority } from '../botGroupToolAuthorization.js';
@@ -13381,6 +13381,154 @@ describe('Orca report durable recovery', () => {
     h.coordinator.resume('lead');
     await flush();
     expect(h.sendToAgent).toHaveBeenCalledOnce();
+  });
+
+  // #9346 / review 4534832924, unit: execute the real INPUT_STOP handler as
+  // the first cold operation. Earlier empty-Stop cases restored the queue first.
+  // An active Lead with no snapshot must cancel immediately, wait for its Stop
+  // write before acknowledging, and still block a report after reconstruction.
+  it.each([false, true])('persists a first cold INPUT_STOP before acknowledging it (preserve=%s)', async preserve => {
+    const read = deferred<AgentInputQueuedMessage[]>(), write = deferred<void>();
+    const h = createHarness({ awaitQueuePersistence: async () => {}, canRestoreOrcaReport: async () => true });
+    h.setRunning(true);
+    h.setLoadQueueSnapshot(() => read.promise);
+    const stop = createInputStopHarness(h.coordinator, { awaitQueuePersistence: () => write.promise });
+    let acknowledged = false;
+    const stopping = stop('lead', preserve ? { keepQueue: true, pauseQueue: true } : undefined)
+      .then(value => { acknowledged = true; return value; });
+    await flush();
+    expect(h.abortSession).toHaveBeenCalledOnce();
+    expect(acknowledged).toBe(false);
+    expect(h.persistQueueSnapshot).not.toHaveBeenCalled();
+    read.resolve([]);
+    await flush();
+    expect(h.persistQueueSnapshot).toHaveBeenLastCalledWith('lead', [], true);
+    expect(acknowledged).toBe(false);
+    write.resolve();
+    expect((await stopping).queuePaused).toBe(false);
+    const saved = h.persistQueueSnapshot.mock.calls.at(-1)!;
+    const restarted = createHarness({ awaitQueuePersistence: async () => {}, canRestoreOrcaReport: async () => true });
+    restarted.setLoadQueueSnapshot(async () => ({ items: saved[1], orcaReportsStopped: saved[2] === true }));
+    await restarted.coordinator.enqueueDurably('lead', report());
+    await flush();
+    expect(restarted.sendToAgent).not.toHaveBeenCalled();
+    restarted.coordinator.resume('lead');
+    await flush();
+    expect(restarted.sendToAgent).toHaveBeenCalledOnce();
+  });
+
+  it.each(['loading', 'revalidating'] as const)('merges cold queued inputs safely when INPUT_STOP races %s', async stage => {
+    const read = deferred<AgentInputQueuedMessage[]>(), permission = deferred<boolean>();
+    const h = createHarness({ canRestoreOrcaReport: () => permission.promise });
+    const old = [makeItem('owner-before-restart', 'Queued owner input'), report()];
+    h.setLoadQueueSnapshot(() => read.promise);
+    h.setRunning(true);
+    const restoring = h.coordinator.ensureQueueRestored('lead');
+    if (stage === 'revalidating') { read.resolve(old); await flush(); }
+    const stopping = createInputStopHarness(h.coordinator)('lead', { keepQueue: true, pauseQueue: true });
+    await flush();
+    expect(h.abortSession).toHaveBeenCalledOnce();
+    expect(h.persistQueueSnapshot).not.toHaveBeenCalled();
+    if (stage === 'loading') read.resolve(old);
+    permission.resolve(true);
+    await Promise.all([restoring, stopping]);
+    h.setRunning(false);
+    h.coordinator.wakeSession('lead', 'stopped-turn-settled');
+    await flush();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    expect(h.coordinator.getProjection('lead')).toMatchObject({ queuePaused: true,
+      pendingQueue: [expect.objectContaining({ clientId: 'owner-before-restart' }), expect.objectContaining({ clientId: 'report-1' })] });
+    expect(h.persistQueueSnapshot.mock.calls.at(-1)![1].map(item => item.clientId))
+      .toEqual(['owner-before-restart', 'report-1']);
+    expect(h.persistQueueSnapshot.mock.calls.at(-1)![2]).toBe(true);
+    // A cold explicit Stop must have the same pause kind as a warm Stop.
+    // Exercise the actual remote Desktop / phone enqueue adapter after it.
+    await createInputEnqueueHarness(h.coordinator, { mobile: stage === 'revalidating' })
+      .enqueue({}, 'lead', makeItem('owner-after-stop', 'New owner input'));
+    await flush();
+    expect(h.coordinator.getProjection('lead').queuePaused).toBe(true);
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    h.coordinator.resume('lead');
+    await flush();
+    expect(h.sendToAgent.mock.calls[0]![3].persistUserMessage?.clientId).toBe('owner-before-restart');
+  });
+
+  it.each(['read', 'write'] as const)('does not acknowledge a cold INPUT_STOP after a snapshot %s failure', async stage => {
+    const h = createHarness();
+    h.setRunning(true);
+    if (stage === 'read') h.setLoadQueueSnapshot(async () => { throw new Error('snapshot unavailable'); });
+    const stop = createInputStopHarness(h.coordinator, {
+      awaitQueuePersistence: async () => { if (stage === 'write') throw new Error('snapshot unavailable'); },
+    });
+    await expect(stop('lead')).rejects.toMatchObject({ code: 'INTERNAL' });
+    expect(h.abortSession).toHaveBeenCalledOnce();
+    expect(h.coordinator.shouldQueueNewTurn('lead', true)).toBe(true);
+    if (stage === 'read') expect(h.persistQueueSnapshot).not.toHaveBeenCalled();
+  });
+
+  // The production snapshot loader can restore a saved quota wait. A Stop
+  // during its async validation must not install that old recovery or timer.
+  it.each(['active-turn', 'queue-head'] as const)('does not reinstall a saved %s quota wait during cold INPUT_STOP', async kind => {
+    const h = createHarness();
+    const snapshot = { kind, item: makeItem('old-quota', 'Old quota input'), error: 'weekly limit' };
+    let token: number | null = null;
+    h.setLoadQueueSnapshot(async () => {
+      token = h.coordinator.restoreUsageLimitRecovery('lead', snapshot, h.coordinator.getGeneration('lead'));
+      return [];
+    });
+    await createInputStopHarness(h.coordinator)('lead');
+    expect(token).toBeNull();
+    expect(h.coordinator.getProjection('lead')).toMatchObject({ recovery: null, error: null, pendingQueue: [] });
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+  });
+
+  it('waits for saved quota cancellation and rejects a failed cancellation before cold INPUT_STOP acknowledgement', async () => {
+    const h = createHarness(), cancellation = deferred<boolean>();
+    const cancelQuotaWait = vi.fn(() => cancellation.promise);
+    const options = { savedQuotaWait: { id: 'old-wait', sessionId: 'lead' }, cancelQuotaWait };
+    const stopping = createInputStopHarness(h.coordinator, options)('lead');
+    const outcome = stopping.then(value => ({ value }), error => ({ error }));
+    let acknowledged = false;
+    void stopping.then(() => { acknowledged = true; }, () => {});
+    await flush();
+    expect(h.abortSession).toHaveBeenCalledOnce();
+    expect(cancelQuotaWait).toHaveBeenCalledWith('lead', 'old-wait');
+    expect(acknowledged).toBe(false);
+    cancellation.reject(new Error('quota cancellation unavailable'));
+    expect(await outcome).toMatchObject({ error: { code: 'INTERNAL' } });
+    await createInputStopHarness(h.coordinator, { ...options, cancelQuotaWait: async () => true })('lead');
+    expect(h.persistQueueSnapshot).toHaveBeenLastCalledWith('lead', [], true);
+  });
+
+  // Stop must prove the old quota ledger is empty, rather than treating an
+  // unreadable file's UI defaults as durable absence.
+  it('rejects cold INPUT_STOP when the saved quota ledger is unreadable', async () => {
+    const h = createHarness();
+    await expect(createInputStopHarness(h.coordinator, { quotaReadError: new Error('ledger unavailable') })('lead'))
+      .rejects.toMatchObject({ code: 'INTERNAL' });
+    expect(h.abortSession).toHaveBeenCalledOnce();
+    expect(h.persistQueueSnapshot).not.toHaveBeenCalled();
+  });
+
+  // The real host restore validates asynchronously: Stop deletes the old id,
+  // then a deliberate Resume must not make that cancelled record current again.
+  it('does not revive a cancelled quota record after cold INPUT_STOP and Resume', async () => {
+    const h = createHarness(), validation = deferred<boolean>();
+    const record = { id: 'old-wait', sessionId: 'lead', resumeAt: 9_000_000, attempts: 1,
+      savedAt: 1_000, route: 'route', kind: 'queue-head' as const,
+      item: makeItem('old-quota', 'Old quota input'), error: 'weekly limit' };
+    let records = [record];
+    const restoring = createSavedQuotaRestoreHarness(h.coordinator, {
+      readAll: () => records, validate: () => validation.promise,
+    })('lead');
+    await flush();
+    await createInputStopHarness(h.coordinator, { savedQuotaWait: record,
+      cancelQuotaWait: async () => { records = []; return true; } })('lead');
+    h.coordinator.resume('lead');
+    validation.resolve(true);
+    await restoring;
+    expect(h.coordinator.getProjection('lead')).toMatchObject({ error: null, recovery: null, pendingQueue: [] });
+    expect(h.sendToAgent).not.toHaveBeenCalled();
   });
 
   // A late control report must not bypass Stop through the running-turn path.

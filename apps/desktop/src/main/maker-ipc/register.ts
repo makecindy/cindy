@@ -1864,8 +1864,11 @@ async function restoreSavedUsageLimitWait(sessionId: string): Promise<void> {
   const scope = activeOwnerScopeKey();
   const generation = coordinator.getGeneration(sessionId);
   const valid = await isSavedUsageLimitWaitValid(record) && await isUsageLimitAutoResumeEligible(sessionId);
-  if (scope !== activeOwnerScopeKey() || usageLimitRecoverySuspended) return;
+  if (scope !== activeOwnerScopeKey() || usageLimitRecoverySuspended || savedUsageLimitWaits.has(sessionId)) return;
   if (!valid) { await usageLimitRecoveryStore.take(sessionId, record.id); return; }
+  // A Stop or a newer wait may have replaced the durable owner while the
+  // validation awaited. Resume cannot make a cancelled record current again.
+  if (!usageLimitRecoveryStore.readAll().some(wait => wait.sessionId === sessionId && wait.id === record.id)) return;
   const pending = { token: 0, record };
   savedUsageLimitWaits.set(sessionId, pending);
   const token = coordinator.restoreUsageLimitRecovery(sessionId, record, generation);
@@ -22196,7 +22199,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // pauseGoal 调用同步 detach listener/timer，持久化可以与 vendor abort 并行；真正的
     // turn/interrupt 先启动，IPC 回执再等待 paused 落盘。
     const goalPause = pauseGoalBeforeExplicitStop(sid);
-    const result = inputCoordinator.stop(
+    inputCoordinator.stop(
       sid,
       opts && typeof opts === 'object'
         ? (opts as {
@@ -22212,8 +22215,23 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (!inputCoordinator.hasPendingQueuedWork(sid)) {
       getAgentIslandService()?.notifyQueueEmptied(sid);
     }
-    await Promise.all([goalPause, makeInterrupted]);
-    return result;
+    // Stop must cancel synchronously above, including a cold session. Restore
+    // before writing its latch so an empty in-memory queue cannot erase older
+    // saved inputs; the same restore promise also fences concurrent readers.
+    const savedStop = (async () => {
+      // The loader also restores quota waits. Cancel the exact old record
+      // durably first; a later wait has a different id and must be preserved.
+      const oldWait = usageLimitRecoveryStore.readAllStrict().find(wait => wait.sessionId === sid);
+      if (oldWait) await usageLimitRecoveryStore.take(sid, oldWait.id);
+      await inputCoordinator.ensureQueueRestored(sid);
+      await awaitAgentInputQueueSnapshotPersistence(sid);
+    })();
+    try {
+      await Promise.all([goalPause, makeInterrupted, savedStop]);
+    } catch {
+      throwIpcError('INTERNAL', 'Could not persist stopped task state');
+    }
+    return inputCoordinator.getProjection(sid);
   });
 
   ipcMain.handle(MAKER_INVOKE.INPUT_RESUME, async (_e, sessionId: unknown, opts?: unknown) => {
