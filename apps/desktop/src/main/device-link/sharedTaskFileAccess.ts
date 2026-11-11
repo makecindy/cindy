@@ -1,5 +1,5 @@
 import { parseFsWatchTopic } from '@cindy/device-link';
-import { getSessionFsSnapshot } from '../localDb/ipc/sessions.js';
+import { getSessionFsSnapshot } from '../localDb/sessionFsSnapshot.js';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 import { MAX_SHARED_TASK_TOPICS, sharedTaskWorkdirGeneration, type SharedTaskPeerCapture } from './sharedTaskDispatch.js';
 

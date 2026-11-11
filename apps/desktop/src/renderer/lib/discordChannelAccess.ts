@@ -220,11 +220,12 @@ export function removeGuild(access: Access, guildId: string): Access {
 /** 移除一个已不可用的频道（生效的和保留的选择里都去掉）。 */
 export function removeChannel(access: Access, guildId: string, channelId: string): Access {
   const entry = entryOf(access, guildId);
-  const channels = channelsOf(access, guildId).filter((channel) => channel.channelId !== channelId);
+  const current = channelsOf(access, guildId);
+  const channels = current.filter((channel) => channel.channelId !== channelId);
   const saved = (entry?.savedChannels ?? []).filter((channel) => channel.channelId !== channelId);
   const next: GuildEntry | null = entry
     ? { ...entry, ...(saved.length > 0 ? { savedChannels: saved } : { savedChannels: undefined }) }
-    : null;
+    : current.length > 0 ? { guildId, enabled: true, mode: 'selected' } : null;
   if (next && next.savedChannels === undefined) delete next.savedChannels;
   return withGuild(access, guildId, next, channels);
 }

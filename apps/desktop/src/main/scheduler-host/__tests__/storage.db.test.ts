@@ -17,7 +17,7 @@ import { createDbClient } from '../../localDb/client/DbClient';
 import type { DbClient } from '../../localDb/client/DbClient';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current';
 import { recordScheduleRunCostDirect } from '../runCostLedger';
-import { DrizzleScheduleStorage, type SchedulerDrizzleDb } from '../storage';
+import { DrizzleScheduleStorage, type SchedulerDrizzleDb } from '../storage.desktop';
 
 function actualMoneyFromLegacyUsd(amountUsd: number) {
   return {
@@ -362,6 +362,25 @@ function enableLegacySessionFallback(
 }
 
 describe('DrizzleScheduleStorage (in-memory)', () => {
+  // Automation speed-menu regression: the UI fixture checks visibility and
+  // submitted values, but its JSON save boundary cannot prove SQLite retains
+  // Ultrafast rather than coercing it to a boolean. DB tier, real public CRUD.
+  // Windows standalone: 11.47s total, 412ms tests; the existing storage/schema
+  // imports account for 10.76s collection (loaded once, no per-case reset).
+  it('round-trips edited Fast and Ultrafast speeds through scheduler storage', async () => {
+    const harness = createStorageHarness();
+    try {
+      await harness.storage.insert(baseSchedule({ agentKind: 'codex', model: 'gpt-6.1-sol' }));
+      for (const fastMode of [true, 'ultrafast', false] as const) {
+        await harness.storage.update('sch-1', { fastMode });
+        const reopened = new DrizzleScheduleStorage(() => harness.db);
+        expect(await reopened.get('sch-1')).toMatchObject({ fastMode });
+      }
+    } finally {
+      harness.close();
+    }
+  });
+
   // discussion_r4419060204: public UPDATE must reject an old completion after
   // another writer changes its nullable/non-null trigger watermark. DB tier.
   it.each([undefined, 100])('guards recovery schedule writes against a changed watermark (%s)', async (lastFiredAt) => {

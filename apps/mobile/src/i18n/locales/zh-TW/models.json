@@ -74,6 +74,9 @@
     "cancel": "保持不變"
   },
   "unified": {
+    "accountUnassigned": "帳號待分配",
+    "accountCount_other": "{{count}} 個帳號",
+    "accountFallback": "帳號 {{index}}",
       "favoriteConfiguration": "收藏此設定",
       "savedConfiguration": "已收藏 · 點擊取消",
       "currentConfiguration": "目前設定",
@@ -113,6 +116,12 @@
       "hour": "小時",
       "minute": "分鐘",
       "second": "秒"
-    }
+    },
+    "quotaAverage": "平均餘額 {{percent}}%",
+    "quotaUpdating": "餘額待更新",
+    "quotaResetSoon": "即將重設",
+    "quotaResetIn": "{{duration}}後重置",
+    "quotaAverageHint": "每週限額 · 各帳號等權平均",
+    "quotaResetHint": "依目前使用速度，重設時可能仍有餘量：24 小時內為黃色，6 小時內為紅色。"
   }
 }

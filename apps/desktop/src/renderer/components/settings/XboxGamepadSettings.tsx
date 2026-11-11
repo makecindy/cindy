@@ -2,10 +2,7 @@ import { Button } from '@/components/ui/button';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   ArrowLeft,
-  Check,
-  ChevronDown,
   ChevronRight,
-  ChevronUp,
   BatteryCharging,
   Bluetooth,
   Gamepad2,
@@ -14,13 +11,12 @@ import {
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import * as Dialog from '@radix-ui/react-dialog';
-import { SelectParts as Select } from '@/components/ui/select';
+import { Select, type SelectProps } from '@/components/ui/select';
 
 import { SETTINGS_ROW_LABEL_CLASS, SettingsCard, SettingsPageHeader, SettingsRow } from '@/components/ui/settings-rows';
 import { Switch } from '@/components/ui/switch';
 import { useXboxGamepad } from '@/hooks/useXboxGamepad';
 import { useSkillhub } from '@/features/skillhub/hooks/useSkillhub';
-import { cn } from '@/lib/utils';
 import {
   InputDeviceConnectionStatus,
   inputDeviceConnectionTone,
@@ -296,14 +292,17 @@ export function XboxGamepadSettings({ family, onBack }: { family: GamepadFamily;
         onBack={onBack}
         backLabel={t('settings.shortcuts.xboxGamepad.back')}
         action={
-          <button
+          <Button data-settings-search-action="Restore the gamepad page defaults"
+            variant="secondary"
+            size="sm"
+            compact
             type="button"
             disabled={!state || saving || isDefault}
             onClick={() => void resetSettings()}
-            className="shrink-0 text-12 text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] disabled:cursor-not-allowed disabled:opacity-50"
           >
+            <RotateCcw size={14} aria-hidden />
             {t('settings.shortcuts.reset')}
-          </button>
+          </Button>
         }
       />
       <div className="flex flex-col gap-[14px]">
@@ -426,11 +425,12 @@ export function XboxGamepadSettings({ family, onBack }: { family: GamepadFamily;
                 title={t('settings.shortcuts.xboxGamepad.stick.mode.label')}
                 hint={t('settings.shortcuts.xboxGamepad.stick.mode.description')}
                 trailing={
-                  <SelectControl
+                  <Select data-settings-search-action="Choose the gamepad stick mode"
+                    width="sm"
                     value={settings.layout.sticks[editing].mode}
                     disabled={!state || saving}
-                    ariaLabel={t('settings.shortcuts.xboxGamepad.stick.mode.label')}
-                    onChange={(value) =>
+                    label={t('settings.shortcuts.xboxGamepad.stick.mode.label')}
+                    onValueChange={(value) =>
                       patchLayout((layout) => {
                         layout.sticks[editing].mode = value as XboxGamepadStickMode;
                       })
@@ -573,7 +573,7 @@ function BindingSelect({
   onChange(binding: XboxGamepadBinding | null): void;
 }) {
   const { t } = useTranslation();
-  const groups: SelectOptionGroup[] = [
+  const groups: NonNullable<SelectProps['groups']>[number][] = [
     { options: [{ value: 'none', label: t('settings.shortcuts.xboxGamepad.actions.none') }] },
   ];
   if (allowVoice) {
@@ -598,114 +598,15 @@ function BindingSelect({
     });
   }
   return (
-    <SelectControl
+    <Select
+      data-settings-search-action="Choose the action bound to this device input"
+      label={t('settings.shortcuts.xboxGamepad.actions.choose')}
       value={bindingValue(binding)}
       disabled={disabled}
-      ariaLabel={t('settings.shortcuts.xboxGamepad.actions.choose')}
-      onChange={(value) => onChange(parseBindingValue(value, skills))}
-      className="min-w-[190px]"
+      onValueChange={(value) => onChange(parseBindingValue(value, skills))}
+      width="sm"
       groups={groups}
     />
-  );
-}
-
-interface SelectOption {
-  value: string;
-  label: string;
-}
-
-interface SelectOptionGroup {
-  label?: string;
-  options: SelectOption[];
-}
-
-function SelectControl({
-  value,
-  disabled,
-  ariaLabel,
-  onChange,
-  options,
-  groups,
-  className,
-}: {
-  value: string;
-  disabled: boolean;
-  ariaLabel: string;
-  onChange(value: string): void;
-  options?: SelectOption[];
-  groups?: SelectOptionGroup[];
-  className?: string;
-}) {
-  const resolvedGroups = groups ?? [{ options: options ?? [] }];
-  return (
-    <Select.Root value={value} onValueChange={onChange} disabled={disabled}>
-      <Select.Trigger
-        aria-label={ariaLabel}
-        className={cn(
-          'flex h-9 min-w-[150px] items-center justify-between gap-2 rounded-full border px-3 text-12',
-          'border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
-          'outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-          'data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50',
-          className,
-        )}
-      >
-        <span className="min-w-0 truncate text-left">
-          <Select.Value />
-        </span>
-        <Select.Icon asChild>
-          <ChevronDown size={14} className="shrink-0 opacity-70" />
-        </Select.Icon>
-      </Select.Trigger>
-      <Select.Portal>
-        <Select.Content
-          position="popper"
-          side="bottom"
-          align="end"
-          sideOffset={4}
-          className={cn(
-            'z-[10010] w-[var(--radix-select-trigger-width)] overflow-hidden rounded-xl border p-1.5',
-            'max-h-[min(15rem,var(--radix-select-content-available-height))]',
-            'border-[var(--border-default)] bg-[var(--surface-elevated)]',
-          )}
-        >
-          <Select.ScrollUpButton className="flex h-5 items-center justify-center text-[var(--text-tertiary)]">
-            <ChevronUp size={14} />
-          </Select.ScrollUpButton>
-          <Select.Viewport>
-            {resolvedGroups.map((group, groupIndex) => (
-              <Select.Group key={group.label ?? `group-${groupIndex}`}>
-                {group.label && (
-                  <Select.Label className="px-2.5 py-1 text-11 text-[var(--text-tertiary)]">
-                    {group.label}
-                  </Select.Label>
-                )}
-                {group.options.map((option) => (
-                  <Select.Item
-                    key={option.value}
-                    value={option.value}
-                    className={cn(
-                      'flex w-full cursor-pointer select-none items-center gap-2 rounded-[8px] px-2.5 py-1.5 text-left text-12 outline-none',
-                      'text-[var(--text-primary)]',
-                      'data-[state=checked]:font-medium',
-                    )}
-                  >
-                    <span className="flex h-4 w-4 shrink-0 items-center justify-center">
-                      <Select.ItemIndicator>
-                        <Check size={14} strokeWidth={2.25} />
-                      </Select.ItemIndicator>
-                    </span>
-                    <Select.ItemText>{option.label}</Select.ItemText>
-                  </Select.Item>
-                ))}
-              </Select.Group>
-            ))}
-          </Select.Viewport>
-          <Select.ScrollDownButton className="flex h-5 items-center justify-center text-[var(--text-tertiary)]">
-            <ChevronDown size={14} />
-          </Select.ScrollDownButton>
-        </Select.Content>
-      </Select.Portal>
-    </Select.Root>
   );
 }
 

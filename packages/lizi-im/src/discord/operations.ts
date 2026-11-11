@@ -1,5 +1,5 @@
 /** Narrow operations over the already connected bot. Never exposes REST or credentials. */
-import type { Client } from 'discord.js';
+import { ChannelType, type Channel, type Client } from 'discord.js';
 import { decodeDiscordLaneUserId, discordLaneOfChannel, discordLaneTargetChannelId, encodeDiscordLaneUserId, type DiscordLane } from './lane.js';
 
 export interface DiscordHistoryMessage {
@@ -29,6 +29,18 @@ export function discordHistoryMessage(raw: unknown): DiscordHistoryMessage {
   const m = raw as { id: string; channel_id: string; author?: { id: string; username?: string; global_name?: string; bot?: boolean }; content?: string; timestamp?: string; attachments?: Array<{ id: string; filename: string; url: string; size: number; content_type?: string }> };
   const attachments = (m.attachments ?? []).map(a => ({ id: a.id, name: a.filename, url: a.url, size: a.size, ...(a.content_type ? { contentType: a.content_type } : {}) }));
   return { id: m.id, channelId: m.channel_id, author: { id: m.author?.id ?? '', name: m.author?.global_name ?? m.author?.username ?? 'unknown', bot: m.author?.bot === true }, text: m.content ?? '', timestamp: Date.parse(m.timestamp ?? '') || 0, contentUnavailable: !m.content && !attachments.length, attachments };
+}
+
+/** Threads inherit only a GuildText parent, matching the gateway's supported lanes. */
+function guildTextLane(client: Client, channel: Channel): DiscordLane | null {
+  if (!('guildId' in channel)) return null;
+  const lane = discordLaneOfChannel(channel.guildId, channel.id, channel);
+  if (!lane) return null;
+  if (!lane.threadId) return channel.type === ChannelType.GuildText ? lane : null;
+  // Use the fetched thread object / connected cache; never fetch another channel for discovery.
+  const parent = ('parent' in channel ? channel.parent : null) ?? client.channels.cache.get(lane.channelId);
+  return parent?.type === ChannelType.GuildText && parent.id === lane.channelId && parent.guildId === lane.guildId
+    ? lane : null;
 }
 
 export function createDiscordOperations(deps: {
@@ -71,8 +83,8 @@ export function createDiscordOperations(deps: {
     assertLane(laneId);
     if (!channel || !channel.isTextBased() || !('messages' in channel)) throw new DiscordOperationError('DISCORD_CHANNEL_UNAVAILABLE');
     if (lane) {
-      const actual = 'guildId' in channel ? discordLaneOfChannel(channel.guildId, channel.id, channel) : null;
-      if (!actual || encodeDiscordLaneUserId(actual) !== laneId || ![0, 10, 11, 12].includes(channel.type)) throw new DiscordOperationError('DISCORD_LANE_DENIED');
+      const actual = guildTextLane(client, channel);
+      if (!actual || encodeDiscordLaneUserId(actual) !== laneId) throw new DiscordOperationError('DISCORD_LANE_DENIED');
       if (!('permissionsFor' in channel)) throw new DiscordOperationError('DISCORD_PERMISSION_DENIED');
       const permissions = channel.permissionsFor(client.user!);
       if (!permissions?.has('ViewChannel') || (permission === 'read' && !permissions.has('ReadMessageHistory')) ||
@@ -106,8 +118,7 @@ export function createDiscordOperations(deps: {
       }
       const lanes: Array<{ laneId: string; name: string; thread: boolean }> = [];
       for (const channel of client.channels.cache.values()) {
-        if (!('guildId' in channel) || ![0, 10, 11, 12].includes(channel.type)) continue;
-        const lane = discordLaneOfChannel(channel.guildId, channel.id, channel);
+        const lane = guildTextLane(client, channel);
         if (!lane || !deps.laneEnabled(lane) || !('permissionsFor' in channel) || !channel.permissionsFor(client.user!)?.has('ViewChannel')) continue;
         lanes.push({ laneId: encodeDiscordLaneUserId(lane), name: channel.name ?? channel.id, thread: !!lane.threadId });
       }

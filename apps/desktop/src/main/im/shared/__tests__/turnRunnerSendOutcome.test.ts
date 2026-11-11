@@ -23,8 +23,9 @@ import type {
   SessionSendResult,
   TurnPermissionPolicy,
 } from '@cindy/maker-core';
-import type { ChannelIM } from '@cindy/im';
-import { setMainLocale } from '../../../i18n';
+import { DiscordIM, type ChannelIM, type DiscordIMOptions, type IMHost, type IMMessageEvent } from '@cindy/im';
+import { setMainLocale } from '../../../i18n.desktop';
+import { buildDiscordAdapter } from '../../discord/adapter';
 import { createTelegramGuestTurnPermissionPolicy } from '../../telegram/permissionPolicy';
 import { createDingTalkTurnPermissionPolicy } from '../../dingtalk/permissionPolicy';
 import { createFeishuGroupTurnPermissionPolicy } from '../../feishu/permissionPolicy';
@@ -135,7 +136,7 @@ vi.mock('../../../goal-host/inactiveNote', () => ({
   peekGoalInactiveNote: mocks.peekGoalInactiveNote,
 }));
 
-vi.mock('../../../imageCacheStore', () => ({
+vi.mock('../../../imageCacheStore.desktop', () => ({
   resolveSafe: mocks.resolveXdtImageUrl,
 }));
 
@@ -365,6 +366,7 @@ function createMakerHarness(session: Session) {
   return {
     getSession: vi.fn(() => session),
     createSession: vi.fn(async () => session),
+    recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
     on: vi.fn((listener: (event: MakerEvent) => void) => {
       makerEventListeners.push(listener);
       return () => {
@@ -695,6 +697,88 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       h.emit({ type: 'done', data: {} });
       if (next.kind === 'accepted') await next.terminal;
     } finally { fakeAdapter.output = previous; }
+  });
+
+  // unit: real dispatch + Discord initial lookup + adapter sink. #9709 invalidation
+  // must precede the new durable sink; the old fallback tests install no such sink.
+  // Minimal race: replace bot during first lookup (resolve/reject), then done/error.
+  it.each([
+    ['done', false], ['done', true], ['error', false], ['error', true],
+  ] as const)('does not persist or send invalidated Discord output (%s, lookup rejects=%s) and drains its queue', async (terminal, rejects) => {
+    type Factory = NonNullable<DiscordIMOptions['gatewayFactory']>;
+    let appId = '2';
+    let events!: Parameters<Factory>[0];
+    let contents: string | null = null;
+    const persist = vi.fn((value: string) => { contents = value; });
+    const channel = { id: '20', guildId: '10', type: 0, isTextBased: () => true,
+      permissionsFor: () => ({ has: () => true }), messages: {}, send: vi.fn(async () => ({ id: '91' })) };
+    const sdk = { user: { id: '2' }, rest: { post: vi.fn(async () => ({ id: '90' })) },
+      channels: { fetch: vi.fn(async () => channel), cache: new Map([['20', channel]]) } };
+    const secrets = new Map([['discord-bot-token', 'fake-not-a-token'], ['discord-owner-user-id', '1'], ['discord-bot-lifecycle-announcement', 'false']]);
+    const host: IMHost = {
+      secrets: { read: key => secrets.get(key) ?? null, write: () => true, remove() {}, isAvailable: () => true },
+      paths: { feishuMediaDir: '' }, httpPostForm: async () => ({ status: 200, body: {} }),
+      ipc: { handle() {}, broadcast() {}, throwIpcError() { throw new Error('invalid'); } },
+    };
+    const im = new DiscordIM(host, {
+      finalTextStorage: () => ({ key: 'test-owner', read: () => contents, write: persist, assertCurrent() {}, authorizationStamp: () => 'grant-1' }),
+      channelAccess: { read: () => ({ channels: [{ guildId: '10', channelId: '20' }] }) },
+      gatewayFactory: ev => {
+        events = ev;
+        return { get appId() { return appId; }, botTag: 'fake', client: sdk,
+          connect: async () => ev.onStatus({ kind: 'connected', appId: 'fake' }), destroy: async () => {} } as unknown as ReturnType<Factory>;
+      },
+    });
+    const lookupEntered = deferred<void>();
+    const lookupReleased = deferred<void>();
+    try {
+      await im.init();
+      const inbound = deferred<IMMessageEvent>();
+      im.onMessage(inbound.resolve);
+      events.onGuildMessage({ id: '8', guildId: '10', channelId: '20', channel,
+        author: { id: '1', username: 'Owner' }, content: '<@2> question', mentions: { has: () => true } } as never);
+      const event = await inbound.promise;
+      const output = buildDiscordAdapter(im, fakeAdapter.config).output;
+      const commit = vi.spyOn(im, 'commitFinalText');
+      const start = vi.spyOn(im, 'startStreamingText');
+      const h = setupSession(async () => ({ accepted: true }));
+      // Silence only the next input's queue notice so all external writes belong to this final.
+      runner = createTurnRunner({ ...fakeAdapter, channel: 'discord', im, output, silentQueue: true }, fakeRepo, fakeCards);
+      const firstComplete = vi.fn();
+      const args = { botContextId: '2', userId: event.senderId, userMessageId: event.messageId,
+        text: 'question', attachments: [], ackReactionIdPromise: null, beforeProviderStart: async () => undefined };
+      const first = await runner.dispatchAgentTurn({ ...args, queueMode: 'external', onTurnComplete: firstComplete });
+      if (first.kind !== 'accepted') throw new Error('expected accepted dispatch');
+      sdk.channels.fetch.mockImplementationOnce(async () => {
+        lookupEntered.resolve();
+        await lookupReleased.promise;
+        if (rejects) throw new Error('channel lookup failed');
+        return channel;
+      });
+      h.emit({ type: 'text', data: { text: 'old identity answer', isFinal: true } });
+      await lookupEntered.promise;
+      appId = '4';
+      const nextComplete = vi.fn();
+      await runner.runAgentTurn({ ...args, userMessageId: '20|9', onTurnComplete: nextComplete });
+      expect(h.send).toHaveBeenCalledOnce();
+      h.emit(terminal === 'done' ? { type: 'done', data: {} }
+        : { type: 'error', data: { message: 'provider failed', isTerminal: true } });
+      lookupReleased.resolve();
+      await expect(first.terminal).resolves.toMatchObject({ kind: terminal });
+      await waitForAssertion(() => expect(h.send).toHaveBeenCalledTimes(2));
+      expect(start).toHaveBeenCalledOnce();
+      expect(commit).not.toHaveBeenCalled();
+      // Empty-ledger maintenance may race dispatch; no terminal entry may ever be persisted.
+      expect(persist.mock.calls.flatMap(([value]) => (JSON.parse(value) as { entries: unknown[] }).entries)).toEqual([]);
+      expect(sdk.rest.post).not.toHaveBeenCalled();
+      expect(channel.send).not.toHaveBeenCalled();
+      expect(firstComplete).toHaveBeenCalledOnce();
+      expect(nextComplete).not.toHaveBeenCalled();
+    } finally {
+      lookupReleased.resolve();
+      await runner?.disposeAllSessions(); runner = null;
+      await im.dispose();
+    }
   });
 
   it('keeps IM persistence, ack, card, and completion exactly-once when Maker recovery is transparent', async () => {
@@ -1494,6 +1578,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     let live: Session | undefined = oldSession.session;
     const maker = {
       createSession: vi.fn(async () => oldSession.session),
+      recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
       getSession: vi.fn(() => live),
       on: vi.fn((listener: (event: MakerEvent) => void) => {
         makerEventListeners.push(listener);
@@ -1994,6 +2079,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     let live: Session | undefined = oldSession.session;
     const maker = {
       createSession: vi.fn(async () => oldSession.session),
+      recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
       getSession: vi.fn(() => live),
       on: vi.fn((listener: (event: MakerEvent) => void) => {
         makerEventListeners.push(listener);
@@ -2051,6 +2137,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       let live: Session | undefined = oldSession.session;
       const maker = {
         createSession: vi.fn(async () => oldSession.session),
+      recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
         getSession: vi.fn(() => live),
         on: vi.fn((listener: (event: MakerEvent) => void) => {
           makerEventListeners.push(listener);
@@ -2151,6 +2238,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       let live: Session | undefined = oldSession.session;
       mocks.getMaker.mockReturnValue({
         createSession: vi.fn(async () => oldSession.session),
+      recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
         getSession: vi.fn(() => live),
         on: vi.fn((listener: (event: MakerEvent) => void) => {
           makerEventListeners.push(listener);
@@ -2220,6 +2308,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     const releaseLock = vi.fn();
     mocks.getMaker.mockReturnValue({
       createSession: vi.fn(async () => oldSession.session),
+      recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
       getSession: vi.fn(() => live),
       on: vi.fn((listener: (event: MakerEvent) => void) => {
         makerEventListeners.push(listener);
@@ -2301,6 +2390,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     let live: Session | undefined = oldSession.session;
     const maker = {
       createSession: vi.fn(async () => oldSession.session),
+      recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
       getSession: vi.fn(() => live),
       on: vi.fn((listener: (event: MakerEvent) => void) => {
         makerEventListeners.push(listener);
@@ -3745,6 +3835,29 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(finalView).not.toContain('tok/s');
   });
 
+  // Rule: a completed card-channel turn hands its process record to the channel next to a
+  // clean answer; the process region used to be dropped at done, leaving nothing to review.
+  // Production entry: agent events -> turnRunner -> StreamingTextHandle.finalize.
+  // Coverage gap: completion tests only pinned the body; error closure keeps the process
+  // inside the text (covered above). Minimal input: one tool step, then text, then done.
+  it('finalizes a completed turn with a clean answer and its process record', async () => {
+    const handle = { messageId: 'stream-record', append: vi.fn(), replace: vi.fn(), finalize: vi.fn(), close: vi.fn() };
+    mocks.feishuIm.startStreamingText.mockResolvedValue(handle);
+    const h = setupSession(async () => ({ accepted: true }));
+    await runDefaultTurn();
+
+    h.emit({ type: 'tool_use', data: { toolName: 'Read', toolUseId: 'r1', input: { file_path: '/x/a.ts' } } });
+    h.emit({ type: 'text', data: { text: '结论', isFinal: true } });
+    await flushMicrotasks();
+    h.emit({ type: 'done', data: {} });
+
+    await waitForAssertion(() => expect(handle.finalize).toHaveBeenCalledTimes(1));
+    const [body, options] = handle.finalize.mock.calls[0];
+    expect(body).toBe('结论');
+    expect(options.process.title).toMatch(/^过程记录 · 1 项 · /);
+    expect(options.process.lines).toEqual(['✓ 读取 a.ts']);
+  });
+
   it('keeps streaming resumed-turn output into the same turn after a silentStop resume', async () => {
     const handle = {
       messageId: 'stream-resume',
@@ -4562,6 +4675,46 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
   // 或 /new 重置后的新上下文首条消息)。threadScoped(slack)路径的回归在
   // turnRunnerThreadRouting.test.ts。
   describe('non-threadScoped generatedTitlePrefix title generation', () => {
+    it.each([
+      { userId: 'g/200000000000000001/300000000000000001', source: 'Studio #general', expected: 'Discord · Studio #general', generates: false },
+      { userId: 'g/200000000000000001/300000000000000001/400000000000000001', source: 'Studio #general › release', expected: 'Discord · Studio #general › release', generates: false },
+      { userId: '9876543210', source: null, expected: 'Discord · Generated summary', generates: true },
+    ])('preserves Discord source titles while keeping DM summaries ($userId)', async ({ userId, source, expected, generates }) => {
+      const discordAdapter = buildDiscordAdapter({
+        ...mocks.feishuIm,
+        describeLane: () => source,
+      } as unknown as DiscordIM, fakeAdapter.config);
+      const localRunner = createTurnRunner({
+        ...discordAdapter,
+        sessions: { ...discordAdapter.sessions, ensureWorkingDir: fakeAdapter.sessions.ensureWorkingDir },
+      }, fakeRepo, fakeCards);
+      let storedTitle = await discordAdapter.sessions.resolveSessionTitle!(userId)
+        ?? discordAdapter.sessions.defaultTitle(userId);
+      const h = setupSession(async () => ({ accepted: true }));
+      const backgroundTasks: Promise<void>[] = [];
+      try {
+        await mocks.generateAndPersistFbotTitle.withImplementation(async (...args: unknown[]) => {
+          storedTitle = `${args[2]}Generated summary`;
+          return storedTitle;
+        }, async () => {
+          const dispatch = await localRunner.dispatchAgentTurn({
+            botContextId: 'cli_test_bot', userId, userMessageId: 'first-message',
+            text: 'summarize this request', attachments: [], queueMode: 'external',
+            beforeProviderStart: async () => {},
+            trackBackgroundTask: (operation) => { backgroundTasks.push(operation()); },
+          });
+          if (dispatch.kind !== 'accepted') throw new Error('expected accepted dispatch');
+          await Promise.all(backgroundTasks);
+          h.emit({ type: 'done', data: {} });
+          await expect(dispatch.terminal).resolves.toMatchObject({ kind: 'done' });
+          expect(storedTitle).toBe(expected);
+          expect(mocks.generateAndPersistFbotTitle).toHaveBeenCalledTimes(generates ? 1 : 0);
+        });
+      } finally {
+        await localRunner.disposeAllSessions();
+      }
+    });
+
     function makePrefixedRunner(): ImTurnRunner {
       return createTurnRunner(
         {
@@ -4700,6 +4853,97 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
   });
 
 describe('初始流式输出面创建失败的收口降级(#2164)', () => {
+  it('settles an invalidated error without claiming the next identity opener and drains queued work', async () => {
+    const start = deferred<void>();
+    const nextHandle = { messageId: 'stream-next', append: vi.fn(), replace: vi.fn(), finalize: vi.fn(), close: vi.fn() };
+    mocks.feishuIm.startStreamingText.mockResolvedValue(nextHandle).mockImplementationOnce(async () => {
+      await start.promise;
+      throw Object.assign(new Error('discord owner changed'), { code: 'IM_OUTPUT_INVALIDATED' });
+    });
+    mocks.resolveXdtImageUrl.mockReturnValue({ absPath: '/media/generated.png' });
+    const h = setupSession(async () => ({ accepted: true }));
+    const firstComplete = vi.fn();
+    const dispatch = await getRunner().dispatchAgentTurn({
+      botContextId: 'cli_test_bot', userId: 'ou_user', userMessageId: 'old-identity',
+      text: 'request', attachments: [], queueMode: 'external',
+      beforeProviderStart: async () => {}, onTurnComplete: firstComplete,
+    });
+    if (dispatch.kind !== 'accepted') throw new Error('expected accepted dispatch');
+    h.emit({ type: 'tool_result_full', data: { fullText: '{"xdt_image_url":"xdt-image://generated.png"}' } });
+    h.emit({ type: 'text', data: { text: 'old identity answer', isFinal: true } });
+    const nextComplete = vi.fn();
+    await runDefaultTurn(nextComplete, { userMessageId: 'next-identity', text: 'next request' });
+    expect(h.send).toHaveBeenCalledOnce();
+    mocks.feishuIm.sendText.mockClear();
+    mocks.feishuIm.sendFile.mockClear();
+    mocks.feishuIm.consumePendingOpenerCard.mockClear();
+    mocks.feishuIm.takeNotedFallbackOpenerId.mockClear();
+    mocks.feishuIm.getPendingOpenerTrigger.mockReturnValue('next-identity');
+    mocks.feishuIm.takeNotedFallbackOpenerId.mockReturnValue('next-opener');
+
+    h.emit({ type: 'error', data: { message: 'provider failed', isTerminal: true } });
+    start.resolve();
+    await expect(dispatch.terminal).resolves.toMatchObject({ kind: 'error' });
+    await waitForAssertion(() => expect(h.send).toHaveBeenCalledTimes(2));
+
+    expect(mocks.feishuIm.sendText).not.toHaveBeenCalled();
+    expect(mocks.feishuIm.sendFile).not.toHaveBeenCalled();
+    expect(mocks.feishuIm.consumePendingOpenerCard).not.toHaveBeenCalled();
+    expect(mocks.feishuIm.takeNotedFallbackOpenerId).not.toHaveBeenCalled();
+    expect(firstComplete).toHaveBeenCalledOnce();
+    expect(nextComplete).not.toHaveBeenCalled();
+
+    h.emit({ type: 'text', data: { text: 'next identity answer', isFinal: true } });
+    h.emit({ type: 'done', data: {} });
+    await waitForAssertion(() => {
+      expect(nextComplete).toHaveBeenCalledOnce();
+      expect(nextHandle.finalize.mock.calls[0]?.[0]).toBe('next identity answer');
+    });
+  });
+
+  it('keeps error fallback after an ordinary stream creation failure', async () => {
+    mocks.feishuIm.startStreamingText.mockRejectedValueOnce(new Error('card create denied'));
+    const h = setupSession(async () => ({ accepted: true }));
+    const dispatch = await getRunner().dispatchAgentTurn({
+      botContextId: 'cli_test_bot', userId: 'ou_user', userMessageId: 'msg-error',
+      text: 'request', attachments: [], queueMode: 'external',
+      beforeProviderStart: async () => {},
+    });
+    if (dispatch.kind !== 'accepted') throw new Error('expected accepted dispatch');
+    h.emit({ type: 'text', data: { text: 'partial answer' } });
+    h.emit({ type: 'error', data: { message: 'provider failed', isTerminal: true } });
+    await expect(dispatch.terminal).resolves.toMatchObject({ kind: 'error' });
+    expect(mocks.feishuIm.sendText).toHaveBeenCalledExactlyOnceWith(
+      'ou_user', expect.stringMatching(/❌ 错误：.*provider failed/), { threadTs: undefined },
+    );
+  });
+
+  it('settles an invalidated output without retrying text or media under a new identity', async () => {
+    mocks.feishuIm.startStreamingText.mockRejectedValue(
+      Object.assign(new Error('discord owner changed'), { code: 'IM_OUTPUT_INVALIDATED' }),
+    );
+    mocks.resolveXdtImageUrl.mockReturnValue({ absPath: '/media/generated.png' });
+    const h = setupSession(async () => ({ accepted: true }));
+    const onTurnComplete = vi.fn();
+    const result = await getRunner().dispatchAgentTurn({
+      botContextId: 'cli_test_bot', userId: 'ou_user', userMessageId: 'old-identity',
+      text: 'request', attachments: [], queueMode: 'external',
+      beforeProviderStart: async () => {}, onTurnComplete,
+    });
+    expect(result.kind).toBe('accepted');
+    mocks.feishuIm.sendText.mockClear();
+    mocks.feishuIm.sendFile.mockClear();
+    h.emit({ type: 'tool_result_full', data: { fullText: '{"xdt_image_url":"xdt-image://generated.png"}' } });
+    h.emit({ type: 'text', data: { text: 'old identity answer', isFinal: true } });
+    h.emit({ type: 'done', data: {} });
+    if (result.kind === 'accepted') await result.terminal;
+
+    expect(mocks.feishuIm.startStreamingText).toHaveBeenCalledOnce();
+    expect(mocks.feishuIm.sendText).not.toHaveBeenCalled();
+    expect(mocks.feishuIm.sendFile).not.toHaveBeenCalled();
+    expect(onTurnComplete).toHaveBeenCalledOnce();
+  });
+
   // Unit: real turn events; missing stream must not drop generated media.
   it.each(['', 'image ready'])('keeps generated media when stream creation fails (body=%s)', async (body) => {
     mocks.feishuIm.startStreamingText.mockRejectedValue(new Error('card create denied'));
@@ -4896,6 +5140,7 @@ describe('初始流式输出面创建失败的收口降级(#2164)', () => {
       let wired = false;
       return {
         getSession: vi.fn(() => (wired ? session : undefined)),
+        recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
         createSession: vi.fn(async () => {
           order.push('wire');
           wired = true;

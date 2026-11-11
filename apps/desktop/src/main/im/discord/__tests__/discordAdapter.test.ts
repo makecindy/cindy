@@ -53,7 +53,7 @@ describe('discord terminal media lease', () => {
     const entered = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
     const post = vi.fn(async () => ({ id: '90' }));
-    const channel = { id: '30', guildId: '10', parentId: '20', type: 11,
+    const channel = { id: '30', guildId: '10', parentId: '20', parent: { id: '20', guildId: '10', type: 0 }, type: 11,
       isTextBased: () => true, isSendable: () => true, messages: {},
       permissionsFor: () => ({ has: () => true }), send: vi.fn(async () => ({ id: '91' })) };
     const sdk = { user: { id: '2' }, rest: { post }, channels: { fetch: async () => {

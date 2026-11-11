@@ -13,10 +13,13 @@ import { okPayload, errorPayload } from './_payload.js';
 import {
   createWorkerSpecSchema,
   workerCreationRoutePayload,
+  workerHandoffPayload,
   toHostAgentDeviceId,
   toWorkerLimitPayload,
   type CreateWorkerDeps,
   type CreateWorkerSpec,
+  type InitialTaskState,
+  type WorkerFileAccess,
   type WorkerLimitSnapshot,
 } from './create_worker.js';
 
@@ -44,6 +47,8 @@ const DESCRIPTION = [
   '用户一次要求创建多个 Worker 时必须使用本工具，不要并行或连续多次调用 create_worker。',
   '本工具按 workers 顺序创建并返回真实逐项终态；首次命中 WORKER_LIMIT_HARD_EXCEEDED 后立即停止，剩余项标记 skipped，不再调用 host。',
   '结果包含 request_count / attempted_count / success_count / failure_count / skipped_count / not_created_count、hard limit 快照、确定生成的 user_report，以及每个 label 对应的 worker/session 或失败原因。success/failure/skipped 是互斥分区。',
+  '每个 initial_task 的正文要自包含：目标、背景、边界与交付要求写进正文，文件只作补充并给绝对路径。逐项结果的 file_access 说明该 Worker 能看到什么（lead_working_directory / own_worktree / explicit_directory / other_computer），initial_task_state 说明首条任务的真实状态（delivered 已送达 / queued 已排队 / not_delivered 未送到 / none 未附任务）；创建成功不等于任务已完成。',
+  'label 只需与团队里现有的 Worker 不同；已归档 Worker 的名字可以直接重新使用。Worker 只是出错时不必归档重建：它原样保留，可直接 send_to_worker 继续。',
   '工具返回后必须向用户逐字转告 user_report 并补充逐项结果；达到 hard limit 时同时转告 suggestions 中的调整设置、复用 Worker 或分批执行方案。',
   '每个 Worker 的 working_dir：可选，Worker 所在主机上已存在的绝对目录。省略时继承 Lead 任务记录的工作目录（启动时的目录），不会跟随之后 cd 进入的 worktree。希望共用你当前的 worktree（含 git worktree add 自建的）时，请显式传其绝对路径；需要独立的新 worktree 时用 new_worktree。显式 working_dir / new_worktree 按会话权限审批。指定 execution_device_id 时目录属于那台电脑，省略由那台分配；校验失败不回退。',
   '每个 Worker 可传 new_worktree: {} 新建自有 worktree，source_branch 可选，与 Lead 同一仓库时使用目标目录当前分支或提交，其他仓库默认先用仓库源分支记忆，失效退回当前分支，worktree_source 返回实际分支与原因；仅支持本机有提交的 Git 项目，不支持 SSH / execution_device_id。逐项成功结果的 working_dir 是实际启动目录，worktree 是归档时按普通任务规则回收的自有检出目录和新分支。',
@@ -63,6 +68,9 @@ interface CreatedWorkerResult {
   dispatched?: boolean;
   dispatch_outcome?: unknown;
   queued_message_id?: string;
+  initial_task_state: InitialTaskState;
+  file_access: WorkerFileAccess;
+  handoff_hint?: string;
   warning?: 'WORKER_LIMIT_SOFT_EXCEEDED';
 }
 
@@ -98,6 +106,22 @@ function hostNotReadySuggestions(): string[] {
   return [`等待 ${BRAND_NAME} 主进程协同服务就绪后，只重试未创建项。`];
 }
 
+/** 已创建 Worker 的首条任务到了哪一步；只列非零项，让用户看到的是事实而不是「已在运行」。 */
+function describeInitialTasks(states: readonly InitialTaskState[]): string {
+  if (states.length === 0) return '';
+  const count = (state: InitialTaskState) => states.filter((item) => item === state).length;
+  const parts = [
+    [count('delivered'), '已送达'],
+    [count('queued'), '已排队、尚未开始'],
+    [count('not_delivered'), '未送达'],
+    [count('none'), '未附任务'],
+  ].flatMap(([total, text]) => (total ? [`${total} 个${text}`] : []));
+  const pending = count('delivered') + count('queued') > 0
+    ? '任务送达不代表已完成，各 Worker 完成后会回报。'
+    : '';
+  return `已创建的 Worker 首条任务：${parts.join('，')}。${pending}`;
+}
+
 function buildUserReport(params: {
   requestCount: number;
   successCount: number;
@@ -105,16 +129,19 @@ function buildUserReport(params: {
   skippedCount: number;
   stopReason: BatchStopReason | undefined;
   limit: WorkerLimitSnapshot | undefined;
+  initialTaskStates: readonly InitialTaskState[];
 }): string {
   const notCreatedCount = params.failureCount + params.skippedCount;
   const base = `本批请求创建 ${params.requestCount} 个 Worker，实际创建成功 ${params.successCount} 个，创建失败 ${params.failureCount} 个，未尝试 ${params.skippedCount} 个，共 ${notCreatedCount} 个未创建`;
+  // 提前结束的批次里，已创建的 Worker 同样要说明首条任务到了哪一步（Lead 逐字转告这句汇总）。
+  const tasks = describeInitialTasks(params.initialTaskStates);
   if (params.stopReason === 'WORKER_LIMIT_HARD_EXCEEDED' && params.limit) {
-    return `${base}；当前 hard limit 为 ${params.limit.workerHardLimit}，已占用 ${params.limit.occupiedSlots} 个槽位。可在协同设置中提高 hard limit、复用已有 Worker，或归档不再需要的 Worker 后分批执行剩余任务。`;
+    return `${base}；当前 hard limit 为 ${params.limit.workerHardLimit}，已占用 ${params.limit.occupiedSlots} 个槽位。可在协同设置中提高 hard limit、复用已有 Worker，或归档不再需要的 Worker 后分批执行剩余任务。${tasks}`;
   }
   if (params.stopReason === 'HOST_NOT_READY') {
-    return `${base}；${BRAND_NAME} 主进程协同服务尚未就绪，请等待服务就绪后只重试未创建项。`;
+    return `${base}；${BRAND_NAME} 主进程协同服务尚未就绪，请等待服务就绪后只重试未创建项。${tasks}`;
   }
-  return `${base}。请按逐项结果核对每个 Worker 的真实终态。`;
+  return `${base}。${tasks}`;
 }
 
 export function registerCreateWorkersTool(
@@ -173,6 +200,7 @@ export function registerCreateWorkersTool(
           results.push({
             ...baseResult(worker),
             ...workerCreationRoutePayload(result, worker.agent),
+            ...workerHandoffPayload(worker, result),
             status: 'created',
             worker_id: result.workerId,
             worker_session_id: result.workerSessionId,
@@ -222,6 +250,7 @@ export function registerCreateWorkersTool(
         skippedCount,
         stopReason,
         limit,
+        initialTaskStates: results.flatMap((item) => (item.status === 'created' ? [item.initial_task_state] : [])),
       });
       const payload = {
         request_count: workers.length,

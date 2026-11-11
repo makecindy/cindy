@@ -19,7 +19,7 @@ async function setup(scope: 'owner' | 'group' | 'companion' | 'missing' = 'owner
   let afterFetch = () => {};
   const secrets = new Map([['discord-bot-token', 'fake-not-a-token'], ['discord-owner-user-id', '1'], ['discord-bot-lifecycle-announcement', 'false']]);
   const rest = { get: vi.fn(async () => []), post: vi.fn(async () => ({ id: '90' })), put: vi.fn(), delete: vi.fn(), patch: vi.fn() };
-  const channel = { id: '30', guildId: '10', parentId: '20', type: 11, name: 'thread', isTextBased: () => true, isSendable: () => true, messages: {}, permissionsFor: () => ({ has: () => true }), send: vi.fn(async () => ({ id: '91' })) };
+  const channel = { id: '30', guildId: '10', parentId: '20', parent: { id: '20', guildId: '10', type: 0 }, type: 11, name: 'thread', isTextBased: () => true, isSendable: () => true, messages: {}, permissionsFor: () => ({ has: () => true }), send: vi.fn(async () => ({ id: '91' })) };
   const sdk = { user: { id: '2' }, rest, channels: { fetch: vi.fn(async () => { afterFetch(); return channel; }), cache: new Map([['30', channel]]) } };
   const host: IMHost = {
     secrets: { read: key => secrets.get(key) ?? null, write: (key, value) => { secrets.set(key, value); return true; }, remove: key => { secrets.delete(key); }, isAvailable: () => true },

@@ -30,6 +30,7 @@ const mocks = vi.hoisted(() => ({
   routeCurrent: false,
   draft: false,
   toastSuccess: vi.fn(),
+  toastInfo: vi.fn(),
 }));
 
 vi.mock('@/contexts/PrRefsContext', () => ({
@@ -37,7 +38,7 @@ vi.mock('@/contexts/PrRefsContext', () => ({
 }));
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
-vi.mock('@/lib/toast', () => ({ toast: { success: mocks.toastSuccess } }));
+vi.mock('@/lib/toast', () => ({ toast: { success: mocks.toastSuccess, info: mocks.toastInfo } }));
 vi.mock('@/lib/makerChatStore', () => ({
   makerChatStore: {
     getRunningSnapshot: () => mocks.running,
@@ -99,6 +100,13 @@ describe('useGhostCardTaskArchive', () => {
     expect(mocks.toastSuccess).toHaveBeenCalledTimes(1);
     mocks.toastSuccess.mock.calls[0][1].action.onClick();
     expect(mocks.unarchiveSession).toHaveBeenCalledWith(session.id);
+  });
+
+  it('explains an uncommitted-worktree block without claiming success', async () => {
+    mocks.preflight = 'dirty';
+    await visit();
+    expect(mocks.toastInfo).toHaveBeenCalledWith('chat.ghostCall.taskAutoArchiveBlockedDirty', { duration: 8000 });
+    expect(mocks.toastSuccess).not.toHaveBeenCalled();
   });
 
   // Regression: refs/statuses can change while the asynchronous preflight is running.

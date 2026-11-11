@@ -3,7 +3,6 @@ import { useEffect, useMemo, useSyncExternalStore } from 'react';
 
 import { useAvailableAgents } from '@/hooks/useAvailableAgents';
 import type { MakerVendor } from '@/lib/ccAgent.types';
-import type { BotAutonomySettingsView } from '../../../shared/botAutonomy';
 import type { BotMemoryDeleteInput, BotMemoryUpdateInput } from '../../../shared/botMemory';
 import { botProfileModelSelectionChanged, type BotModelRoute } from '../../../shared/botModelChain';
 import type { ConversationSearchResponse } from '../../../shared/conversationSearch';
@@ -181,7 +180,6 @@ export function remoteBotSettingsPages(ops: ReadonlySet<BotSettingsOp>): Set<str
   if (has('history.search')) pages.add('history');
   if (has('voice.models', 'voice.voices', 'voice.preference', 'voice.setPreference')) pages.add('voice');
   if (has('channels.im.list', 'channels.im.remove')) pages.add('channels');
-  if (has('routines.list', 'routines.sources', 'routines.history', 'routines.save', 'routines.runNow', 'routines.remove')) pages.add('routines');
   return pages;
 }
 
@@ -205,18 +203,6 @@ export function createRemoteBotSettingsTarget(input: RemoteBotSettingsInput) {
     chainKey = key;
     defaultChain = modelChain;
     chainListeners.forEach((listener) => listener());
-  };
-
-  let autonomy: BotAutonomySettingsView | null = null;
-  const autonomyListeners = new Set<() => void>();
-  const loadAutonomy = async () => {
-    const view = await invokeBotSettings<BotAutonomySettingsView>(deviceId, 'autonomy.get', null);
-    autonomy = view;
-    autonomyListeners.forEach((listener) => listener());
-  };
-  const applyAutonomy = (view: BotAutonomySettingsView) => {
-    autonomy = view;
-    autonomyListeners.forEach((listener) => listener());
   };
 
   const call2 = <T>(op: BotSettingsOp, args?: Record<string, unknown>) => invokeBotSettings<T>(deviceId, op, botId,
@@ -271,7 +257,6 @@ export function createRemoteBotSettingsTarget(input: RemoteBotSettingsInput) {
     onChannelSettingsChange: (listener) => pollWhileVisible(async () => (await readWechat()).channelSettings, listener),
   };
   const catalogWatchers = new Set<() => void>();
-  const routineWatchers = new Set<() => void>();
 
   const target: BotSettingsTarget = {
     kind: 'remote',
@@ -350,10 +335,10 @@ export function createRemoteBotSettingsTarget(input: RemoteBotSettingsInput) {
       async load(bot) {
         const result = await invokeBotSettings<{
           personal: BotSkillSummary[];
-          entries: Partial<Record<BotCapabilityKind, Array<{ id: string; name: string; description?: string; available: boolean }>>>;
+          entries: Partial<Record<BotCapabilityKind, Array<{ id: string; name: string; description?: string; available: boolean; cindyOfficial?: boolean }>>>;
         }>(deviceId, 'capabilities.catalog', bot.id);
         const entries = (kind: BotCapabilityKind): BotCapabilityEntry[] =>
-          (result.entries[kind] ?? []).map(({ id, name, description, available }) => ({ id, name, description, available }));
+          (result.entries[kind] ?? []).map(({ id, name, description, available, cindyOfficial }) => ({ id, name, description, available, cindyOfficial }));
         return {
           skill: [
             ...result.personal.map((item) => ({ id: `personal:${item.slug}`, name: item.name, description: item.description || undefined, available: item.enabled !== false, personal: true })),
@@ -389,60 +374,14 @@ export function createRemoteBotSettingsTarget(input: RemoteBotSettingsInput) {
           ...(sentencePlayback !== undefined ? { sentencePlayback } : {}),
         }),
     },
-    routineModels: input.ops.has('routines.saveWithModel'),
-    routineSessionModes: input.ops.has('routines.saveWithSessionMode'),
-    routineDelivery: input.ops.has('routines.saveWithDelivery'),
-    routines: {
-      list: (id) => invokeBotSettings(deviceId, 'routines.list', id),
-      save: (id, routine, routineId) => invokeBotSettings(deviceId,
-        input.ops.has('routines.saveWithDelivery') ? 'routines.saveWithDelivery'
-          : input.ops.has('routines.saveWithSessionMode') ? 'routines.saveWithSessionMode'
-          : input.ops.has('routines.saveWithModel') ? 'routines.saveWithModel' : 'routines.save',
-        id, { input: routine, ...(routineId ? { id: routineId } : {}) }),
-      async remove(id, routineId) {
-        await invokeBotSettings(deviceId, 'routines.remove', id, { id: routineId });
-      },
-      runNow: (id, routineId) => invokeBotSettings(deviceId, 'routines.runNow', id, { id: routineId }),
-      history: (id, routineId) => invokeBotSettings(deviceId, 'routines.history', id, { id: routineId }),
-      sources: () => invokeBotSettings(deviceId, 'routines.sources', null),
-      deliveryTargets: (id) => input.ops.has('routines.deliveryTargets')
-        ? invokeBotSettings(deviceId, 'routines.deliveryTargets', id) : Promise.resolve([]),
-      onChanged(listener) {
-        routineWatchers.add(listener);
-        return () => void routineWatchers.delete(listener);
-      },
-    },
-    autonomy: {
-      useSettings() {
-        useEffect(() => {
-          void loadAutonomy().catch(() => undefined);
-        }, []);
-        return useSyncExternalStore(
-          (listener) => (autonomyListeners.add(listener), () => void autonomyListeners.delete(listener)),
-          () => autonomy,
-        );
-      },
-      async setSchedulerBotId(id) {
-        applyAutonomy(await invokeBotSettings<BotAutonomySettingsView>(deviceId, 'autonomy.set', null, { schedulerBotId: id }));
-      },
-      async reset() {
-        applyAutonomy(await invokeBotSettings<BotAutonomySettingsView>(deviceId, 'autonomy.reset', null));
-      },
-    },
   };
 
   return {
     target,
     profiles,
     /** The teammate's computer reported a change: re-read what the open pages show. */
-    changed(collectionId = 'teammates') {
-      // Routines have their own collection on the teammate's computer.
-      if (collectionId === 'routines') {
-        routineWatchers.forEach((listener) => listener());
-        return;
-      }
+    changed() {
       void profiles.refresh().catch(() => undefined);
-      if (autonomyListeners.size) void loadAutonomy().catch(() => undefined);
       if (chainListeners.size) void loadDefaultChain().catch(() => undefined);
       catalogWatchers.forEach((refresh) => refresh());
     },

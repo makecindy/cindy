@@ -2,7 +2,6 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { ScriptTarget, transpileModule } from 'typescript';
 import { afterEach, expect, it, vi } from 'vitest';
-import { createBotSessionTaskRouteBridge } from '../botSessionTaskRouteBridge.js';
 import { createSessionControlService } from '../sessionControlService.js';
 import { GroupToolAuthorizationError, authorizeGroupTool, registerGroupToolAuthority } from '../botGroupToolAuthorization.js';
 import { setSessionRuntimeHarness } from '../sessionRuntimeHarnessSelection.js';
@@ -38,7 +37,6 @@ it.each(['catalog', 'harness-read', 'native-preview', 'valid-harness', 'valid-mo
     const close = vi.fn();
     const supersede = vi.fn();
     const profile = { control: { generation: 1, pending: null }, effective: current };
-    const runtime = { ok: true, runtime: { runtimeGeneration: 1, effectiveProfile: current } };
     const maker = {
       getSession: () => ({ agentKind: 'pi' as const, model: 'old', setModel: nativeSet,
         previewModelSwitch: async () => {
@@ -65,6 +63,9 @@ it.each(['catalog', 'harness-read', 'native-preview', 'valid-harness', 'valid-mo
       resolveSessionRuntimeAxes: () => ({ ok: true, effort: null, fastMode: false }),
       mergeSessionRuntimeProfilePatch,
       runtimeSelectionRequiresModelWindowConfirmation: () => false,
+      // A deliberate choice becomes the task's own; this boundary does not inspect that bookkeeping.
+      updateScheduledPreference: async () => true,
+      reconcileBotModelRoute: { acceptTaskChoice: async () => {} },
       agentSwitchDeps: {
         getSessionRow: async () => {
           if (point === 'harness-read') revoked = true;
@@ -94,11 +95,11 @@ it.each(['catalog', 'harness-read', 'native-preview', 'valid-harness', 'valid-mo
     };
     const host = new Function(...Object.keys(deps), adapter)(...Object.values(deps));
     const control = createSessionControlService({ sessionExists: async () => true, getLiveSession: () => null, setSessionRuntime: host } as never);
-    const bridge = createBotSessionTaskRouteBridge({ getSessionRuntime: async () => runtime as never,
-      setSessionRuntime: params => control.setSessionRuntime(params), readConfiguredCandidate: vi.fn() });
     try {
       const authority = await authorizeGroupTool('route-group', 'bot-route', 'owner-action');
-      const action = bridge.advance('route-child', 1, next, authority.refresh);
+      const action = control.setSessionRuntime({ targetSessionId: 'route-child', expectedGeneration: 1,
+        beforeMutation: authority.refresh, patch: { ...(next.agentKind === current.agentKind ? {} : { harness: next.agentKind }),
+          model: next.model, providerId: next.providerId, effort: next.effort, fastMode: next.fastMode } });
       if (point.startsWith('valid')) {
         expect(await action).toMatchObject({ ok: true, status: point === 'valid-harness' ? 'deferred' : 'applied' });
         if (point === 'valid-harness') expect(pending.get('route-child')).toMatchObject({ model: 'next' });

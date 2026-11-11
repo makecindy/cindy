@@ -1,5 +1,37 @@
 {
   "defaults": {
+    "plugin-identity-official-text": {
+      "light": "semantic.defaults.plugin-identity-official-text.light",
+      "dark": "semantic.defaults.plugin-identity-official-text.dark"
+    },
+    "plugin-identity-official-bg": {
+      "light": "semantic.defaults.plugin-identity-official-bg.light",
+      "dark": "semantic.defaults.plugin-identity-official-bg.dark"
+    },
+    "plugin-identity-community-text": {
+      "light": "semantic.defaults.plugin-identity-community-text.light",
+      "dark": "semantic.defaults.plugin-identity-community-text.dark"
+    },
+    "plugin-identity-community-bg": {
+      "light": "semantic.defaults.plugin-identity-community-bg.light",
+      "dark": "semantic.defaults.plugin-identity-community-bg.dark"
+    },
+    "plugin-identity-team-text": {
+      "light": "semantic.defaults.plugin-identity-team-text.light",
+      "dark": "semantic.defaults.plugin-identity-team-text.dark"
+    },
+    "plugin-identity-team-bg": {
+      "light": "semantic.defaults.plugin-identity-team-bg.light",
+      "dark": "semantic.defaults.plugin-identity-team-bg.dark"
+    },
+    "plugin-identity-custom-text": {
+      "light": "semantic.defaults.plugin-identity-custom-text.light",
+      "dark": "semantic.defaults.plugin-identity-custom-text.dark"
+    },
+    "plugin-identity-custom-bg": {
+      "light": "semantic.defaults.plugin-identity-custom-bg.light",
+      "dark": "semantic.defaults.plugin-identity-custom-bg.dark"
+    },
     "surface": {
       "light": "semantic.defaults.surface.light",
       "dark": "semantic.defaults.surface.dark"

@@ -154,6 +154,17 @@ test("database CI gates sources outside localDb that DB-tier tests import direct
 	const runs = databaseTestRuns(ROOT, files, os.tmpdir(), [changed]);
 	assert.deepEqual(runs.map(run => run.tier), ["migration", "db", "db-related"]);
 	assert.ok(runs[2].pnpmArgs.includes("src/main/git-context/prRefsStore.ts"));
+	// Discord cursor persistence executes real SQL; keep it out of unit and in the same CI DB graph.
+	const desktop = manifest.workspaces.find(workspace => workspace.cwd === "apps/desktop");
+	const discordTest = "apps/desktop/src/main/localDb/__tests__/discordContext.test.ts";
+	const discordSource = "apps/desktop/src/main/im/discord/context.ts";
+	assert.equal(selectFilesForTier(desktop, desktop.tiers.unit, files).includes(discordTest), false);
+	assert.equal(selectFilesForTier(desktop, desktop.tiers.db, files).includes(discordTest), true);
+	assert.equal(needsDatabaseTests([discordTest], entrypoints), true);
+	assert.equal(needsDatabaseTests([discordSource], entrypoints), true);
+	const discordRuns = databaseTestRuns(ROOT, files, os.tmpdir(), [discordSource]);
+	assert.ok(discordRuns[2].selected.includes(discordTest));
+	assert.ok(discordRuns[2].pnpmArgs.includes("src/main/im/discord/context.ts"));
 });
 
 test("database CI compares each event base to the checked-out head and preserves removed paths", () => {
@@ -449,6 +460,7 @@ test("unit workspace concurrency reserves the full worker budget for heavy works
 		"**/*.e2e.test.ts",
 		"**/*.git-integration.test.ts",
 		"src/agents/shared/auto-review-remote-wiring.test.ts",
+		"src/agents/pi/__tests__/pi-extra-dirs-prompt.test.ts",
 	]);
 	assert.deepEqual(makerCore.tiers.unit.command, {
 		type: "packageBin",
@@ -488,9 +500,13 @@ test("real agent integration tests are explicit tiers outside unit", () => {
 	]);
 	assert.deepEqual(desktop.tiers.e2e.include, [
 		"src/main/maker-host/__tests__/*.e2e.test.ts",
+		"src/main/maker-host/__tests__/codexTerraProxy.integration.test.ts",
 		"src/main/remote-agent/__tests__/groupRelayClaudeFork.e2e.test.ts",
 		"src/main/remote-agent/__tests__/startupProbe.e2e.test.ts",
 	]);
+	const terraProxyTest = "apps/desktop/src/main/maker-host/__tests__/codexTerraProxy.integration.test.ts";
+	assert.deepEqual(selectFilesForTier(desktop, desktop.tiers.e2e, [terraProxyTest]), [terraProxyTest]);
+	assert.deepEqual(selectFilesForTier(desktop, desktop.tiers.unit, [terraProxyTest]), []);
 });
 
 test("Pi RPC lifecycle stays in unit while binary resource discovery stays in integration", () => {

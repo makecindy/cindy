@@ -90,6 +90,11 @@ interface DiscordFilePayload {
   name: string;
 }
 
+/** 调用方必须丢弃原轮次的出站内容，不能改用新身份重发。 */
+class DiscordOutputInvalidatedError extends Error {
+  readonly code = 'IM_OUTPUT_INVALIDATED';
+}
+
 export interface DiscordIMOptions {
   /** Owner-scoped atomic storage supplied by the host. Text only; never contains credentials. */
   finalTextStorage?: () => DiscordFinalTextStorage;
@@ -1194,7 +1199,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     const stagedDiscards: Array<() => Promise<void>> = [];
     try {
       const isOwner = m.author.id === acceptedContext.ownerUserId;
-      const channelName = m.channel?.parent?.name ?? m.channel?.name;
+      const channelName = lane.threadId ? m.channel?.parent?.name ?? m.channel?.name : m.channel?.name;
       const speakerName = m.member?.displayName ?? m.author.globalName ?? m.author.username ?? m.author.id;
       const event = await normalizeInboundMessage(
         m,
@@ -1333,8 +1338,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     if (!lane) return this.requireDmChannel(userId);
     const assertCurrent = this.captureLaneGuard(lane);
     assertCurrent();
-    const first = await this.fetchLaneChannel(lane);
-    assertCurrent();
+    const first = await this.fetchLaneChannel(lane).finally(assertCurrent);
     return {
       id: first.id,
       assertCurrent,
@@ -1374,9 +1378,9 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     const owner = this.ownerUserId;
     return () => {
       if (this.disposing || !appId || this.gateway.appId !== appId) {
-        throw new Error('discord connection changed');
+        throw new DiscordOutputInvalidatedError('discord connection changed');
       }
-      if (this.ownerUserId !== owner) throw new Error('discord owner changed');
+      if (this.ownerUserId !== owner) throw new DiscordOutputInvalidatedError('discord owner changed');
     };
   }
 

@@ -28,6 +28,7 @@ export const TEST_CLIENT_ENDPOINTS: ClientEndpointMap = {
   authDesktopCallbackUrl: '',
   chatApiBaseUrl: 'https://chat.test.invalid',
   deviceLinkApiBaseUrl: 'https://device.test.invalid',
+  agentNetApiBaseUrl: '',
   oauthBrokerApiBaseUrl: 'https://oauth.test.invalid',
   ossApiBaseUrl: 'https://oss.test.invalid',
   heartbeatUrl: 'https://heartbeat.test.invalid',

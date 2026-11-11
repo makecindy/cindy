@@ -90,7 +90,8 @@ export function InlineReferenceChip({
           {icon}
         </span>
       ) : null}
-      <span className={cn('min-w-0 truncate', labelClassName)}>{label}</span>
+      {/* Keep an atomic summary non-selectable even inside `.select-text *`. */}
+      <span className={cn('min-w-0 truncate', !textSelectable && 'select-none', labelClassName)}>{label}</span>
     </>
   );
   // `<span role="button">` 换掉原生 `<button>` 后要自己补键盘激活:走 native

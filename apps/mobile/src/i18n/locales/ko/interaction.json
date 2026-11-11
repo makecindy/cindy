@@ -29,6 +29,13 @@
       "description": "전체 접근은 작업 공간 샌드박스를 비활성화하고 일반 승인을 건너뜁니다. {{appName}}가 작업 공간 밖의 파일을 수정하고 네트워크 명령을 묻지 않고 실행할 수 있습니다. 기본 제공 고위험 작업은 계속 확인을 요청합니다.",
       "confirm": "전체 접근 활성화",
       "cancel": "현재 권한 유지"
+    },
+    "description": {
+      "default": "필요한 경우 사용자가 작업을 승인합니다.",
+      "acceptEdits": "파일 편집은 바로 허용하고, 다른 작업은 필요한 경우 사용자가 승인합니다.",
+      "auto": "AI 모델이 작업을 승인하므로 추가 대기 시간이 생길 수 있습니다. 필요한 경우 사용자가 확인합니다.",
+      "bypass": "일반 작업은 바로 허용하며, 작업 공간 밖의 파일과 네트워크 명령도 사용할 수 있습니다.",
+      "plan": "파일을 변경하지 않고 분석과 계획만 합니다."
     }
   },
   "planMode": {
@@ -36,6 +43,10 @@
     "exit": "플랜 모드 종료"
   },
   "panel": {
+    "questionUnanswered": "답변 없음",
+    "questionWithdrawn": "더 이상 답변이 필요하지 않습니다",
+    "withdrawnDraft": "이 질문에 더 이상 답변할 필요가 없습니다.\n{{reason}}\n초안은 보관되며 추가 정보로 보낼 수 있습니다.",
+    "sendSupplement": "추가 정보 보내기",
     "readOnlyKind": "확인 대기",
     "readOnlyTitle": "컴퓨터에서 확인을 기다리는 중",
     "pendingRequests": "대기 중인 요청",
@@ -450,5 +461,39 @@
       "ghost_id": "플러그인",
       "tool": "도구"
     }
+  },
+  "issueConfirm": {
+    "title": "{{appName}} 피드백 제출 확인",
+    "typeBug": "버그",
+    "typeFeature": "기능 제안",
+    "titleLabel": "제목",
+    "bodyLabel": "본문(Markdown)",
+    "privacyHint": "Issue 제목과 본문은 공개되며 검색되거나 캐시될 수 있습니다. 자동 가림은 일부 일반적인 형식만 처리하며 문맥상 민감한 정보를 모두 감지할 수는 없습니다.",
+    "relatedLogsHint": "이 제출에는 위에 표시된 관련 클라이언트 로그가 포함됩니다. 공개 전에 출처 및 필드 필터링, 가림, 길이 제한이 적용됩니다.",
+    "privacyConfirm": "위 공개 내용을 검토했으며 비공개로 유지해야 할 개인, 대화 또는 업무 정보가 포함되지 않았음을 확인했습니다",
+    "submissionMethodLabel": "제출 계정",
+    "identityGithubUser": "내 GitHub 계정 @{{login}}",
+    "identityGithubUserHint": "GitHub의 Issue 작성자가 되며 직접 수정하거나 닫을 수 있습니다",
+    "identityPlatform": "Cindy 공식 봇 @{{login}} (기본값)",
+    "identityPlatformHint": "GitHub 계정 설정 없이 사용할 수 있습니다. Issue는 공식 봇이 만들며 본문에 공개 서명을 표시할 수 있습니다",
+    "publicNameLabel": "공개 서명",
+    "publicNameHint": "이 서명은 Issue 본문에 공개적으로 표시됩니다",
+    "anonymous": "익명",
+    "useAnonymous": "익명 서명 사용",
+    "envLine": "제출 클라이언트 환경(제출 시 자동 첨부): 클라이언트 {{appVersion}} · {{platform}} {{arch}}({{osVersion}}) · 표시 언어 {{uiLanguage}}",
+    "runtimeLine": "Harness {{harness}} · Model ID {{modelId}} (지금 이 세션)",
+    "regionLine": "지역: {{region}}",
+    "regionCodeCn": "CN",
+    "regionCodeDev": "Dev",
+    "submit": "피드백 제출",
+    "cancel": "취소",
+    "previewLabel": "GitHub · 공개 피드백",
+    "edit": "수정",
+    "doneEditing": "수정 완료",
+    "publicSubmit": "공개 제출",
+    "publicationNotice": "내용과 작성자 이름이 GitHub에 공개됩니다.",
+    "attribution": "작성자: {{name}}",
+    "environment": "실행 환경 포함",
+    "identitySettings": "이름 및 계정"
   }
 }

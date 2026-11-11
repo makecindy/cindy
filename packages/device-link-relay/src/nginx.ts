@@ -249,8 +249,8 @@ function marked(text: string): string {
 }
 
 function location(port: number, tls: boolean): string {
-  return `location ^~ ${API} {
-    proxy_pass ${tls ? 'https' : 'http'}://127.0.0.1:${port};
+  const routes = [API, '/api/agent-net/'].map((prefix) => `location ^~ ${prefix} {
+    proxy_pass ${prefix === API && tls ? 'https' : 'http'}://127.0.0.1:${prefix === API ? port : 3348};
     proxy_http_version 1.1;
     proxy_set_header Host $http_host;
     proxy_set_header X-Forwarded-Host $http_host;
@@ -270,8 +270,8 @@ function location(port: number, tls: boolean): string {
     auth_basic off;
     access_log off;
     error_log /dev/null;
-}
-location @cindy_relay_unavailable {
+}`).join('\n');
+  return `${routes}\nlocation @cindy_relay_unavailable {
     access_log off;
     error_log /dev/null;
     recursive_error_pages off;
@@ -344,14 +344,14 @@ export function planNginx(options: {
     });
   };
   const routeApi = (body: string, tls: boolean): string => {
-    body = body.replaceAll(`if ($uri !~ "^${CHALLENGE}")`, 'if ($uri !~ "^/(?:api/device-link/|[.]well-known/acme-challenge/)")');
+    body = body.replaceAll(`if ($uri !~ "^${CHALLENGE}")`, 'if ($uri !~ "^/(?:api/(?:device-link|agent-net)/|[.]well-known/acme-challenge/)")');
     const directives = parse('body', body);
-    if (directives.some((d) => d.name === 'location' && d.args.some((a) => a.startsWith(API) || a === '/api/device-link'))) {
+    if (directives.some((d) => d.name === 'location' && d.args.some((a) => a.startsWith(API) || a === '/api/device-link' || a.startsWith('/api/agent-net')))) {
       throw new Error('The existing site already serves the Cindy relay API path');
     }
     for (const d of [...directives].reverse()) {
       if (d.name === 'return')
-        body = body.slice(0, d.start) + `if ($uri !~ "^${API}") { ${body.slice(d.start, d.end)} }` + body.slice(d.end);
+        body = body.slice(0, d.start) + `if ($uri !~ "^/api/(?:device-link|agent-net)/") { ${body.slice(d.start, d.end)} }` + body.slice(d.end);
     }
     return `${body}\n${marked(location(port, tls))}\n`;
   };
@@ -410,8 +410,8 @@ export function planNginx(options: {
         ) {
           body = body.slice(0, d.start) + body.slice(d.end);
         } else if (relay && d.name === 'return') {
-          body = body.slice(0, d.start) + `if ($uri !~ "^${API}") { ${body.slice(d.start, d.end)} }` + body.slice(d.end);
-        } else if (relay && d.name === 'location' && d.args.some((a) => a.startsWith(API)))
+          body = body.slice(0, d.start) + `if ($uri !~ "^/api/(?:device-link|agent-net)/") { ${body.slice(d.start, d.end)} }` + body.slice(d.end);
+        } else if (relay && d.name === 'location' && d.args.some((a) => a.startsWith(API) || a.startsWith('/api/agent-net')))
           throw new Error('The default site already serves the relay API path');
       }
       return body;

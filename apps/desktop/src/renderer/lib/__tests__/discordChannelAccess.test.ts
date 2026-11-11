@@ -118,4 +118,17 @@ describe('discord server-level access transforms', () => {
     expect(withoutA.guilds?.[0]?.savedChannels).toEqual([{ channelId: B }]);
     expect(canonical(removeChannel(legacy, G, A)).channels).toEqual([{ guildId: G, channelId: B }]);
   });
+
+  it('removing the last legacy channel preserves selected-empty across closing and reopening', () => {
+    let access = canonical(removeChannel({ channels: [
+      { guildId: G, channelId: A }, { guildId: G2, channelId: B },
+    ] }, G, A));
+    expect(guildState(access, G)).toMatchObject({ enabled: true, mode: 'selected' });
+    expect(guildState(access, G).selectedChannelIds.size).toBe(0);
+
+    access = canonical(setGuildEnabled(access, G, false));
+    access = canonical(setGuildEnabled(access, G, true));
+    expect(guildState(access, G)).toMatchObject({ enabled: true, mode: 'selected' });
+    expect(access.channels).toEqual([{ guildId: G2, channelId: B }]);
+  });
 });

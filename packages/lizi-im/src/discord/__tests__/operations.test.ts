@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Client } from 'discord.js';
 import { createDiscordOperations, discordOperationFailure, DiscordOperationError } from '../operations.js';
+import { isDiscordLaneEnabled } from '../lane.js';
 
 // unit: production REST adapter. First-phase send tests cannot observe REST history/search or lease expiry.
 // Minimal failures: mismatched thread parent, revocation while fetch is pending, 202 search, other-author edit.
@@ -12,7 +13,7 @@ function harness(boundLane?: string) {
   const parent = { id: '20', guildId: '10', type: 0, name: 'parent', isTextBased: () => true, messages: {}, permissionsFor: () => ({ has: () => true }) };
   const thread = { ...parent, id: '30', type: 11, parentId: '20', name: 'thread' };
   const client = { user: { id: '2' }, rest, channels: { fetch: vi.fn(async (id: string) => id === '30' ? thread : parent), cache: new Map([['20', parent], ['30', thread]]) } } as unknown as Client;
-  const tools = createDiscordOperations({ client: () => client, assertCurrent: () => { if (!current) throw new DiscordOperationError('EXPIRED'); }, laneEnabled: () => enabled, ownerId: '1', boundLane, authorizationStamp: () => generation });
+  const tools = createDiscordOperations({ client: () => client, assertCurrent: () => { if (!current) throw new DiscordOperationError('EXPIRED'); }, laneEnabled: lane => enabled && isDiscordLaneEnabled({ channels: [], guilds: [{ guildId: '10', enabled: true, mode: 'all' }] }, lane), ownerId: '1', boundLane, authorizationStamp: () => generation });
   return { tools, rest, parent, thread, client, revoke: () => { enabled = false; }, regrant: () => { generation = 'grant-3'; }, expire: () => { current = false; } };
 }
 const raw = (id: string, channel_id = '30', author = '3') => ({ id, channel_id, author: { id: author, username: 'someone' }, content: `body-${id}`, timestamp: '2026-11-10T01:00:00Z', attachments: [] });
@@ -39,10 +40,29 @@ describe('Discord narrow operations', () => {
     expect(other.rest.post).not.toHaveBeenCalled();
   });
   it('checks actual thread parent and platform permission', async () => {
-    const h = harness(); h.thread.parentId = '99';
+    const h = harness();
+    expect((await h.tools.listChannels()).lanes.map(lane => lane.laneId)).toEqual(['g/10/20', 'g/10/20/30']);
+    h.thread.parentId = '99';
     await expect(h.tools.history('g/10/20/30')).rejects.toMatchObject({ code: 'DISCORD_LANE_DENIED' });
     h.parent.permissionsFor = () => ({ has: () => false });
     await expect(h.tools.history('g/10/20')).rejects.toMatchObject({ code: 'DISCORD_PERMISSION_DENIED' });
+  });
+  // unit: all-server grants still cover only GuildText and its threads (#9709).
+  // Existing parent-id tests allowed a Forum/Announcement parent with a matching id.
+  // Minimal failure: cached thread + hand-written lane; discovery must do no extra I/O.
+  it.each([15, 5, undefined])('rejects tools and cached discovery without a GuildText parent (parent type %s)', async type => {
+    const h = harness();
+    if (type === undefined) h.client.channels.cache.delete('20');
+    else h.parent.type = type;
+    expect((await h.tools.listChannels()).lanes).toEqual([]);
+    expect(h.client.channels.fetch).not.toHaveBeenCalled();
+    await expect(h.tools.history('g/10/20/30')).rejects.toMatchObject({ code: 'DISCORD_LANE_DENIED' });
+    await expect(h.tools.send('g/10/20/30', 'outside text lanes')).rejects.toMatchObject({ code: 'DISCORD_LANE_DENIED' });
+    expect(h.rest.get).not.toHaveBeenCalled();
+    expect(h.rest.post).not.toHaveBeenCalled();
+    expect(h.client.channels.fetch).toHaveBeenCalledTimes(2);
+    expect(h.client.channels.fetch).toHaveBeenNthCalledWith(1, '30');
+    expect(h.client.channels.fetch).toHaveBeenNthCalledWith(2, '30');
   });
   it.each([undefined, 'g/10/20/30'])('does not reuse a revoked-then-regranted target across an await (scope %s)', async bound => {
     const h = harness(bound);

@@ -138,7 +138,7 @@ describe('Discord completed-input delivery identity', () => {
     let contents: string | null = null;
     const storage: DiscordFinalTextStorage = { key: 'owner-test', read: () => contents, write: value => { contents = value; }, assertCurrent() {}, authorizationStamp: () => 'grant-1' };
     const post = vi.fn(async (_route: string, _options: unknown) => ({ id: '90' }));
-    const channel = { id: '30', type: 11, guildId: '10', parentId: '20', isTextBased: () => true, messages: {}, permissionsFor: () => ({ has: () => true }) };
+    const channel = { id: '30', type: 11, guildId: '10', parentId: '20', parent: { id: '20', guildId: '10', type: 0 }, isTextBased: () => true, messages: {}, permissionsFor: () => ({ has: () => true }) };
     const sdk = { user: { id: '2' }, channels: { fetch: async () => channel }, rest: { post } };
     let events: DiscordGatewayEvents;
     const create = () => new DiscordIM(host, { finalTextStorage: () => storage, channelAccess: { read: () => ({ channels: [{ guildId: '10', channelId: '20' }] }) }, gatewayFactory: ev => {

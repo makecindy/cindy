@@ -107,7 +107,7 @@ describe('host proxies', () => {
     await handlers.get('local-db:messages:list')!({} as IpcMainInvokeEvent, 'task-1', { limit: 50 });
     expect(requests.at(-1)).toEqual({
       path: '/api/messages/list',
-      body: { sessionId: 'task-1', limit: 50 },
+      body: { sessionId: 'task-1', limit: 50, before: null },
     });
     await handlers.get('maker:input:enqueue')!({} as IpcMainInvokeEvent, 'task-1', {
       clientId: 'c1',
@@ -197,6 +197,27 @@ describe('host proxy round trip', () => {
 });
 
 describe('createHostClient', () => {
+  // Unit regression through the registered IPC boundary: the old contract
+  // returned a bare boolean for approval and an object for steer, opposite to
+  // what preload consumers expect. Also keep a successful refresh signed out.
+  // Existing proxy tests only covered request bodies; minimal false verdicts
+  // detect accidental success without an Electron process or real credentials.
+  it('returns preload-compatible approval, steer and auth verdicts', async () => {
+    const handlers = new Map<string, (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown>();
+    registerHostDelegatedIpc({
+      ipcMain: {
+        removeHandler() {},
+        handle: (channel, handler) => { handlers.set(channel, handler); },
+      },
+      client: { request: async () => ({ accepted: false, ok: true, isAuthenticated: false }) },
+    });
+    const event = {} as IpcMainInvokeEvent;
+    await expect(handlers.get('maker:resolve-interaction')!(event, 'request-1', { behavior: 'allow' }))
+      .resolves.toEqual({ accepted: false });
+    await expect(handlers.get('maker:input:steer')!(event, 'task-1', { text: 'next' })).resolves.toBe(true);
+    await expect(handlers.get('auth:refresh')!(event)).resolves.toBe(false);
+  });
+
   it('sends the profile bearer and returns the parsed body', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
@@ -314,6 +335,7 @@ describe('claimProxiedChannels and unsupported fallbacks', () => {
     const settingsChanged: Array<{ domain: string; value: unknown }> = [];
     const sessionEvents: unknown[] = [];
     const messageEvents: unknown[] = [];
+    const historyChanges: unknown[] = [];
     let projectAliasesNotified = false;
     const errors: unknown[] = [];
 
@@ -333,6 +355,9 @@ describe('claimProxiedChannels and unsupported fallbacks', () => {
           res.write('data: {"seq":5,"type":"input_projection","projection":{"sessionId":"s1","turnInProgress":true}}\n\n');
           res.write('data: {"seq":6,"type":"interaction_request","sessionId":"s1","request":{"requestId":"r1"}}\n\n');
           res.write('data: {"seq":7,"type":"text","sessionId":"s1"}\n\n');
+          res.write('data: {"seq":8,"type":"message_deleted","sessionId":"s1","clientId":"draft"}\n\n');
+          res.write('data: {"seq":9,"type":"error_persisted","sessionId":"s1","persistId":"err"}\n\n');
+          res.write('data: {"seq":10,"type":"subagent_runs_changed","sessionId":"s1"}\n\n');
         } else {
           res.writeHead(404);
           res.end();
@@ -356,6 +381,9 @@ describe('claimProxiedChannels and unsupported fallbacks', () => {
       onSettingsChanged: (domain, value) => settingsChanged.push({ domain, value }),
       onSessionChanged: (event) => sessionEvents.push(event),
       onMessageCreated: (event) => messageEvents.push(event),
+      onMessageDeleted: (event) => historyChanges.push(event),
+      onErrorPersisted: (event) => historyChanges.push(event),
+      onSubagentRunsChanged: (event) => historyChanges.push(event),
       onProjectAliasesChanged: () => {
         projectAliasesNotified = true;
       },
@@ -367,7 +395,7 @@ describe('claimProxiedChannels and unsupported fallbacks', () => {
 
     // Wait for the stream events to process
     for (let i = 0; i < 20; i++) {
-      if (broadcasts.length >= 1) break;
+      if (historyChanges.length >= 3) break;
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
 
@@ -381,6 +409,11 @@ describe('claimProxiedChannels and unsupported fallbacks', () => {
     expect(settingsChanged).toEqual([{ domain: 'appearance', value: { theme: 'dark' } }]);
     expect(sessionEvents).toEqual([{ seq: 2, type: 'session_changed', action: 'create', sessionId: 's1' }]);
     expect(messageEvents).toEqual([{ seq: 3, type: 'message_created', sessionId: 's1', messageId: 'm1' }]);
+    expect(historyChanges).toEqual([
+      { seq: 8, type: 'message_deleted', sessionId: 's1', clientId: 'draft' },
+      { seq: 9, type: 'error_persisted', sessionId: 's1', persistId: 'err' },
+      { seq: 10, type: 'subagent_runs_changed', sessionId: 's1' },
+    ]);
     expect(projectAliasesNotified).toBe(true);
   });
 });

@@ -186,6 +186,10 @@ class DiscordJsGateway implements DiscordGateway {
         return;
       }
       if (!message.guildId || !isGuildMessageChannelType(channelType)) return;
+      if (
+        channelType !== ChannelType.GuildText &&
+        (!('parent' in message.channel) || message.channel.parent?.type !== ChannelType.GuildText)
+      ) return;
       if (message.system || message.webhookId || !isUserAuthoredMessageType(message.type)) return;
       if (this.#dedup.seen(message.id)) return;
       this.ev.onGuildMessage(message);

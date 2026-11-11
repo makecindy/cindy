@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 
-import { createRehydrateCloseSuppression } from '../rehydrateCloseSuppression';
+import { createRehydrateCloseSuppression, shouldSkipOnCloseSideEffects } from '../rehydrateCloseSuppression';
 
 function makeLog() {
   return {
@@ -133,5 +133,39 @@ describe('withRehydrateCloseSuppressed', () => {
       'rehydrate suppress timeout, releasing',
       { sessionId: 'session-1' },
     );
+  });
+
+  it('skip skips side-effects even after the suppression window has been released', async () => {
+    // 回归(Greptile P1):Maker.close 不等 onClose;漂移回收包裹的窗口在 close
+    // 返回后即释放,而 onClose 先等 worktree lease 的文件操作才查抑制表 ——
+    // 重查会错过窗口照删暂存附件。close 请求入口固化的瞬态事实必须独立于当前表生效。
+    const log = makeLog();
+    const suppression = createRehydrateCloseSuppression(log);
+    const sideEffect = vi.fn(async () => undefined);
+
+    await suppression.withSuppressed('session-1', async () => undefined);
+    // 此刻窗口已释放(生产里对应 close 返回后调用方 finally 释放),但入口取样的瞬态事实仍生效。
+    await suppression.runOnCloseSideEffects('session-1', sideEffect, { skip: true });
+
+    expect(sideEffect).not.toHaveBeenCalled();
+    expect(log.debug).toHaveBeenCalledWith(
+      'skip onClose side-effects: transient close',
+      { sessionId: 'session-1' },
+    );
+    // 不传 skip 且窗口已释放时照常执行(其余调用方不受影响)。
+    await suppression.runOnCloseSideEffects('session-1', sideEffect);
+    expect(sideEffect).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats runtime-refresh closes as transient without any suppression window', () => {
+    // runtime-refresh 本身就是重建语义：调用方忘了包窗口也不得释放 worktree。
+    expect(shouldSkipOnCloseSideEffects({ reason: 'runtime-refresh', transient: false }, false)).toBe(true);
+    // 其它原因靠请求入口的瞬态标记。
+    expect(shouldSkipOnCloseSideEffects({ reason: 'agent-switch', transient: true }, false)).toBe(true);
+    // 自关闭（handle 自己退出）没有事实，只靠钩子入口的窗口快照。
+    expect(shouldSkipOnCloseSideEffects({ reason: 'unexpected', transient: false }, true)).toBe(true);
+    // 两者都没有就是真实关闭，必须释放。
+    expect(shouldSkipOnCloseSideEffects({ reason: 'requested', transient: false }, false)).toBe(false);
+    expect(shouldSkipOnCloseSideEffects({ reason: 'unexpected', transient: false }, false)).toBe(false);
   });
 });

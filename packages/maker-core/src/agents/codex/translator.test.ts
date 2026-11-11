@@ -32,6 +32,8 @@ import {
   pauseCodexGeneration,
   resetCodexGenerationTiming,
   resumeCodexGeneration,
+  codexSpeedSnapshot,
+  settleCodexSpeedUsage,
 } from './translator.js';
 import type { CodexRuntimeState } from './translator.js';
 import type { CodexErrorInfo } from './app-server/protocol.js';
@@ -39,6 +41,9 @@ import { createAsyncQueue } from '../shared/async-queue.js';
 import type { AsyncQueue } from '../shared/async-queue.js';
 import type { AgentEvent } from '../../types/events.js';
 import { makeGhostManual64KiBFixture } from '../shared/ghost-manual-fixture.js';
+import { expandCodexStream, type RecordedCodexStream } from './recorded-stream-fixture.js';
+import recordedAnswer from './fixtures/recorded-stream-answer.json';
+import recordedToolLoop from './fixtures/recorded-stream-tool-loop.json';
 
 function noopLog(): {
   info: () => void;
@@ -585,7 +590,8 @@ describe('Codex generation timing', () => {
     try {
       const rt = newCodexRuntimeState();
       beginCodexGenerationTurn(rt, 'turn-1', 1_000);
-      rt.tokenSpeed.recordUsage(10, 1_000);
+      settleCodexSpeedUsage(rt, { outputTokens: 10 }, 2_000);
+      expect(rt.tokenSpeed.snapshot()).toMatchObject({ tokens: 10 });
       wallClockSpy.mockReturnValue(40_000);
       finalizeCodexGenerationTurn(rt, 'turn-1', 2_000);
       expect(codexGenerationDurationMs(rt)).toBeUndefined();
@@ -2744,23 +2750,28 @@ it('carries the provider final phase from item start onto the first delta', asyn
   expect(await collect(q)).toContainEqual({ type: 'text', source: 'codex', data: { text: 'Visible now', isFinal: false, agentMessageId: 'final', phase: 'final_answer' } });
 });
 
-it('does not count visible summaries as output and pauses the usage clock while a command runs', () => {
+it('counts the streamed answer while it arrives and stops the clock while a command runs', () => {
   vi.useFakeTimers();
   try {
     const rt = newCodexRuntimeState(), q = createAsyncQueue<AgentEvent>(), ctx = makeCtx(rt);
     vi.setSystemTime(1_000);
     beginCodexGenerationTurn(rt, 'turn', 1_000);
-    translateItemNotification('started', { threadId: 'thread', turnId: 'turn', item: { type: 'agentMessage', id: 'm1', text: '' } }, q, ctx);
+    // Hidden reasoning: time the model spends, with nothing to count until usage arrives.
+    translateItemNotification('started', { threadId: 'thread', turnId: 'turn', item: { type: 'reasoning', id: 'r1', summary: [], content: [] } }, q, ctx);
     vi.setSystemTime(1_500);
-    translateAgentMessageDelta({ threadId: 'thread', turnId: 'turn', itemId: 'm1', delta: 'one two three four' }, q, ctx);
     expect(rt.tokenSpeed.snapshot()).toBeUndefined();
+    translateItemNotification('started', { threadId: 'thread', turnId: 'turn', item: { type: 'agentMessage', id: 'm1', text: '' } }, q, ctx);
+    vi.setSystemTime(2_000);
+    translateAgentMessageDelta({ threadId: 'thread', turnId: 'turn', itemId: 'm1', delta: 'one two three four' }, q, ctx);
+    expect(rt.tokenSpeed.snapshot()).toMatchObject({ streaming: true, tokens: 4 });
     translateItemNotification('started', { threadId: 'thread', turnId: 'turn', item: { type: 'commandExecution', id: 'c1', command: 'ls' } }, q, ctx);
     vi.setSystemTime(9_500);
     // The command is still running: its time is not generation time.
-    expect(rt.generationDurationMs).toBe(500);
-    rt.tokenSpeed.recordUsage(20, rt.generationDurationMs);
+    expect(rt.generationDurationMs).toBe(1_000);
+    settleCodexSpeedUsage(rt, { outputTokens: 20, reasoningOutputTokens: 8 });
     rt.tokenSpeed.stop();
-    expect(rt.tokenSpeed.snapshot()).toMatchObject({ streaming: false, tokens: 20, elapsedMs: 500, average: 40 });
+    // The response's real 20 tokens over the second between its first item and the command.
+    expect(rt.tokenSpeed.snapshot()).toMatchObject({ streaming: false, tokens: 20, elapsedMs: 1_000, average: 20 });
   } finally {
     vi.useRealTimers();
   }
@@ -2784,4 +2795,118 @@ it('projects imageView once and retains mixed MCP media', async () => {
     { toolUseId: 'mcp', fullText: 'captured', isError: false,
       processMedia: [{ kind: 'image', mimeType: 'image/png', data: 'aW1hZ2U=' }] },
   ]);
+});
+
+// Recorded Codex turns (scripts/token-speed-replay.ts). The speed used to divide each
+// response's output by its model time, wait for the first byte included, and to appear only
+// once a response had finished: 38.8 tok/s after a 30s answer that streamed at 63, and
+// 26 tok/s for a turn of tool calls whose answer streamed at 114. Unit tier, through the
+// translator entry points the agent calls; the smallest failing input is one streamed answer.
+it.each([
+  ['a long streamed answer', recordedAnswer as RecordedCodexStream, 42, 44],
+  ['a loop of tool calls', recordedToolLoop as RecordedCodexStream, 32, 50],
+])('times %s from its first byte and reads its speed while it streams', (_name, recorded, slowest, fastest) => {
+  vi.useFakeTimers();
+  vi.setSystemTime(0);
+  try {
+    const rt = newCodexRuntimeState(), q = createAsyncQueue<AgentEvent>(), ctx = makeCtx(rt);
+    let realOutput = 0;
+    const readings: number[] = [];
+    for (const { t, msg } of expandCodexStream(recorded)) {
+      // Advance rather than jump: the suspend heartbeat has to see time pass.
+      vi.advanceTimersByTime(Math.max(0, t - Date.now()));
+      const params = msg.params as never;
+      if (msg.method === 'turn/started') beginCodexGenerationTurn(rt, 'recorded-turn', t);
+      else if (msg.method === 'item/started') translateItemNotification('started', params, q, ctx);
+      else if (msg.method === 'item/completed') translateItemNotification('completed', params, q, ctx);
+      else if (msg.method === 'item/agentMessage/delta') {
+        translateAgentMessageDelta(params, q, ctx);
+        const shown = codexSpeedSnapshot(rt);
+        if (shown?.streaming && shown.rate > 0) readings.push(shown.rate);
+      } else if (msg.method === 'thread/tokenUsage/updated') {
+        const last = (msg.params as { tokenUsage: { last: { outputTokens: number; reasoningOutputTokens: number } } }).tokenUsage.last;
+        realOutput += last.outputTokens;
+        settleCodexSpeedUsage(rt, last);
+      } else if (msg.method === 'turn/completed') {
+        finalizeCodexGenerationTurn(rt, 'recorded-turn');
+        rt.tokenSpeed.stop();
+      }
+    }
+    const final = codexSpeedSnapshot(rt);
+    expect(final).toMatchObject({ streaming: false, tokens: realOutput });
+    expect(final!.average).toBeGreaterThan(slowest);
+    expect(final!.average).toBeLessThan(fastest);
+    // The answer is read while it streams, at the pace it streams.
+    expect(readings.length).toBeGreaterThan(0);
+    expect(Math.min(...readings)).toBeGreaterThan(40);
+    // The recorded answer itself speeds up to about 150 words a second near its end.
+    expect(Math.max(...readings)).toBeLessThan(170);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+// Review of the speed meter (PR 9597): output that streams while a tool owns the turn, and
+// waits for the user, used to leak into the next response's speed. Unit tier, translator entry points.
+describe('codex speed around unpaired output and human waits', () => {
+  const answer = (rt: CodexRuntimeState, q: ReturnType<typeof createAsyncQueue<AgentEvent>>, ctx: ReturnType<typeof makeCtx>, id: string, from: number, words: number, perDelta = 5) => {
+    translateItemNotification('started', { threadId: 't', turnId: 'turn', item: { type: 'agentMessage', id, text: '' } }, q, ctx);
+    for (let at = from + 100; at <= from + 100 * (words / perDelta); at += 100) {
+      vi.setSystemTime(at);
+      translateAgentMessageDelta({ threadId: 't', turnId: 'turn', itemId: id, delta: 'w '.repeat(perDelta) }, q, ctx);
+    }
+  };
+
+  it('drops output that streamed while tools owned the turn instead of timing the next response with it', () => {
+    vi.useFakeTimers();
+    try {
+      const rt = newCodexRuntimeState(), q = createAsyncQueue<AgentEvent>(), ctx = makeCtx(rt);
+      vi.setSystemTime(0);
+      beginCodexGenerationTurn(rt, 'turn', 0);
+      // A response of 250 tokens at 50 tok/s.
+      answer(rt, q, ctx, 'a1', 0, 250);
+      vi.setSystemTime(5_000);
+      expect(settleCodexSpeedUsage(rt, { outputTokens: 250 })?.requestTps).toBeCloseTo(50, -1);
+      // A background tool owns the turn while 50 more tokens stream, then the tool runs for 10s.
+      translateItemNotification('started', { threadId: 't', turnId: 'turn', item: { type: 'mcpToolCall', id: 'tool', server: 's', tool: 't', arguments: {} } }, q, ctx);
+      vi.setSystemTime(6_000);
+      translateAgentMessageDelta({ threadId: 't', turnId: 'turn', itemId: 'a1', delta: 'w '.repeat(50) }, q, ctx);
+      vi.setSystemTime(16_000);
+      expect(settleCodexSpeedUsage(rt, { outputTokens: 50 })).toBeUndefined();
+      expect(codexSpeedSnapshot(rt)).toBeUndefined();
+      translateItemNotification('completed', { threadId: 't', turnId: 'turn', item: { type: 'mcpToolCall', id: 'tool', server: 's', tool: 't', arguments: {} } }, q, ctx);
+      // The next response is timed from its own first byte, at its own 50 tok/s.
+      vi.setSystemTime(17_000);
+      answer(rt, q, ctx, 'a2', 17_000, 250);
+      vi.setSystemTime(22_000);
+      const report = settleCodexSpeedUsage(rt, { outputTokens: 250 });
+      expect(report?.requestTps).toBeCloseTo(50, -1);
+      expect(report!.requestMs).toBeLessThan(6_000);
+      expect(codexSpeedSnapshot(rt)).toMatchObject({ tokens: 500 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops the speed clock while the user owes an answer, and restarts it with the next output', () => {
+    vi.useFakeTimers();
+    try {
+      const rt = newCodexRuntimeState(), q = createAsyncQueue<AgentEvent>(), ctx = makeCtx(rt);
+      vi.setSystemTime(0);
+      beginCodexGenerationTurn(rt, 'turn', 0);
+      answer(rt, q, ctx, 'a1', 0, 250);
+      vi.setSystemTime(5_000);
+      // An approval or a question to the user is not an item with a boundary of its own.
+      pauseCodexGeneration(rt, 'turn', 'approval:cmd-1', 5_000);
+      vi.setSystemTime(65_000);
+      expect(codexSpeedSnapshot(rt)).toMatchObject({ streaming: false, elapsedMs: 5_000 });
+      resumeCodexGeneration(rt, 'turn', 'approval:cmd-1', 65_000);
+      answer(rt, q, ctx, 'a2', 65_000, 250);
+      vi.setSystemTime(70_000);
+      expect(settleCodexSpeedUsage(rt, { outputTokens: 500 })?.requestTps).toBeCloseTo(50, -1);
+      expect(codexSpeedSnapshot(rt)).toMatchObject({ tokens: 500, elapsedMs: 10_000, average: 50 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

@@ -38,6 +38,7 @@ import {
 } from '../device-link/broadcast-tap.js';
 import type { RewindCommitArgs } from '../localDb/client/tx/types';
 import { getMaker, withRehydrateCloseSuppressed } from '../maker-host/index.js';
+import { syncBackgroundCommandWork } from '../maker-host/claude-background-command-work-sync.js';
 import { buildHandoffText } from '../maker-ipc/agentHandoff.js';
 import { readGitSafetySettings } from '../maker-host/git-safety-settings-store.js';
 import { ownerScopedUserDataPath } from '../appSessionState';
@@ -46,7 +47,7 @@ import type { Session } from '../../renderer/lib/ccAgent.types';
 import type { RewindFilesResult } from '@cindy/maker-core';
 
 import { createLogger } from '../logger';
-import { setLastAssistantTranscriptUuid } from '../messagePersistBroadcaster.js';
+import { setLastAssistantTranscriptUuid } from '../messagePersistBroadcaster.desktop.js';
 import { recomputePrRefsForSession } from '../git-context/prRefsStore.js';
 import { isCodexNativeThreadStart, resolveCodexForkEventTimestamp, resolveCodexTurnAnchor } from './fork';
 import {
@@ -247,7 +248,7 @@ async function loadRewindContext(
     if (row?.agentKind !== 'cc' || activeSdkSessionId(row.sdkSessionId ?? undefined)) {
       throw rewindError(
         'NO_LIVE_QUERY',
-        '会话未激活——请先发送任意一条消息（即使是 "ok"），让 SDK 起来后再 rewind',
+        '任务运行环境未能恢复，无法回退',
       );
     }
     detached = true;
@@ -985,6 +986,10 @@ export async function commitRewindAtMessage(
       rewindResult = await makerSession.commitRewindFiles('', ctx.assistantUuid!);
     }
   }
+
+  // 回退提交会关闭旧 Query,连同它的后台命令一起终止,任务表被不带事件地清空:
+  // 刷新「后台命令仍在工作」,任务列表才不会一直显示已不存在的命令在跑。
+  if (makerSession) syncBackgroundCommandWork(makerSession);
 
   // ── 段 2：SQLite 事务（软删消息 + 同步写回 replacement sdk_session_id）──
   // edit-last-message 的第二道最新校验直接下沉进 worker 事务临界区(payload 带

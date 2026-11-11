@@ -6,7 +6,7 @@
  */
 import { dialog, type BrowserWindow } from 'electron';
 
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import type { SetupTransferPrompt } from './transfer.js';
 
 const MAX_LINES = 12;
