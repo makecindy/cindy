@@ -331,7 +331,7 @@ it('uses the existing member leave action without changing the group archive sta
   renderAt(group());
   fireEvent.click(row(LEAVE));
   await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: { type: 'member', actorId: 'me', action: 'leave' } }));
-  expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({ presentation: 'standard', description: key('leaveHint'), confirmVariant: 'destructive' }));
+  expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({ description: key('leaveHint'), confirmVariant: 'destructive' }));
   expect(mocks.refresh).toHaveBeenCalledOnce();
 });
 

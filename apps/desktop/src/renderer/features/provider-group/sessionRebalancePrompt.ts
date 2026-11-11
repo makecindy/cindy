@@ -153,7 +153,6 @@ export async function offerSessionRebalance(options: {
   }
   const selection: { value: RebalanceChoice } = { value: 'once' };
   const ok = await confirm({
-    presentation: 'standard',
     title: t('providerGroup.rebalance.title', { label: suggestion.label }),
     description: describeSessionRebalance(suggestion, t),
     content: createElement(SessionRebalanceChoices, { onChange: (value) => { selection.value = value; } }),

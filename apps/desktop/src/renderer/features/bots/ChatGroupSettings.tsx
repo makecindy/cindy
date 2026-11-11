@@ -156,7 +156,7 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
   }
   async function confirmed(action: ChatGroupAction, title: string, note: string, exit = false, confirmText = t(key('confirm'))) {
     const owner = getDataOwnerGeneration();
-    if (await confirm({ presentation: 'standard', title, description: note, confirmText,
+    if (await confirm({ title, description: note, confirmText,
       cancelText: t('bots.cancel'), confirmVariant: 'destructive' }) && mounted.current && isDataOwnerGenerationCurrent(owner)) await mutate(action, exit);
   }
   async function saveRules(change: { replyMode?: BotGroupSummary['replyMode']; speakingMode?: BotGroupSummary['speakingMode'] }) {
