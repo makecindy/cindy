@@ -11,6 +11,10 @@ import { _clearSmartResolveCache } from '@/lib/localPathResolver';
 import { AskUserQuestionPrompt } from '../components/new-chat/AskUserQuestionPrompt';
 import { BotGroupPendingInteraction } from '../features/bots/BotGroupPendingInteraction';
 import { Tooltip } from '@/components/ui/tooltip';
+// This test exercises keyboard ownership in the real preview, not its cold
+// bundle load. Preload once before rendering: React may start the lazy import
+// only when async act commits, after dynamicImportSettled has already returned.
+import '@/components/chat/TextLightbox';
 
 const links = vi.hoisted(() => ({ html: vi.fn(), url: vi.fn(), lane: {} as Record<string, unknown>, answer: vi.fn() }));
 vi.mock('@/lib/makerChatStore', () => ({ makerChatStore: {
@@ -73,11 +77,11 @@ describe('AskUserQuestionPrompt action labels', () => {
     })));
     const link = await view.findByRole('link', { name: 'notes.txt' });
     link.focus();
-    fireEvent.click(link);
+    // PR #9754 CI: the real editor's cold import can exceed the DOM wait's
+    // 1s budget on Windows. Finish loading before checking keyboard behavior.
     await act(async () => {
-      // The real preview is lazy-loaded; await its module before checking DOM
-      // readiness so cold transforms do not consume the keyboard test's wait.
-      await vi.dynamicImportSettled();
+      fireEvent.click(link);
+      await import('../components/chat/TextLightbox');
     });
     await waitFor(() => expect(document.querySelector('[data-text-lightbox-card]')).not.toBeNull());
     await view.findByRole('tooltip');

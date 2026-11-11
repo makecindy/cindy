@@ -92,6 +92,15 @@ describe('isNonAnchorHistoryRow — 历史初始页 backfill 判定', () => {
     expect(isNonAnchor(synthetic({ text: '帮我查一下' }))).toBe(false);
   });
 
+  // Bug (PR #9727 review): a hidden answer row counted as a visible anchor, so a latest page made of
+  // such rows and other hidden rows rendered nothing and never paged back to the question card.
+  it('已在提问卡上展示的回答行算无锚点,普通回答行仍是锚点', () => {
+    const reply = (clientId: string): Message =>
+      ({ id: 'r', clientId, sessionId: SESSION_ID, role: 'user', content: '> Q?\n\nA', createdAt: '2026-07-02T00:00:00.000Z' } as unknown as Message);
+    expect(isNonAnchor(reply('question-reply:answered:q1:digest'))).toBe(true);
+    expect(isNonAnchor(reply('question-reply:q1:digest'))).toBe(false);
+  });
+
   it('子代理内部行算无锚点(buildRenderItems 整体剔除,漏登记会渲染 0 项)', () => {
     // 子代理密集的会话最新一页可能全部是这类行(实测本机库单会话上万条)。
     const subagentRow = (parentUuid: string, role = 'assistant'): Message =>

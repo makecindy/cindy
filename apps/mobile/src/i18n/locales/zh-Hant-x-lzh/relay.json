@@ -1,10 +1,18 @@
 {
+  "agentNet": {
+    "enabled": "啟用 Agent-Net",
+    "onlyEncrypted": "惟用加密連線",
+    "hint": "諸裝置間以端到端加密相連。惟用加密連線時，兩端皆須啟用 Agent-Net。",
+    "updateRequired": "請裝新版應用，以用 Agent-Net。",
+    "notConfigured": "此中繼尚無 Agent-Net，請更新或加入 V2 中繼。",
+    "failed": "Agent-Net 設定未成，請核中繼連線再試。"
+  },
   "settings": {
     "sectionTitle": "中繼",
     "currentLabel": "中繼",
     "official": "{{appName}} 官方中繼",
     "switchToOfficial": "歸官方中繼",
-    "officialHint": "諸裝置經 {{appName}} 官方中繼相連。欲改用自建中繼，於中繼所在之機示其加入 QR 碼，以手機相機掃之而入。",
+    "officialHint": "諸裝置經 {{appName}} 官方中繼相連。君之機用自家中繼時列於此，一點即入；他人所分享之中繼，以手機相機掃其所予之 QR 碼而入。",
     "selfHostedHint": "諸裝置經自建中繼 {{address}} 相連；登入、模型與共事等仍用 {{appName}} 官方服務。",
     "removedHint": "此手機已被移出中繼，或中繼已停。可歸官方中繼，或於機上重入。",
     "credentialMissingHint": "此手機上不見中繼憑證。請於機上重入，或歸官方中繼。",
@@ -12,7 +20,15 @@
     "confirmBody": "此手機將出「{{name}}」，改用 {{appName}} 官方中繼。此後欲再用此中繼，須於機上重入。",
     "confirmAction": "歸之",
     "switchFailed": "未能歸官方中繼，請稍後再試。",
-    "pushUnavailable": "用自建中繼之時，機上差事之告不推至此手機。"
+    "pushUnavailable": "用自建中繼之時，機上差事之告不推至此手機。",
+    "accountManagedOn": "於「{{device}}」上理之",
+    "accountSwitchTitle": "入「{{name}}」乎？",
+    "accountSwitchBody": "此乃君帳號下之中繼，由「{{device}}」放行，此機自入，無需分享連結。用自建中繼時，此機不得收機上任務之通知。",
+    "accountSwitchAction": "入",
+    "sharedHint": "裝置之間經他人所分享之中繼 {{address}} 相連，唯連君己之裝置；登入、模型、共享任務諸事仍用 {{appName}} 官方之服務。",
+    "sharedCurrent": "{{name}}（{{owner}} 所分享）",
+    "accountSharedBy": "{{owner}} 所分享 · 由「{{device}}」入之",
+    "accountSharedOn": "由「{{device}}」入之"
   },
   "issue": {
     "removedTitle": "已出中繼",
@@ -34,22 +50,28 @@
     "retry": "再試",
     "signedOut": "請先登入 {{appName}}，再入此中繼。",
     "signIn": "往登門",
-    "invalidLink": "加入之連結無效或已失效，請於機上重生之。",
-    "cancelled": "加入已罷。欲入此中繼，請於機上重生加入之連結。"
+    "invalidLink": "分享之連結無效或已失效，請於機上重生之。",
+    "cancelled": "加入已罷。欲入此中繼，請於機上重生分享之連結。",
+    "accountRequesting": "正請「{{device}}」放行…",
+    "accountWaiting": "正入，候「{{device}}」放行…",
+    "openOnComputer": "此乃他帳號所分享之中繼，請於君之電腦開此連結以入。電腦既入，此手機於設定之中繼服務中即見之，一點即入。"
   },
   "errors": {
     "unreachable": "此中繼連之不上。請確手機與機同在一網，或手機能訪此位址。",
-    "insecureUnreachable": "此中繼連之不上。手機唯可經 https 入中繼，請於機上為中繼設憑證後，重生加入之連結。",
-    "notRelay": "此位址非 {{appName}} 中繼，請察加入之連結。",
+    "insecureUnreachable": "此中繼連之不上。手機唯可經 https 入中繼，請於機上為中繼設憑證後，重生分享之連結。",
+    "notRelay": "此位址非 {{appName}} 中繼，請察分享之連結。",
     "incompatible": "此中繼與今版 {{appName}} 不相容，請將中繼與 {{appName}} 皆更至最新版。",
     "accountMismatch": "此中繼屬另一 {{appName}} 名籍。",
-    "codeInvalid": "加入之連結已失效，請於機上重生之。",
+    "codeInvalid": "分享之連結已失效，請於機上重生之。",
     "rateLimited": "嘗試過頻，請稍後再試。",
     "rejected": "機上已拒此番加入。",
-    "expired": "候許逾時，請於機上重生加入之連結。",
-    "ownerMismatch": "中繼所回之憑證非加入連結中之主人所簽，或連至他人偽造之中繼，已止加入。",
+    "expired": "候許逾時，請於機上重生分享之連結。",
+    "ownerMismatch": "中繼所回之憑證非分享連結中之主人所簽，或連至他人偽造之中繼，已止加入。",
     "failed": "未能入中繼，請稍後再試。",
-    "saveFailed": "已得其許，然中繼憑證未能存於此手機。請於機上重生加入之連結後再試。",
-    "credentialUnavailable": "此手機無可用之中繼憑證。請重入，或於規制中歸官方中繼。"
+    "saveFailed": "已得其許，然中繼憑證未能存於此手機。請於機上重生分享之連結後再試。",
+    "credentialUnavailable": "此手機無可用之中繼憑證。請重入，或於規制中歸官方中繼。",
+    "ownerUnavailable": "「{{device}}」無應。請確其開 {{appName}} 且已連網，或請其分享連結予君。",
+    "relayUnavailable": "「{{device}}」已不用此中繼。",
+    "accountDirectoryUnavailable": "暫連不上 {{appName}} 帳號之服務，不得讀君帳號下之中繼。請稍後再試，或請對方分享連結予君。"
   }
 }

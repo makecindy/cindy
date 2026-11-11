@@ -264,7 +264,7 @@ export function BotGroupComposer({
   const textRef = useRef(text);
   textRef.current = text;
   const voice = useBotGroupVoiceInput({
-    draftKey, textareaRef, text, disabled,
+    draftKey, textareaRef, text, disabled: disabled || sending,
     maxLength: thread ? BOT_GROUP_MESSAGE_MAX_CHARS : undefined,
     onTooLong: () => toast.warning(t('bots.groupChat.composer.tooLong', { max: BOT_GROUP_MESSAGE_MAX_CHARS })),
     onChange: (value, edit) => {
@@ -863,7 +863,7 @@ export function BotGroupComposer({
                   type="button"
                   aria-label={voiceLabel}
                   aria-pressed={voice.isListening}
-                  disabled={disabled || (voice.isBusy && !voice.isListening)}
+                  disabled={disabled || sending || (voice.isBusy && !voice.isListening)}
                   onClick={() => {
                     textareaRef.current?.focus();
                     if (voice.isListening) void voice.stop(); else voice.start();

@@ -23,16 +23,20 @@ const LONG_DEVICE = 'Mac Studio · A very long device name for layout verificati
 /** Migrated from check-group-control-layout.mjs (remote-control notice above the composer). */
 export default {
   name: 'group-chat',
+  // Voice capture is outside this fixture.
+  stubs: {
+    // Rich component bodies read account context, but sign-in is not under test.
+    'src/renderer/contexts/AuthContext': { partial: `export const useAuth = () => ({ mode: 'local', dataOwnerId: 'fixture-account', user: null });` },
+    // The group voice hook resolves its URL on render; capture is not exercised.
+    'src/renderer/voice-input/workletUrl': 'export function getVoiceInputWorkletUrl() { return ""; }',
+    // The file preview pulls in pdf.js' and draw.io's workers through Vite's ?url, which the single-page builder does not implement; no group case opens a file.
+    'src/renderer/features/cc-agent/workdir-browse/FileBodyView': 'export const FileBodyView = () => null;',
+  },
   entry: './group-control-fixture.tsx',
   viewport: { width: 1280, height: 800 },
-  // esbuild has no Vite ?url loader; visual fixtures never open a microphone.
-  stubs: {
-    'src/renderer/features/cc-agent/workdir-browse/FileBodyView': 'export const FileBodyView = () => null;',
-    'src/renderer/voice-input/workletUrl': 'export function getVoiceInputWorkletUrl() { return ""; }',
-  },
   real: 'BotGroupChatView (timeline, composer, send button, header registration), ControlledBanner, ContentHeader shell, Markdown, theme, fonts and translations',
   notCovered:
-    'Audio capture, native voice shortcuts, real IPC/network sending (send-status/share-pending control host receipts), round control, real device-link control and revocation, answering pending owner interactions, plans and attachment IO; the bubbles case shows a task snapshot, not a live task; the sidebar renders the real group row for work-state cases and is otherwise an empty frame',
+    'Account sign-in, audio capture, native voice shortcuts, real IPC/network sending (send-status/share-pending control host receipts), round control, real device-link control and revocation, answering pending owner interactions, plans and attachment IO; the bubbles case shows a task snapshot, not a live task; the sidebar renders the real group row for work-state cases and is otherwise an empty frame',
   cases: {
     'reply-composer': {
       about: 'Real thread reply composer with microphone and editable draft at narrow width',
@@ -322,13 +326,17 @@ export default {
       assert.ok(!(await timeline.innerText()).includes('"op":"create"'));
       const text = await timeline.innerText();
       assert.ok(text.includes('图片说明保留') && text.includes('图片标题保留'));
-      assert.ok(text.includes('🖼'), 'an undescribed image has a neutral placeholder');
-      assert.ok(!text.includes('cindy-media://') && !text.includes('/private/tmp/fixture-image.png'));
-      for (const kind of ['image', 'video', 'audio']) {
-        const url = `https://example.test/public-${kind}`;
-        const link = timeline.getByRole('link', { name: url, exact: true });
-        assert.equal(await link.count(), 1, 'public media keep an actionable web link');
-        assert.equal(await link.getAttribute('href'), url);
+      assert.equal(await timeline.getByText(await ui.t('richAnswer.invalidImageReference'), { exact: true }).count(), 1, 'invalid managed image references have an explicit recovery state');
+      assert.equal(await timeline.locator('a[href^="cindy-media:"], a[href^="/private/"], img[src^="/private/"]').count(), 0, 'unavailable references must not become privileged links or file requests');
+      // Group replies now render rich media instead of the former text-only projection.
+      // Serve checked-in assets from the fixture origin; never relax its network CSP.
+      const picture = timeline.locator('img[alt="public-image"]');
+      await picture.waitFor();
+      assert.equal(await picture.evaluate(img => img.complete && img.naturalWidth > 0), true);
+      for (const kind of ['video', 'audio']) {
+        const media = timeline.locator(kind);
+        assert.equal(await media.count(), 1, `${kind} keeps a native media control`);
+        assert.ok((await media.getAttribute('src'))?.startsWith('http://cindy-ui.test/assets/'));
       }
       return;
     }

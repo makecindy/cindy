@@ -1760,6 +1760,10 @@ export function useVoiceInput(
       // A pending start is invalidated above and cleaned by its late runId.
       // An unscoped cancel could instead target another composer's new run.
       if (runId) await window.electronAPI.voiceInput.cancel({ runId });
+    } catch {
+      // Main releases the run in finally even if the provider rejects stop.
+      // Admission is already revoked; local completion must still unlock the editor.
+      log.warn('voice input cancel failed after local cancellation');
     } finally {
       await restoreSystemAudioForRecording(audioOwner);
     }
@@ -1863,7 +1867,10 @@ export function useVoiceInput(
     } finally {
       await restorePromise;
     }
-    if (!isActiveStartAttempt(attemptId)) return;
+    // Main may already have emitted refining/done/error before this reply.
+    // Only cancellation/replacement makes it stale; current runs still need
+    // their completion wait and failure checks below.
+    if (startAttemptIdRef.current !== attemptId) return;
     if (!result.ok) {
       resolveStopCompletion();
       setVoiceState('error');

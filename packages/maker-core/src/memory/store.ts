@@ -108,6 +108,13 @@ export class MakerMemoryStore {
   /** mkdir + meta.json + FTS 表创建 + sanity check (count 不一致 → rebuild). 幂等. */
   async init(): Promise<void> {
     if (this.initialized) return;
+    await this.storage.serializeInitialization(() => this.initUnqueued());
+  }
+
+  private async initUnqueued(): Promise<void> {
+    if (this.initialized) return;
+    // The owner may have changed while another store held the directory queue.
+    this.assertScopeOk();
     await this.storage.init(this.deps.absWorkdir);
     // 派生索引 (MEMORY.md) 无条件重建 (review #2388 Codex 24th P1): dirty 标记
     // 是实例内存态 — 写/删被边界中止后 store 会被 close/重建, 标记丢失;

@@ -1,0 +1,186 @@
+--- a/src/congestion.rs
++++ b/src/congestion.rs
+@@ -135,6 +135,8 @@
+     round_rates: [u64; DELIVERY_ROUNDS],
+     /// 进入巡航以后过了几轮。
+     probe_bw_rounds: u32,
++    /// 一共过了几轮，包括应用没数据的轮次。
++    round_count: u64,
+     /// 最近两轮的丢包率，单位百万分之一。
+     round_loss_ppm: [u64; 2],
+     /// 加速探测阶段发出的包：丢了几个、一共几个。
+@@ -191,6 +193,8 @@
+     last_period_rate: u64,
+     /// 第一批包的第一个确认到达时的时间和送达量。
+     train_start: Option<(u64, u64)>,
++    /// 往返时间的平滑平均。
++    rtt_avg_us: u64,
+     /// 相邻两个 RTT 样本之差的平滑平均，衡量抖动。
+     rtt_jitter_us: u64,
+     last_rtt_us: u64,
+@@ -213,6 +217,7 @@
+             round_started_at: 0,
+             round_rates: [0; DELIVERY_ROUNDS],
+             probe_bw_rounds: 0,
++            round_count: 0,
+             round_loss_ppm: [0; 2],
+             probe_lost: 0,
+             probe_total: 0,
+@@ -258,6 +263,7 @@
+             period_calm_lost: 0,
+             last_period_rate: 0,
+             train_start: None,
++            rtt_avg_us: 0,
+             rtt_jitter_us: 0,
+             last_rtt_us: 0,
+         }
+@@ -309,8 +315,32 @@
+     pub(crate) fn on_probe_outcome(&mut self, lost: bool) {
+         self.probe_total += 1;
+         self.probe_lost += lost as u64;
++    }
++
++    /// 一共过了几轮。
++    pub(crate) fn round_count(&self) -> u64 {
++        self.round_count
++    }
++
++    /// 被窗口限住、没有限速、一轮里最小的 RTT 也没涨：多发的校验包没有把瓶颈顶出队列。
++    pub(crate) fn window_limited_without_queue(&self) -> bool {
++        self.mode == Mode::ProbeBw && self.window_limited && self.rate_cap == 0 && !self.queue_rising()
++    }
++
++    /// 按平均往返算，路径送达的速率已经装满窗口的九成：卡住速度的确实是窗口。
++    /// 抖动大时窗口按平均往返周转，按最小往返算会低估；带宽才是瓶颈的路径到不了这个比例。
++    pub(crate) fn window_binds(&self) -> bool {
++        self.btl_bw.saturating_mul(self.rtt_avg_us) / 1_000_000 * 10 >= self.max_cwnd * 9
+     }
+ 
++    /// 一轮里最小的 RTT 比最小往返高出往返的十六分之一（至少 0.2 毫秒）：瓶颈开始排队了。
++    /// 比 `queue_is_building` 敏感：为抖动多发的校验要在队列刚冒头时就收手。抖动用一轮的最小值滤掉。
++    pub(crate) fn queue_rising(&self) -> bool {
++        let floor = if self.round_rtt_samples >= ROUND_RTT_SAMPLES { self.round_min_rtt_us } else { self.last_round_min_rtt_us };
++        let margin = (self.min_rtt_us / 16).max(200);
++        floor != u64::MAX && floor >= self.min_rtt_us + margin
++    }
++
+     /// 已经确认撞上限速。这时再多发冗余只会丢得更多。
+     pub(crate) fn is_rate_limited(&self) -> bool {
+         self.rate_cap > 0 && self.rate_cap_confirmed
+@@ -692,6 +722,7 @@
+                 self.round_loss_ppm = [if round_total > 0 { self.round_lost.saturating_mul(1_000_000) / round_total } else { 0 }, self.round_loss_ppm[0]];
+                 self.probe_bw_rounds = if self.mode == Mode::ProbeBw { self.probe_bw_rounds.saturating_add(1) } else { 0 };
+                 self.round_rates.rotate_right(1);
++                self.round_count += 1;
+                 self.round_rates[0] = round_delivered.saturating_mul(1_000_000) / round_elapsed;
+             }
+             self.round_started_at = now_us;
+@@ -729,6 +760,7 @@
+             if self.last_rtt_us > 0 {
+                 self.rtt_jitter_us = (self.rtt_jitter_us * 7 + sample.rtt_us.abs_diff(self.last_rtt_us)) / 8;
+             }
++            self.rtt_avg_us = if self.rtt_avg_us == 0 { sample.rtt_us } else { (self.rtt_avg_us * 7 + sample.rtt_us) / 8 };
+             self.last_rtt_us = sample.rtt_us;
+             self.round_min_rtt_us = self.round_min_rtt_us.min(sample.rtt_us);
+             self.round_rtt_samples += 1;
+--- a/src/connection.rs
++++ b/src/connection.rs
+@@ -80,6 +80,12 @@
+ const REORDER_DECAY_RTTS: u64 = 16;
+ /// 空闲分片缓冲的数量上限，避免收发路径上反复申请内存。
+ const MAX_SPARE_BUFFERS: usize = 256;
++/// 为抖动多发校验时每轮最多加这么多。
++const JITTER_PARITY_STEP_PPM: u32 = 50_000;
++/// 往返短于这个值时不为抖动多发校验：局域网一类的路径上，晚到的包只让窗口多等零点几毫秒，校验包反倒占掉不多的余量。
++const JITTER_PARITY_MIN_RTT_US: u64 = 10_000;
++/// 顶起过队列以后，上限每轮放开这么多。
++const JITTER_CEILING_RELAX_PPM: u32 = 2_000;
+ /// 收到的包平均间隔短于这个值（每秒两万个包以上）时，每个包都马上确认。
+ const FAST_ARRIVAL_GAP_US: u64 = 50;
+ /// 丢包率比随机丢包率的两倍还高出这么多，又量到了上限，就当成限速器在丢包。
+@@ -303,6 +309,13 @@
+     loss_samples: u32,
+     /// 晚到得足以堵住窗口的包占多少，单位百万分之一。
+     late_ppm: u32,
++    /// 被抖动拖晚、比后发的包更晚确认的包所占比例。窗口卡住时它们和丢包一样堵窗口头部。
++    jitter_late_ppm: u32,
++    /// 为抖动多发的校验比例，见 `adjust_jitter_parity`。
++    jitter_parity_ppm: u32,
++    jitter_parity_round: u64,
++    /// 上次把队列顶起来时的比例的四分之三，之后加到这里为止，慢慢再放开。
++    jitter_parity_ceiling: u32,
+     bundle_until: u64,
+     /// 最近一次确认丢包后，保持最低校验比例到这个时刻。
+     parity_floor_until: u64,
+@@ -405,6 +418,10 @@
+             loss_ppm: 0,
+             loss_samples: 0,
+             late_ppm: 0,
++            jitter_late_ppm: 0,
++            jitter_parity_ppm: 0,
++            jitter_parity_round: 0,
++            jitter_parity_ceiling: 1_000_000,
+             bundle_until: 0,
+             parity_floor_until: 0,
+             lost_run_ppm: 0,
+@@ -907,6 +924,7 @@
+                 send_span_us: send_elapsed,
+             };
+             self.congestion.on_ack(now_us, &sample, self.delivered, self.bytes_in_flight);
++            self.adjust_jitter_parity();
+         }
+         if self.largest_acked.is_none_or(|value| largest > value) {
+             self.largest_acked = Some(largest);
+@@ -962,6 +980,11 @@
+             self.observe_outcome(&packet, false);
+             let late = self.is_slow(now_us, &packet) && self.largest_acked.is_some_and(|largest| packet.number + LATE_PACKET_DISTANCE <= largest);
+             self.observe_lateness(late);
++            // 后发的包已经确认了、自己比最小往返晚到了十六分之一往返以上：抖动把它拖在了后面。
++            let reordered = self.largest_acked.is_some_and(|largest| packet.number < largest);
++            let delayed = now_us.saturating_sub(packet.sent_at) > self.congestion.min_rtt_us() + self.rtt.srtt_us() / 16;
++            let sample = if reordered && delayed { 1_000_000 } else { 0 };
++            self.jitter_late_ppm = self.jitter_late_ppm - self.jitter_late_ppm / LOSS_SMOOTHING + sample / LOSS_SMOOTHING;
+             if newest.is_none_or(|value: SentPacket| packet.number > value.number) {
+                 *newest = Some(packet);
+             }
+@@ -1378,9 +1401,39 @@
+         // 一个校验包只覆盖最近 64 个分片，窗口比覆盖范围大很多时，大部分空洞修不到，多发也帮不上。
+         let coverable = self.config.send_window as u64 <= parity::MAX_COVERED * HEAVY_PARITY_COVERAGE_FACTOR;
+         let heavy = fast || (spare && coverable && self.congestion.window_has_room());
+-        Some(if heavy { parity::fast_repair_interval(holes, spare) } else { parity::repair_interval(holes, spare) })
++        let interval = if heavy { parity::fast_repair_interval(holes, spare) } else { parity::repair_interval(holes, spare) };
++        // 为抖动多发的校验按比例直接给，不再乘余量：比例由 `jitter_parity_ppm` 逐轮试出来。
++        let share = self.jitter_parity_ppm.min(500_000) as u64;
++        let jitter_interval = if share > 0 { ((1_000_000 - share) / share).max(1) as u32 } else { u32::MAX };
++        Some(interval.min(jitter_interval))
+     }
+ 
++    /// 每轮调整一次为抖动多发的校验。
++    ///
++    /// 抖动大时窗口要等最慢的那个包确认才能往前走，KCP 的 FEC 配置靠校验把晚到的包提前算出来。
++    /// 但被窗口限住时测不出路径还剩多少余量：余量够的路径（家宽、5G）多发校验能快 3%–5%，
++    /// 余量不够的路径（4G、校园网、千兆）校验会挤掉数据。所以逐轮试：窗口确实卡住、没排队时每轮加一点，
++    /// 最多加到抖动晚到的比例；一轮里最小的 RTT 涨了（队列冒头）就减半，并把上限压到这次的四分之三，之后慢慢放开。
++    fn adjust_jitter_parity(&mut self) {
++        let round = self.congestion.round_count();
++        if round == self.jitter_parity_round {
++            return;
++        }
++        self.jitter_parity_round = round;
++        if self.congestion.queue_rising() || self.congestion.rate_cap() > 0 {
++            if self.jitter_parity_ppm > 0 {
++                self.jitter_parity_ceiling = self.jitter_parity_ppm * 3 / 4;
++            }
++            self.jitter_parity_ppm /= 2;
++        } else if self.congestion.window_limited_without_queue()
++            && self.congestion.window_binds()
++            && self.congestion.min_rtt_us() >= JITTER_PARITY_MIN_RTT_US
++        {
++            self.jitter_parity_ceiling = (self.jitter_parity_ceiling + JITTER_CEILING_RELAX_PPM).min(1_000_000);
++            self.jitter_parity_ppm = (self.jitter_parity_ppm + JITTER_PARITY_STEP_PPM).min(self.jitter_late_ppm).min(self.jitter_parity_ceiling);
++        }
++    }
++
+     /// 校验包覆盖的范围：最近发出的、对端可能还缺的分片。
+     fn parity_range(&self) -> (u64, u64) {
+         (self.snd_una.max(self.snd_sent.saturating_sub(parity::MAX_COVERED)), self.snd_sent)

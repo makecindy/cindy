@@ -880,64 +880,6 @@ describe('AgentIslandService native publishing', () => {
     service.resetRuntimeState();
   });
 
-  it.each([true, false])('waits across status Done → native done for the shared local/remote completion decision (%s)', async handled => {
-    const { AgentIslandService } = await import('../service.js');
-    const remoteEvents: string[] = [];
-    const controller = new AgentIslandService({
-      getMainWindow: () => null,
-      nativeHost: { failed: false, headless: true, publish: () => true, suspend: () => undefined },
-      onDeviceSessionEvent: event => remoteEvents.push(event.kind),
-    });
-    controller.setEnabled(false);
-    mocks.tapWindowBroadcast.mockImplementation((channel, payload) => {
-      if (channel !== SESSION_ACTIVITY_CHANNEL) return;
-      controller.setDeviceSessions([{
-        ...payload,
-        deviceId: 'execution-host',
-        deviceName: 'Host',
-        title: 'Delegated task',
-        detail: payload.compactDetail,
-      }]);
-    });
-    let settlement: Promise<boolean> | undefined;
-    let resolve!: (handled: boolean) => void;
-    const check = vi.fn(async () => await settlement ?? false);
-    const source = new AgentIslandService({
-      getMainWindow: () => null,
-      nativeHost: { failed: false, headless: true, publish: () => true, suspend: () => undefined },
-      isCompletionHandledByTeammate: check,
-    });
-    source.setEnabled(false);
-    const meta = { sessionId: 'delegated-status-done', agentKind: 'codex' as const };
-    source.handleUserPrompt(meta, 'run task');
-    source.handleAgentEvent(meta, textEvent('Final result', true));
-    source.handleAgentEvent(meta, { type: 'status', source: 'codex', data: { status: 'Done', isRunning: false } });
-    // Native events cross separate iterator awaits. A microtask delay at status
-    // Done alone must never decide ownership before the later done boundary.
-    for (let i = 0; i < 5; i++) await Promise.resolve();
-    expect(check).not.toHaveBeenCalled();
-    expect(remoteEvents).toEqual([]);
-    const localDecision = source.waitForCompletionNotification(meta.sessionId);
-    expect(localDecision).toBeDefined();
-    expect(source.getSessionActivitySnapshot(meta.sessionId)).toMatchObject({ phase: 'completed', attention: true });
-    source.handleAgentEvent(meta, doneEvent());
-    // The synchronous terminal adapter registers settlement after island delivery.
-    settlement = new Promise<boolean>(r => { resolve = r; });
-    await Promise.resolve();
-    expect(check).toHaveBeenCalledOnce();
-    expect(remoteEvents).toEqual([]);
-    resolve(handled);
-    await expect(localDecision).resolves.toBe(handled);
-    expect(remoteEvents).toEqual(handled ? [] : ['done']);
-    source.handleAgentEvent(meta, doneEvent());
-    source.replaySessionActivity();
-    expect(check).toHaveBeenCalledOnce();
-    expect(remoteEvents).toEqual(handled ? [] : ['done']);
-    expect(source.getSessionActivitySnapshot(meta.sessionId)).toMatchObject({ phase: 'completed', attention: true });
-    source.resetRuntimeState(); controller.resetRuntimeState();
-    mocks.tapWindowBroadcast.mockReset();
-  });
-
   // Swipe actions must use the real lifecycle entry and retain attention on failure.
   // Existing focus tests do not cover background completion actions (unit tier).
   it('reads or archives completed tasks without focusing, and retains failed archives', async () => {
@@ -4964,7 +4906,7 @@ describe('AgentIslandService native publishing', () => {
     const remotePublish = vi.fn((state: AgentIslandDisplayState) => state.visible);
     const remoteSound = vi.fn(() => true);
     const desktopEvent = vi.fn();
-    const source = new AgentIslandService({ getMainWindow: () => null, nativeHost: { failed: false, publish: sourcePublish, playSound: sourceSound }, isCompletionHandledByTeammate: async () => false });
+    const source = new AgentIslandService({ getMainWindow: () => null, nativeHost: { failed: false, publish: sourcePublish, playSound: sourceSound } });
     const remote = new AgentIslandService({ getMainWindow: () => null, nativeHost: { failed: false, publish: remotePublish, playSound: remoteSound } });
     const desktop = new AgentIslandService({ getMainWindow: () => null, nativeHost: { failed: false, publish: () => false }, onDeviceSessionEvent: desktopEvent });
     try {

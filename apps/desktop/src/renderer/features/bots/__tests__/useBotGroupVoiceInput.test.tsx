@@ -408,6 +408,35 @@ describe('group textarea dictation ownership (#6650)', () => {
       expect(textbox.value.length).toBe(BOT_GROUP_MESSAGE_MAX_CHARS);
     }
   });
+  // discussion_r4526952147: the real reply draft is owned by its in-flight
+  // send. Earlier recording tests never tried to start while that send waited.
+  it.each(['button', 'shortcut'] as const)('blocks %s dictation while the reply send is pending, then allows retry', async entry => {
+    let finishReply!: (value: { ok: false; errorCode: 'INTERNAL'; message: string }) => void;
+    const sendReply = vi.fn().mockImplementation(() => new Promise(resolve => { finishReply = resolve; }));
+    render(<Tooltip.Provider><BotGroupComposer groupId="group" draftKey={`sending-voice-${entry}`} mode="thread"
+      members={[]} running={false} sendReply={sendReply} /></Tooltip.Provider>);
+    const textbox = screen.getByRole('textbox') as HTMLTextAreaElement;
+    fireEvent.change(textbox, { target: { value: 'pending reply' } });
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.server.sendReply' })));
+    expect(sendReply).toHaveBeenCalledOnce();
+    expect(textbox.readOnly).toBe(true);
+    try {
+      act(() => textbox.focus());
+      await act(async () => {
+        if (entry === 'button') fireEvent.click(screen.getByRole('button', { name: 'newChat.chatInput.voiceInput.start' }));
+        else trigger('start');
+      });
+      expect(api.start).not.toHaveBeenCalled();
+      expect((screen.getByRole('button', { name: 'newChat.chatInput.voiceInput.start' }) as HTMLButtonElement).disabled).toBe(true);
+    } finally {
+      await act(async () => finishReply({ ok: false, errorCode: 'INTERNAL', message: 'send failed' }));
+    }
+    expect(textbox.value).toBe('pending reply');
+    expect(textbox.readOnly).toBe(false);
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'newChat.chatInput.voiceInput.start' })));
+    expect(api.start).toHaveBeenCalledOnce();
+  });
+
   it('the real reply composer stops on Enter, retains the transcript, and sends only after manual editing', async () => {
     const sendReply = vi.fn().mockResolvedValue({ ok: true, messageId: 'reply' });
     render(<Tooltip.Provider><BotGroupComposer groupId="group" draftKey="voice-test-thread" mode="thread"

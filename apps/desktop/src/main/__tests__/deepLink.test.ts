@@ -84,6 +84,19 @@ describe('OS deep-link registration', () => {
     expect(registerWindowsDeepLinkName).not.toHaveBeenCalled();
   });
 
+  it('preserves installed handlers during a packaged smoke test', () => {
+    vi.spyOn(app, 'isPackaged', 'get').mockReturnValue(true);
+    const argv = process.argv;
+    process.argv = ['cindy', '--smoke-test'];
+    try {
+      registerDeepLinkProtocol();
+      expect(app.setAsDefaultProtocolClient).not.toHaveBeenCalled();
+      expect(registerWindowsDeepLinkName).not.toHaveBeenCalled();
+    } finally {
+      process.argv = argv;
+    }
+  });
+
   it('registers every supported scheme for packaged clients without a dev launch command', () => {
     vi.spyOn(app, 'isPackaged', 'get').mockReturnValue(true);
     vi.mocked(app.setAsDefaultProtocolClient).mockReturnValue(true);

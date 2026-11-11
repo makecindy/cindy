@@ -440,14 +440,14 @@ export async function runPlan(plan, options, externalSignal) {
           // Same density as a Retina Mac and as the Electron runner, so crops are comparable.
           deviceScaleFactor: 2,
           serviceWorkers: 'block',
-          reducedMotion: 'reduce',
+          reducedMotion: options.motion ? 'no-preference' : 'reduce',
           colorScheme: variant.theme,
           locale: variant.locale,
         });
         await routePage(context);
         page = await context.newPage();
       }
-      await page.emulateMedia({ colorScheme: variant.theme, reducedMotion: 'reduce' });
+      await page.emulateMedia({ colorScheme: variant.theme, reducedMotion: options.motion ? 'no-preference' : 'reduce' });
       const errors = [];
       const onError = (error) => errors.push(error.message);
       const onConsole = (message) => {

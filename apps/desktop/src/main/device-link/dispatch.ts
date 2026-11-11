@@ -1124,6 +1124,8 @@ function projectInvokeResultForTunnel(
     // 只有远程 Agent 的选择入口按它筛选。只放行布尔值。
     delete rest.remoteInvocationEnabled;
     if (typeof p.remoteInvocationEnabled === 'boolean') rest.remoteInvocationEnabled = p.remoteInvocationEnabled;
+    // 「运行于」是这台电脑自己的偏好，不给其他电脑。
+    delete rest.runLocation;
     // Only the host's narrow Cindy AI identity override may supersede brand inference.
     const logoKind = p.id === 'xd' && p.logoKind === 'xd'
       ? 'xd'
@@ -4742,6 +4744,37 @@ async function runProviderShareInvoke(
   return projected.ok ? { ...result, result: projected.value } : projected;
 }
 
+/**
+ * 「用本机模型」被单独关掉的同账号电脑：目录照常给(远程控制与手机仍要看全部供应商)，只是不再标成
+ * 可远程调用，它的模型列表与「运行于」里就不出现这台电脑。
+ */
+function withoutModelUseForRevokedController(src: string, result: unknown): unknown {
+  if (!(readDeviceLinkSettings().modelUseRevokedControllers ?? []).includes(src)) return result;
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return result;
+  const value = result as { providers?: unknown };
+  if (!Array.isArray(value.providers)) return result;
+  return {
+    ...value,
+    providers: value.providers.map((provider) => provider && typeof provider === 'object' && !Array.isArray(provider)
+      ? { ...(provider as Record<string, unknown>), remoteInvocationEnabled: false }
+      : provider),
+  };
+}
+
+/**
+ * 同账号电脑的「用本机模型」被关掉：结束它在本机的远程 Agent 任务，并通知它重读目录。
+ * 只匹配同账号控制端，分享来的受邀者另有撤权路径。
+ */
+async function revokeControllerModelUse(deviceId: string): Promise<void> {
+  await remoteAgentHandler?.abortControllers?.((controller) => controller === deviceId && !isProviderSharePeer(controller));
+  sendPushBestEffort(deviceId, 'maker:provider:changed', {});
+}
+
+/** 「用本机模型」恢复：通知那台电脑重读目录。 */
+function notifyControllerModelUseRestored(deviceId: string): void {
+  sendPushBestEffort(deviceId, 'maker:provider:changed', {});
+}
+
 /** For diagnostics: whether any provider share is currently known on this computer. */
 function hasProviderShares(): boolean {
   return providerShareAccess?.hasShares() ?? false;
@@ -5212,9 +5245,12 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
         args,
       ));
     // 供应商组摘要与运行数只给同账号电脑(受邀者与共享任务访客另有投影，这里不加，scrubSharedProvider 再兜一层)。
-    const decorated = payload.channel === 'maker:provider:list' && isSameAccountController(src) && providerGroupRemoteHandler
+    const grouped = payload.channel === 'maker:provider:list' && isSameAccountController(src) && providerGroupRemoteHandler
       ? await providerGroupRemoteHandler.decorateProviderList(projected)
       : projected;
+    const decorated = payload.channel === 'maker:provider:list' && isSameAccountController(src)
+      ? withoutModelUseForRevokedController(src, grouped)
+      : grouped;
     if (!broadcastTap.isDataOwnerBroadcastScopeCurrent(invocationOwner)) throw new Error('[NOT_FOUND] Session does not exist');
     return { ok: true, result: decorated };
   } catch (err) {
@@ -5437,6 +5473,8 @@ return {
   hasProviderShares,
   providerShareActiveControllers,
   revokeProviderShareControllers,
+  revokeControllerModelUse,
+  notifyControllerModelUseRestored,
   abortProviderShareReshareRuns,
   __testing,
   remoteAgentLimitUsage

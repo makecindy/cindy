@@ -56,7 +56,6 @@ describe.skipIf(!binary)('native Terra Ultra and Fast through the Cindy proxy', 
     let server: ReturnType<typeof createServer> | undefined;
     let catalogForCleanup: typeof import('../active-catalog.js') | undefined;
     let routingForCleanup: typeof import('../provider-route.js') | undefined;
-    // This exercises the Desktop assembly, not the shared port-injected factory.
     let proxyForCleanup: typeof import('../codex-proxy-host.desktop.js') | undefined;
     let sessionsForCleanup: typeof import('../session-provider-store.js') | undefined;
     let agent: CodexAgent | undefined;

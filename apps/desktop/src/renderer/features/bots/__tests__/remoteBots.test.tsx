@@ -117,6 +117,10 @@ it('restores all cached rows beyond 200 and imports legacy device-qualified ackn
     avatar: '', avatarColor: '', description: '', preview: '', activityAt: 100, lastReplyAt: 200, readAt: 300 }));
   localStorage.setItem(`cindy.remoteBots.v1.${h.owner}`, JSON.stringify(rows));
   stopReads = startBotReadStateSync();
+  // Check migration contents after the real file-backed bootstrap completes.
+  // Await all 205 real atomic writes before the unchanged readiness assertion;
+  // under full-suite load those writes can outlast vi.waitFor's default 1 s.
+  await reads.settled();
   await vi.waitFor(() => expect(getBotReadStateSyncStatus().phase).toBe('ready'));
   h.devices = [host('a', false)];
   const { result } = renderHook(useRoster);
