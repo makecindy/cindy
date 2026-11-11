@@ -69,16 +69,13 @@ describe('Windows Acrylic resize backing contract', () => {
     );
   });
 
-  it('lets only the ordinary Acrylic sidebar show the creation-time backing', () => {
-    expect(globalsSource).toContain(
-      "[data-platform='win32'][data-window-backdrop-material='acrylic'][data-theme='cindy-light']",
+  it('keeps the sidebar tint on Windows Acrylic because the opaque window drops backing alpha', () => {
+    expect(bootstrapSource).toContain("process.platform === 'darwin' ? { transparent: true } : {}");
+    expect(secondaryWindowsSource).toContain(
+      "process.platform === 'darwin' ? { transparent: true } : {}",
     );
-    expect(globalsSource).toContain(
-      "[data-platform='win32'][data-window-backdrop-material='acrylic'][data-theme='cindy-dark']",
-    );
-    expect(globalsSource).toContain('aside.bg-sidebar:not([data-sidebar-peek-drawer])');
-    expect(globalsSource).toMatch(
-      /aside\.bg-sidebar:not\(\[data-sidebar-peek-drawer\]\)[\s\S]*?\{\s*background:\s*transparent;/,
+    expect(globalsSource).not.toMatch(
+      /\[data-window-backdrop-material='acrylic'\][^{]*aside\.bg-sidebar[^{]*\{\s*background:\s*transparent;/,
     );
     expect(globalsSource).toMatch(
       /aside\.bg-sidebar\[data-sidebar-peek-drawer\][\s\S]*?background:\s*var\(--surface-translucent-sidebar\);[\s\S]*?backdrop-filter:\s*blur\(28px\);/,
