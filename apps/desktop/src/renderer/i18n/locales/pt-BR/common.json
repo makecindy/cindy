@@ -1926,6 +1926,15 @@
     },
     "remote": {
       "title": "Máquinas remotas",
+      "hostKeyError": {
+        "missing": "A verificação da chave de host SSH não está configurada. Conexão recusada.",
+        "read": "Cindy não conseguiu ler as chaves de host confiáveis: {{reason}}. Conexão recusada.",
+        "write": "Cindy não conseguiu salvar a chave de host confiável: {{reason}}. Conexão recusada.",
+        "mismatch": "A chave de host de {{host}} mudou ({{fingerprint}}) e não corresponde mais à impressão digital em que Cindy confiava. Isso pode significar que o servidor foi reinstalado ou um ataque man-in-the-middle. Conexão recusada.",
+        "file": "Arquivo de chaves de host confiáveis:\n{{filePath}}",
+        "repair": "Cindy não lê ~/.ssh/known_hosts. A impressão digital antiga está armazenada em:\n{{filePath}}\nA chave da entrada é \"{{host}}\".\nSe você confirmou que esta alteração é confiável, feche Cindy, remova apenas esta entrada, mantenha o arquivo e todos os outros hosts e conecte-se novamente. A nova impressão digital será salva na primeira conexão. Não exclua o arquivo inteiro.",
+        "verifyChange": "Confirme a alteração com o administrador do servidor antes de atualizar o registro de chaves de host confiáveis."
+      },
       "footnote": "Fase A: apenas gerenciamento de conexões SSH. A execução de Agents na máquina remota chegará em uma atualização futura.",
       "viaAuth": "via {{label}}",
       "readOnlyFromSshConfig": "Os detalhes da conexão vêm da configuração SSH",
