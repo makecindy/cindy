@@ -1,3 +1,4 @@
+import { MODEL_SPECTRUM_COLORS } from '@cindy/model-providers/branding';
 import { colorRegistry } from './color-registry';
 import { Emitter } from './event';
 import type { ColorIdentifier, ColorValue, Theme } from './types';
@@ -46,6 +47,10 @@ export function exportThemeColors(theme: Theme): Record<string, ColorValue> {
 function serializeThemeCss(theme: Theme): string {
   const declarations = Object.entries(exportThemeColors(theme))
     .map(([id, value]) => `--${id}:${value}`);
+  // This existing model-name/brand palette is shared with Mobile, outside user theme overrides.
+  MODEL_SPECTRUM_COLORS[theme.type].forEach((color, index) => {
+    declarations.push(`--model-spectrum-${index + 1}:${color}`);
+  });
   return `:root{${declarations.join(';')};}`;
 }
 

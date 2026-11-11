@@ -1005,10 +1005,6 @@ export function LayoutRoot({
         sidebar: entry.node.type === 'pane' && entry.node.panelKind === 'right-tabs',
         preferredWidth: entry.node.type === 'pane' ? entry.node.preferredWidth : undefined,
       }))),
-    () => {
-      const pane = layoutRootRef.current?.querySelector<HTMLElement>('[data-panel-drag-root="right-tabs"]');
-      return pane?.getBoundingClientRect().width ?? 0;
-    },
   );
   const rememberSidebarWidth = useRef<() => void>(() => undefined);
   rememberSidebarWidth.current = () => {

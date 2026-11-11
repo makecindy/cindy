@@ -4,6 +4,7 @@ import { AppServerClient, detectAuthInvalidationReason } from './client.js';
 import type { Logger } from '../../../interfaces/logger.js';
 import type { Transport, LineHandler, StderrHandler, CloseHandler } from './transport.js';
 import { Method } from './protocol.js';
+import { readAccountRateLimitsWithRefresh } from './account-rate-limits.js';
 
 class FakeTransport implements Transport {
   readonly lines: string[] = [];
@@ -379,6 +380,43 @@ describe('AppServerClient close completion', () => {
 });
 
 describe('AppServerClient request timeout', () => {
+  // PR #9916: a renderer deadline cannot release a native request. Drive the
+  // quota reader through the real client with a transport that never replies.
+  it.each([false, true])('settles stalled quota RPCs and permits a fresh read (renewed=%s)', async renewed => {
+    vi.useFakeTimers();
+    const transport = new FakeTransport();
+    const client = new AppServerClient({ createTransport: () => transport, logger });
+    client.start();
+    try {
+      let outcome: unknown;
+      const pending = readAccountRateLimitsWithRefresh((method, params, options) => client.request(method, params, options));
+      void pending.then(value => { outcome = value; }, error => { outcome = error; });
+      if (renewed) {
+        const initial = JSON.parse(transport.lines.at(-1)!);
+        transport.emitLine({ id: initial.id, error: { code: -32603, message: '401 token_expired' } });
+        await vi.advanceTimersByTimeAsync(0);
+        const refresh = JSON.parse(transport.lines.at(-1)!);
+        expect(refresh.method).toBe('account/read');
+        transport.emitLine({ id: refresh.id, result: {} });
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      const stalled = JSON.parse(transport.lines.at(-1)!);
+      expect(stalled.method).toBe(Method.AccountRateLimitsRead);
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(outcome).toBeInstanceOf(Error);
+      expect((outcome as Error).message).toContain('timed out');
+      // A late old reply cannot fulfill the next caller's request.
+      const retry = readAccountRateLimitsWithRefresh((method, params, options) => client.request(method, params, options));
+      const fresh = JSON.parse(transport.lines.at(-1)!);
+      transport.emitLine({ id: stalled.id, result: { rateLimits: { planType: 'old' } } });
+      transport.emitLine({ id: fresh.id, result: { rateLimits: { planType: 'plus' } } });
+      await expect(retry).resolves.toEqual({ rateLimits: { planType: 'plus' } });
+    } finally {
+      await client.close();
+      vi.useRealTimers();
+    }
+  });
+
   it('rejects and removes a pending request when the server stays connected without responding', async () => {
     vi.useFakeTimers();
     try {

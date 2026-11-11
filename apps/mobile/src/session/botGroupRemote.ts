@@ -283,6 +283,11 @@ function parseStep(value: unknown): BotGroupPlanStepView | null {
   const task = text(record?.task, 4_096);
   if (!record || position === null || !botId || !status || task === null) return null;
   return { position, botId, botName: text(record.botName, MAX_NAME) ?? '', task, status,
+    // An explicit null means the turn published nothing (NO_REPLY); a missing field is an older
+    // projection that never reported it. Keeping them apart is what lets the queue show a skipped
+    // turn instead of claiming it spoke (#9909).
+    ...(record.resultMessageId === null ? { resultMessageId: null }
+      : id(record.resultMessageId) ? { resultMessageId: id(record.resultMessageId)! } : {}),
     ...(id(record.executionId) ? { executionId: id(record.executionId)! } : {}),
     ...(typeof record.executionStatus === 'string' ? { executionStatus: record.executionStatus } : {}) };
 }
@@ -303,8 +308,9 @@ function parsePlan(value: unknown): BotGroupPlanView | null {
     supportsPendingSkip: record.supportsPendingSkip === true,
     canManage: typeof record.canManage === 'boolean' ? record.canManage : undefined,
     canAdd: typeof record.canAdd === 'boolean' ? record.canAdd : undefined,
-    // The computer's 自动交接 for a 分工 it started; changed only there.
+    // The setting belongs to this computer; only a new host explicitly offers remote control.
     autoContinue: typeof record.autoContinue === 'boolean' ? record.autoContinue : undefined,
+    canSetAutoContinue: record.canSetAutoContinue === true,
     organizerBotId: id(record.organizerBotId) ?? '',
     organizerName: text(record.organizerName, MAX_NAME) ?? '',
     steps: steps as BotGroupPlanStepView[],
@@ -355,6 +361,7 @@ function parseRound(value: unknown): BotGroupRoundView {
     status: record?.status === 'running' ? 'running' : 'idle',
     speakers,
     canContinue: record?.canContinue === true,
+    ...(record?.othersActive === true ? { othersActive: true } : {}),
   };
 }
 
@@ -402,6 +409,8 @@ export function parseBotGroupChatData(value: unknown): BotGroupRemoteChatData | 
     name,
     serverBacked: record.serverBacked === true,
     singleSpeaker: record.singleSpeaker === true,
+    canStopAll: record.canStopAll === true,
+    supportsScopedStop: record.supportsScopedStop === true,
     supportsMentionAudiences: record.supportsMentionAudiences === true,
     allowMentionAllBots: record.allowMentionAllBots === true,
     supportsDivision: record.supportsDivision === true,

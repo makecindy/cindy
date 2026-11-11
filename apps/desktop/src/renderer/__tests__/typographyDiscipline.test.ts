@@ -48,11 +48,13 @@ import { describe, expect, it } from 'vitest';
  *     配置中仍保留 xl..5xl 语义映射(源码零使用),不可简单删除:它们挂在
  *     theme.extend 下,删除会静默回退到不跟随用户缩放的 Tailwind 默认值;
  *     守卫在源码侧拒绝 xl..9xl,配置清理留待后续改成显式 numeric 档位。
- *  8. 会缩放的字号 token(`text-<n>` / `text-xs|sm|base|lg`)不得与固定 px 行高
- *     `leading-[Mpx]` 同处一个 class 值区域:字号跟随「外观 → UI 字号」缩放而
- *     固定行框不跟随,放大字号即裁切 / 重叠。判定按 className / cn(...) 的
- *     **整块区域**(跨行)而非同一行 —— 单行比对会漏掉 `cn()` 分行写法。
- *     修法是改成无单位比例(比例 = 原 px ÷ 字号),默认字号下渲染不变。
+ *  8. 会缩放的字号 token(`text-<n>` / `text-xs|sm|base|lg`)不得与固定行高
+ *     (`leading-[Mpx]`、`leading-[Nrem]`、Tailwind 数字档 `leading-3…10`)同处
+ *     一个 class 值区域:字号跟随「外观 → UI 字号」缩放而固定行框不跟随,放大
+ *     字号即裁切 / 重叠。判定按 className / cn(...) 的**整块区域**(跨行)与
+ *     单行字符串常量(单 / 双 / 反引号),而非同一行 —— 单行比对会漏掉 `cn()` 分行写法。
+ *     修法是改成无单位比例(比例 = 原 px ÷ 默认字号),默认字号下渲染不变。
+ *     2026-11 扩展前已存在的 rem / 数字档命中登记在 FIXED_LEADING_DEBT,只减不增。
  *
  * ## 豁免(精确绑定:文件 + 规则 + 理由 + 具体合法命中/上下文及期望次数)
  *  每条豁免按具体 match 与上下文签名计数;新增 font-black 或 800 即使总数不变也红。
@@ -141,6 +143,8 @@ interface Exemption {
   reason: string;
   /** 允许的具体命中/上下文及 occurrence 期望次数;未登记签名一律不享有豁免。 */
   signatures: ReadonlyArray<{ match: string; expected: number; context?: string }>;
+  /** 存量债务基线(只减不增),不是合法豁免域。 */
+  debt?: true;
 }
 
 const EXEMPTIONS: Exemption[] = [
@@ -292,6 +296,153 @@ const EXEMPTIONS: Exemption[] = [
     signatures: [{ match: 'text-[length:var(--app-code-font-size)]', expected: 1 }],
   },
 ];
+
+/**
+ * 固定行高存量债务基线(DESIGN.md §3 行高例外条款,2026-11 维护者裁决方案 A)。
+ *
+ * 规则 8 扩展到 `leading-[Nrem]` 与 Tailwind 数字档 `leading-3…10` 时,renderer 里已有的
+ * 命中按「文件 + 具体写法 + 次数」逐条登记在这里,与 EXEMPTIONS 走同一套精确计数:
+ * 新增一处(哪怕在已登记文件里)即红;迁移掉一处后实测次数变少也会红,提示同步下调
+ * 或删除登记 —— 基线只减不增。修法与分批计划见 DESIGN.md §3。`leading-[Mpx]` 已在
+ * #1553 清零,不得登记在这里。
+ */
+const fixedLeadingDebt = (file: string, counts: Record<string, number>): Exemption => ({
+  file,
+  rule: 'fixed-leading',
+  reason: 'DESIGN.md §3 固定行高存量债务,分批迁移为无单位比例',
+  debt: true,
+  signatures: Object.entries(counts).map(([match, expected]) => ({ match, expected })),
+});
+
+const FIXED_LEADING_DEBT: Exemption[] = [
+  fixedLeadingDebt('src/renderer/cindy-brain/GhostInstallConsentHost.tsx', { 'leading-5': 7 }),
+  fixedLeadingDebt('src/renderer/cindy-brain/GhostSettingsWebview.tsx', { 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/cindy-brain/PluginTaskPrefs.tsx', { 'leading-4': 2, 'leading-5': 2 }),
+  fixedLeadingDebt('src/renderer/components/chat/AgentTaskCard.tsx', { 'leading-4': 3, 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/components/chat/AgentTaskLiveDetails.tsx', { 'leading-4': 4 }),
+  fixedLeadingDebt('src/renderer/components/chat/BotStartedTasks.tsx', { 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/components/chat/GeneratedFilesCard.tsx', { 'leading-5': 4 }),
+  fixedLeadingDebt('src/renderer/components/chat/InlineReferenceChip.tsx', { 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/components/chat/MessageStream.tsx', { 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/components/chat/SessionHandoffCard.tsx', { 'leading-4': 5, 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/components/chat/UserMessage.tsx', { 'leading-5': 2 }),
+  fixedLeadingDebt('src/renderer/components/log-support/StartupLogSupport.tsx', { 'leading-4': 1 }),
+  fixedLeadingDebt('src/renderer/components/new-chat/AskUserQuestionPrompt.tsx', { 'leading-5': 2 }),
+  fixedLeadingDebt('src/renderer/components/new-chat/FullAccessConfirmContent.tsx', { 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/components/new-chat/GoalIndicator.tsx', { 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/components/new-chat/MentionChipNode.tsx', { 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/components/new-chat/ModelHarnessPicker.tsx', { 'leading-4': 2 }),
+  fixedLeadingDebt('src/renderer/components/new-chat/ModelSelector.tsx', { 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/components/new-chat/NewGoalDialog.tsx', { 'leading-5': 2 }),
+  fixedLeadingDebt('src/renderer/components/new-chat/PastedTextChipNode.tsx', { 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/components/new-chat/PluginConnectionForm.tsx', { 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/components/new-chat/PluginOauthDeviceCode.tsx', { 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/components/new-chat/PluginSetupPrompt.tsx', { 'leading-4': 1, 'leading-5': 8 }),
+  fixedLeadingDebt('src/renderer/components/new-chat/RemoteOauthSetupCard.tsx', { 'leading-5': 2 }),
+  fixedLeadingDebt('src/renderer/components/settings/AccountDeletionSection.tsx', { 'leading-5': 4 }),
+  fixedLeadingDebt('src/renderer/components/settings/ModelAdvancedDrawer.tsx', { 'leading-4': 1, 'leading-5': 4 }),
+  fixedLeadingDebt('src/renderer/components/settings/MyDevicesPanel.tsx', { 'leading-4': 1 }),
+  fixedLeadingDebt('src/renderer/components/settings/ProviderConnectionDialog.tsx', { 'leading-4': 2, 'leading-5': 3 }),
+  fixedLeadingDebt('src/renderer/components/settings/RelayServicePanel.tsx', { 'leading-5': 7 }),
+  fixedLeadingDebt('src/renderer/components/settings/SessionShareImportWizard.tsx', { 'leading-8': 1 }),
+  fixedLeadingDebt('src/renderer/components/settings/UserProfileCard.tsx', { 'leading-4': 1, 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/components/sidebar/NewTag.tsx', { 'leading-4': 1 }),
+  fixedLeadingDebt('src/renderer/components/status/QuotaHoverCard.tsx', { 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/components/title-bar/WindowControls.tsx', { 'leading-6': 1 }),
+  fixedLeadingDebt('src/renderer/features/billing/BillingCheckoutDialog.tsx', { 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/features/billing/BillingPage.tsx', { 'leading-4': 1, 'leading-5': 11, 'leading-7': 1 }),
+  fixedLeadingDebt('src/renderer/features/billing/CreditPoolRowView.tsx', { 'leading-4': 1 }),
+  fixedLeadingDebt('src/renderer/features/billing/PlanChangeDialog.tsx', { 'leading-5': 2 }),
+  fixedLeadingDebt('src/renderer/features/bots/BotAutomationsSettings.tsx', { 'leading-6': 1 }),
+  fixedLeadingDebt('src/renderer/features/bots/BotBasicProfileFields.tsx', { 'leading-6': 1 }),
+  fixedLeadingDebt('src/renderer/features/bots/BotCapabilitySettings.tsx', { 'leading-5': 3 }),
+  fixedLeadingDebt('src/renderer/features/bots/BotDeleteDialog.tsx', { 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/features/bots/BotDmThreadPreview.tsx', { 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/features/bots/BotDmThreadViews.tsx', { 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/features/bots/BotGlancePopover.tsx', { 'leading-4': 1, 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/features/bots/BotGroupCapabilityNotice.tsx', { 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/features/bots/BotGroupChatView.tsx', { 'leading-4': 2, 'leading-5': 2 }),
+  fixedLeadingDebt('src/renderer/features/bots/BotGroupLivePreview.tsx', { 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/features/bots/BotGroupLiveStatus.tsx', { 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/features/bots/BotGroupMentionCard.tsx', { 'leading-4': 2, 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/features/bots/BotGroupPlan.tsx', { 'leading-4': 2, 'leading-5': 2, 'leading-6': 2 }),
+  fixedLeadingDebt('src/renderer/features/bots/BotGroupRuntimeFailureNotice.tsx', { 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/features/bots/BotGroupSidebarRow.tsx', { 'leading-4': 5, 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/features/bots/BotGroupTaskCard.tsx', { 'leading-5': 1, 'leading-6': 1 }),
+  fixedLeadingDebt('src/renderer/features/bots/BotGroupThreadViews.tsx', { 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/features/bots/BotGroupTimelineItem.tsx', { 'leading-4': 1, 'leading-5': 3 }),
+  fixedLeadingDebt('src/renderer/features/bots/BotInvitationWelcome.tsx', { 'leading-6': 1 }),
+  fixedLeadingDebt('src/renderer/features/bots/BotLifecycleSettings.tsx', { 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/features/bots/BotMarketDialog.tsx', { 'leading-5': 1, 'leading-6': 1 }),
+  fixedLeadingDebt('src/renderer/features/bots/BotMarketModules.tsx', { 'leading-5': 4 }),
+  fixedLeadingDebt('src/renderer/features/bots/BotModelChainEditor.tsx', { 'leading-5': 2 }),
+  fixedLeadingDebt('src/renderer/features/bots/BotProjectsSettings.tsx', { 'leading-5': 3, 'leading-6': 1 }),
+  fixedLeadingDebt('src/renderer/features/bots/BotRosterView.tsx', { 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/features/bots/BotSettingsBlock.tsx', { 'leading-5': 2 }),
+  fixedLeadingDebt('src/renderer/features/bots/BotSettingsDrawer.tsx', { 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/features/bots/ChatGroupNotificationSettings.tsx', { 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/features/bots/CindyDeviceRow.tsx', { 'leading-4': 1, 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/features/bots/RemoteBotSettings.tsx', { 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/features/bots/RemoteTeammateSettings.tsx', { 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/features/bots/TeammatesSection.tsx', { 'leading-4': 2, 'leading-5': 3 }),
+  fixedLeadingDebt('src/renderer/features/bots/TeammateStatusDot.tsx', { 'leading-4': 1 }),
+  fixedLeadingDebt('src/renderer/features/bots/voice/CompanionVoiceToolbar.tsx', { 'leading-4': 1 }),
+  fixedLeadingDebt('src/renderer/features/cc-agent/OrcaRemoteLeadBadge.tsx', { 'leading-4': 1 }),
+  fixedLeadingDebt('src/renderer/features/cc-agent/SessionBranchTreeDialog.tsx', { 'leading-4': 2, 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/features/cc-agent/SessionEntryError.tsx', { 'leading-6': 1 }),
+  fixedLeadingDebt('src/renderer/features/cc-agent/sidebar/MachineSwitcherMenu.tsx', { 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/features/cc-agent/sidebar/sections/PinnedSection.tsx', { 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/features/cc-agent/sidebar/TaskRuntimePluginsDialog.tsx', { 'leading-5': 3 }),
+  fixedLeadingDebt('src/renderer/features/plugin/GhostLibrarySection.tsx', { 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/features/plugin/GhostPluginDetailView.tsx', { 'leading-5': 12 }),
+  fixedLeadingDebt('src/renderer/features/plugin/GhostPluginPage.tsx', { 'leading-5': 4, 'leading-6': 1 }),
+  fixedLeadingDebt('src/renderer/features/plugin/MarketplaceDiscoveryNotice.tsx', { 'leading-4': 3, 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/features/plugin/MarketplaceGuideDialog.tsx', { 'leading-4': 1, 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/features/plugin/MarketplaceSourcesDialog.tsx', { 'leading-4': 1 }),
+  fixedLeadingDebt('src/renderer/features/plugin/MarketPluginDetailView.tsx', { 'leading-5': 3, 'leading-6': 1 }),
+  fixedLeadingDebt('src/renderer/features/plugin/MyPluginsPage.tsx', { 'leading-5': 20, 'leading-6': 26, 'leading-7': 1, 'leading-8': 1 }),
+  fixedLeadingDebt('src/renderer/features/plugin/PluginBackgroundTasksSection.tsx', { 'leading-5': 4 }),
+  fixedLeadingDebt('src/renderer/features/plugin/PluginControlPointsSection.tsx', { 'leading-5': 2 }),
+  fixedLeadingDebt('src/renderer/features/plugin/PluginManagementLayout.tsx', { 'leading-5': 2, 'leading-6': 1 }),
+  fixedLeadingDebt('src/renderer/features/plugin/PluginPublishDialog.tsx', { 'leading-4': 2, 'leading-5': 7, 'leading-6': 1 }),
+  fixedLeadingDebt('src/renderer/features/plugin/PluginPublisherBadge.tsx', { 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/features/plugin/PluginReadmeSection.tsx', { 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/features/plugin/PluginScopePicker.tsx', { 'leading-4': 1 }),
+  fixedLeadingDebt('src/renderer/features/plugin/PluginVersionFacts.tsx', { 'leading-5': 2 }),
+  fixedLeadingDebt('src/renderer/features/plugin/RemotePluginConfiguration.tsx', { 'leading-5': 7 }),
+  fixedLeadingDebt('src/renderer/features/plugin/RemotePluginPage.tsx', { 'leading-5': 1, 'leading-6': 1 }),
+  fixedLeadingDebt('src/renderer/features/plugin/RemotePluginReadOnlyDetail.tsx', { 'leading-5': 4 }),
+  fixedLeadingDebt('src/renderer/features/plugin/RetiredFeatureDetail.tsx', { 'leading-5': 2, 'leading-6': 2 }),
+  fixedLeadingDebt('src/renderer/features/plugin/UpdateAllDialog.tsx', { 'leading-5': 2 }),
+  fixedLeadingDebt('src/renderer/features/provider-group/SessionRebalanceChoices.tsx', { 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/features/right-sidebar/EmptyState.tsx', { 'leading-5': 2 }),
+  fixedLeadingDebt('src/renderer/features/right-sidebar/plugins/background-tasks/BackgroundTasksBody.tsx', { 'leading-4': 1, 'leading-5': 3 }),
+  fixedLeadingDebt('src/renderer/features/right-sidebar/plugins/background-tasks/WorkflowAgentStrip.tsx', { 'leading-4': 1 }),
+  fixedLeadingDebt('src/renderer/features/right-sidebar/plugins/background-tasks/WorkflowProgressTree.tsx', { 'leading-4': 6, 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/features/right-sidebar/plugins/retired-feature/index.tsx', { 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/features/right-sidebar/plugins/review/DiffViewer/PlainUnifiedDiff.tsx', { 'leading-5': 3 }),
+  fixedLeadingDebt('src/renderer/features/right-sidebar/plugins/side-chat/SideChatTabBody.tsx', { 'leading-5': 3 }),
+  fixedLeadingDebt('src/renderer/features/right-sidebar/plugins/subagents/ConversationStream.tsx', { 'leading-4': 1 }),
+  fixedLeadingDebt('src/renderer/features/right-sidebar/plugins/subagents/DetailView.tsx', { 'leading-4': 4, 'leading-5': 6 }),
+  fixedLeadingDebt('src/renderer/features/right-sidebar/plugins/subagents/RunList.tsx', { 'leading-4': 3, 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/features/right-sidebar/plugins/subagents/SubagentChrome.tsx', { 'leading-4': 3, 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/features/right-sidebar/plugins/subagents/SubagentToolCard.tsx', { 'leading-4': 6 }),
+  fixedLeadingDebt('src/renderer/features/scheduler/components/ScheduleChips.tsx', { 'leading-4': 5 }),
+  fixedLeadingDebt('src/renderer/features/skillhub/SkillhubDetailView.tsx', { 'leading-4': 1, 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/features/skillhub/SkillhubHomeView.tsx', { 'leading-4': 1, 'leading-5': 3, 'leading-6': 1 }),
+  fixedLeadingDebt('src/renderer/features/skillhub/SkillPublishUpdateHint.tsx', { 'leading-4': 1 }),
+  fixedLeadingDebt('src/renderer/features/task-tags/TaskTags.tsx', { 'leading-5': 1, 'leading-6': 1 }),
+  fixedLeadingDebt('src/renderer/voice-input/VoiceInputDictionaryToast.tsx', { 'leading-5': 2 }),
+  fixedLeadingDebt('src/renderer/voice-input/VoiceInputOverlay.tsx', { 'leading-5': 4, 'leading-6': 2 }),
+];
+
+const FIXED_LEADING_FIX =
+  '(比例 = 原行高 px ÷ 默认字号 px,精度以乘回默认字号仍得原 px 为准,如 text-13 leading-5 → leading-[1.54]、' +
+  'text-12 leading-5 → leading-[1.667];见 DESIGN.md §3 行高例外)';
+
+function hintFor(rule: string): string {
+  return rule === 'fixed-leading' ? ` —— 改成无单位比例${FIXED_LEADING_FIX}` : '';
+}
 
 // ── 预处理 ──────────────────────────────────────────────────────────
 
@@ -528,18 +679,22 @@ export function findFontShorthands(text: string): Hit[] {
 }
 
 /**
- * 固定 px 行高 + 会缩放的字号 token = 功能缺陷(不是行高风格漂移)。
+ * 固定行高 + 会缩放的字号 token = 功能缺陷(不是行高风格漂移)。
  *
  * `text-<n>` / `text-xs|sm|base|lg` 经 `--text-*` 响应「外观 → UI 字号」设置,
- * `leading-[Mpx]` 的行框不跟随;用户把字号调大时文字在固定行框里裁切 / 重叠。
- * 一律改成无单位比例(比例 = 原 px ÷ 字号),默认字号下渲染不变。
+ * 固定长度的行框不跟随;用户把字号调大时文字在固定行框里裁切 / 重叠。固定行高
+ * 包括 `leading-[Mpx]`、`leading-[Nrem]` 与 Tailwind 数字档 `leading-3…10`
+ * (= 0.75–2.5rem;设置只改写 `--text-*`、不改根字号,rem 同样不跟随)。
+ * 一律改成无单位比例(比例 = 原 px ÷ 默认字号),默认字号下渲染不变。
  * 规范见 DESIGN.md §3 non-goals 的行高例外条款。
  *
  * 判定按「同一个 class 值区域」而不是同一行:`cn(...)` 会把字号与行高分散到
  * 不同行,只比对单行会漏 —— #1553 就是这样漏掉过 PlanActionCard 一处,
- * 因此这里做括号 / 引号配对取整块区域再比对。
+ * 因此这里做括号 / 引号配对取整块区域再比对。单个字符串常量(没挂在
+ * className / cn 上的 class 常量)同时含字号与固定行高时同样命中。
  */
 const SIZE_TOKEN_IN_CLASS = /\btext-(?:\d+|xs|sm|base|lg)\b/;
+const FIXED_LEADING_IN_CLASS = /(?<![\w-])leading-(?:\[\d*\.?\d+(?:px|rem)\]|(?:10|[3-9])(?![\w.[-]))/g;
 
 function matchBalanced(text: string, openIndex: number, open: string, close: string): number {
   let depth = 0;
@@ -571,6 +726,11 @@ function classValueRegions(text: string): Array<{ start: number; end: number }> 
     const open = (m.index ?? 0) + m[0].length - 1;
     regions.push({ start: open, end: matchBalanced(text, open, '(', ')') });
   }
+  // 单行字符串常量:`const ICON_BUTTON = 'text-13 leading-5 …'` 之类的 class 常量,
+  // 单引号、双引号与反引号(模板字符串)同样处理。
+  for (const m of text.matchAll(/(['"`])(?:(?!\1)[^\\\n]|\\.)*\1/g)) {
+    regions.push({ start: m.index ?? 0, end: (m.index ?? 0) + m[0].length });
+  }
   return regions;
 }
 
@@ -580,7 +740,7 @@ function findFixedLeadingWithScalingToken(text: string): Hit[] {
     const slice = text.slice(region.start, region.end);
     const token = SIZE_TOKEN_IN_CLASS.exec(slice);
     if (!token) continue;
-    for (const m of slice.matchAll(/leading-\[(\d+(?:\.\d+)?)px\]/g)) {
+    for (const m of slice.matchAll(FIXED_LEADING_IN_CLASS)) {
       // className 区域与其内层 cn(...) 区域会重叠,按绝对下标去重免得重复计数。
       const index = region.start + (m.index ?? 0);
       if (!byIndex.has(index)) byIndex.set(index, { match: m[0], index, context: token[0] });
@@ -681,9 +841,16 @@ export function parseNumericCssMappings(css: string): Array<readonly [number, nu
 describe('typography discipline (DESIGN.md §3, #1505)', () => {
   it('keeps weights and sizes on the ladder; exemption hit counts stay exact', () => {
     const violations = scan();
-
     const keyOf = (file: string, rule: string) => `${file} ${rule}`;
-    const exemptionByKey = new Map(EXEMPTIONS.map((e) => [keyOf(e.file, e.rule), e]));
+    const allExemptions = [...EXEMPTIONS, ...FIXED_LEADING_DEBT];
+    const exemptionByKey = new Map(allExemptions.map((e) => [keyOf(e.file, e.rule), e]));
+    // 债务基线与合法豁免共用一套计数;同一文件 + 规则只能有一条登记,否则后者会静默覆盖前者。
+    expect(exemptionByKey.size).toBe(allExemptions.length);
+    // 债务基线只收 2026-11 新纳入的写法:px 行高已在 #1553 清零,共享组件(components/ui)已先行迁移。
+    for (const e of FIXED_LEADING_DEBT) {
+      expect(e.file).not.toMatch(/^src\/renderer\/components\/ui\//);
+      for (const s of e.signatures) expect(s.match).not.toMatch(/px\]$/);
+    }
 
     const signatureKey = (match: string, context?: string) => `${match} @ ${context ?? '<any>'}`;
     const counts = new Map<string, Map<string, number>>();
@@ -696,7 +863,9 @@ describe('typography discipline (DESIGN.md §3, #1505)', () => {
           (s) => s.match === v.match && (!s.context || s.context === v.context),
         );
         if (!signature) {
-          unexempted.push(`${v.file}:${v.line} [${v.rule}] ${v.match}（未登记的豁免命中）`);
+          unexempted.push(
+            `${v.file}:${v.line} [${v.rule}] ${v.match}（未登记的豁免命中）${hintFor(v.rule)}`,
+          );
           continue;
         }
         const bucket = counts.get(key) ?? new Map<string, number>();
@@ -706,21 +875,25 @@ describe('typography discipline (DESIGN.md §3, #1505)', () => {
         );
         counts.set(key, bucket);
       } else {
-        unexempted.push(`${v.file}:${v.line} [${v.rule}] ${v.match}`);
+        unexempted.push(`${v.file}:${v.line} [${v.rule}] ${v.match}${hintFor(v.rule)}`);
       }
     }
 
     const exemptionDrift: string[] = [];
-    for (const e of EXEMPTIONS) {
+    for (const e of allExemptions) {
       const actual = counts.get(keyOf(e.file, e.rule)) ?? new Map<string, number>();
       for (const signature of e.signatures) {
         const hits = actual.get(signatureKey(signature.match, signature.context)) ?? 0;
         if (hits !== signature.expected) {
+          const advice = e.debt
+            ? hits > signature.expected
+              ? `存量债务只减不增,新增处请改无单位比例${FIXED_LEADING_FIX}`
+              : '债务已减少,请同步下调 FIXED_LEADING_DEBT 基线(归零即删整条)'
+            : hits > signature.expected
+              ? '有人蹭豁免,新增处必须自证或归梯'
+              : '豁免已过期,请同步删登记';
           exemptionDrift.push(
-            `${e.file} [${e.rule}] ${signature.match} 登记 ${signature.expected} 次,实测 ${hits} 次 —— ` +
-              (hits > signature.expected
-                ? '有人蹭豁免,新增处必须自证或归梯'
-                : '豁免已过期,请同步删登记'),
+            `${e.file} [${e.rule}] ${signature.match} 登记 ${signature.expected} 次,实测 ${hits} 次 —— ${advice}`,
           );
         }
       }
@@ -797,6 +970,25 @@ describe('typography discipline (DESIGN.md §3, #1505)', () => {
       // className 区域与内层 cn(...) 区域重叠,同一处只能计一次。
       expect(
         findFixedLeadingWithScalingToken('className={cn("text-13", "leading-[16px]")}'),
+      ).toHaveLength(1);
+      // Tailwind 数字档与 rem 行高同样是固定长度:设置只改 --text-*,不改根字号(2026-11 方案 A)。
+      expect(
+        matches(findFixedLeadingWithScalingToken('className="text-13 leading-5 md:leading-10"')),
+      ).toEqual(['leading-5', 'leading-10']);
+      expect(matches(findFixedLeadingWithScalingToken('className="text-12 leading-3"'))).toEqual([
+        'leading-3',
+      ]);
+      expect(
+        matches(findFixedLeadingWithScalingToken('className="text-sm leading-[1.25rem]"')),
+      ).toEqual(['leading-[1.25rem]']);
+      // 没挂在 className / cn 上的 class 常量也要判。
+      expect(
+        findFixedLeadingWithScalingToken("const ROW = 'flex text-13 leading-5 text-[var(--x)]';"),
+      ).toHaveLength(1);
+      // 反引号常量同样要判,无论有没有插值。
+      expect(findFixedLeadingWithScalingToken('const ROW = `text-13 leading-5`;')).toHaveLength(1);
+      expect(
+        findFixedLeadingWithScalingToken('const ROW = `text-13 ${active ? "font-medium" : ""} leading-5`;'),
       ).toHaveLength(1);
       expect(findArbitrarySizes('text-[9px] text-[8px]')).toHaveLength(2);
       // 全单位 / 大小写 / 无整数部分小数(三轮加固)
@@ -948,6 +1140,16 @@ describe('typography discipline (DESIGN.md §3, #1505)', () => {
       );
       // 语义 leading 档位与行高变量同样放行。
       expect(findFixedLeadingWithScalingToken('className="text-14 leading-snug"')).toEqual([]);
+      // 无单位的 leading-none、em 行高与非行高类名(leading-1x 前缀、带连字符的自定义类)不算固定行高。
+      expect(
+        findFixedLeadingWithScalingToken(
+          'className="text-13 leading-none leading-[1.5em] leading-1 x-leading-5 leading-5x"',
+        ),
+      ).toEqual([]);
+      // 字号与行高分属两个独立字符串常量时不互相串联。
+      expect(findFixedLeadingWithScalingToken("const A = 'text-13'; const B = 'leading-5';")).toEqual(
+        [],
+      );
       expect(findArbitrarySizes('text-[var(--app-code-font-size)]')).toEqual([]);
       expect(
         findOffLadderTokenSizes('className="text-xs text-sm text-base text-lg text-12 text-28"'),

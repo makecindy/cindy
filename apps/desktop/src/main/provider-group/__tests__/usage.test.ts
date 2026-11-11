@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ClaudeSubscriptionUsageSnapshot } from '../../../shared/claudeSubscriptionUsage';
 import type { ProviderGroupMember } from '../../../shared/providerGroup';
+import { pickProviderGroupMember } from '../scheduler';
 import {
   createProviderGroupUsageReader, providerGroupUsageSnapshot, providerGroupUsageState,
   providerGroupCodexUsageSnapshot, providerGroupMemberUsageState,
@@ -83,6 +84,38 @@ describe('OpenAI group quota snapshots', () => {
     expect(state(fresh)).toMatchObject({ limited: false, urgency: expect.closeTo(6.75) });
     expect(state(fresh, 'gpt-5.3-codex', 'pi')).toMatchObject({ limited: false, urgency: null });
     expect(state(providerGroupCodexUsageFromReads(bucket(40), null, NOW)).urgency).toEqual(urgencyOneDayLeft(20));
+  });
+
+  // Unit regression: native account/rateLimits/read uses windowDurationMins,
+  // while running-task events already normalize it. Previous fixtures only used
+  // windowMinutes, masking an idle account's exclusion from quota-first selection.
+  it('selects the unused native account over a busy account with normalized weekly usage', () => {
+    const weekly = (usedPercent: number, duration: object) => ({
+      limitId: 'codex', primary: { usedPercent, resetsAt: (NOW + 6 * DAY) / 1000, ...duration },
+    });
+    const busy = providerGroupCodexUsageSnapshot({
+      ...weekly(29, { windowMinutes: 10_080 }), updatedAt: NOW,
+    });
+    const idle = providerGroupCodexUsageFromReads(null, {
+      rateLimits: weekly(0, { windowDurationMins: 10_080 }),
+      rateLimitsByLimitId: { codex: weekly(0, { windowDurationMins: 10_080 }) },
+    }, NOW);
+    const members = [busy, idle].map((usage, index) => ({
+      key: String(index), usable: true, paused: false, running: index === 0 ? 13 : 0,
+      limit: 16, weight: 1, ...state(usage),
+    }));
+    expect(pickProviderGroupMember(members, 'least')).toBe('1');
+    expect(idle?.appServerBuckets?.codex.primary?.windowMinutes).toBe(10_080);
+  });
+
+  it('recognizes native five-hour pressure and preserves explicit normalized durations', () => {
+    const usage = providerGroupCodexUsageFromReads(null, {
+      rateLimits: {
+        primary: { usedPercent: 90, windowDurationMins: 300, resetsAt: (NOW + 3 * 3_600_000) / 1000 },
+        secondary: { usedPercent: 20, windowMinutes: 10_080, windowDurationMins: 60, resetsAt: (NOW + DAY) / 1000 },
+      },
+    }, NOW);
+    expect(state(usage)).toMatchObject({ fiveHourTight: true, urgency: urgencyOneDayLeft(20) });
   });
 });
 const member = (kind: ProviderGroupMember['kind'], agentDeviceId: string | null, providerId = 'anthropic'): ProviderGroupMember => ({
@@ -209,6 +242,22 @@ describe('provider group usage reads', () => {
     h.reader.invalidate();
     await h.reader.read(REMOTE);
     expect(h.readRemote).toHaveBeenCalledTimes(4);
+  });
+
+  // Unit: an account pause invalidates quota while a read may still be in
+  // flight. Existing coverage only cleared completed reads, allowing old quota back.
+  it('discards a late quota reply after account settings invalidate it', async () => {
+    const h = harness();
+    let finish!: (value: ReturnType<typeof snapshot>) => void;
+    h.readRemote.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const pending = h.reader.read(REMOTE);
+    await Promise.resolve();
+    h.reader.invalidate();
+    finish(snapshot());
+    expect(await pending).toBeNull();
+    expect(h.reader.peek(REMOTE)).toBeNull();
+    await h.reader.read(REMOTE);
+    expect(h.readRemote).toHaveBeenCalledTimes(2);
   });
 
   it('never requests another person’s subscription quota', async () => {

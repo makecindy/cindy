@@ -1,4 +1,5 @@
 import { DEFAULT_FONT_SIZES } from './generated/appearance-tokens';
+import { normalizePluginAppearanceSettings, type PluginAppearanceSettingsFields } from './pluginAppearance';
 
 /**
  * Desktop appearance preferences shared by main, preload and renderer.
@@ -7,7 +8,7 @@ import { DEFAULT_FONT_SIZES } from './generated/appearance-tokens';
  * the effective snapshot returned by main.
  */
 
-export interface AppearanceOverrides {
+export interface AppearanceOverrides extends PluginAppearanceSettingsFields {
   uiFamily?: string;
   codeFamily?: string;
   uiSize?: number;
@@ -48,7 +49,7 @@ export interface WallpaperDownloadProgress {
   total: number;
 }
 
-export interface AppearanceSettings {
+export interface AppearanceSettings extends PluginAppearanceSettingsFields {
   uiFamily: string;
   codeFamily: string;
   uiSize: number;
@@ -67,6 +68,7 @@ export interface AppearanceSettings {
   appIcon: AppIcon;
   /** Read-only, host-owned media reference; never accepted by set-patch. */
   customWallpaperUrl?: string;
+  customWallpaperFallbackUrl?: string;
 }
 
 /** Keep the terminal's existing platform fallbacks independent of code fonts. */
@@ -243,6 +245,8 @@ export function normalizeAppearanceSettings(raw: unknown): AppearanceSettings {
   }
   const value = raw as Record<string, unknown>;
   return {
+    ...normalizePluginAppearanceSettings(value),
+    ...(normalizeCustomWallpaperUrl(value.customWallpaperFallbackUrl) ? { customWallpaperFallbackUrl: normalizeCustomWallpaperUrl(value.customWallpaperFallbackUrl) } : {}),
     uiFamily: normalizeFamily(value.uiFamily),
     codeFamily: normalizeFamily(value.codeFamily),
     terminalFamily: normalizeFamily(value.terminalFamily),

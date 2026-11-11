@@ -146,7 +146,7 @@ describe('代输入 requests the agent makes', () => {
     const problem = await harness().service.checkTarget(target);
     expect(problem?.errorCode ?? null).toBe(errorCode);
     if (errorCode === 'TARGET_NOT_FOUND') expect(problem!.message).toContain('Example, Google Chrome');
-    if (errorCode === 'TARGET_IS_CINDY') expect(problem!.message).toContain('kind="scan"');
+    if (errorCode === 'TARGET_IS_CINDY') expect(problem!.message).toContain('request_input_handoff');
   });
 
   it('closes a waiting card when the owner writes in the task, without a second turn, and tells the agent once', async () => {

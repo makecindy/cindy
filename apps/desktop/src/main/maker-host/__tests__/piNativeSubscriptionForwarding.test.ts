@@ -25,7 +25,18 @@ vi.mock('electron', () => ({
   app: { getPath: () => '/tmp/cindy-pi-native-forwarding-test' },
 }));
 
-vi.mock('../../appSessionState.js', () => ({
+// The HTTP transport fixture injects account readers below. Global Skill
+// projection has its own tests and must not start Desktop services here.
+vi.mock('../managed-skills.js', () => ({
+  listCindyManagedSkills: async () => [],
+  cindyManagedSkillRoots: async () => [],
+}));
+vi.mock('../model-discovery/xai.js', () => ({
+  discardXaiModelsDiskCache: vi.fn(async () => {}),
+}));
+
+vi.mock('../../appSessionState.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../appSessionState.js')>(),
   isAppSessionBoundaryPending: () => ownerState.pending,
   activeOwnerScopeKey: () => ownerState.scope,
 }));

@@ -73,8 +73,9 @@ P1／P2。按下表转换，**不要**把仓库口径的 P2 改写成评论里�
   `docs/dev-rules/database-and-migrations.md`。
 - **mobile 冷更边界**：改动是否触碰 `app.json`／`app.config.js`／`eas.json`／
   `apps/mobile/package.json`／`plugins/`／`modules/` 等进入 runtime fingerprint 的输入。
-  命中就在评论里点名——这类 PR 合并前需要把关人对冷更单独确认；可保持 Ready 并正常
-  审查，不因冷更要求新建讨论 issue 或转为 draft。见
+  命中就在评论里点名，并核对是否确实必须冷更（能用不动指纹的写法达成时要求改写），
+  以及 PR Description 是否写明冷更原因、存量装机影响与发版节奏；缺项按规范违反上报。
+  这类 PR 可保持 Ready 并正常审查，不需要把关人另外确认。见
   `docs/dev-rules/mobile-development.md`。
 - **协议兼容**：本地协议 package、device-link／relay／隧道 payload、IPC allowlist
   等跨端 wire protocol 的向后兼容性。见 `docs/dev-rules/protocol-compatibility.md`。

@@ -25,7 +25,7 @@ function setup(options: { home: string | null; handler?: ApiHandler; devices?: D
   readValues?: () => Promise<Array<{ key: string; value: unknown }>>; syncProfile?: (botId: string) => Promise<void>;
   turnActive?: () => boolean; homeLink?: CompanionCloudHost['homeLink']; stopBotTurns?: CompanionCloudHost['stopBotTurns'];
   canonicalSession?: CompanionCloudHost['canonicalSession']; paused?: (botId: string) => boolean; refreshForeground?: () => Promise<void>;
-  store?: Parameters<typeof startCompanionCloud>[0]['store']; savedState?: string }) {
+  store?: Parameters<typeof startCompanionCloud>[0]['store']; savedState?: string; upgradeArrived?: CompanionCloudHost['upgradeArrived'] }) {
   const actors: CompanionRuntimeActor[] = [{ id: 'actor-1', kind: 'bot', externalId: 'bot_mia', name: 'Mia', avatar: null, homeDeviceId: options.home }];
   const { api, calls } = fakeApi(options.handler ?? ((route, method) => {
     // The home has uploaded the profile snapshot a take-over builds from.
@@ -52,6 +52,7 @@ function setup(options: { home: string | null; handler?: ApiHandler; devices?: D
     ...(options.turnActive ? { isBotBusy: async () => options.turnActive!() } : {}),
     ...(options.homeLink ? { homeLink: options.homeLink } : {}),
     ...(options.stopBotTurns ? { stopBotTurns: options.stopBotTurns } : {}),
+    ...(options.upgradeArrived ? { upgradeArrived: options.upgradeArrived } : {}),
   };
   runtime = startCompanionCloud({ api, ...(options.backgroundIdentityApi ? { backgroundIdentity: {
     api: options.backgroundIdentityApi, isDeferred: options.identityDeferred ?? (() => false) } } : {}),
@@ -83,6 +84,86 @@ describe('private report recovery', () => {
 });
 
 describe('take over', () => {
+  // Regression: a different local Cindy made automatic take-over recreate the same missing
+  // profile every minute. Existing tests only used an unconstrained in-memory profile.
+  // Unit tier: drive real takeOver/reconcile; conflicting identities never overwrite or upload.
+  it('refuses a different Cindy before changing its home or claiming the installation', async () => {
+    const t = setup({ home: 'laptop', installationId: 'this-install', handler: (route, method) => {
+      if (route === '/preferences' && method === 'GET') return [{ key: 'companion.profile.v1', value: { ...MIA, templateId: 'cindy' }, revision: 1 }];
+      return {};
+    } });
+    t.local.host.findConflictingCindy = vi.fn(async () => 'local-cindy');
+    expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: false, code: 'FAILED' });
+    expect(t.calls.every(call => call.method === 'GET')).toBe(true);
+    expect(t.actors[0]!.homeDeviceId).toBe('laptop');
+    expect(t.local.host.createProfile).not.toHaveBeenCalled();
+    expect(t.local.host.updateProfile).not.toHaveBeenCalled();
+  });
+
+  it('holds a conflicting Cindy without repeating cloud writes, then resumes after the conflict clears', async () => {
+    vi.useFakeTimers();
+    try {
+      const t = setup({ home: 'desk', handler: (route, method) => {
+        if (route === '/preferences') return method === 'GET' ? [{ key: 'companion.profile.v1', value: { ...MIA, templateId: 'cindy' }, revision: 1 }] : { revision: 1 };
+        if (route === '/conversations') return { id: ROOM };
+        if (route.includes('/messages?')) return [];
+        return {};
+      } });
+      const conflict = vi.fn(async (): Promise<string | null> => 'local-cindy');
+      t.local.host.findConflictingCindy = conflict;
+      t.runtime.reconcile([]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(t.state.isDemoted('bot_mia')).toBe(true);
+      expect(t.local.host.createProfile).not.toHaveBeenCalled();
+      const calls = t.calls.length;
+      for (let i = 0; i < 3; i++) {
+        await vi.advanceTimersByTimeAsync(60_000);
+        t.runtime.reconcile([]);
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      expect(t.calls).toHaveLength(calls);
+      expect(t.local.host.writeSystemPrompt).not.toHaveBeenCalled();
+      conflict.mockResolvedValue(null);
+      await vi.advanceTimersByTimeAsync(60_000);
+      t.runtime.reconcile([]);
+      t.runtime.reconcile([]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(t.state.isDemoted('bot_mia')).toBe(false);
+      expect(t.local.host.createProfile).toHaveBeenCalledOnce();
+      t.runtime.reconcile([{ id: 'bot_mia', status: 'active' }]);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(t.local.host.createProfile).toHaveBeenCalledOnce();
+    } finally { runtime?.dispose(); vi.useRealTimers(); }
+  });
+
+  it.each(['replacement-actor', 'explicit-retry'])('rechecks cloud identity after a conflict: %s', async mode => {
+    vi.useFakeTimers();
+    try {
+      let templateId: string | undefined = 'cindy';
+      const t = setup({ home: 'desk', handler: (route, method) => {
+        if (route === '/preferences') return method === 'GET' ? [{ key: 'companion.profile.v1', value: { ...MIA, templateId }, revision: 1 }] : { revision: 1 };
+        if (route === '/conversations') return { id: ROOM };
+        if (route.includes('/messages?')) return [];
+        return {};
+      } });
+      t.local.host.findConflictingCindy = vi.fn(async () => 'local-cindy');
+      t.runtime.reconcile([]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(t.state.isDemoted('bot_mia')).toBe(true);
+      templateId = undefined;
+      if (mode === 'replacement-actor') {
+        t.actors[0]!.id = 'replacement';
+        await vi.advanceTimersByTimeAsync(60_000);
+        t.runtime.reconcile([]);
+        await vi.advanceTimersByTimeAsync(0);
+      } else {
+        expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: true });
+      }
+      expect(t.state.isDemoted('bot_mia')).toBe(false);
+      expect(t.local.host.createProfile).toHaveBeenCalledOnce();
+    } finally { runtime?.dispose(); vi.useRealTimers(); }
+  });
+
   it('resolves an uncached actor through the explicit refresh channel before taking over', async () => {
     let restore = () => {};
     const foreground = vi.fn(async () => { restore(); });
@@ -100,6 +181,19 @@ describe('take over', () => {
     expect(t.actors[0]!.homeDeviceId).toBe('desk');
     expect(t.local.host.createProfile).toHaveBeenCalledOnce();
     expect(t.publish).toHaveBeenCalled();
+  });
+
+  // Teammate V2 (cloud-companions.md §2.1): a teammate that arrives becomes a project right away,
+  // not only at the next start; a take-over that did not complete does not upgrade it.
+  it('upgrades the teammate to V2 once it arrived, and not when the take-over did not complete', async () => {
+    const upgradeArrived = vi.fn(async () => undefined);
+    const t = setup({ home: 'laptop', upgradeArrived });
+    expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: true });
+    await vi.waitFor(() => expect(upgradeArrived).toHaveBeenCalledExactlyOnceWith('bot_mia'));
+    const failed = setup({ home: 'laptop', upgradeArrived: vi.fn(async () => undefined) });
+    vi.mocked(failed.local.host.createProfile).mockRejectedValueOnce(new Error('DISK_FULL'));
+    expect((await failed.runtime.takeOver('bot_mia')).ok).toBe(false);
+    expect(failed.host.upgradeArrived).not.toHaveBeenCalled();
   });
 
   it('tells what depends on the hidden copies when this one is hidden and again when it is lifted', async () => {
@@ -385,6 +479,26 @@ describe('transfer', () => {
       const uploaded = t.calls.findIndex(call => call.route === '/companion-store/entry' && call.method === 'POST');
       expect(uploaded).toBeLessThan(t.calls.findIndex(call => call.method === 'PATCH'));
     } else expect(stored).toBeUndefined();
+  });
+
+  // Teammate V2 (cloud-companions.md §2.1 第 4 条, 2026-11-10 owner): a computer whose Cindy cannot run
+  // a V2 teammate (caps < 4) is listed as outdated, and still receives one, from here or asked elsewhere.
+  it('hands a V2 teammate to a computer that runs an older Cindy, listed as outdated', async () => {
+    const homeLink = { version: vi.fn(async (deviceId: string) => (deviceId === 'laptop' ? 3 : COMPANION_CLOUD_VERSION)),
+      targets: vi.fn(async () => []), handOver: vi.fn(async () => ({ ok: true as const })) };
+    const t = setup({ home: 'desk', devices: [device('laptop'), device('tablet')], homeLink });
+    expect(await t.runtime.transferTargets()).toEqual([
+      { deviceId: 'laptop', name: 'laptop', online: true, outdated: true },
+      { deviceId: 'tablet', name: 'tablet', online: true },
+    ]);
+    expect(await t.runtime.switchHome('bot_mia', 'laptop')).toEqual({ ok: true });
+    expect(t.calls.some(call => call.method === 'PATCH')).toBe(true);
+    expect(t.state.isDemoted('bot_mia')).toBe(true);
+    // Asked from another computer: the home hands it over.
+    const remote = setup({ home: 'laptop', devices: [device('laptop')], homeLink: { ...homeLink, version: vi.fn(async () => COMPANION_CLOUD_VERSION),
+      targets: vi.fn(async () => [{ deviceId: 'tablet', name: 'Tablet', online: true, outdated: true }]) } });
+    expect(await remote.runtime.switchHome('bot_mia', 'tablet')).toEqual({ ok: true });
+    expect(homeLink.handOver).toHaveBeenCalledOnce();
   });
 
   it('only transfers from the home computer', async () => {

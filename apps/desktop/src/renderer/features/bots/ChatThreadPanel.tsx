@@ -1,3 +1,5 @@
+import { copyChatSelection } from '@/components/chat/chatSelectionClipboard';
+import { usePluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
 import { useProcessDisclosureScroll } from './useProcessDisclosureScroll';
 /**
  * 话题（Thread）面板：与主时间线同一套消息行（BotGroupTimelineItem）与密度规则——根消息、
@@ -190,6 +192,7 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
   resize?: ThreadPanelResize;
 }) {
   const { t, i18n } = useTranslation();
+  const pluginUi = usePluginUiMessageCandidates();
   const locale = i18n.language;
   const shareScope = `bot-group:${group.id}:thread:${rootId}`;
   const readLocatedMention = useReadLocatedMention(group.id);
@@ -629,6 +632,7 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
       : { key: 'post-to-main', label: t(key('thread.postToMain')), disabled: posting.has(message.id), icon: <MessageSquareShare size={14} strokeWidth={2} className="shrink-0" />, onSelect: () => void postToMain(message.id, false) };
     return (
       <BotGroupTimelineItem
+        pluginUi={pluginUi}
         message={message}
         continued={continued}
         authorName={authorName}
@@ -680,7 +684,7 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
               </Tip>
             ) : null}
         </>}>
-        <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-5 pb-4 pt-3"
+        <div ref={scrollRef} onCopy={copyChatSelection} className="min-h-0 flex-1 overflow-y-auto px-5 pb-4 pt-3"
           onClickCapture={processScroll.onClickCapture}
           onWheel={event => navigateTimeline(() => processScroll.onWheel(event))}
           onKeyDown={event => navigateTimeline(() => processScroll.onKeyDown(event))}

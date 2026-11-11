@@ -29,11 +29,12 @@ export function deviceOffersModel(
 export type ProviderShareRouteRejection =
   | 'REMOTE_AGENT_SHARE_PAUSED'
   | 'REMOTE_AGENT_SHARE_REMOVED'
-  | 'REMOTE_AGENT_SHARE_UNAVAILABLE';
+  | 'REMOTE_AGENT_SHARE_UNAVAILABLE'
+  | 'REMOTE_AGENT_SHARE_LEGACY_DISABLED';
 
 export type DeviceRouteRejection = 'unreachable' | 'not-offered' | ProviderShareRouteRejection;
 
-const SHARE_REJECTION = /^\[(REMOTE_AGENT_SHARE_(?:PAUSED|REMOVED|UNAVAILABLE))\]/;
+const SHARE_REJECTION = /^\[(REMOTE_AGENT_SHARE_(?:PAUSED|REMOVED|UNAVAILABLE|LEGACY_DISABLED))\]/;
 
 /**
  * 读那台的目录并判定。目录读不到(离线、未授权远控、旧版本) = unreachable；

@@ -16,7 +16,7 @@ vi.mock('../../textClipboard.js', () => ({ rememberIssuedClipboardText: clipboar
 vi.mock('../../authManager.js', () => ({ getAuthState: () => ({ isAuthenticated: true }), getDeviceId: () => 'host-device' }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn(), info: vi.fn() }) }));
 vi.mock('../../maker-host/remote-provider-access-store.js', () => ({ isRemoteProviderInvocationAllowed: () => true }));
-vi.mock('../settings-store.js', () => ({ readDeviceLinkSettings: () => ({ remoteControlEnabled: true }) }));
+vi.mock('../settings-store.desktop.js', () => ({ readDeviceLinkSettings: () => ({ remoteControlEnabled: true }) }));
 vi.mock('../providerShareApi.js', () => ({
   providerShareOwnerKey: () => state.scope,
   providerShareApi: { listOwned: async () => state.owned },

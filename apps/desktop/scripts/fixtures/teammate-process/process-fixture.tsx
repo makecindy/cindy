@@ -1,3 +1,4 @@
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
 import { BotAvatar } from '../../../src/renderer/features/bots/BotAvatar';
 import { ThreadPanel } from '../../../src/renderer/features/bots/ThreadPanel';
 import { useState } from 'react';
@@ -88,7 +89,7 @@ function RefreshingProcess({ running }: { running: boolean }) {
       <Button data-testid="refresh-end" onClick={() => setLoading(false)}>Finish loading</Button>
       <Button data-testid="refresh-fail" onClick={() => { setLoading(false); setFailed(true); }}>Fail loading</Button>
     </div>
-    <WorkGroupBlock journal blockId="refreshing-process" isStreaming={running} durationMs={25000}
+    <WorkGroupBlock pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} journal blockId="refreshing-process" isStreaming={running} durationMs={25000}
       childItems={[{ kind: 'rendered', key: 'note', renderNode: () => <p>正在核对任务进展。</p> }]}
       deferred={{ key: 'details', expanded: true, loading, failed,
         toggle: () => undefined, retry: () => { setFailed(false); setLoading(true); } }} />

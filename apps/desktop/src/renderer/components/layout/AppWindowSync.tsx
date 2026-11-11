@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { useAppShellCover } from '@/contexts/AppShellCoverContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { startBotReadStateSync } from '@/features/bots/botReadState';
@@ -22,6 +23,7 @@ function ReadyAppWindowSync() {
 
 export function AppWindowSync() {
   const { canEnterApp, dataOwnerId } = useAuth();
-  if (!canEnterApp || !dataOwnerId || isSidebarWindow()) return null;
+  const { localDbGateStatus } = useAppShellCover();
+  if (!canEnterApp || !dataOwnerId || localDbGateStatus !== 'ready' || isSidebarWindow()) return null;
   return <ReadyAppWindowSync />;
 }

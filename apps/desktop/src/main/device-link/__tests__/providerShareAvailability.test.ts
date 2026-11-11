@@ -9,11 +9,11 @@ const f = vi.hoisted(() => ({
   members: [] as any[], leases: [] as any[],
 }));
 vi.mock('electron', () => ({ net: { fetch: (...args: any[]) => f.netFetch(...args) } }));
-vi.mock('../../i18n.js', () => ({ getResolvedMainLocale: () => 'zh-CN' }));
+vi.mock('../../i18n.desktop.js', () => ({ getResolvedMainLocale: () => 'zh-CN' }));
 vi.mock('../../logger.js', () => ({ createLogger: () => f.log }));
 vi.mock('../../authManager.js', () => ({ getDeviceId: () => f.self, getAccessToken: () => null }));
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => f.endpoint }));
-vi.mock('../../serverApiClient.js', () => ({ serverApiFetch: (...args: any[]) => f.request(...args) }));
+vi.mock('../../serverApiClient.desktop.js', () => ({ serverApiFetch: (...args: any[]) => f.request(...args) }));
 vi.mock('../../provider-group/managementScope.js', () => ({ captureProviderManagementScope: () => {
   const scope = f.scope; return () => { if (scope !== f.scope) throw new Error('account changed'); };
 } }));
@@ -26,7 +26,7 @@ vi.mock('../../provider-group/runtime.js', () => ({ getProviderGroupDirectory: (
 vi.mock('../../maker-host/remote-provider-access-store.js', () => ({ isRemoteProviderInvocationAllowed: () => true }));
 vi.mock('../../maker-host/createDesktopProviderService.js', () => ({ getDesktopProviderService: () => ({ listProviders: async () => [{ id: 'group', connected: f.connected, models: { codex: [{ id: 'allowed' }] } }] }) }));
 vi.mock('../remoteModelAccess.js', () => ({ remoteModelAccess: { allowsDelegatedExecution: (_p: string, model: string) => !f.budget && model === 'allowed' } }));
-vi.mock('../settings-store.js', () => ({ readDeviceLinkSettings: () => ({ remoteControlEnabled: f.remote, disabledControlDeviceIds: [], revokedControllers: [] }) }));
+vi.mock('../settings-store.desktop.js', () => ({ readDeviceLinkSettings: () => ({ remoteControlEnabled: f.remote, disabledControlDeviceIds: [], revokedControllers: [] }) }));
 vi.mock('../providerShareCrossRegion.js', () => ({ isCrossRegionShare: () => false }));
 vi.mock('../providerShareGuest.js', () => ({ findReceivedShare: () => ({ standbyOnline: true }) }));
 vi.mock('../providerShareDelegatedAccess.js', () => ({ applyProviderShareDelegation: (...args: any[]) => f.apply(...args), delegatedProviderShareLeases: () => f.leases,
@@ -38,7 +38,7 @@ import { publishShareAvailability, prepareShareAvailability, allocateShareAvaila
 import { readDeviceProviderCatalog, readRemoteProviderRoute } from '../../remote-agent/controller/deviceCatalog.js';
 import { remoteAgentProviders } from '../../../renderer/components/new-chat/unifiedModelSelection.js';
 vi.mock('../../device-link', () => ({ remoteBackgroundInvoke: (...args: unknown[]) => f.invoke(...args) }));
-const realApi = await vi.importActual<typeof import('../../serverApiClient.js')>('../../serverApiClient.js');
+const realApi = await vi.importActual<typeof import('../../serverApiClient.desktop.js')>('../../serverApiClient.desktop.js');
 const realDelegation = await vi.importActual<typeof import('../providerShareDelegatedAccess.js')>('../providerShareDelegatedAccess.js');
 let dir: string;
 const model = { id: 'allowed', name: 'Fake model', contextWindow: 200000, efforts: ['high'], defaultEffort: 'high' };
@@ -152,11 +152,14 @@ describe('standby client production entry points (all identities/providers are l
     await f.usage.acknowledgeDirectCleanup(f.usage.listPendingDirectCleanup('owner')[0]);
     expect(await published()).toEqual([{ memberId: 'member', joinedAt: Date.parse(updated.members[0].joinedAt), models: ['allowed'] }]);
   });
-  it('publishes local provider mapping and exact model permission without credentials', async () => {
+  // #9501 unit: publish the executor's effective window using the existing wire
+  // field; prior coverage only had a default and missed advanced-settings overrides.
+  it.each([undefined, 1_000_000])('publishes local provider mapping with source budget %s and exact permission', async (limit) => {
+    f.members[0].view.models.codex[0] = { ...model, contextWindowOverride: limit };
     await publishShareAvailability([owned]);
     const body = f.request.mock.calls.find(([path]) => path.endsWith('/publish'))![1].body.policy;
     expect(body).toMatchObject({ revision: 5, allowFast: false, fastRevision: 7,
-      executors: [{ deviceId: 'standby', providerId: 'local', limit: 2, models: [{ ...model, kind: 'codex' }] }],
+      executors: [{ deviceId: 'standby', providerId: 'local', limit: 2, models: [{ ...model, contextWindow: limit ?? model.contextWindow, kind: 'codex' }] }],
       members: [{ memberId: 'member', models: ['allowed'] }] });
     expect(f.remember).toHaveBeenCalledWith('share', 'group');
   });

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { PluginMarketApi } from '../api';
+import { PluginMarketApi, PluginMarketEndpointUnsupportedError } from '../api';
 
 const logger = vi.hoisted(() => ({
   warn: vi.fn(),
@@ -10,7 +10,7 @@ const serverApi = vi.hoisted(() => ({ serverApiFetch: vi.fn() }));
 vi.mock('../../logger.js', () => ({
   createLogger: () => ({ info: vi.fn(), warn: logger.warn, error: vi.fn() }),
 }));
-vi.mock('../../serverApiClient.js', () => ({ serverApiFetch: serverApi.serverApiFetch }));
+vi.mock('../../serverApiClient.desktop.js', () => ({ serverApiFetch: serverApi.serverApiFetch }));
 vi.mock('../../clientEndpointsService.js', () => ({
   getClientEndpoint: () => 'https://plugins.example.com',
 }));
@@ -90,7 +90,99 @@ describe('PluginMarketApi 默认 fetcher 的日志隐私', () => {
   });
 });
 
+/** serverApiFetch 抛出的错误形状：脱敏后只剩 HTTP 状态与通用码。 */
+function httpError(status: number) {
+  return Object.assign(new Error(`请求失败 (${status})`), { code: status === 0 ? 'NETWORK_ERROR' : `HTTP_${status}`, statusCode: status });
+}
+
+/** 模拟尚未部署 v7.5 读取接口的旧 plugin-server。 */
+function legacyServer(plugins: unknown[], onUnknown: (path: string) => never = (path) => {
+  throw httpError(path === '/api/plugins/resolve' ? 404 : 400);
+}) {
+  const fetcher = vi.fn();
+  fetcher.mockImplementation(async (path: string) => {
+    if (path.startsWith('/api/plugins?')) return { schemaVersion: 2, plugins, nextCursor: null };
+    return onUnknown(path);
+  });
+  return fetcher;
+}
+
+describe('PluginMarketApi 旧服务端兼容', () => {
+  // unit：客户端 62588f5ff0 先于服务端 eb701e0d4 上线；旧服务端把 defaults 当插件 ID（400），没有 resolve（404）。
+  it('reads the full catalog when defaults, resolve and catalog do not exist, and remembers it', async () => {
+    const fetcher = legacyServer([summary(PLUGIN_A, 'alpha'), summary(PLUGIN_B, 'beta')]);
+    const api = new PluginMarketApi(fetcher, undefined, () => 'https://plugins.example.com', () => 0);
+    await expect(api.defaults()).rejects.toBeInstanceOf(PluginMarketEndpointUnsupportedError);
+
+    const resolved = await api.resolve([{ key: 'a', pluginId: PLUGIN_A }, { key: 'b', ghostId: 'beta', namespace: null },
+      { key: 'missing', ghostId: 'gamma', namespace: null }]);
+    expect(resolved.results.map(row => [row.key, row.status])).toEqual([['a', 'available'], ['b', 'available'], ['missing', 'unavailable']]);
+
+    const page = await api.catalog({ limit: 1 });
+    expect(page.plugins.map(plugin => plugin.id)).toEqual([PLUGIN_A]);
+    expect(page.counts?.all).toBe(2);
+    expect((await api.catalog({ limit: 1, cursor: page.nextCursor })).plugins.map(plugin => plugin.id)).toEqual([PLUGIN_B]);
+    // 记住旧服务端后不再逐个撞 404 / 400。
+    expect(fetcher.mock.calls.map(call => String(call[0])).filter(path => !path.startsWith('/api/plugins?')))
+      .toEqual(['/api/plugins/defaults?limit=100']);
+  });
+
+  it('falls back when only resolve is missing (404) and probes again after the memo expires', async () => {
+    let now = 0;
+    const fetcher = legacyServer([summary(PLUGIN_A, 'alpha')]);
+    const api = new PluginMarketApi(fetcher, undefined, () => 'https://plugins.example.com', () => now);
+    expect((await api.resolve([{ key: 'a', pluginId: PLUGIN_A }])).results[0]!.status).toBe('available');
+    now = 11 * 60_000;
+    await api.resolve([{ key: 'a', pluginId: PLUGIN_A }]);
+    expect(fetcher.mock.calls.filter(call => call[0] === '/api/plugins/resolve')).toHaveLength(2);
+  });
+
+  it('does not match an organization plugin with unknown namespace to a public target', async () => {
+    const org = { ...summary(PLUGIN_A, 'alpha'), scope: 'organization', organizationId: 'org-1' };
+    const api = new PluginMarketApi(legacyServer([org]), undefined, () => 'https://plugins.example.com', () => 0);
+    const resolved = await api.resolve([{ key: 'root', ghostId: 'alpha', namespace: null }]);
+    expect(resolved.results).toEqual([{ key: 'root', status: 'unavailable' }]);
+  });
+
+  it.each([0, 401, 403, 500, 503])('does not fall back on HTTP %i', async (status) => {
+    const fetcher = legacyServer([summary(PLUGIN_A, 'alpha')], () => { throw httpError(status); });
+    const api = new PluginMarketApi(fetcher);
+    await expect(api.defaults()).rejects.toMatchObject({ statusCode: status });
+    await expect(api.resolve([{ key: 'a', pluginId: PLUGIN_A }])).rejects.toMatchObject({ statusCode: status });
+    await expect(api.catalog()).rejects.toMatchObject({ statusCode: status });
+    expect(fetcher.mock.calls.some(call => String(call[0]).startsWith('/api/plugins?'))).toBe(false);
+  });
+
+  it('keeps a catalog 400 as an error when the server does have defaults', async () => {
+    const fetcher = vi.fn();
+    fetcher.mockImplementation(async (path: string) => {
+      if (path.startsWith('/api/plugins/defaults')) return { schemaVersion: 2, plugins: [], nextCursor: null };
+      throw httpError(400);
+    });
+    await expect(new PluginMarketApi(fetcher).catalog({ query: 'x' })).rejects.toMatchObject({ statusCode: 400 });
+    expect(fetcher.mock.calls.some(call => String(call[0]).startsWith('/api/plugins?'))).toBe(false);
+  });
+});
+
 describe('PluginMarketApi', () => {
+  // unit：v7.5 市场必须按页读取；旧 listAll 用例不能证明首屏不会追完整目录。
+  it('reads one catalog page and preserves complete query counts without following its cursor', async () => {
+    const fetcher = pagedFetcher({ plugins: [summary(PLUGIN_A, 'alpha')], nextCursor: 'next-page',
+      counts: { all: 200, public: 200, organization: 0, personal: 0 } });
+    const result = await new PluginMarketApi(fetcher).catalog({ query: 'alpha', limit: 12 });
+    expect(result.plugins).toHaveLength(1);
+    expect(result.counts?.all).toBe(200);
+    expect(result.nextCursor).toBe('next-page');
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher.mock.calls[0]![0]).toContain('/api/plugins/catalog?');
+  });
+
+  it('rejects incomplete target responses instead of interpreting them as missing installations', async () => {
+    const fetcher = pagedFetcher({ results: [], currentOrganization: null, removals: [] });
+    await expect(new PluginMarketApi(fetcher).resolve([{ key: 'installed', pluginId: PLUGIN_A }])).rejects.toThrow();
+    expect(fetcher.mock.calls[0]![0]).toBe('/api/plugins/resolve');
+  });
+
   it('paginates with opaque cursors and deduplicates repeated ids', async () => {
     const fetcher = pagedFetcher(
       { plugins: [summary(PLUGIN_A, 'alpha')], nextCursor: PLUGIN_A },

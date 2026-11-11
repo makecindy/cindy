@@ -5,7 +5,7 @@ import type { JSONContent } from '@tiptap/core';
 import { leadingSlashInvocation } from '@cindy/maker-shared';
 import type { InstalledGhost } from '../../../shared/ghost';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity';
-import { filterGhostsForWorkdir } from '@/cindy-brain/ghostWorkdirFilter';
+import { getWorkdirDisabledGhostIds, useWorkdirDisabledGhostIds } from '@/cindy-brain/ghostWorkdirFilter';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import {
   getDraft as getComposerDraft,
@@ -55,8 +55,9 @@ const SETUP_META_KEYS: Record<PluginSkillSetupState, string> = {
 export function pluginSkillSetupStates(
   installed: InstalledGhost[],
   workingDir: string | null,
+  disabled: ReadonlySet<string> = installed.length ? getWorkdirDisabledGhostIds(workingDir) : new Set(),
 ): ((typeof PLUGIN_SKILL_SETUPS)[number] & { state: PluginSkillSetupState })[] {
-  const usable = filterGhostsForWorkdir(installed, workingDir).filter((g) => g.enabled);
+  const usable = installed.filter((g) => g.enabled && !disabled.has(installedGhostStoragePart(g)));
   return PLUGIN_SKILL_SETUPS.flatMap((setup) => {
     const ghost = installed.find((g) => installedGhostStoragePart(g) === setup.ghostId);
     if (ghost && usable.includes(ghost)) return [];
@@ -73,7 +74,7 @@ export async function pluginSetupRoute(
   pluginId: string,
 ): Promise<string | null> {
   if (ghost) return `/plugins?ghost=${encodeURIComponent(installedGhostStoragePart(ghost))}`;
-  const market = await window.electronAPI.pluginMarket.snapshot();
+  const market = await window.electronAPI.pluginMarket.lookup([pluginId]);
   const matches = market.items.filter(
     (item) => item.ghostId === pluginId && item.installState !== 'conflict',
   );
@@ -134,10 +135,11 @@ export function usePluginSkillSetup(params: {
   const location = useLocation();
   const installed = useInstalledGhosts(enabled);
   const active = enabled && !!ownerId;
+  const disabled = useWorkdirDisabledGhostIds(workingDir, installed, active);
   const entries = useMemo(
     () =>
-      active
-        ? pluginSkillSetupStates(installed, workingDir).map(
+      active && disabled !== null
+        ? pluginSkillSetupStates(installed, workingDir, disabled).map(
             ({ skillName, descriptionKeys, state }) => ({
               skillName,
               description: t(descriptionKeys[state]),
@@ -146,7 +148,7 @@ export function usePluginSkillSetup(params: {
             }),
           )
         : [],
-    [active, installed, t, workingDir],
+    [active, disabled, installed, t, workingDir],
   );
 
   const mounted = useRef(true);
