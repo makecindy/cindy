@@ -23,7 +23,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import type { McpAppRecord, McpAppDocument } from '../../shared/mcpApps.js';
 import { hasExecutionComputerFile, MCP_APP_LINK_GRANT_MS, type McpAppLinkAuthorization } from '../../shared/mcpApps.js';
-import type { McpAppMessageGuard } from './message.js';
+import type { McpAppMessageGuard, McpAppMessageSource } from './message.js';
 import { AppConnection, sharedPluginConnection, type AppServerConfig } from './connection.js';
 import {
   appCsp,
@@ -49,15 +49,15 @@ export interface McpAppsHostDeps {
   readCard(sessionId: string, clientId: string): Promise<McpAppRecord>;
   writeCard(sessionId: string, clientId: string, record: McpAppRecord): Promise<void>;
   authorizeTool(
-    sessionId: string,
+    sessionId: string | null,
     tool: Tool,
     args: Record<string, unknown>,
     signal: AbortSignal,
-    source?: { clientId: string; serverId: string; title: string },
+    source?: { clientId: string; serverId: string; title: string; caller?: string },
   ): Promise<void>;
   sendMessage(
     sessionId: string,
-    record: McpAppRecord,
+    record: McpAppRecord | McpAppMessageSource,
     content: unknown[],
     assertCurrent: McpAppMessageGuard,
     files?: AgentInputSerializedFile[],
@@ -73,6 +73,23 @@ export interface McpAppModelContext {
   text: string;
   assertCurrent(): Promise<void>;
   consume(): void;
+}
+
+/** Main-owned authority for a declared resource opened independently of a tool. */
+export interface McpAppResourceBinding {
+  id: string;
+  title: string;
+  serverId: string;
+  serverRevision: string;
+  resourceUri: string;
+  assertCurrent(): void | Promise<void>;
+  /** Task lifetime is checked at open/operations, not on each pushed state update. */
+  assertOperation?(): Promise<void>;
+  projectContext?(context: McpUiHostContext): Record<string, unknown>;
+  /** A visible View owns its context source, independently of iframe reloads. */
+  observeContext?(changed: () => void, signal: AbortSignal): Promise<() => void>;
+  hostTools?: Tool[];
+  callHostTool?(name: string, args: Record<string, unknown>, signal: AbortSignal): Promise<CallToolResult>;
 }
 
 class ViewTransport implements Transport {
@@ -165,9 +182,12 @@ interface View {
   openId?: string;
   owner: object;
   caller: string;
-  sessionId: string;
+  sessionId: string | null;
   clientId: string;
-  record: McpAppRecord;
+  record?: McpAppRecord;
+  resourceBinding?: McpAppResourceBinding;
+  serverId: string;
+  serverRevision: string;
   connection: AppConnection;
   bridge: AppBridge;
   transport: ViewTransport;
@@ -181,6 +201,7 @@ interface View {
   context: McpUiHostContext;
   lastUsed: number;
   unlisten: (() => void)[];
+  stopContext?: () => void;
   links: Map<string, { url: string; claim: () => void; resolve: (success: boolean) => void }>;
 }
 
@@ -215,6 +236,7 @@ export class McpAppsHost {
       serverId: string;
       revision: string;
       value: unknown;
+      assertSource?: () => Promise<void>;
     }
   >();
   private readonly connectionIds = new WeakMap<AppConnection, string>();
@@ -229,6 +251,35 @@ export class McpAppsHost {
     const owner = this.deps.owner();
     if (!owner) throw new Error('MCP_APP_OWNER_UNAVAILABLE');
     return owner;
+  }
+
+  /** Native entries use the same policy, one-use ticket and original main.js runner. */
+  async callPluginAction(caller: string, sessionId: string | null, source: {
+    serverId: string; id: string; title: string; assertCurrent(): void | Promise<void>;
+  }, name: string, args: Record<string, unknown>, signal: AbortSignal): Promise<CallToolResult> {
+    const owner = this.captureOwner();
+    const assertCurrent = async () => {
+      signal.throwIfAborted();
+      if (owner !== this.deps.owner()) throw new Error('MCP_APP_OWNER_CHANGED');
+      await source.assertCurrent();
+    };
+    await assertCurrent();
+    const config = this.deps.config(source.serverId);
+    if (!config?.plugin) throw new Error('MCP_PLUGIN_UNAVAILABLE');
+    const connection = this.deps.connection?.(config) ?? sharedPluginConnection(config, owner);
+    const target = (await connection.tools(signal)).find(tool => tool.name === name && toolVisibleTo(tool, 'app'));
+    if (!target) throw new Error('MCP_APP_TOOL_NOT_VISIBLE');
+    await this.deps.authorizeTool(sessionId, target, args, signal, { caller, clientId: source.id,
+      serverId: config.id, title: source.title });
+    await assertCurrent();
+    const client = await connection.getClient(signal);
+    return withPluginPageTicket({ instance: config.plugin.instance, revision: config.plugin.revision,
+      sessionId, clientId: source.id, tool: name, assertCurrent }, async ticket => {
+      const result = await client.callTool({ name, arguments: args, _meta: { [PLUGIN_PAGE_TICKET]: ticket } },
+        CallToolResultSchema, { signal, timeout: GHOST_PIPE_CALL_MAX_TOTAL_MS });
+      await assertCurrent();
+      return result as CallToolResult;
+    });
   }
 
   assertOwner(owner: object): void {
@@ -263,6 +314,27 @@ export class McpAppsHost {
     hostContext: McpUiHostContext,
     openId?: string,
   ): Promise<McpAppDocument> {
+    return this.openSource(caller, sessionId, clientId, hostContext, openId);
+  }
+
+  async openResource(
+    caller: string,
+    sessionId: string | null,
+    binding: McpAppResourceBinding,
+    hostContext: McpUiHostContext,
+    openId?: string,
+  ): Promise<McpAppDocument> {
+    return this.openSource(caller, sessionId, binding.id, hostContext, openId, binding);
+  }
+
+  private async openSource(
+    caller: string,
+    sessionId: string | null,
+    clientId: string,
+    hostContext: McpUiHostContext,
+    openId?: string,
+    resourceBinding?: McpAppResourceBinding,
+  ): Promise<McpAppDocument> {
     const owner = this.captureOwner();
     const key = JSON.stringify([caller, sessionId, openId ?? randomUUID()]);
     this.pruneCancelledOpens();
@@ -278,7 +350,7 @@ export class McpAppsHost {
     });
     try {
       return await Promise.race([
-        this.openView(caller, sessionId, clientId, hostContext, pending.abort.signal, openId),
+        this.openView(caller, sessionId, clientId, hostContext, pending.abort.signal, openId, resourceBinding),
         cancelled,
       ]);
     } finally {
@@ -288,7 +360,7 @@ export class McpAppsHost {
     }
   }
 
-  async cancelOpen(caller: string, sessionId: string, openId: string): Promise<void> {
+  async cancelOpen(caller: string, sessionId: string | null, openId: string): Promise<void> {
     const key = JSON.stringify([caller, sessionId, openId]);
     this.pruneCancelledOpens();
     // Cancellation may win the IPC authorization race before open reaches Host.
@@ -330,11 +402,12 @@ export class McpAppsHost {
 
   private async openView(
     caller: string,
-    sessionId: string,
+    sessionId: string | null,
     clientId: string,
     hostContext: McpUiHostContext,
     signal: AbortSignal,
     openId?: string,
+    resourceBinding?: McpAppResourceBinding,
   ): Promise<McpAppDocument> {
     await this.sweep();
     signal.throwIfAborted();
@@ -345,23 +418,29 @@ export class McpAppsHost {
       (caller.startsWith('device:') ? 4 : 16)
     )
       throw new Error('MCP_APP_VIEW_LIMIT');
-    let record = await this.deps.readCard(sessionId, clientId);
+    if (!resourceBinding && sessionId === null) throw new Error('MCP_APP_SESSION_UNAVAILABLE');
+    let record = resourceBinding ? undefined : await this.deps.readCard(sessionId!, clientId);
+    await resourceBinding?.assertCurrent();
+    await resourceBinding?.assertOperation?.();
     signal.throwIfAborted();
-    const config = this.deps.config(record.serverId);
-    if (!config || this.serverRevision(config) !== record.serverRevision)
+    const serverId = resourceBinding?.serverId ?? record!.serverId;
+    const serverRevision = resourceBinding?.serverRevision ?? record!.serverRevision;
+    const resourceUri = resourceBinding?.resourceUri ?? record!.resourceUri;
+    const config = this.deps.config(serverId);
+    if (!config || this.serverRevision(config) !== serverRevision)
       throw new Error('MCP_APP_SERVER_CHANGED');
-    config.plugin?.assertCurrent(sessionId);
+    config.plugin?.assertCurrent(sessionId ?? undefined);
     if (caller.startsWith('device:') && config.plugin && hasExecutionComputerFile(record))
       throw new Error('MCP_APP_FILES_LOCAL_ONLY');
-    const connectionId = (record as McpAppRecord & { connectionId?: string }).connectionId;
+    const connectionId = record?.connectionId;
     const registered = connectionId ? this.connections.get(connectionId) : undefined;
     const detached = !registered || registered.owner !== owner || registered.connection.isClosed;
     // An unknown connection belongs to a previous Host lifetime. Its original
     // call cannot finish here, and replaying it could repeat a side effect.
     // Persist the terminal state before reconnecting, even if loading later fails.
-    if (!registered && !record.result && !record.cancelled) {
+    if (record && !registered && !record.result && !record.cancelled) {
       record = { ...record, cancelled: 'Tool execution interrupted before completion' };
-      await this.updateResult(sessionId, clientId, record, owner);
+      await this.updateResult(sessionId!, clientId, record, owner);
       signal.throwIfAborted();
     }
     const connection =
@@ -370,15 +449,17 @@ export class McpAppsHost {
         : (this.deps.connection?.(config) ?? (config.plugin ? sharedPluginConnection(config, owner) : new AppConnection(config)));
     const registeredId = this.registerConnection(connection, owner);
     if (detached) this.connections.get(registeredId)!.retired = true;
+    let stopContext: (() => void) | undefined;
+    let liveView: View | undefined;
     try {
       const client = await connection.getClient();
       signal.throwIfAborted();
-      const tool = (await connection.tools(signal)).find((item) => item.name === record.tool.name);
-      if (!tool || uiToolUri(tool) !== record.resourceUri)
+      const tool = record ? (await connection.tools(signal)).find((item) => item.name === record!.tool.name) : undefined;
+      if (record && (!tool || uiToolUri(tool) !== resourceUri))
         throw new Error('MCP_APP_TOOL_UNAVAILABLE');
-      const loaded = await connection.resource(record.resourceUri, signal);
+      const loaded = await connection.resource(resourceUri, signal);
       signal.throwIfAborted();
-      const resource = readAppResource(loaded.result, record.resourceUri, loaded.meta);
+      const resource = readAppResource(loaded.result, resourceUri, loaded.meta);
       const policy = appCsp(resource.meta);
       if (config.plugin) {
         const allowed = new Set(config.plugin.domains);
@@ -388,8 +469,9 @@ export class McpAppsHost {
             if (!allowed.has(domain)) throw new Error('MCP_PLUGIN_CSP_DOMAIN_NOT_DECLARED');
           }
         }
-        config.plugin.assertCurrent(sessionId);
+        config.plugin.assertCurrent(sessionId ?? undefined);
       }
+      await resourceBinding?.assertCurrent();
       if (owner !== this.deps.owner()) throw new Error('MCP_APP_OWNER_CHANGED');
       // Recheck after async resource loading so simultaneous opens share the limit.
       if (
@@ -416,9 +498,16 @@ export class McpAppsHost {
         createLogger('mcp-apps').warn('Host SDK omitted: page fits the remote budget, but page plus SDK exceeds it; bare SDK imports will fail in this View');
       }
       const transport = new ViewTransport(remote ? MCP_APPS_MAX_REMOTE_BYTES : MCP_APPS_MAX_BYTES, !remote || !config.plugin);
+      stopContext = await resourceBinding?.observeContext?.(() => {
+        if (liveView && this.views.get(viewId) === liveView)
+          this.context(caller, sessionId, viewId, { cindy: liveView.context.cindy });
+      }, signal);
+      signal.throwIfAborted();
+      const { toolInfo: _untrustedToolInfo, cindy: _untrustedCindy, ...environmentContext } = hostContext;
       const context: McpUiHostContext = {
-        ...hostContext,
-        toolInfo: { tool, id: clientId },
+        ...environmentContext,
+        ...(resourceBinding?.projectContext ? { cindy: resourceBinding.projectContext(hostContext) } : {}),
+        ...(tool ? { toolInfo: { tool, id: clientId } } : {}),
         displayMode: 'inline',
         availableDisplayModes:
           hostContext.platform === 'mobile' ? ['inline'] : ['inline', 'fullscreen'],
@@ -430,15 +519,15 @@ export class McpAppsHost {
         {
           openLinks: {},
           ...(!remote && config.plugin && this.deps.downloadFile ? { downloadFile: {} } : {}),
-          ...(capabilities?.tools
-            ? { serverTools: { listChanged: capabilities.tools.listChanged } }
+          ...(capabilities?.tools || resourceBinding?.hostTools?.length
+            ? { serverTools: { listChanged: capabilities?.tools?.listChanged } }
             : {}),
           ...(capabilities?.resources
             ? { serverResources: { listChanged: capabilities.resources.listChanged } }
             : {}),
           logging: {},
-          message: { text: {}, resourceLink: {} },
-          updateModelContext: { text: {}, structuredContent: {} },
+          ...(sessionId !== null ? { message: { text: {}, resourceLink: {} },
+            updateModelContext: { text: {}, structuredContent: {} } } : {}),
           sandbox: { permissions: {}, csp: policy.csp },
         },
         { hostContext: currentContext },
@@ -451,6 +540,9 @@ export class McpAppsHost {
         sessionId,
         clientId,
         record,
+        resourceBinding,
+        serverId,
+        serverRevision,
         connection,
         bridge,
         transport,
@@ -477,9 +569,12 @@ export class McpAppsHost {
         resultSent: false,
         lastUsed: Date.now(),
         unlisten: [],
+        stopContext,
         links: new Map(),
       };
       this.views.set(viewId, view);
+      liveView = view;
+      stopContext = undefined;
       if (!this.sweepTimer) {
         this.sweepTimer = setInterval(() => {
           void this.sweep().catch(() => {});
@@ -496,6 +591,7 @@ export class McpAppsHost {
         const assertCurrent = async () => {
           if (view.generation !== generation) throw new Error('MCP_APP_DOCUMENT_CHANGED');
           await assertView();
+          await resourceBinding?.assertOperation?.();
           if (view.generation !== generation) throw new Error('MCP_APP_DOCUMENT_CHANGED');
         };
         const scopedTransport: Transport = {
@@ -528,8 +624,8 @@ export class McpAppsHost {
           view.initialized = true;
           void assertCurrent()
             .then(async () => {
-              const attachments = (record.tool._meta as Record<string, unknown> | undefined)?.['cindy/attachments'];
-              if (!view.inputSent && view.files && attachments) {
+              const attachments = (record?.tool._meta as Record<string, unknown> | undefined)?.['cindy/attachments'];
+              if (!view.inputSent && view.files && attachments && tool) {
                 const projected = await view.files.project(attachments);
                 await assertCurrent();
                 view.context = { ...view.context, toolInfo: { tool: {
@@ -541,6 +637,7 @@ export class McpAppsHost {
             })
             .then(async () => {
               if (view.inputSent) return;
+              if (!record) return;
               const args = view.files ? await view.files.project(record.arguments) : record.arguments;
               await assertCurrent();
               view.inputSent = true;
@@ -556,12 +653,18 @@ export class McpAppsHost {
         };
         bridge.oncalltool = async (params, extra) => {
           await assertCurrent();
+          if (resourceBinding?.hostTools?.some(tool => tool.name === params.name)) {
+            if (!resourceBinding.callHostTool) throw new Error('MCP_APP_TOOL_UNAVAILABLE');
+            const result = await resourceBinding.callHostTool(params.name, params.arguments ?? {}, extra.signal);
+            await assertCurrent();
+            return result;
+          }
           const tools = await currentResult(connection.tools(extra.signal), extra.signal);
           const target = tools.find((item) => item.name === params.name);
           if (!target || !toolVisibleTo(target, 'app')) throw new Error('MCP_APP_TOOL_NOT_VISIBLE');
           // Page calls use the tool's normal policy regardless of how the script started.
           // The one-use ticket below binds identity; it does not grant approval.
-          await this.deps.authorizeTool(sessionId, target, params.arguments ?? {}, extra.signal, { clientId, serverId: record.serverId, title: record.tool.title ?? record.tool.name });
+          await this.deps.authorizeTool(sessionId, target, params.arguments ?? {}, extra.signal, { clientId, serverId, title: resourceBinding?.title ?? record!.tool.title ?? record!.tool.name, caller });
           const client = await currentClient(extra.signal);
           if (!config.plugin) {
             const token = params._meta?.progressToken;
@@ -643,7 +746,7 @@ export class McpAppsHost {
         bridge.setRequestHandler(ListToolsRequestSchema, async (_params, extra) => {
           await assertCurrent();
           const tools = await currentResult(connection.tools(extra.signal), extra.signal);
-          return { tools: tools.filter((item) => toolVisibleTo(item, 'app')) };
+          return { tools: [...(resourceBinding?.hostTools ?? []), ...tools.filter((item) => toolVisibleTo(item, 'app') && !resourceBinding?.hostTools?.some(hostTool => hostTool.name === item.name))] };
         });
         bridge.onreadresource = async (params, extra) => {
           const client = await currentClient(extra.signal);
@@ -666,6 +769,7 @@ export class McpAppsHost {
         };
         bridge.onmessage = async (params) => {
           await assertCurrent();
+          if (sessionId === null) throw new Error('MCP_APP_TASK_REQUIRED');
           const content = Array.isArray(params.content) ? params.content : [params.content];
           if (content.some((block) => block.type !== 'text' && block.type !== 'resource_link'))
             throw new Error('MCP_APP_MESSAGE_CONTENT_UNSUPPORTED');
@@ -688,8 +792,9 @@ export class McpAppsHost {
             for (const file of files) await view.files!.describeGranted(file.url!);
             await (accepted ? assertView() : assertCurrent());
           };
-          if (files.length) await this.deps.sendMessage(sessionId, record, content, assertMessageCurrent, files);
-          else await this.deps.sendMessage(sessionId, record, content, assertMessageCurrent);
+          const source = record ?? { serverId, title: resourceBinding!.title };
+          if (files.length) await this.deps.sendMessage(sessionId, source, content, assertMessageCurrent, files);
+          else await this.deps.sendMessage(sessionId, source, content, assertMessageCurrent);
           accepted = true;
           return {};
         };
@@ -713,6 +818,7 @@ export class McpAppsHost {
         };
         bridge.onupdatemodelcontext = async (params) => {
           await assertCurrent();
+          if (sessionId === null) throw new Error('MCP_APP_TASK_REQUIRED');
           if (Buffer.byteLength(JSON.stringify(params), 'utf8') > 128_000)
             throw new Error('MCP_APP_CONTEXT_TOO_LARGE');
           const { content, structuredContent } = params;
@@ -725,8 +831,8 @@ export class McpAppsHost {
             await assertCurrent();
           }
           const next = {
-            app: record.serverId,
-            resourceUri: record.resourceUri,
+            app: serverId,
+            resourceUri,
             content,
             structuredContent,
           };
@@ -754,8 +860,9 @@ export class McpAppsHost {
             owner,
             sessionId,
             clientId,
-            serverId: record.serverId,
-            revision: record.serverRevision,
+            serverId,
+            revision: serverRevision,
+            ...(resourceBinding ? { assertSource: async () => { await resourceBinding.assertCurrent(); await resourceBinding.assertOperation?.(); } } : {}),
             value: next,
           });
           return {};
@@ -820,25 +927,33 @@ export class McpAppsHost {
         await (view.documentReady = connectDocument(bridge));
         // Register before rereading: tool completion during loading must reach this
         // View, and a clear or configuration change must prevent publishing it.
-        const latest = await this.deps.readCard(sessionId, clientId);
+        if (resourceBinding) {
+          await resourceBinding.assertCurrent();
+          await resourceBinding.assertOperation?.();
+          signal.throwIfAborted();
+          this.view(caller, sessionId, viewId);
+          return document;
+        }
+        const latest = await this.deps.readCard(sessionId!, clientId);
         signal.throwIfAborted();
         this.view(caller, sessionId, viewId);
         if (
-          latest.serverId !== record.serverId ||
-          latest.serverRevision !== record.serverRevision ||
-          latest.resourceUri !== record.resourceUri ||
-          latest.tool.name !== record.tool.name
+          latest.serverId !== record!.serverId ||
+          latest.serverRevision !== record!.serverRevision ||
+          latest.resourceUri !== record!.resourceUri ||
+          latest.tool.name !== record!.tool.name
         )
           throw new Error('MCP_APP_CARD_UNAVAILABLE');
         // A completion delivered while the database read was pending is newer
         // than that read's snapshot; never replace it with an unfinished record.
-        if (!view.record.result && !view.record.cancelled) view.record = latest;
+        if (view.record && !view.record.result && !view.record.cancelled) view.record = latest;
       } catch (error) {
         await this.disposeView(viewId, view);
         throw error;
       }
       return document;
     } catch (error) {
+      stopContext?.();
       if (detached) await this.releaseConnection(connection).catch(() => {});
       throw error;
     }
@@ -856,7 +971,7 @@ export class McpAppsHost {
       await this.deps.writeCard(sessionId, clientId, record);
       this.assertOwner(owner);
       for (const [id, view] of this.views)
-        if (view.owner === owner && view.sessionId === sessionId && view.clientId === clientId) {
+        if (view.record && view.owner === owner && view.sessionId === sessionId && view.clientId === clientId) {
           view.record = record;
           if (view.inputSent) await this.sendResult(id, view);
         }
@@ -867,7 +982,7 @@ export class McpAppsHost {
         [...this.views]
           .filter(
             ([, view]) =>
-              view.owner === owner && view.sessionId === sessionId && view.clientId === clientId,
+              !!view.record && view.owner === owner && view.sessionId === sessionId && view.clientId === clientId,
           )
           .map(([id, view]) => this.disposeView(id, view)),
       );
@@ -875,12 +990,18 @@ export class McpAppsHost {
     }
   }
 
-  async assertViewAuthorized(caller: string, sessionId: string, id: string): Promise<void> {
+  async assertViewAuthorized(caller: string, sessionId: string | null, id: string): Promise<void> {
     await this.assertCurrentView(id, this.view(caller, sessionId, id));
   }
 
   private async assertCurrentView(id: string, view: View): Promise<void> {
     this.view(view.caller, view.sessionId, id);
+    if (view.resourceBinding) {
+      await view.resourceBinding.assertCurrent();
+      this.view(view.caller, view.sessionId, id);
+      return;
+    }
+    if (!view.record || view.sessionId === null) throw new Error('MCP_APP_SOURCE_UNAVAILABLE');
     const latest = await this.deps.readCard(view.sessionId, view.clientId);
     this.view(view.caller, view.sessionId, id);
     if (
@@ -901,7 +1022,7 @@ export class McpAppsHost {
   }
 
   private async sendResult(id: string, view: View): Promise<void> {
-    if (!view.initialized || view.resultSent || (!view.record.result && !view.record.cancelled)) return;
+    if (!view.record || !view.initialized || view.resultSent || (!view.record.result && !view.record.cancelled)) return;
     const generation = view.generation;
     const bridge = view.bridge;
     try {
@@ -930,7 +1051,7 @@ export class McpAppsHost {
     }
   }
 
-  private view(caller: string, sessionId: string, id: string): View {
+  private view(caller: string, sessionId: string | null, id: string): View {
     const view = this.views.get(id);
     if (
       !view ||
@@ -939,15 +1060,15 @@ export class McpAppsHost {
       view.owner !== this.deps.owner()
     )
       throw new Error('MCP_APP_VIEW_UNAVAILABLE');
-    const config = this.deps.config(view.record.serverId);
-    if (!config || this.serverRevision(config) !== view.record.serverRevision)
+    const config = this.deps.config(view.serverId);
+    if (!config || this.serverRevision(config) !== view.serverRevision)
       throw new Error('MCP_APP_SERVER_CHANGED');
-    config.plugin?.assertCurrent(sessionId);
+    config.plugin?.assertCurrent(sessionId ?? undefined);
     view.lastUsed = Date.now();
     return view;
   }
 
-  async dispatch(caller: string, sessionId: string, id: string, input: unknown): Promise<void> {
+  async dispatch(caller: string, sessionId: string | null, id: string, input: unknown): Promise<void> {
     if (JSON.stringify(input).length > MCP_APPS_MAX_BYTES)
       throw new Error('MCP_APP_MESSAGE_TOO_LARGE');
     const view = this.view(caller, sessionId, id);
@@ -993,7 +1114,7 @@ export class McpAppsHost {
     view.documentTransport.onmessage?.(message);
   }
 
-  async poll(caller: string, sessionId: string, id: string, after: number) {
+  async poll(caller: string, sessionId: string | null, id: string, after: number) {
     if (!Number.isSafeInteger(after) || after < 0) throw new Error('MCP_APP_INVALID_CURSOR');
     const view = this.view(caller, sessionId, id);
     if (after > view.transport.seq) throw new Error('MCP_APP_INVALID_CURSOR');
@@ -1005,7 +1126,7 @@ export class McpAppsHost {
     return view.transport.currentEvents(events);
   }
 
-  context(caller: string, sessionId: string, id: string, patch: McpUiHostContext): void {
+  context(caller: string, sessionId: string | null, id: string, patch: McpUiHostContext): void {
     const view = this.view(caller, sessionId, id);
     const old = view.context;
     // Tool identity and granted capabilities are host-owned, never renderer overrides.
@@ -1021,13 +1142,15 @@ export class McpAppsHost {
     const update = Object.fromEntries(
       allowed.filter((key) => Object.hasOwn(patch, key)).map((key) => [key, patch[key]]),
     );
+    if (view.resourceBinding?.projectContext && Object.hasOwn(patch, 'cindy'))
+      update.cindy = view.resourceBinding.projectContext(patch);
     view.context = { ...old, ...update };
     if (view.initialized) view.bridge.setHostContext(view.context);
   }
 
   async authorizeLink(
     caller: string,
-    sessionId: string,
+    sessionId: string | null,
     id: string,
     linkId: string,
     url?: string,
@@ -1043,7 +1166,7 @@ export class McpAppsHost {
 
   linkResult(
     caller: string,
-    sessionId: string,
+    sessionId: string | null,
     id: string,
     linkId: string,
     success: boolean,
@@ -1053,7 +1176,7 @@ export class McpAppsHost {
 
   displayMode(
     caller: string,
-    sessionId: string,
+    sessionId: string | null,
     id: string,
     mode: 'inline' | 'fullscreen' | 'pip',
   ): void {
@@ -1070,7 +1193,7 @@ export class McpAppsHost {
 
   async teardown(
     caller: string,
-    sessionId: string,
+    sessionId: string | null,
     id: string,
     alreadyNotified = false,
   ): Promise<void> {
@@ -1095,6 +1218,7 @@ export class McpAppsHost {
       }
     }
     this.views.delete(id);
+    view.stopContext?.();
     view.files?.close();
     if (!this.views.size) {
       clearInterval(this.sweepTimer);
@@ -1116,14 +1240,13 @@ export class McpAppsHost {
       let current = false;
       if (item.owner === this.deps.owner()) {
         try {
-          const card = await this.deps.readCard(item.sessionId, item.clientId);
+          const card = item.assertSource ? (await item.assertSource(), undefined) : await this.deps.readCard(item.sessionId, item.clientId);
           const config = this.deps.config(item.serverId);
           current =
             item.owner === this.deps.owner() &&
             !!config &&
             this.serverRevision(config) === item.revision &&
-            card.serverId === item.serverId &&
-            card.serverRevision === item.revision;
+            (!card || card.serverId === item.serverId && card.serverRevision === item.revision);
         } catch {
           // Unavailable cards cannot contribute model context.
         }
@@ -1137,7 +1260,7 @@ export class McpAppsHost {
     const owner = this.deps.owner();
     const empty: McpAppModelContext = { text: '', async assertCurrent() {}, consume() {} };
     const values: unknown[] = [];
-    const captured: Array<{ clientId: string; serverId: string; revision: string }> = [];
+    const captured: Array<{ clientId: string; serverId: string; revision: string; assertSource?: () => Promise<void> }> = [];
     const removals: Array<() => void> = [];
     for (const [key, item] of [...this.contexts]) {
       if (item.owner !== owner || item.sessionId !== sessionId) continue;
@@ -1146,13 +1269,13 @@ export class McpAppsHost {
         if (this.contexts.get(key) === item) this.contexts.delete(key);
       };
       try {
-        const card = await this.deps.readCard(sessionId, item.clientId);
+        const card = item.assertSource ? (await item.assertSource(), undefined) : await this.deps.readCard(sessionId, item.clientId);
         const config = this.deps.config(item.serverId);
         if (owner !== this.deps.owner()) return empty;
         if (
           !config ||
           this.serverRevision(config) !== item.revision ||
-          card.serverRevision !== item.revision
+          (card && card.serverRevision !== item.revision)
         ) {
           remove();
           continue;
@@ -1174,7 +1297,7 @@ export class McpAppsHost {
       assertCurrent: async () => {
         if (owner !== this.deps.owner()) throw new Error('MCP_APP_OWNER_CHANGED');
         const cards = await Promise.all(
-          captured.map((item) => this.deps.readCard(sessionId, item.clientId)),
+          captured.map(async (item) => item.assertSource ? (await item.assertSource(), undefined) : this.deps.readCard(sessionId, item.clientId)),
         );
         if (owner !== this.deps.owner()) throw new Error('MCP_APP_OWNER_CHANGED');
         for (const [index, item] of captured.entries()) {
@@ -1182,7 +1305,7 @@ export class McpAppsHost {
           if (
             !config ||
             this.serverRevision(config) !== item.revision ||
-            cards[index].serverRevision !== item.revision
+            (cards[index] && cards[index]!.serverRevision !== item.revision)
           )
             throw new Error('MCP_APP_SERVER_CHANGED');
         }
@@ -1206,7 +1329,7 @@ export class McpAppsHost {
   async revokePluginServers(ids: ReadonlySet<string>): Promise<void> {
     pagePermissionGrants.clearServers(ids);
     const closing: Promise<unknown>[] = [];
-    for (const [id, view] of this.views) if (ids.has(view.record.serverId)) closing.push(this.disposeView(id, view, true));
+    for (const [id, view] of this.views) if (ids.has(view.serverId)) closing.push(this.disposeView(id, view, true));
     for (const [id, entry] of this.connections) if (ids.has(entry.connection.config.id)) {
       closing.push(entry.connection.close().then(() => { this.connections.delete(id); }));
     }
@@ -1241,11 +1364,11 @@ export class McpAppsHost {
 
   private async sweep(): Promise<void> {
     for (const [id, view] of this.views) {
-      const config = this.deps.config(view.record.serverId);
+      const config = this.deps.config(view.serverId);
       if (
         view.owner !== this.deps.owner() ||
         !config ||
-        this.serverRevision(config) !== view.record.serverRevision ||
+        this.serverRevision(config) !== view.serverRevision ||
         Date.now() - view.lastUsed > 60_000
       )
         await this.disposeView(id, view, true);

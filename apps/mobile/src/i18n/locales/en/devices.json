@@ -621,8 +621,6 @@
       "minutes": "{{n}} min",
       "hoursMinutes": "{{h}} h {{m}} min"
     },
-    "retrying": "Hasn't started yet — retrying…",
-    "stopTask": "Stop task",
     "actionFailed": "Unable to load or complete this action",
     "messages": "Messages",
     "readOnly": "Read only",
@@ -760,8 +758,6 @@
     "artifactsEmpty": "No artifacts yet. Ask your teammate to create something.",
     "openSourceTask": "Open Source Session",
     "modelFollowsDefault": "Follow the default model chain",
-    "taskModel": "Task Model",
-    "taskInheritsPrimary": "Inherit Primary Model",
     "modelOverride": "Using this teammate’s own model chain",
     "modelsUnavailable": "No usable models. Check this teammate’s model settings on your computer, then refresh.",
     "artifactsRecovery": "Open files from the message cards, or browse them on {{deviceName}}.",
@@ -867,7 +863,6 @@
   },
   "glance": {
     "open": "{{name}} at a glance",
-    "dueUnseen": "A todo is due",
     "computers": "Computers",
     "runningHere": "Running here",
     "online": "Online",
@@ -875,37 +870,16 @@
     "current": "Current",
     "offlineCount_one": "{{count}} offline",
     "offlineCount_other": "{{count}} offline",
-    "todos": "Todos",
     "showMore": "Show more",
     "showLess": "Show less",
     "doneCount_one": "{{count}} done",
     "doneCount_other": "{{count}} done",
-    "delete": "Delete",
-    "deleted": "Deleted. It won't be added again.",
-    "undo": "Undo",
-    "undoFailed": "Couldn't undo. Try again.",
-    "deleteFailed": "Couldn't delete. Try again.",
-    "check": "Check for me",
     "checkMeta": "Look for new todos in connected mail and chats",
-    "checkPrompt": "Check my connected sources, like mail and messages, for anything new I need to handle, and add it to my todos.",
-    "dailyCheck": "Check every day",
-    "dailyCheckMeta": "Weekdays at 9:00, quiet when nothing is new",
     "recentTasks": "Recent tasks",
     "unread": "Unread result",
-    "stopDailyCheck": "Stop daily checking",
     "openFailed": "Couldn’t open this link",
-    "dailyCheckFailed": "Couldn't save. Try again.",
-    "loadFailed": "Couldn't load todos",
     "outputs": "Outputs",
-    "outputMeta": "{{time}} · {{task}}",
-    "source": {
-      "conversation": "You asked",
-      "mail": "From email",
-      "feishu": "From Feishu",
-      "github": "From GitHub",
-      "community": "From the community",
-      "task": "From a task"
-    }
+    "outputMeta": "{{time}} · {{task}}"
   },
   "cloudCompanion": {
     "homeOffline": "Main computer “{{device}}” is offline",
@@ -928,6 +902,8 @@
     "moveTo": "Move to “{{device}}”",
     "moveTitle": "Run {{name}} on “{{device}}”?",
     "moveDescription": "From now on {{name}} runs on “{{device}}”, and the chat history comes along. Working directories, connections and local files stay on the computer they are on.",
+    "olderTarget": "Older Cindy",
+    "olderTargetNote": "“{{device}}” runs an older Cindy, so {{name}} works the older way there: the chat history still syncs, but project rules and automations don’t apply there.",
     "moveAction": "Move to “{{device}}”",
     "moving": "Moving {{name}} to “{{device}}”…",
     "busyTitle": "{{name}} is still replying",
@@ -996,5 +972,8 @@
       "disk-full": "Couldn’t import: not enough disk space",
       "native-unloadable": "Couldn’t import: the original history can’t be loaded"
     }
+  },
+  "liveActivity": {
+    "waitingForUpdate": "Waiting for update"
   }
 }

@@ -79,13 +79,13 @@ vi.mock('../claude-native-connection.js', () => ({
       : null;
   },
 }));
-vi.mock('../claude-native-cli.js', () => ({
+vi.mock('../claude-native-cli.desktop.js', () => ({
   readClaudeCliLoginStatus: async () => {
     h.readClaudeStatus();
     return { loggedIn: h.claudeCredentialPresent };
   },
 }));
-vi.mock('../grok-oauth-login.js', () => ({
+vi.mock('../grok-oauth-login.desktop.js', () => ({
   grokAccountIdentity: () => 'grok@example.test',
   hasGrokOAuthLoginUnbound: () => h.grokCredentialPresent,
   hasGrokOAuthLogin: () => h.grokCredentialPresent && isBoundToCurrentOwner('xai'),

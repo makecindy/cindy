@@ -46,7 +46,7 @@ import { isDefaultDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
 import { EMPTY_INPUT_PROJECTION, normalizeInputProjection } from '@/session/inputProjection';
 import { sortPendingInteractions } from '@/session/interactionModel';
-import { clearAskUserDraft } from '@/session/interactionDraftStore';
+import { clearAskUserDraft, clearIssueConfirmDraft, clearAllInteractionDrafts } from '@/session/interactionDraftStore';
 import { applySessionModelPrefPush } from '@/session/sessionModelMirror';
 import {
   createLatestWriteGuard,
@@ -262,8 +262,9 @@ const listMessageKeys = new Map<string, Set<string>>();
 const livePlanSnapshots = new Map<string, Map<string, LivePlanSnapshot>>();
 const pendingInteractions = new Map<string, PendingInteraction[]>();
 // Editing is local to the controller. It must not keep a provider turn alive.
-const protectedQuestions = new Map<string, PendingInteraction>();
-const visibleInteractionCache = new Map<string, { raw: PendingInteraction[]; protected?: PendingInteraction; result: PendingInteraction[] }>();
+// Every edited async question keeps its own snapshot; lists are replaced, never mutated, so the cache can compare identity.
+const protectedQuestions = new Map<string, PendingInteraction[]>();
+const visibleInteractionCache = new Map<string, { raw: PendingInteraction[]; protected?: PendingInteraction[]; result: PendingInteraction[] }>();
 /**
  * 这个会话的 pending 列表当前是不是**权威**的(来自被控端的一次全量快照)。
  *
@@ -5001,9 +5002,21 @@ export const remoteSessionStore = {
       const sessionId = readString(payload, 'sessionId');
       const requestId = readString(payload, 'requestId');
       if (sessionId && requestId && acceptSessionStateSource(sessionId, deviceId, sessionInteractionSources)) {
-        if (payload.reason === 'resolved' && !(isRecord(payload.decision) && payload.decision.dismissed === true)) {
-          this.confirmProtectedQuestion(sessionId, requestId);
+        if (payload.reason === 'question_withdrawn' && typeof payload.withdrawalReason === 'string') {
+          this.settleOptimisticInteractionDismiss(sessionId, requestId, { kind: 'confirmed' });
+          const retained = protectedQuestions.get(sessionId);
+          if (retained?.some((item) => item.request.requestId === requestId)) {
+            protectedQuestions.set(sessionId, retained.map((item) => item.request.requestId === requestId
+              ? { ...item, request: { ...item.request, withdrawalReason: payload.withdrawalReason as string } } : item));
+            visibleInteractionCache.delete(sessionId);
+            emit();
+          }
         }
+        if (payload.reason === 'resolved' || payload.reason === 'superseded' || payload.reason === 'session_closed') {
+          this.confirmProtectedQuestion(sessionId, requestId);
+          clearAskUserDraft(requestId);
+        }
+        clearIssueConfirmDraft(requestId);
         // 注意:这里**不**提前回收延长抑制条目——push 到达只说明被控端已确认,
         // 不排除仍有「决定提交前发出、此刻还在途」的旧 getPendingInteractions
         // 快照晚于本 push 返回(弱网高发);提前回收会让那份旧快照把已解决的卡
@@ -5531,6 +5544,7 @@ export const remoteSessionStore = {
   },
 
   clear(): void {
+    clearAllInteractionDrafts();
     clearRemoteHistoryViews();
     deviceSessionListMutationEpochFloor = ++nextDeviceSessionListMutationEpoch;
     deviceSessionListMutationEpochs.clear();
@@ -5813,21 +5827,25 @@ export const remoteSessionStore = {
 
   protectAsyncQuestion(sessionId: string, item: PendingInteraction): void {
     if (item.request.kind !== 'ask_user_question' || item.request.delivery !== 'async') return;
-    if (protectedQuestions.get(sessionId)?.request.requestId === item.request.requestId) return;
-    protectedQuestions.set(sessionId, { ...item, retainedDraft: true });
+    const retained = protectedQuestions.get(sessionId) ?? [];
+    if (retained.some((q) => q.request.requestId === item.request.requestId)) return;
+    protectedQuestions.set(sessionId, [...retained, { ...item, retainedDraft: true }]);
     emit();
   },
 
   releaseProtectedQuestion(sessionId: string, requestId: string): void {
-    if (protectedQuestions.get(sessionId)?.request.requestId !== requestId) return;
-    protectedQuestions.delete(sessionId);
+    const retained = protectedQuestions.get(sessionId);
+    if (!retained?.some((q) => q.request.requestId === requestId)) return;
+    const rest = retained.filter((q) => q.request.requestId !== requestId);
+    if (rest.length > 0) protectedQuestions.set(sessionId, rest);
+    else protectedQuestions.delete(sessionId);
     visibleInteractionCache.delete(sessionId);
     emit();
   },
 
   /** Both the resolve receipt and a resolved push complete the same draft. */
   confirmProtectedQuestion(sessionId: string, requestId: string): void {
-    if (protectedQuestions.get(sessionId)?.request.requestId !== requestId) return;
+    if (!protectedQuestions.get(sessionId)?.some((q) => q.request.requestId === requestId)) return;
     // Register the existing stale-snapshot suppression before publishing removal.
     this.settleOptimisticInteractionDismiss(sessionId, requestId, { kind: 'confirmed' });
     clearAskUserDraft(requestId);
@@ -5841,7 +5859,8 @@ export const remoteSessionStore = {
     if (!retained) return raw;
     const cached = visibleInteractionCache.get(sessionId);
     if (cached?.raw === raw && cached.protected === retained) return cached.result;
-    const result = [retained, ...raw.filter((item) => item.request.requestId !== retained.request.requestId)];
+    const kept = new Set(retained.map((item) => item.request.requestId));
+    const result = [...retained, ...raw.filter((item) => !kept.has(item.request.requestId))];
     visibleInteractionCache.set(sessionId, { raw, protected: retained, result });
     return result;
   },

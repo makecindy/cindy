@@ -3,6 +3,7 @@ import { isContinuationMessage } from '@cindy/maker-shared/synthetic-trigger';
 import { hasRichAnswer } from '@cindy/maker-shared/rich-answer';
 import { botTaskResultKey, readBotCollaborationMeta } from '@cindy/maker-shared/botCollaboration';
 import { HISTORY_GAP_SPLIT_MS } from '@/lib/historyGap';
+import { collectBotTurnContinuations } from '@cindy/maker-shared/botTimeline';
 import type { ChatMessage } from '@/lib/makerChatStore';
 import {
   isCompletedAssistantMessage,
@@ -14,6 +15,19 @@ import {
 } from '@/components/chat/messageWorkGroups';
 
 type WorkGroupItem = Extract<RenderItem, { type: 'work_group' }>;
+
+export function botTurnContinuations(items: readonly RenderItem[]): ReadonlySet<string> {
+  return collectBotTurnContinuations(items, item => ({
+    kind: item.type === 'work_group' ? 'process'
+      : item.type === 'message' ? item.message.role === 'assistant' && !item.message.systemCardType ? 'reply'
+        : ['bot-session-task', 'bot-session-task-result', 'bot-session-task-message', 'bot-direct-message']
+          .includes(item.message.systemCardType ?? '') ? 'artifact' : 'boundary'
+      : item.type === 'fork_origin' ? 'boundary' : 'artifact',
+    completed: isProse(item) && item.message.turnCompleted === true,
+    start: renderItemStartMs(item),
+    end: renderItemEndMs(item),
+  }));
+}
 
 function isProse(item: RenderItem): item is MessageRenderItem {
   return item.type === 'message' && item.message.role === 'assistant'

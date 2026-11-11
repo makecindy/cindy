@@ -15,6 +15,8 @@ export const DEVICE_LINK_INVOKE = {
   SET_DEVICE_CONTROL_ENABLED: 'device-link:set-device-control-enabled',
   /** 同账号设备列表(REST 经 main 转发,带 online/busy/开关三态) */
   LIST_DEVICES: 'device-link:list-devices',
+  /** 远程连接拓扑:本机已协商可靠链路的对端 + 数据路径 + RTT 快照(纯本机读,不进隧道) */
+  GET_PEER_LINKS: 'device-link:get-peer-links',
   /** 重命名设备 */
   RENAME_DEVICE: 'device-link:rename-device',
   /** 删除离线设备档案 */
@@ -36,6 +38,7 @@ export const DEVICE_LINK_INVOKE = {
   DISCONNECT_ALL: 'device-link:disconnect-all',
   /** 被控端:撤销某控制端的访问权限(逐设备黑名单,持久化) */
   REVOKE: 'device-link:revoke',
+  SET_MODEL_USE: 'device-link:set-model-use',
   /** 被控端:恢复某控制端的访问权限 */
   RESTORE: 'device-link:restore',
   // —— 控制端:远程会话镜像的本地冷缓存(见 main/device-link/mirrorCacheStore.ts)——
@@ -59,10 +62,14 @@ export const DEVICE_LINK_INVOKE = {
 
 /** main → renderer push */
 export const DEVICE_LINK_PUSH = {
+  /** Local setting changed through UI or native consent; never a remote grant. */
+  CONTROL_ENABLED_CHANGED: 'device-link:control-enabled-changed',
   /** Local peer recovery invalidates content readiness; payload: { deviceId }. Not a wire push. */
   PEER_LINK_RESET: 'device-link:peer-link-reset',
   /** Local recovery succeeded; payload: { deviceId }. Not a wire push. */
   PEER_LINK_REOPENED: 'device-link:peer-link-reopened',
+  /** 对端链路拓扑变化(建链 / 断链 / 直连↔relay),payload: DeviceLinkPeerLinksSnapshot(全量)。Not a wire push. */
+  PEER_LINKS_CHANGED: 'device-link:peer-links-changed',
   /** 同账号某设备 presence 变化(上线/下线/开关/busy),payload: PresenceSnapshot */
   PRESENCE_CHANGED: 'device-link:presence-changed',
   /** 本机 relay 连接状态变化,payload: { status: 'stopped'|'connecting'|'online' } */
@@ -164,6 +171,8 @@ export interface DeviceLinkState {
   controlledBy: ControlledByDevice[];
   /** 被撤销访问权限的控制端 deviceId 列表(逐设备黑名单,被控端 UI 渲染「已撤销」用) */
   revokedControllers: string[];
+  /** 单独关掉「用本机模型」的同账号电脑(仍可远程控制本机，但借不到本机的模型)。 */
+  modelUseRevokedControllers?: string[];
   /** 本机主动关闭控制的目标设备 deviceId 列表(控制端本地偏好)。 */
   disabledControlDeviceIds: string[];
   /**
@@ -188,4 +197,27 @@ export interface DeviceLinkDeviceView {
   /** 本机是否允许主动控制该目标设备(控制端本地偏好)。 */
   controlEnabled: boolean;
   isSelf: boolean;
+}
+
+/** 远程连接拓扑:一条已协商可靠链路的本机视角(镜像 @cindy/device-link 的 DeviceLinkPeerLinkSnapshot) */
+export type DeviceLinkPeerPath = 'direct' | 'relay';
+export interface DeviceLinkPeerLinkView {
+  deviceId: string;
+  /** Absent on old hosts; true only for a link carried by the authenticated V2 stream. */
+  encrypted?: boolean;
+  path: DeviceLinkPeerPath;
+  /** 可靠帧 ACK 的平滑往返;首个 ACK 之前为 null,闲置时是最近测得的值 */
+  rttMs: number | null;
+  /** link-open / link-accept 双向都已就绪 */
+  open: boolean;
+  /** 距本机最近一次发出业务消息多少毫秒(取快照时算);还没发过为 null */
+  sentAgoMs: number | null;
+  /** 距最近一次从对端收到业务消息多少毫秒;还没收到过为 null */
+  receivedAgoMs: number | null;
+}
+/** GET_PEER_LINKS 返回与 PEER_LINKS_CHANGED 推送的全量快照 */
+export interface DeviceLinkPeerLinksSnapshot {
+  links: DeviceLinkPeerLinkView[];
+  /** 本机到主 relay 连接的心跳往返;离线 / 未测得为 null */
+  relayRttMs: number | null;
 }

@@ -3,6 +3,7 @@
 > 新增或修改只对伙伴生效的工具、提示词、回执、例行任务或其它机制前先读本文。
 > 本文是开发引导和讨论底稿，**不是审批门**：新想法照常可以做，先按第 3 节想清楚放在哪一层。
 > 现行行为仍以 [伙伴运行时](cindy-bots-runtime.md) 等专题正文为准；与本方向冲突的条款见第 5 节，裁决前不改行为。
+> 2026-11-08 起伙伴 V2 已按本方向落地：伙伴 = 一个普通项目 + 它的任务 + 身份，第 4 节各行标了结果。
 
 ## 1. 方向（2026-11-05，Dash 提出，Chris 同意，细节仍在讨论）
 
@@ -19,7 +20,7 @@
   其他伙伴找到的地址、云端身份与主力电脑。
 - **伙伴的工作方式属于伙伴。** 怎么说话、用什么格式转达、怎么派活和管任务、什么时候汇报、续用老任务还是开新任务、
   怎么安排定时任务，都应该能由伙伴自己的规则决定和修改，不依赖改工具或发新版本；每个伙伴因此可以高度自定义。
-- **宿主只管规则保证不了的事**：谁在说话（来源与主人核验）、能不能做（权限档与自主轮风险确认）、
+- **宿主只管规则保证不了的事**：谁在说话（来源与主人核验）、能不能做（权限档；2026-11-08 起不再有伙伴专属的自主轮风险确认）、
   最多发生几次（防循环上限）、任务处于什么状态（状态机、等你 / 出错 / 卡住的可见性）、在哪台电脑运行（主力电脑）。
   这些对所有任务生效，不是伙伴专属规则。
 - **只有现有工具做不到，或能做到但效率很低，才改工具；补的时候优先补成普通任务和项目也能用的通用能力。**
@@ -29,8 +30,8 @@
 | 宿主保留（所有任务通用） | 伙伴自己的规则决定 |
 | --- | --- |
 | 来源与授权：谁的话算主人请求，结构化记录、不靠正文文字（[伙伴授权](teammate-authority.md)） | 转达时怎么措辞、要不要引用原话 |
-| 权限档与自主轮的少数风险确认 | 哪些事先问主人、哪些自己办 |
-| 防循环上限：伙伴对话条数、同类事件每天次数、每条任务一个跟进者 | 怎么拆活、派给谁 |
+| 权限档（2026-11-08 起 V2 不再适用：自主轮风险确认已删除，见 [伙伴授权](teammate-authority.md)） | 哪些事先问主人、哪些自己办 |
+| 防循环上限：伙伴对话条数、同类事件每天次数、每条任务一个跟进者（2026-11-08 起 V2 不再适用：伙伴私信与跟进事件已移除；结果回传是对方任务自己发的一条普通消息） | 怎么拆活、派给谁 |
 | 任务状态机；「等你、出错、卡住、撞上限」必须让伙伴或主人知道 | 普通「完成」要不要叫醒自己、多久汇报一次、推送还是主动拉 |
 | 主力电脑：同一时间只有一处运行 | 续用老任务还是开新任务 |
 | 记忆与技能的版本、可撤销；主人写的规则不被自动改写 | 记什么、学什么 |
@@ -46,29 +47,28 @@
 已有的专属设计不合理时，方向是**逐步扭转**：先把写死的工作方式从工具和回执里拿掉、改由伙伴规则决定，
 再把重复的专属工具并入通用能力。每次扭转都要保证原有能力不丢（见第 6 节），不为收敛而砍功能。
 
-## 4. 现状盘点（main@ef64de3f4a，2026-11-05）
+## 4. 现状盘点（main@ef64de3f4a，2026-11-05；2026-11-08 V2 结果见方向一列）
 
-工具位于 `packages/lizi-mcps/src`（`lizi_xdtHelperMcpServer.ts` 与 `xdt-helper/`）。方向一列是讨论起点，不是已定计划。
+工具位于 `packages/lizi-mcps/src`（`lizi_xdtHelperMcpServer.ts` 与 `xdt-helper/`）。方向一列原是讨论起点；标了「V2」的是 2026-11-08 起的现状。
 
 | 类别 | 伙伴专属工具或机制 | 普通任务或项目的对应 | 方向 |
 | --- | --- | --- | --- |
-| 例行任务 | `routine_list/save/delete/run_now/history/sources/delivery_targets`；内置「跟进」「夜间学习」 | 定时任务 `schedule_*`（`cindy_scheduler`）；项目仓库里的 `.cindy/automations/schedules.json`（改动只是预览，主人确认快照才生效） | **并入定时任务**。两者已共用调度执行器，`Schedule.source` 已有 `'bot'`。例行任务多出的只有：事件触发（插件事件、`host:sessions`）、多条件并列、送达方式（伙伴 / IM / 静默）——先补给定时任务，普通项目也能用。插件前置检查（`preRunPlugin`）已由 `schedule_create` / `schedule_update` / `routine_save` 共用，不是缺口；限制只在跨电脑不能设置、项目自动化配置文件不支持（[Agent 与用户同权](agent-user-parity.md)） |
-| 后台任务 | `start_session_task`、`check_session_task`、`message_session_task`、`stop_session_task`、路线检查与推进；完成回执与唤醒 | `send_to_session`、`get_task_digest`、插话、停止、队列工具（伙伴主任务已有，[伙伴运行时](cindy-bots-runtime.md) §6.4） | **并入通用任务工具**，委派只留一条「谁负责」关系。通用工具缺的任务卡、等你时代答、暂停与恢复、执行期限要先补齐 |
-| 工作台 | `get_workbench`、`read_workbench_task`、`continue_workbench_task`、`set_workbench_task_responsibility` | `list_sessions`、`get_chat_history`、`get_task_digest`、`send_to_session`（跨电脑发消息已支持） | 读和继续并入通用工具；「谁负责」保留为通用的任务关系（也是「按项目跟进」的基础） |
-| 记忆 | 伙伴记忆独立服务（`botMemoryService.ts`） | Cindy 记忆（`cindy_memory`），按工作目录隔离 | 伙伴即项目后合成一套；保留「全局记忆开关不影响伙伴记忆」 |
-| 技能 | `save/list/read_teammate_skill`；核心 / 系统 / 用户三层 | 引擎原生项目技能、SkillHub | 用户技能并入项目技能；核心与系统技能由宿主提供 |
+| 例行任务 | `routine_list/save/delete/run_now/history/sources/delivery_targets`；内置「跟进」「夜间学习」 | 定时任务 `schedule_*`（`cindy_scheduler`）；项目仓库里的 `.cindy/automations/schedules.json`（改动只是预览，主人确认快照才生效） | **并入定时任务**。两者已共用调度执行器，`Schedule.source` 已有 `'bot'`。例行任务多出的只有：事件触发（插件事件、`host:sessions`）、多条件并列、送达方式（伙伴 / IM / 静默）——先补给定时任务，普通项目也能用。插件前置检查（`preRunPlugin`）已由 `schedule_create` / `schedule_update` / `routine_save` 共用，不是缺口；限制只在跨电脑不能设置、项目自动化配置文件不支持（[Agent 与用户同权](agent-user-parity.md)）。**V2：已移除**例行任务引擎、`routine_*` 工具与 `routine` 系统 Skill；伙伴的定时工作是它项目的自动化（`.cindy/automations/schedules.json`，伙伴项目免导入确认），含每晚的 `teammate-memory-review`；升级时 V1 例行任务转成同节奏的项目自动化，搬不动的保留为暂停并记进 `CARRYOVER.md` |
+| 后台任务 | `start_session_task`、`check_session_task`、`message_session_task`、`stop_session_task`、路线检查与推进；完成回执与唤醒 | `send_to_session`、`get_task_digest`、插话、停止、队列工具（伙伴主任务已有，[伙伴运行时](cindy-bots-runtime.md) §6.4） | **已并入**（2026-11-08）：伙伴用 `send_to_session` 开普通任务，需要结果时请对方做完用 `send_to_session` 发回；委派工具与服务已移除，旧任务卡、产出与「由谁开的」只读保留（[伙伴运行时](cindy-bots-runtime.md) §6.1） |
+| 工作台 | `get_workbench`、`read_workbench_task`、`continue_workbench_task`、`set_workbench_task_responsibility` | `list_sessions`、`get_chat_history`、`get_task_digest`、`send_to_session`（跨电脑发消息已支持） | 读和继续并入通用工具；「谁负责」保留为通用的任务关系（也是「按项目跟进」的基础）。**V2：已移除**四个工作台工具、`follow` Skill、跟进观察与「自动跟进所有任务」设置；只保留「由这位伙伴开的」记录（`botTaskCreation.ts`），供行头像、伙伴筛选和归属小标使用 |
+| 记忆 | 伙伴记忆独立服务（`botMemoryService.ts`） | Cindy 记忆（`cindy_memory`），按工作目录隔离 | 伙伴即项目后合成一套；保留「全局记忆开关不影响伙伴记忆」。**V2：已合并**为项目记忆，放在 `<workspace>/.cindy/memory/` 随 Git 记版本，仍按伙伴自己的记忆开关（[伙伴运行时](cindy-bots-runtime.md) §4）；夜间学习、每轮学习复盘与工作记忆已移除 |
+| 技能 | `save/list/read_teammate_skill`；核心 / 系统 / 用户三层 | 引擎原生项目技能、SkillHub | 用户技能并入项目技能；核心与系统技能由宿主提供。**V2：**技能就是项目的 `.agents/skills`（`save/list_teammate_skill` 写这里）；系统 Skill 机制已整体移除，伙伴不再挂核心指南 |
 | 关联项目 | `list_teammate_projects`、`set_teammate_project` | `list_projects` | 变成通用的「项目关联其他项目」 |
-| 待办 | `list/update_teammate_todo`、`preflight/record_teammate_todo_event` | 无 | 可升级为项目级待办（通用能力），优先级低 |
-| 提示词与工具说明 | `botSystemPrompt.ts`、`teammateGuide.ts`、helper 工具说明里的「只开一次」「同一任务跟到底」「不必重新发起」「只在用户追问时查」 | 普通任务无此类引导 | **简化**：工具说明只讲能做什么，工作方式进默认模板 |
-| 转话格式 | 2026-11-05 已改：正文是 Agent 原文，用户授权由发送端判断后记在回执里（[消息来源](message-source.md)「跨任务委派：发送端判断，正文是原文」） | — | 措辞交给伙伴规则；旧格式的接收、显示与跨电脑回退保留（[协议兼容](../dev-rules/protocol-compatibility.md)） |
+| 待办 | `list/update_teammate_todo`、`preflight/record_teammate_todo_event` | 无 | 可升级为项目级待办（通用能力），优先级低。**V2：已移除**待办工具、每天查待办和近况里的待办；未完成项在升级时写进项目的 `CARRYOVER.md` |
+| 提示词与工具说明 | `botSystemPrompt.ts`、`teammateGuide.ts`、helper 工具说明里的「只开一次」「同一任务跟到底」「不必重新发起」「只在用户追问时查」 | 普通任务无此类引导 | **简化**：工具说明只讲能做什么，工作方式进默认模板。**V2：**伙伴的工作方式写在项目 `AGENTS.md`（`CLAUDE.md` 指向 `@AGENTS.md`），伙伴可自己改，Git 记版本 |
+| 转话格式 | 2026-11-05 已改：正文是 Agent 原文，代办轮的转交带用户授权记在回执里（[消息来源](message-source.md)「跨任务委派：代办轮的转交带授权，正文是原文」） | — | 措辞交给伙伴规则；旧格式的接收、显示与跨电脑回退保留（[协议兼容](../dev-rules/protocol-compatibility.md)） |
 | 身份 | `create_teammate`、`update_teammate_profile`、`get_teammate_state`、`get/move_teammate_home`、`find/set_teammate_capability` | — | **保留**（对外身份层）；能力配置随伙伴即项目变成项目配置 |
-| 伙伴间消息 | `send_to_agent`、`check_agent_message`、`send_to_user`、`list_agents` | — | **保留**：伙伴有地址，项目没有；上限不变 |
+| 伙伴间消息 | `send_to_agent`、`check_agent_message`、`send_to_user`、`list_agents` | — | **保留**：伙伴有地址，项目没有；上限不变。**V2：**`send_to_agent` / `check_agent_message` 已移除；`list_agents` 返回各伙伴主对话的 `session_id`（另一台电脑上为 `deviceId::sessionId`），联系伙伴用普通 `send_to_session`；群专线的 `send_to_user` 保留 |
 
 结构上做不到、需要补的通用能力（不是伙伴专属）：
 
-- **按项目跟进**：现在只有「跟自己开的或接手的任务」和「跟本机全部任务」两档，缺「跟项目 B 里的任务」。
-- **跨电脑**：跨电脑新建任务、列出与登记项目目前没有 Agent 工具（[Agent 与用户同权](agent-user-parity.md)）；
-  另一台电脑上的任务只进「一眼」，不唤醒跟进者。
+- **按项目跟进**：V1 的两档跟进（「跟自己开的或接手的任务」「跟本机全部任务」）已于 2026-11-08 移除；通用的「跟项目 B 里的任务」仍是缺口，现由请对方回传与主动拉取 `get_task_digest` 覆盖单任务。
+- **跨电脑**：跨电脑新建任务、列出与登记项目目前没有 Agent 工具（[Agent 与用户同权](agent-user-parity.md)）。
 - **按项目汇总进度**：管理多个项目时以拉取为主，只有「等你、出错、卡住」推送。
 - **事件触发的定时任务、项目级模型设置**。
 
@@ -77,15 +77,15 @@ AGENTS.md、记忆和技能；关于被管项目的事实写进那个项目；�
 
 ## 5. 与本方向冲突、待裁决的现行条款
 
-以下条款现在仍然有效，裁决前照常实现与维护；原文处已挂标记指向这里。
+以下条款原在 2026-11-05 待裁决（2026-11-08 起 V2 不再适用：委派续接与内置「跟进」例行任务都已移除，表格只作记录）。
 
 | 条款 | 位置 | 冲突点 |
 | --- | --- | --- |
 | 续接「保留稳定的原始目标」，上下文保留完整原目标与本轮补充 | [伙伴运行时](cindy-bots-runtime.md) §6.1 | 每轮重发原始目标，已推翻的要求无法退出上下文 |
 | 内置「跟进」例行任务不能删、不能改指令和触发条件，只能暂停 | [例行任务](bot-routines.md)「内置跟进例行任务」；[伙伴运行时](cindy-bots-runtime.md) §8 | 伙伴无法用自己的规则决定怎么跟进 |
 
-2026-11-05 已裁决并实现「跨任务请求由宿主拼成固定三行」：正文改为 Agent 原文，发送端判断委派意图；
-子任务向主任务汇报不再带用户授权（见[消息来源](message-source.md)「跨任务委派：发送端判断，正文是原文」）。
+2026-11-05 已裁决并实现「跨任务请求由宿主拼成固定三行」：正文改为 Agent 原文；
+子任务向主任务汇报不再带用户授权（见[消息来源](message-source.md)「跨任务委派：代办轮的转交带授权，正文是原文」；2026-11-08 取消发送端审核）。
 
 ## 6. 扭转时要守住的用户场景
 
@@ -94,9 +94,10 @@ AGENTS.md、记忆和技能；关于被管项目的事实写进那个项目；�
 - **「等你、出错、卡住」不能静音**：只有普通完成可以不唤醒，否则会出现无人处理的停摆。
 - **授权从「看文字」改成「看数据」**：接收方自动审核在 Ask / Auto / Full Access 三档下都要验证，不多弹也不越权；
   手机、其它电脑和历史消息仍要认旧格式。
-- **正在运行的委派按旧行为跑完**，新委派才用新行为。
+- **正在运行的委派按旧行为跑完**，新委派才用新行为。（2026-11-08 起 V2 不再适用：委派已移除，升级时在运行的委派的子任务就是普通任务，旧任务卡只读。）
 - **伙伴改自己的规则**：伙伴会读到不可信内容，规则改动要有版本、可撤销、主人可见；夜间学习不改写主人写的规则。
 - **合并专属工具前先补齐通用能力**，旧工具名保留一段时间并映射到新工具，避免老伙伴规则里的调用失败；
   伙伴的定时任务仍只在主力电脑运行；两套确认语义（授予常驻指令、新建完全访问 Agent）合并时都要保留。
 
-待核实：群聊分工是否依赖委派完成回执把结果发回群里；插件事件源能否直接接到普通定时任务。
+待核实：插件事件源能否直接接到普通定时任务（V2 下插件 `routineEvents` 照常解析但不再触发）。
+2026-11-09：宿主不再替任务回传结果（`notify_when_done`、`report_task_delivery` 与群结果代发已删除），回传由派活方在消息里约定。

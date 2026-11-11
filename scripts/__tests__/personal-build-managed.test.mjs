@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseManifest, queueRequest, runtimeEnv, toolBundle } from '../personal-build/managed.mjs';
 import { checkCheckout } from '../personal-build/checkout-guard.mjs';
 import { run } from '../personal-build.mjs';
@@ -60,8 +60,27 @@ test('deployed bundle is self-contained and paths with spaces survive dispatch',
   const root = temp(t), bundle = path.join(root, 'tool bundle'); toolBundle(bundle);
   const help = run(process.execPath, [path.join(bundle, 'personal-build.mjs'), 'help'], root);
   assert.match(help, /sync-plugins/);
+  // Deployed tools retain the real classifier even when an old release has no guard code.
+  const guard=run(process.execPath,['--input-type=module','-e',
+    `const m=await import(process.argv[1]);m.assertNoRestartTargets([], '/old/release', ['/old/release']);
+     const p={pid:42,command:'/Applications/Cindy.app/Contents/MacOS/Electron /old/release/apps/desktop'};
+     try {m.assertNoRestartTargets([p].filter(p=>m.isRepositoryDesktopDevProcess(p,['/old/release'])), '/old/release',['/old/release']);process.exitCode=1;}
+     catch(e){if(!e.message.includes('occupied checkout'))throw e;console.log('protected');}`,
+    pathToFileURL(path.join(bundle,'restart-desktop-remote.mjs')).href],root);
+  assert.equal(guard,'protected');
   const c = { name: 'fixture', region: 'global', app: { checkout: root, repository: 'example/app' }, runtime: { clientDir: path.join(root, 'app [test]'), stagingDir: 'stage', stateDir: 'state', dataDir: 'data', node: process.execPath, mode: 'shared', toolPaths: [], idleMinutes: 120 } };
-  const env = runtimeEnv(c, path.join(root, 'config file.json'));
+  const oldRouting = [process.env.CINDY_PERSONAL_MONITOR_DIR,process.env.CINDY_PERSONAL_GENERATION];
+  process.env.CINDY_PERSONAL_MONITOR_DIR='/inherited-monitor';process.env.CINDY_PERSONAL_GENERATION='inherited-generation';
+  let env;
+  try {
+    env = runtimeEnv(c, path.join(root, 'config file.json'));
+    assert.equal(env.CINDY_PERSONAL_MONITOR_DIR,undefined);
+    assert.equal(env.CINDY_PERSONAL_GENERATION,undefined);
+  } finally {
+    for(const [i,key] of ['CINDY_PERSONAL_MONITOR_DIR','CINDY_PERSONAL_GENERATION'].entries()) {
+      if(oldRouting[i]===undefined)delete process.env[key];else process.env[key]=oldRouting[i];
+    }
+  }
   assert.equal(env.PERSONAL_CONFIG, path.join(root, 'config file.json'));
   assert.ok(new RegExp(env.PERSONAL_ELECTRON_RE).test(path.join(c.runtime.clientDir, 'node_modules/electron/dist/Electron.app/Contents/MacOS/Electron')));
 });

@@ -4,6 +4,7 @@ import {
   buildMessageSourceNote,
   describeMessageSourceSender,
   isCrossDeviceSourceSessionId,
+  parseSourceSessionTarget,
   messageSourceIdEntries,
   formatSourceRef,
   promptSafeSourceName,
@@ -177,6 +178,12 @@ describe('messageSourceIdEntries', () => {
     ]);
   });
 
+  it('does not attribute an auto-bridge batch to its first Worker', () => {
+    expect(messageSourceIdEntries({ origin: { kind: 'orca', senderLabel: '', senderSessionId: 'w-1', autoBridge: true, autoBridgeBatchCount: 2 } })).toEqual([]);
+    // 单条仍定位发送方 Worker。
+    expect(messageSourceIdEntries({ origin: { kind: 'orca', senderLabel: 'Backend', senderSessionId: 'w-1' } })).toEqual([{ kind: 'session', id: 'w-1' }]);
+  });
+
   it('returns nothing for hook channels, redacted sources and local input', () => {
     expect(messageSourceIdEntries({ origin: { kind: 'scheduler', scheduleId: 'hook:c' } })).toEqual([]);
     expect(messageSourceIdEntries({ origin: { kind: 'scheduler' } })).toEqual([]);
@@ -267,5 +274,14 @@ describe('isCrossDeviceSourceSessionId', () => {
     for (const local of [undefined, '', 'task-1', '::task-1', 'dev-A::']) {
       expect(isCrossDeviceSourceSessionId(local)).toBe(false);
     }
+  });
+});
+
+// Routing must preserve the explicit device, while redacted/malformed sources stay inert.
+describe('parseSourceSessionTarget', () => {
+  it('splits a stamped source and preserves same-host legacy ids', () => {
+    expect(parseSourceSessionTarget('dev-A::task-1')).toEqual({ deviceId: 'dev-A', sessionId: 'task-1' });
+    expect(parseSourceSessionTarget('task-1')).toEqual({ sessionId: 'task-1' });
+    for (const id of [undefined, '', '::task-1', 'dev-A::']) expect(parseSourceSessionTarget(id)).toBeNull();
   });
 });

@@ -486,3 +486,21 @@ it('persists X companion assignment only for the current account', () => {
   store.setXCompanionBotId(null);
   expect(makeStore(undefined, () => owner).get().xCompanionBotId).toBeNull();
 });
+
+
+// User requirement: the account list is presentation-only and must survive restart
+// without leaking identities when the Cindy account changes. Uses the production store.
+// Review gap: a null display name on the first identity must survive disk reload too.
+it('persists store Feishu identities by Cindy account and preserves the legacy first-account cache', () => {
+  let account = 'account-a';
+  const rows = ['alice', 'bob'].map((id) => ({ bindingId: id, principalId: `ou_${id}`, principalName: id,
+    scopeId: 'cli_store', scopeName: id === 'alice' ? null : 'Cindy', tenantKey: `tenant-${id}` }));
+  const store = makeStore(undefined, () => account);
+  store.setFeishuBindingsCache(rows);
+  expect(makeStore(undefined, () => account).get().feishuBindingsCache).toEqual(rows);
+  expect(store.get().feishuBindingCache).toEqual(rows[0]);
+  account = 'account-b'; expect(store.get().feishuBindingsCache).toBeUndefined();
+  account = 'account-a'; expect(store.get().feishuBindingsCache).toEqual(rows);
+  store.setFeishuBindingsCache([rows[1]!]);
+  expect(store.get().feishuBindingsCache).toEqual([rows[1]]);
+});

@@ -109,6 +109,9 @@ describe("project management MCP", () => {
           offset: 0,
           limit: 100,
         });
+        expect(await call("list_projects", { device: "other-computer", limit: 20 })).toMatchObject({ ok: true });
+        expect(list).toHaveBeenLastCalledWith({ callerSessionId: "caller", device: "other-computer",
+          includeHidden: true, offset: 0, limit: 20 });
         expect(
           await call("rename_project", { working_dir: "/repo", name: "" }),
         ).toMatchObject({ ok: true, alias: null });
@@ -167,7 +170,7 @@ describe("project management MCP", () => {
             errorCode: "CAPABILITY_NOT_AVAILABLE",
           });
         }
-        expect(list).toHaveBeenCalledTimes(2);
+        expect(list).toHaveBeenCalledTimes(3);
         expect(rename).toHaveBeenCalledTimes(2);
         expect(remove).toHaveBeenCalledTimes(2);
       } finally {

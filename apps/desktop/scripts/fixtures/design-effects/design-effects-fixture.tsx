@@ -1,3 +1,4 @@
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
 import { mountPage } from '../../ui-page/harness';
 import { AgentActionRow } from '../../../src/renderer/components/chat/AgentActionRow';
 import { ChatAudioCard } from '../../../src/renderer/components/chat/ChatAudioCard';
@@ -69,12 +70,12 @@ mountPage({
       </Row>
       <Row title="工具输入">
         <div data-tool-input className="w-96">
-          <AgentActionRow message={{ toolName: 'Grep', toolInput: { pattern: 'shadow-menu', path: 'src' } } as never} />
+          <AgentActionRow pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} message={{ toolName: 'Grep', toolInput: { pattern: 'shadow-menu', path: 'src' } } as never} />
         </div>
       </Row>
       <Row title="协作消息">
         <div data-orca-message className="w-96">
-          <UserMessage workingDir="/fixture" content={JSON.stringify({ orcaSource: 'lead', content: 'Lead 发给 Worker 的消息正文' })} />
+          <UserMessage pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} workingDir="/fixture" content={JSON.stringify({ orcaSource: 'lead', content: 'Lead 发给 Worker 的消息正文' })} />
         </div>
       </Row>
       <Row title="标题栏图标">

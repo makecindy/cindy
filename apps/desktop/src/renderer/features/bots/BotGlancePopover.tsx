@@ -1,24 +1,13 @@
-/** Partner glance: existing computer controls, nonempty owner todos, attributed tasks and outputs.
+/** Partner glance: existing computer controls, attributed tasks and outputs.
  * Task attention and PR state are read-only projections of the ordinary task list stores.
  */
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
-import { Check, ChevronDown, CircleAlert, LayoutGrid, Monitor, ScanSearch, MessageCircle, GitPullRequest, X } from 'lucide-react';
-import type { Routine } from '@cindy/maker-scheduler';
-import { REMOTE_RESOURCE_CHANGED_CHANNEL, parseRemoteResourceChangedPayload } from '@cindy/device-link';
-import { createPortal } from 'react-dom';
+import { Check, ChevronDown, LayoutGrid, Monitor, MessageCircle, GitPullRequest } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { buildTodoReferenceHref } from '@cindy/maker-shared/agent-input-projection';
-import { todoDateLabel, todoDue, todoDueSoon, type TeammateTodo } from '@cindy/maker-shared/teammate-todo';
 
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { FileTypeIcon } from '@/components/ui/file-type-icon';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
@@ -28,16 +17,11 @@ import { prStatusKey, sessionPrUrl, type SessionPrRef } from '@cindy/maker-share
 import { PR_STATUS_ICON, prStatusColor } from '@/features/cc-agent/gitContextPrVisuals';
 import { sessionActivityMs } from '@/features/cc-agent/lib/dateSessionGrouping';
 import { AutomationTimerIcon } from '@/features/cc-agent/sidebar/AutomationTimerIcon';
-import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import { matchesTaskCreators, useTaskCreatorIndex } from './botFollowScopes';
-import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import type { Session } from '@/lib/ccAgent.types';
-import { makerChatStore } from '@/lib/makerChatStore';
-import * as sessionService from '@/lib/sessionService';
 import { remoteProjectsStore, useRemoteProjectSessions } from '@/features/device-link/remoteProjectsStore';
 import { refreshRemoteDeviceSessions } from '@/features/device-link/refreshRemoteSessions';
 import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
-import { insertTodoReferenceIntoComposer } from '@/lib/composerActionsBus';
 import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
@@ -46,27 +30,15 @@ import { BotAvatar } from './BotAvatar';
 import { isBotKnownOffline } from './BotConnectionStatus';
 import { HomeSwitchConfirm, useCompanionHomeSwitch, type HomeSwitch } from './BotHomeComputerSetting';
 import type { BotChatIdentity } from './BotSessionContentHeader';
-import { useBotDelegations } from './botDelegationLive';
+import { useBotDelegationRecords } from './botDelegationHistory';
 import { isBotPrimaryGeneratedFile } from './botGeneratedArtifacts';
 import { useBotProfiles, useBotUnreadCounts } from './botStore';
 import { cloudRemoteBots, withoutCloudCompanions, withoutShadowedBots } from './companionCloudPresentation';
 import { useCompanionCloud } from './companionCloudStore';
 import { cindyDeviceKey, cindyDeviceOptions, isCindyDeviceBot, taskCreatorFilterKey } from './cindyDeviceRoster';
-import {
-  dueTodos,
-  hasUnseenDue,
-  markDueSeen,
-  patchGlanceTodo,
-  setGlanceDailyCheck,
-  useGlanceTodos,
-  type GlanceTodoHost,
-} from './botGlanceTodos';
 import { useRemoteBots, useRemoteCindyIds } from './useRemoteBots';
-import { invokeBotSettings } from './remoteBotSettingsClient';
-import { TODO_CHECK_ROUTINE_PREFIX } from '../../../shared/botAutonomy';
 
 /** 每块先列几条，其余收进「显示更多」。 */
-const TODO_PREVIEW = 2;
 const TASK_PREVIEW = 5;
 const OUTPUT_PREVIEW = 3;
 const OUTPUT_LIMIT = 30;
@@ -169,11 +141,6 @@ function FoldRow({ label, open, onClick, indent }: { label: string; open: boolea
   );
 }
 
-/** 期限前的到期红点；入口按钮上同一种点（DESIGN.md「伙伴待办到期点」）。 */
-export function TodoDueDot({ className }: { className?: string }) {
-  return <span aria-hidden className={cn('size-1.5 shrink-0 rounded-full bg-[var(--error-fg)]', className)} />;
-}
-
 // ---------------------------------------------------------------- 电脑
 
 interface ComputerRowModel {
@@ -182,6 +149,8 @@ interface ComputerRowModel {
   current: boolean;
   online: boolean;
   unread?: boolean;
+  /** An older Cindy: still selectable, labelled so the owner knows the teammate runs there the older way. */
+  outdated?: boolean;
   onSelect?: () => void;
 }
 
@@ -198,7 +167,8 @@ function ComputerRows({ rows }: { rows: ComputerRowModel[] }) {
       icon={<Monitor size={16} />}
       title={row.name}
       muted={!row.current && !row.online}
-      meta={row.current ? t('bots.glance.runningHere') : row.online ? t('bots.glance.online') : t('bots.glance.offline')}
+      meta={row.current ? t('bots.glance.runningHere') : row.outdated ? t('bots.cloud.targetOutdatedMeta')
+        : row.online ? t('bots.glance.online') : t('bots.glance.offline')}
       inlineMeta
       trailing={
         row.current ? (
@@ -259,6 +229,7 @@ function CloudComputers({
         name: state.targetName(target),
         current: false,
         online: target.online,
+        ...(target.outdated ? { outdated: true } : {}),
         onSelect: () => {
           onClose();
           state.setError(null);
@@ -326,230 +297,6 @@ function Computers({
   return <ComputerRows rows={[{ key: bot.deviceId ?? 'local', name, current: true, online: true }]} />;
 }
 
-// ---------------------------------------------------------------- 待办
-
-function sourceText(todo: TeammateTodo, t: (key: string) => string): string {
-  const source = todo.sources[0];
-  if (!source || source.kind === 'conversation') return t('bots.glance.source.conversation');
-  const kind = t(`bots.glance.source.${source.kind}`);
-  const label = source.label?.trim();
-  // 来源名已含标签（「来自 GitHub」+「GitHub」）时不再重复。
-  return label && !kind.toLowerCase().includes(label.toLowerCase()) ? `${kind} · ${label}` : kind;
-}
-
-function TodoRow({
-  todo,
-  onOpen,
-  onMenu,
-}: {
-  todo: TeammateTodo;
-  onOpen: (todo: TeammateTodo) => void;
-  onMenu: (todo: TeammateTodo, x: number, y: number, origin: HTMLButtonElement) => void;
-}) {
-  const { t, i18n } = useTranslation();
-  const due = todoDue(todo);
-  const date = todoDateLabel(todo, i18n.language);
-  return (
-    <Row
-      testId="bot-glance-todo"
-      title={todo.title}
-      meta={sourceText(todo, t)}
-      trailing={
-        date ? (
-          <>
-            {due ? <TodoDueDot /> : null}
-            <span className={due ? 'text-[var(--text-primary)]' : undefined}>{date}</span>
-          </>
-        ) : null
-      }
-      onClick={() => onOpen(todo)}
-      onContextMenu={(event) => {
-        event.preventDefault();
-        onMenu(todo, event.clientX, event.clientY, event.currentTarget);
-      }}
-      onKeyDown={(event) => {
-        if (event.key !== 'ContextMenu' && !(event.key === 'F10' && event.shiftKey)) return;
-        event.preventDefault();
-        const rect = event.currentTarget.getBoundingClientRect();
-        onMenu(todo, rect.left + 10, rect.bottom, event.currentTarget);
-      }}
-    />
-  );
-}
-
-/**
- * 「帮我查查」：以主人的一句话发进伙伴对话，和主人自己打字发送走同一条路径（远程伙伴同样带来源设备标记）。
- * 用的是伙伴对话当前的模型、思考档位与权限。
- */
-async function sendToTeammate(sessionId: string, deviceId: string | undefined, text: string): Promise<boolean> {
-  const owner = getDataOwnerGeneration();
-  const row = deviceId
-    ? (remoteProjectsStore.getDeviceSessions(deviceId).find((session) => session.id === sessionId) ??
-      ((await window.electronAPI.deviceLink.invoke(deviceId, 'local-db:sessions:get', [sessionId])) as Session | null))
-    : await sessionService.get(sessionId);
-  if (!isDataOwnerGenerationCurrent(owner) || !row?.workingDir) return false;
-  return makerChatStore.sendMessage(sessionId, text, row.model, row.effort, row.permissionMode, row.workingDir);
-}
-
-function DailyCheckSwitch({ host, todos }: { host: GlanceTodoHost; todos: ReturnType<typeof useGlanceTodos> }) {
-  const { t } = useTranslation();
-  const [busy, setBusy] = useState(false);
-  const checked = todos.todos.dailyCheck;
-  if (!checked) return null;
-  const change = async (next: boolean) => {
-    setBusy(true);
-    try {
-      todos.setDailyCheck(await setGlanceDailyCheck(host, next));
-    } catch {
-      toast.error(t('bots.glance.dailyCheckFailed'));
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <div
-      data-testid="bot-glance-daily-check"
-      className="flex min-h-11 w-full cursor-pointer items-center gap-3 rounded-lg px-2 py-1.5 hover:bg-[var(--surface-hover)]"
-    >
-      <span className="w-5 shrink-0" aria-hidden />
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-13 text-[var(--text-primary)]">{t('bots.glance.dailyCheck')}</span>
-        <span className="block truncate text-12 text-[var(--text-tertiary)]">{t('bots.glance.dailyCheckMeta')}</span>
-      </span>
-      <button type="button" disabled={busy} aria-label={t('bots.glance.stopDailyCheck')}
-        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-        onClick={() => void change(false)}><X size={16} /></button>
-    </div>
-  );
-}
-
-function Todos({
-  host,
-  sessionId,
-  todos,
-  todoOff,
-  onClose,
-}: {
-  host: GlanceTodoHost;
-  sessionId: string;
-  todos: ReturnType<typeof useGlanceTodos>;
-  /** 主人关掉了系统技能「待办」：已有待办照常显示，不再给「帮我查查」「每天帮我查一次」。 */
-  todoOff: boolean;
-  onClose: () => void;
-}) {
-  const { t } = useTranslation();
-  const [showAll, toggleAll] = useToggle();
-  const [menu, setMenu] = useState<{ todo: TeammateTodo; x: number; y: number } | null>(null);
-  const menuOrigin = useRef<HTMLButtonElement | null>(null);
-  const now = new Date();
-  const open = todos.todos.open.filter(todo => todoDueSoon(todo, now));
-  const openTotal = open.length;
-
-  const check = () => {
-    onClose();
-    void sendToTeammate(sessionId, host.deviceId, t('bots.glance.checkPrompt'))
-      .then((sent) => {
-        if (!sent) toast.error(t('bots.glance.checkFailed'));
-      })
-      .catch(() => toast.error(t('bots.glance.checkFailed')));
-  };
-
-  const quote = (todo: TeammateTodo) => {
-    onClose();
-    // 浮层收起后再插入，焦点回到输入框而不是被浮层的关闭动画抢走。
-    requestAnimationFrame(() =>
-      insertTodoReferenceIntoComposer({
-        targetSessionId: sessionId,
-        href: buildTodoReferenceHref(host.botId, todo.id),
-        title: todo.title,
-      }),
-    );
-  };
-  const remove = async (todo: TeammateTodo) => {
-    try {
-      const deleted = await patchGlanceTodo(host, { id: todo.id, expectedRevision: todo.revision, operation: 'delete' });
-      void todos.refresh();
-      toast.info(t('bots.glance.deleted'), {
-        duration: 6000,
-        action: {
-          label: t('bots.glance.undo'),
-          onClick: () =>
-            void patchGlanceTodo(host, {
-              id: todo.id,
-              expectedRevision: deleted?.revision ?? todo.revision + 1,
-              operation: 'restore',
-            })
-              .then(() => todos.refresh())
-              .catch(() => toast.error(t('bots.glance.undoFailed'))),
-        },
-      });
-    } catch {
-      toast.error(t('bots.glance.deleteFailed'));
-      void todos.refresh();
-    }
-  };
-
-  if (!todos.loaded) return null;
-  if (openTotal === 0) return todos.failed
-    ? <Section label={t('bots.glance.todos')}><Row title={t('bots.glance.loadFailed')} onClick={() => void todos.refresh()} /></Section>
-    : null;
-  const visible = showAll ? open : open.slice(0, TODO_PREVIEW);
-  const hiddenCount = Math.max(0, openTotal - TODO_PREVIEW);
-  return (
-    <Section label={t('bots.glance.todos')} action={todoOff ? undefined : <button type="button" data-testid="bot-glance-check"
-      aria-label={t('bots.glance.check')} title={t('bots.glance.check')} onClick={check}
-      className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"><ScanSearch size={16} /></button>}>
-      {todoOff ? null : <DailyCheckSwitch host={host} todos={todos} />}
-      {visible.map((todo) => (
-        <TodoRow
-          key={todo.id}
-          todo={todo}
-          onOpen={quote}
-          onMenu={(target, x, y, origin) => {
-            menuOrigin.current = origin;
-            setMenu({ todo: target, x, y });
-          }}
-        />
-      ))}
-      {hiddenCount > 0 ? (
-        <FoldRow indent={false} open={showAll} onClick={toggleAll} label={showAll ? t('bots.glance.showLess') : t('bots.glance.showMore')} />
-      ) : null}
-      <DropdownMenu open={menu !== null} onOpenChange={(next) => { if (!next) setMenu(null); }}>
-        {/* 锚点挂到 body：浮层带入场变换，fixed 元素放在里面会按浮层而不是窗口定位。 */}
-        {createPortal(
-          <DropdownMenuTrigger asChild>
-            <span
-              aria-hidden="true"
-              className="pointer-events-none fixed h-0 w-0"
-              style={{ left: menu?.x ?? 0, top: menu?.y ?? 0 }}
-            />
-          </DropdownMenuTrigger>,
-          document.body,
-        )}
-        <DropdownMenuContent
-          align="start"
-          className="min-w-40"
-          onCloseAutoFocus={(event) => {
-            event.preventDefault();
-            menuOrigin.current?.focus({ preventScroll: true });
-          }}
-        >
-          <DropdownMenuItem
-            variant="danger"
-            onSelect={() => {
-              const target = menu?.todo;
-              setMenu(null);
-              if (target) void remove(target);
-            }}
-          >
-            {t('bots.glance.delete')}
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </Section>
-  );
-}
-
 // ---------------------------------------------------------------- 输出内容
 
 interface OutputFile {
@@ -567,7 +314,7 @@ function basename(path: string): string {
 }
 
 function useOutputs(sessionId: string, botId: string): OutputFile[] {
-  const delegations = useBotDelegations(sessionId);
+  const delegations = useBotDelegationRecords(sessionId);
   return useMemo(() => {
     const files: OutputFile[] = [];
     for (const delegation of delegations) {
@@ -639,50 +386,10 @@ function Outputs({ sessionId, botId, onClose, prs }: { sessionId: string; botId:
   );
 }
 
-/** 只读伙伴所在电脑的规则；打开近况才订阅，不等待第一次运行生成任务。 */
-function useGlanceRoutines(botId: string, deviceId?: string) {
-  const [routines, setRoutines] = useState<Routine[]>([]);
-  const [failed, setFailed] = useState(false);
-  const [reload, setReload] = useState(0);
-  useEffect(() => {
-    let alive = true;
-    let request = 0;
-    setRoutines([]);
-    setFailed(false);
-    const load = () => {
-      const current = ++request;
-      const owner = getDataOwnerGeneration();
-      void (deviceId
-        ? invokeBotSettings<Routine[]>(deviceId, 'routines.list', botId)
-        : window.electronAPI.routines.list(botId))
-        .then(items => {
-          if (!alive || current !== request || !isDataOwnerGenerationCurrent(owner)) return;
-          // 内置跟进、学习和每天查待办已有各自入口，不重复占近期任务。
-          setRoutines(items.filter(item => !item.builtin && !item.id.startsWith(TODO_CHECK_ROUTINE_PREFIX)));
-          setFailed(false);
-        })
-        .catch(() => {
-          if (alive && current === request && isDataOwnerGenerationCurrent(owner)) setFailed(true);
-        });
-    };
-    load();
-    const off = deviceId
-      ? window.electronAPI.deviceLink.onRemotePush((push, stamp) => {
-          if (push.deviceId !== deviceId || push.channel !== REMOTE_RESOURCE_CHANGED_CHANNEL
-            || !isDeviceLinkRemotePushCurrent(push, stamp)) return;
-          if (parseRemoteResourceChangedPayload(push.payload)?.collectionId === 'routines') load();
-        })
-      : window.electronAPI.routines.onChanged(load);
-    return () => { alive = false; off(); };
-  }, [botId, deviceId, reload]);
-  return { routines, failed, retry: () => setReload(value => value + 1) };
-}
-
-// ---------------------------------------------------------------- 近期任务（含未运行的例行任务）与 PR。
+// ---------------------------------------------------------------- 近期任务与 PR。
 function Activity({ bot, onClose }: { bot: BotChatIdentity; onClose(): void }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const { routines, failed, retry } = useGlanceRoutines(bot.id, bot.deviceId);
   const { sessions: local } = useCCSessions({ includeArchived: 'all' });
   const remote = useRemoteProjectSessions();
   const creators = useTaskCreatorIndex();
@@ -705,14 +412,13 @@ function Activity({ bot, onClose }: { bot: BotChatIdentity; onClose(): void }) {
       && (task.status === 'active' || task.status === 'archived')
       && matchesTaskCreators(task, [key], creators))
     .sort((a, b) => sessionActivityMs(b) - sessionActivityMs(a)), [local, remote, creators, key, bot.sessionId]);
-  // PR discovery keeps its original budget; activity groups all runs before applying its limit.
-  const prTasks = useMemo(() => tasks.slice(0, OUTPUT_LIMIT), [tasks]);
-  const ids = useMemo(() => prTasks.map(task => task.id), [prTasks]);
+  const recentTasks = useMemo(() => tasks.slice(0, OUTPUT_LIMIT), [tasks]);
+  const ids = useMemo(() => recentTasks.map(task => task.id), [recentTasks]);
   const { registerPrConsumer } = usePrActions();
   useEffect(() => {
-    const stops = prTasks.map(task => registerPrConsumer(task.id, task.deviceLinkDeviceId));
+    const stops = recentTasks.map(task => registerPrConsumer(task.id, task.deviceLinkDeviceId));
     return () => stops.forEach(stop => stop());
-  }, [prTasks, registerPrConsumer]);
+  }, [recentTasks, registerPrConsumer]);
   const refs = usePrRefsForSessions(ids);
   const prs = useMemo(() => {
     const unique = new Map<string, SessionPrRef>();
@@ -722,55 +428,35 @@ function Activity({ bot, onClose }: { bot: BotChatIdentity; onClose(): void }) {
     return [...unique.values()];
   }, [refs]);
   const [allTasks, toggleTasks] = useToggle();
-  const entries = useMemo(() => {
-    const latest = new Map<string, Session>();
-    const routineIds = new Set(routines.map(routine => routine.id));
-    const ordinary = tasks.filter(task => {
-      const companion = task.companion;
-      if ((task.deviceLinkDeviceId ?? undefined) !== bot.deviceId || companion?.id !== bot.id
-        || companion.role !== 'routine' || !companion.routineId || !routineIds.has(companion.routineId)) return true;
-      if (!latest.has(companion.routineId)) latest.set(companion.routineId, task);
-      return false;
-    }).map(task => ({ key: `task:${task.deviceLinkDeviceId ?? ''}:${task.id}`, task, routine: null, at: sessionActivityMs(task) }));
-    return [...ordinary, ...routines.map(routine => {
-      const task = latest.get(routine.id);
-      return { key: `routine:${routine.id}`, routine, task, at: task ? sessionActivityMs(task) : routine.createdAt };
-    })].sort((a, b) => b.at - a.at).slice(0, OUTPUT_LIMIT);
-  }, [tasks, routines, bot.id, bot.deviceId]);
-  const openRoutines = () => {
-    onClose();
-    const base = bot.deviceId ? `/bots/remote/${encodeURIComponent(bot.deviceId)}/${encodeURIComponent(bot.id)}` : `/bots/${encodeURIComponent(bot.id)}`;
-    navigate(`${base}?settings=1&settingsPage=routines`);
-  };
   const openTask = async (task: Session) => {
     if (task.deviceLinkDeviceId) remoteProjectsStore.pinSessionOrigin(task.deviceLinkDeviceId, task.id);
     onClose();
     navigate(await resolveSessionRoute(task.id));
   };
   return <>
-    {entries.length > 0 || failed ? <Section label={t('bots.glance.recentTasks')}>
-      {(allTasks ? entries : entries.slice(0, TASK_PREVIEW)).map(entry => entry.routine
-        ? <RecentTask key={entry.key} task={entry.task} routine={entry.routine} onOpen={openRoutines} />
-        : <RecentTask key={entry.key} task={entry.task!} onOpen={() => void openTask(entry.task!)} />)}
-      {failed ? <Row testId="bot-glance-routines-retry" icon={<CircleAlert size={16} />} title={t('routines.title')} trailing={t('commonUi.retry')} onClick={retry} /> : null}
-      {entries.length > TASK_PREVIEW ? <FoldRow indent open={allTasks} onClick={toggleTasks} label={t(allTasks ? 'bots.glance.showLess' : 'bots.glance.showMore')} /> : null}
+    {recentTasks.length > 0 ? <Section label={t('bots.glance.recentTasks')}>
+      {(allTasks ? recentTasks : recentTasks.slice(0, TASK_PREVIEW)).map(task =>
+        <RecentTask key={`task:${task.deviceLinkDeviceId ?? ''}:${task.id}`} task={task} onOpen={() => void openTask(task)} />)}
+      {recentTasks.length > TASK_PREVIEW ? <FoldRow indent open={allTasks} onClick={toggleTasks} label={t(allTasks ? 'bots.glance.showLess' : 'bots.glance.showMore')} /> : null}
     </Section> : null}
     <Outputs sessionId={bot.sessionId ?? ''} botId={bot.id} onClose={onClose} prs={prs} />
   </>;
 }
 
-function RecentTask({ task, routine, onOpen }: { task?: Session; routine?: Routine; onOpen(): void }) {
-  const attention = useSessionAttentionKind(task?.id ?? '');
+function RecentTask({ task, onOpen }: { task: Session; onOpen(): void }) {
+  const attention = useSessionAttentionKind(task.id);
   const { t } = useTranslation();
-  const automatic = routine || task?.companion?.role === 'routine' || task?.source === 'scheduler';
+  // Older teammate routine lanes still read as automatic runs.
+  const automatic = task.companion?.role === 'routine' || task.source === 'scheduler';
   return <Row testId="bot-glance-task" icon={automatic
-    ? <span role="img" aria-label={t('routines.title')}>
-        <AutomationTimerIcon size={16} className="size-5" paused={routine?.enabled === false} running={routine?.activity === 'running'} />
+    ? <span role="img" aria-label={t('scheduler.page.title')}>
+        <AutomationTimerIcon size={16} className="size-5" />
       </span>
-    : <MessageCircle size={16} />} title={routine?.name ?? task?.title ?? ''}
+    : <MessageCircle size={16} />} title={task.title}
     onClick={onOpen}
-    trailing={routine?.enabled === false || attention === 'done' ? <>{routine?.enabled === false ? <span>{t('routines.paused')}</span> : null}
-      {attention === 'done' ? <span className="flex items-center" role="img" aria-label={t('bots.glance.unread')}><AttentionDot tone="done" /></span> : null}</> : undefined} />;
+    trailing={attention === 'done'
+      ? <span className="flex items-center" role="img" aria-label={t('bots.glance.unread')}><AttentionDot tone="done" /></span>
+      : undefined} />;
 }
 
 function PrOutput({ pr }: { pr: SessionPrRef }) {
@@ -801,38 +487,18 @@ export function BotGlanceButton({ bot, cloudHome }: { bot: BotChatIdentity; clou
   const [open, setOpen] = useState(false);
   const homeSwitch = useCompanionHomeSwitch({ id: bot.id, name: bot.name }, 'toast');
   const sessionId = bot.sessionId ?? '';
-  const host = useMemo<GlanceTodoHost>(() => ({ botId: bot.id, deviceId: bot.deviceId }), [bot.deviceId, bot.id]);
-  const todos = useGlanceTodos(host, Boolean(sessionId));
-  // 只有本机伙伴的资料在这里；远程伙伴由它所在的电脑在关掉「待办」时不下发每天检查的状态。
-  const localProfile = useBotProfiles().find((profile) => !bot.deviceId && profile.id === bot.id);
-  const todoOff = localProfile?.capabilities?.systemSkillsOff?.includes('todo') === true;
-  const due = dueTodos(todos.todos);
-  const [unseen, setUnseen] = useState(false);
-  const dueSignature = due.map((todo) => `${todo.id}:${todo.revision}`).join('|');
-  useEffect(() => {
-    setUnseen(hasUnseenDue(bot.id, due));
-    // 到期集合变化时重新判断入口红点。
-  }, [bot.id, dueSignature]);
   if (!sessionId) return null;
 
-  const changeOpen = (next: boolean) => {
-    setOpen(next);
-    if (next) {
-      void todos.refresh();
-      markDueSeen(bot.id, due);
-      setUnseen(false);
-    }
-  };
-  const label = unseen ? `${t('bots.glance.open', { name: bot.name })} · ${t('bots.glance.dueUnseen')}` : t('bots.glance.open', { name: bot.name });
+  const label = t('bots.glance.open', { name: bot.name });
   return (
     <>
-    <Popover open={open} onOpenChange={changeOpen}>
+    <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button
           type="button"
           data-testid="bot-glance-button"
           aria-label={label}
-          title={t('bots.glance.open', { name: bot.name })}
+          title={label}
           className={cn(
             'relative flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]',
             open && 'bg-[var(--surface-hover)] text-[var(--text-primary)]',
@@ -840,7 +506,6 @@ export function BotGlanceButton({ bot, cloudHome }: { bot: BotChatIdentity; clou
           style={WINDOW_NO_DRAG_STYLE}
         >
           <LayoutGrid size={15} />
-          {unseen ? <TodoDueDot className="absolute right-1 top-1" /> : null}
         </button>
       </PopoverTrigger>
       <PopoverContent
@@ -848,7 +513,7 @@ export function BotGlanceButton({ bot, cloudHome }: { bot: BotChatIdentity; clou
         sideOffset={6}
         collisionPadding={12}
         data-testid="bot-glance-popover"
-        aria-label={t('bots.glance.open', { name: bot.name })}
+        aria-label={label}
         className="w-[360px] max-w-[calc(100vw-24px)] overflow-y-auto p-0"
         style={{ maxHeight: 'var(--radix-popover-content-available-height, calc(100dvh - 24px))', ...WINDOW_NO_DRAG_STYLE }}
       >
@@ -865,7 +530,6 @@ export function BotGlanceButton({ bot, cloudHome }: { bot: BotChatIdentity; clou
             onClose={() => setOpen(false)}
           />
         </Section>
-        <Todos host={host} sessionId={sessionId} todos={todos} todoOff={todoOff} onClose={() => setOpen(false)} />
         <Activity bot={bot} onClose={() => setOpen(false)} />
       </PopoverContent>
     </Popover>

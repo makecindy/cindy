@@ -919,6 +919,30 @@ describe('normalizeRemoteMessages', () => {
     expect(items[0]).toMatchObject({ kind: 'ask_user', body: 'Q: Choose?\nA: A\n\nQ: Choose?\nA: B' });
   });
 
+  // Pending history becomes unanswered only after the host has synchronized its live queue.
+  it('keeps orphaned questions readable without duplicating live cards', () => {
+    const row = message({ id: 'orphan', role: 'ask_user', content: {
+      requestId: 'question-id', status: 'pending', questions: [{ question: 'Install this version?' }],
+    } });
+    expect(normalizeRemoteMessages([row])).toEqual([]);
+    expect(normalizeRemoteMessages([row], { pendingQuestionIds: new Set(['question-id']) })).toEqual([]);
+    const expired = normalizeRemoteMessages([row], { pendingQuestionIds: new Set() });
+    expect(expired).toHaveLength(1);
+    expect(expired[0].body).toBe(`Q: Install this version?\n${i18n.t('interaction.panel.questionUnanswered')}`);
+    const cancelled = { ...row, content: { ...row.content as object, status: 'cancelled' } };
+    expect(normalizeRemoteMessages([cancelled])[0].body).toBe(expired[0].body);
+  });
+
+  it('keeps withdrawn history with its reason without inventing an answer', () => {
+    const items = normalizeRemoteMessages([message({ id: 'withdrawn', role: 'ask_user', content: {
+      status: 'cancelled', questions: [{ question: 'Logged in?' }], withdrawalReason: '已从日志确认', answers: {},
+    } })]);
+    expect(items).toHaveLength(1);
+    expect(items[0].body).toContain('Logged in?');
+    expect(items[0].body).toContain('已从日志确认');
+    expect(items[0].body).not.toContain('A:');
+  });
+
   it('renders only answered ask_user history as question and answer pairs', () => {
     const items = normalizeRemoteMessages([
       message({
@@ -1370,7 +1394,9 @@ describe('normalizeRemoteMessages', () => {
     ]);
   });
 
-  it.each(['telegram', 'slack', 'x', 'feishu', 'lark', 'discord', 'wechat', 'wecom', 'dingtalk'])(
+  // #9266 unit regression: imSource.im='imessage' used to lose its card/align.
+  // Extend the real normalize entry's existing long-body/attachment matrix.
+  it.each(['telegram', 'slack', 'x', 'feishu', 'lark', 'discord', 'wechat', 'wecom', 'dingtalk', 'imessage'])(
     'renders local %s IM source as a Cindy card while keeping ordinary user actions and content',
     (im) => {
       const text = 'a'.repeat(20_100);
@@ -1402,7 +1428,7 @@ describe('normalizeRemoteMessages', () => {
         role: 'user',
         content: 'clean text',
         agentMeta: {
-          imSource: { im: 'feishu', userText: 'clean text', contentFormat: 'user-text' },
+          imSource: { im: 'imessage', userText: 'clean text', contentFormat: 'user-text' },
           hookSource: { im: 'slack', userText: 'legacy' },
         },
       }),
@@ -1413,7 +1439,7 @@ describe('normalizeRemoteMessages', () => {
         agentMeta: { imSource: { im: 'myspace', userText: 'spoofed', contentFormat: 'user-text' } },
       }),
     ]);
-    expect(both.hookSource).toMatchObject({ im: 'feishu', userTextContent: true });
+    expect(both.hookSource).toMatchObject({ im: 'imessage', userTextContent: true });
     expect(both.body).toBe('clean text');
     expect(unknown.hookSource).toBeUndefined();
     expect(unknown).toMatchObject({ body: 'plain', align: 'user' });
@@ -1705,6 +1731,21 @@ it.each(['steer', 'new', 'completion'])('pairs companion introduction across ste
   ], { preserveSourceOrder: true });
   const ids = rows.map((row) => row.source.id);
   expect(ids.indexOf('task') > ids.indexOf('intro')).toBe(kind === 'steer');
+});
+
+// Bug: answering a Codex question added a bubble holding the reply markup sent to the model.
+// The question card already shows the answer, so its row stays out of the conversation;
+// a reply saved in the model format (older rows, supplements) reads as question and answer.
+it('keeps an answer shown on its question card out of the conversation', () => {
+  const modelCopy = '<send_user_message_question_reply>\n[{"questionItemId":"q1","question":"Install?","answer":"Yes"}]\n</send_user_message_question_reply>';
+  const rows = [
+    message({ id: 'answered', clientId: 'question-reply:answered:q1:digest', role: 'user', content: '> Install?\n\nYes' }),
+    message({ id: 'earlier', clientId: 'question-reply:q1:digest', role: 'user', content: modelCopy }),
+  ];
+  const normalized = normalizeRemoteMessages(JSON.parse(JSON.stringify(rows)));
+  expect(normalized[0]).toMatchObject({ isSyntheticTrigger: true, body: '' });
+  expect(normalized[1].body).toBe('> Install?\n\nYes');
+  expect(normalized[1].isSyntheticTrigger).toBeUndefined();
 });
 
 it('keeps durable coordination hidden on phone history without hiding user-facing inputs or results', () => {

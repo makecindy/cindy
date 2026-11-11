@@ -77,6 +77,8 @@ import { promises as fs } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 
+import { teammateFolderName } from '@cindy/maker-shared/teammate-project';
+
 /** 原子写的临时文件序号,进程内自增 —— 见 writeTextAtomic 里的并发说明。 */
 let writeSeq = 0;
 /**
@@ -109,7 +111,7 @@ export class BotProfileFolderError extends Error {
 function botDirName(botId: string): string {
   const trimmed = botId.trim();
   if (!trimmed) throw new BotProfileFolderError('INVALID_ARGS', 'botId required');
-  const safe = trimmed.replace(/[^A-Za-z0-9._-]/g, '-').replace(/^\.+/, '');
+  const safe = teammateFolderName(trimmed);
   if (!safe) {
     throw new BotProfileFolderError('INVALID_ARGS', 'botId is not usable as a directory name');
   }

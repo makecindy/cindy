@@ -226,11 +226,21 @@ bridge 共用这一顺序；OpenAI 订阅的 Pi 以公共 Pi 目录为基础，�
 
 Claude 订阅没有 HTTP 清单接口，清单来自内置 Claude Code 的 SDK `supportedModels()`：会话启动时
 捕获；此外 maker 就绪、登录／认领 Claude 登录以及手动刷新时，用本机 CLI 起一个空闲 Query 只读
-清单（不发消息、不产生模型调用）。SDK 对每个系列的当前型号常只给简称（`opus` / `sonnet` /
+清单（不发消息、不产生模型调用）。SDK 提供 `resolvedModel` 时优先使用其中的真实 Claude ID；
+Claude Code 2.1.321 的说明已不含型号版本，不能只靠说明猜型号。旧 SDK 对每个系列的当前型号常只给简称（`opus` / `sonnet` /
 `default`）并把版本写在说明里（如 “Opus 5.5 · …”）；简称按说明拼出 `claude-<系列>-<主>-<次>`。
 Registry 尚未登记的新版本照样显示（资料用未知模型默认值，并记日志提示补登记），**绝不映射到
 相邻旧版本**；说明里读不出版本时才跳过。SDK 的 displayName 只有系列名（如 “Fable”）时不作为
 型号名称，改用 Registry 名称，Registry 未登记则按 ID 推导（`claude-fable-5-2` → “Fable 5.2”）。
+排查新型号缺失时，先核对 Cindy 实际使用的内置 CLI 版本，而不是 PATH 上的 `claude`；
+例如 Fable 5.2 从 Claude Code 2.1.321 起进入清单。还要核对实际子进程环境：
+`DISABLE_TELEMETRY` 不只关闭遥测，也关闭上游 feature-flag 获取，可能令同一内核返回旧清单。
+原生订阅会话及发现探针不默认注入该变量，保留 Claude 官方默认行为；用户显式设置仍原样传递，
+网关及远端路径继续默认禁用。错误上报和 OTEL 导出仍独立默认禁用。
+参见 [Claude Code 环境变量说明](https://code.claude.com/docs/en/env-vars)。
+`configure_model_provider` 的
+`rediscover` 与设置页手动刷新共用 `refreshBuiltinModels`，等待真实发现完成后再返回目录，
+不能走已无发现实现的旧 hook 并报告成功。CLI 清单可见、选择器可见和真实推理成功须分别验证。
 xAI 保留 Registry 声明顺序，XD 以 Gateway `/models` 为准，均不受此规则影响。
 第三方 API key 连接（MiMo、Kimi Code 等预设及自定义端点）没有 sortOrder，按连接配置里的
 顺序排：首次添加用接口返回的顺序；之后刷新发现的新型号排在已有型号之前（保持接口返回的

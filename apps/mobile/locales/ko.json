@@ -1,5 +1,6 @@
 {
   "ios": {
+    "NSLocalNetworkUsageDescription": "Cindy가 같은 네트워크에서 페어링된 기기를 찾아 직접 연결합니다.",
     "NSMicrophoneUsageDescription": "Cindy가 원격 세션에서 음성 입력을 사용하려면 마이크 접근 권한이 필요합니다.",
     "NSCameraUsageDescription": "Cindy가 사진을 촬영하여 원격 세션에 첨부하려면 카메라 접근 권한이 필요합니다.",
     "NSPhotoLibraryUsageDescription": "Cindy가 최근 사진과 스크린샷을 표시하여 빠르게 첨부할 수 있도록 사진 보관함 접근 권한이 필요합니다."

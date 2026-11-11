@@ -9,7 +9,7 @@ import * as prRefsStore from '../../../git-context/prRefsStore';
 import * as previewRows from '../../latestMessageText';
 import { commitMessageMediaRefs } from '../../../cindy-media/chatAttachments';
 import { onAssistantTextEvent, clearSessionPersistState, drainPersistQueue,
-  flushAssistantBlock, noteSessionClearBoundary } from '../../../messagePersistBroadcaster';
+  flushAssistantBlock, noteSessionClearBoundary } from '../../../messagePersistBroadcaster.desktop';
 
 const h = vi.hoisted(() => ({
   sqlite: null as Database.Database | null,
@@ -482,6 +482,17 @@ it('publishes a null preview when an ordinary latest-message rewrite has an empt
   await updateMessageContent('s1', 'target', '');
   expect(h.broadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
     sessionId: 's1', patch: { preview: null },
+  });
+});
+
+// Empty rows no longer win the list preview, so the push must carry what the list will show.
+it('publishes the surviving preview when an ordinary latest-message rewrite has an empty body', async () => {
+  const insert = h.sqlite!.prepare("INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, 's1', 'assistant', ?, ?)");
+  insert.run('previous', 'previous', JSON.stringify('Previous answer'), 1);
+  insert.run('target', 'target', JSON.stringify('Old body'), 2);
+  await updateMessageContent('s1', 'target', '');
+  expect(h.broadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
+    sessionId: 's1', patch: { preview: 'Previous answer' },
   });
 });
 

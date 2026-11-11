@@ -8,7 +8,7 @@ const NOTE_KEY = {
   providerShare: 'providerShare.officialRelayNote',
 } as const;
 
-/** 用自己的中转时,共享任务与供应商分享仍经官方中转(自建中转不转发跨账号内容),入口上如实说明。 */
+/** Sharing follows its invitation's V2 relay; legacy sharing keeps its original official route. */
 export function OwnRelayCrossAccountNotice({ feature, className }: {
   feature: keyof typeof NOTE_KEY;
   className?: string;

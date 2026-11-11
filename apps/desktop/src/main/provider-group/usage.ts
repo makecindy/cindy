@@ -134,11 +134,14 @@ function currentSnapshot(updatedAt: unknown, now: number): boolean {
 function codexWindow(raw: unknown): CodexUsageWindow | null {
   if (raw === undefined || raw === null) return null;
   const value = record(raw);
+  // Native account/rateLimits/read uses windowDurationMins; task events already
+  // normalize it to windowMinutes. Both sources must retain the same quota pace.
+  const minutes = value?.windowMinutes ?? value?.windowDurationMins;
   return {
     usedPercent: typeof value?.usedPercent === 'number' && Number.isFinite(value.usedPercent) && value.usedPercent >= 0
       ? Math.min(100, value.usedPercent) : undefined,
-    windowMinutes: typeof value?.windowMinutes === 'number' && Number.isFinite(value.windowMinutes) && value.windowMinutes > 0
-      ? value.windowMinutes : null,
+    windowMinutes: typeof minutes === 'number' && Number.isFinite(minutes) && minutes > 0
+      ? minutes : null,
     resetsAt: typeof value?.resetsAt === 'number' && Number.isFinite(value.resetsAt) && value.resetsAt > 0 ? value.resetsAt : null,
   };
 }
@@ -327,6 +330,7 @@ export function createProviderGroupUsageReader<T>(deps: ProviderGroupUsageReader
             : await deps.readRemote(member.agentDeviceId!, member.providerId);
           return deps.isCurrent() ? deps.parseSnapshot(raw, deps.now()) : null;
         }).catch(() => null).then((snapshot) => {
+          if (pending.get(key) !== request) return null;
           pending.delete(key);
           if (deps.isCurrent() && (member.kind !== 'local' || deps.cacheLocal)) {
             if (cached.size >= MAX_CACHED_ACCOUNTS) cached.delete(cached.keys().next().value!);
@@ -339,6 +343,6 @@ export function createProviderGroupUsageReader<T>(deps: ProviderGroupUsageReader
       const snapshot = await bounded(request);
       return deps.isCurrent() ? deps.parseSnapshot(snapshot, deps.now()) : null;
     },
-    invalidate() { cached.clear(); },
+    invalidate() { cached.clear(); pending.clear(); },
   };
 }

@@ -78,13 +78,7 @@ interface MaximizeRecoveryMouseInput {
 
 type MaximizeRecoveryUserIntentSource = 'before-unmaximize' | 'after-unmaximize';
 
-const WM_SYSCOMMAND = 0x0112;
-const SC_RESTORE = 0xf120;
-const SYSTEM_COMMAND_MASK = 0xfff0;
-
 export interface MaximizeRecoveryNativeWindow extends MaximizeRecoveryWindow {
-  hookWindowMessage(message: number, callback: (wParam: Buffer, lParam: Buffer) => void): void;
-  unhookWindowMessage(message: number): void;
   webContents: {
     on(
       event: 'before-input-event',
@@ -108,9 +102,9 @@ export interface MaximizeRecoveryNativeWindow extends MaximizeRecoveryWindow {
 /**
  * Marks restore gestures that do not go through Cindy's custom window-control IPC.
  * Electron exposes manual movement/resizing separately from programmatic bounds
- * changes, while the frameless title bar's double-click and Win+Down arrive via
- * webContents input events. These signals precede the native `unmaximize`
- * transition on Windows, so the recovery controller can preserve the user's choice.
+ * changes. Also observe title-area input and Win+Down when delivered to webContents.
+ * WM_SYSCOMMAND restore intent is handled by installWindowsTransparentTitleBar,
+ * which owns that message hook. Together these preserve the user's restore choice.
  */
 export function installMainWindowNativeRestoreIntent(
   win: MaximizeRecoveryNativeWindow,
@@ -123,11 +117,6 @@ export function installMainWindowNativeRestoreIntent(
     notifyUserUnmaximizeIntent(win.isMaximized() ? 'before-unmaximize' : 'after-unmaximize');
   const onWillResize = (): void =>
     notifyUserUnmaximizeIntent(win.isMaximized() ? 'before-unmaximize' : 'after-unmaximize');
-  const onSystemCommand = (wParam: Buffer): void => {
-    if (wParam.byteLength >= 4 && (wParam.readUInt32LE(0) & SYSTEM_COMMAND_MASK) === SC_RESTORE) {
-      notifyUserUnmaximizeIntent('before-unmaximize');
-    }
-  };
   const onBeforeMouseEvent = (_event: unknown, mouse: MaximizeRecoveryMouseInput): void => {
     if (
       mouse.type === 'mouseDown' &&
@@ -156,18 +145,16 @@ export function installMainWindowNativeRestoreIntent(
 
   win.on('will-move', onWillMove);
   win.on('will-resize', onWillResize);
-  win.hookWindowMessage(WM_SYSCOMMAND, onSystemCommand);
   win.webContents.on('before-mouse-event', onBeforeMouseEvent);
   win.webContents.on('before-input-event', onBeforeInputEvent);
 
   return (): void => {
     // The caller unhooks from the window's 'closed' event, when the native window is already
-    // gone: its listeners and message hook died with it, and calling into it throws
+    // gone: its listeners died with it, and calling into it throws
     // "Object has been destroyed" (seen as an uncaughtException during update relaunch).
     if (win.isDestroyed()) return;
     win.removeListener('will-move', onWillMove);
     win.removeListener('will-resize', onWillResize);
-    win.unhookWindowMessage(WM_SYSCOMMAND);
     win.webContents.removeListener('before-mouse-event', onBeforeMouseEvent);
     win.webContents.removeListener('before-input-event', onBeforeInputEvent);
   };
