@@ -7,7 +7,7 @@ import { FuseV1Options, FuseVersion } from '@electron/fuses';
 import { MakerDeb } from '@electron-forge/maker-deb';
 import { rebuild as electronRebuild } from '@electron/rebuild';
 import { MakerZIP } from '@electron-forge/maker-zip';
-import { AutoUnpackNativesPlugin } from '@electron-forge/plugin-auto-unpack-natives';
+import { PersonalNativeLaunchPlugin } from './forge-personal-launch';
 import { FusesPlugin } from '@electron-forge/plugin-fuses';
 import { VitePlugin } from '@electron-forge/plugin-vite';
 import type { ForgeArch, ForgeConfig, ForgePlatform } from '@electron-forge/shared-types';
@@ -831,6 +831,8 @@ function extraResourcesForTarget(targetPlatform: string): string[] {
     'resources/remote-file-service',
     // 自建中转单文件:「部署到我的服务器」经 SSH 上传到用户服务器运行。
     'resources/device-link-relay',
+    // V2 transport core, loaded by the trusted Main host and shared across connections.
+    'resources/agent-net',
     // .cindy 发布者/审核 Ed25519 公钥信任表(私钥永不进客户端)。
     'resources/ghost-trust.json',
     // 远端 pi manager bundle(Node 单例 daemon,SSH remote 会话的进程持有器)。
@@ -1747,13 +1749,20 @@ function buildMacMenubarHelper(platform: ForgePlatform, arch: ForgeArch): void {
     }
   }
   fs.mkdirSync(destDir, { recursive: true });
+  // A single-file AppKit tool still needs an application identity for defaults
+  // (including NSStatusItem.autosaveName). Embed it before the normal signing pass.
+  const infoPlistPath = `${dest}.Info.plist`;
+  const infoPlist = fs.readFileSync(path.join(srcDir, 'Info.plist'), 'utf8')
+    .replace('$(PRODUCT_BUNDLE_IDENTIFIER)', `${CINDY_APP_ID}.menubar`);
+  fs.writeFileSync(infoPlistPath, infoPlist, 'utf8');
   buildSwiftHelperForForgeArch(
     src,
     dest,
     arch,
     MACOS_MENUBAR_HELPER_DEPLOYMENT_TARGET,
     // The helper uses @main, which requires library parsing mode.
-    ['-O', '-parse-as-library'],
+    ['-O', '-parse-as-library',
+      '-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__info_plist', '-Xlinker', infoPlistPath],
     'menu bar helper',
   );
   for (const asset of assets) fs.copyFileSync(path.join(srcDir, asset), path.join(destDir, asset));
@@ -2149,7 +2158,7 @@ const config: ForgeConfig = {
   plugins: [
     // chat-data-localization F1：自动 unpack 任何 *.node 原生模块（better-sqlite3）
     // 使其在 packaged 应用中可以被 require()——asar 会阻止原生模块的 dlopen 调用。
-    new AutoUnpackNativesPlugin({}),
+    new PersonalNativeLaunchPlugin({}),
     new VitePlugin({
       // Dev keeps all watcher targets in one process. Build them serially at
       // startup so the initial graph does not multiply the same high baseline;
@@ -2272,7 +2281,7 @@ const config: ForgeConfig = {
           target: 'preload',
         },
         {
-          entry: 'src/main/cindy-brain/nodeRuntimeWorkerProcess.ts',
+          entry: 'src/main/cindy-brain/nodeRuntimeWorkerProcess.desktop.ts',
           config: 'vite.preload.config.ts',
           // 正式包关闭 RunAsNode fuse；随包插件改由 Electron utilityProcess
           // 承载。独立 CJS entry 与 main bundle 同目录，dev / packaged 同路径。

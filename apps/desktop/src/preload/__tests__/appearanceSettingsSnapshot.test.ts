@@ -87,7 +87,7 @@ describe.each(['main', 'sidebar'] as const)('%s preload appearance snapshot', (k
 
     if (kind === 'sidebar') {
       expect(Object.keys(bridge).sort()).toEqual([
-        'ensureWallpaperImage', 'ensureWallpaperVideo', 'getSync', 'onChanged',
+        'ensureWallpaperImage', 'ensureWallpaperVideo', 'getSync', 'loadPluginFont', 'onChanged',
         'onWallpaperDownloadProgress',
       ]);
       // Plugin picker regression: a parallel profile without a migration-complete marker needs
@@ -106,7 +106,7 @@ describe.each(['main', 'sidebar'] as const)('%s preload appearance snapshot', (k
       expect(exposed.maker.claimLegacyModelVisibilityOwner().canWriteOwnerScoped).toBe(false);
     } else {
       expect(Object.keys(bridge).sort()).toEqual([
-        'ensureWallpaperImage', 'ensureWallpaperVideo', 'get', 'getSync', 'importWallpaper',
+        'ensureWallpaperImage', 'ensureWallpaperVideo', 'get', 'getSync', 'importWallpaper', 'loadPluginFont',
         'onChanged', 'onWallpaperDownloadProgress', 'removeWallpaper', 'reset', 'setPatch',
       ]);
     }

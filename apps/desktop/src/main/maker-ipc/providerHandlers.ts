@@ -1,3 +1,4 @@
+import { withoutProviderHeaderCredentials } from '../maker-host/provider-public-view.js';
 import { withAvailabilityPolicyMutation } from '../device-link/providerShareAvailabilityPolicy.js';
 import { bindModelSourceSnapshot, acceptsModelSourceSnapshot, modelSourceRequestSignature, issueModelSourceSnapshot } from '../maker-host/model-source-snapshots.js';
 import { buildModelsFetchRequest } from '../maker-host/provider-model-fetch.js';
@@ -5,7 +6,7 @@ import { getProviderRouteCredentialRevision } from '../maker-host/provider-route
 import { appendSpeechModels, missingSpeechReference } from '../../shared/speechProviderSetup.js';
 import { setProviderPresentation, retainProviderPresentationAfterAuthChange } from '../maker-host/provider-presentation-store.js';
 import type { DeploymentDetectionResult } from '../../shared/providerDetection.js';
-import { pruneProviderGroupBindings } from '../provider-group/bindings.js';
+import { pruneProviderGroupBindings } from '../provider-group/bindings.desktop.js';
 import { writeProviderGroup } from '../provider-group/store.js';
 /**
  * provider:* IPC handlers。
@@ -80,6 +81,7 @@ import {
   customProviderExists,
   deleteCustomProvider,
   getCustomProvider,
+  listCustomProviders,
   updateCustomProvider,
   updateCustomProviderIfUnchanged,
   validateCustomProviderConfig,
@@ -102,7 +104,17 @@ import {
   finishProviderImportConfirm,
   previewProviderImport,
   createProviderImportDraftsFromFile,
+  createLocalProviderImport,
+  editLocalProviderImport,
+  isLocalProviderImport,
+  checkLocalProviderImportSource,
+  localProviderImportDraft,
+  equivalentLocalProvider,
+  completeEquivalentLocalImport,
+  localProviderImportItem,
 } from '../provider-import/providerImport.js';
+import { localSourceContext, readLocalProviderSource, SOURCE_IDS, type LocalSourceContext } from '../provider-import/local/sources.js';
+import type { LocalProviderImportScan, LocalProviderImportItem } from '../../shared/localProviderImport.js';
 import { readProviderImportFile } from '../provider-import/providerImportFile.js';
 import {
   builtinApiKeyStore,
@@ -272,21 +284,10 @@ function oauthRuntimeEndpointSignature(config: CustomProviderConfig | null): str
   }));
 }
 
-/** Never expose runtime header credentials to WebViews or synthetic remote events. */
-function withoutProviderHeaderCredentials(provider: ProviderView): ProviderView {
-  if (!provider.routing) return provider;
-  const routing = Object.fromEntries(
-    Object.entries(provider.routing).map(([agent, descriptor]) => {
-      if (!descriptor) return [agent, descriptor];
-      const safeDescriptor = { ...descriptor };
-      delete safeDescriptor.headerOverride;
-      return [agent, safeDescriptor];
-    }),
-  ) as ProviderView['routing'];
-  return { ...provider, routing };
-}
 
 export interface ProviderHandlerDeps {
+  /** Test seam: production reads known locations on this desktop, never renderer paths. */
+  localProviderSourceContext?: () => LocalSourceContext;
   /**
    * 当前供应商视图（含实时连接状态）；见 createDesktopProviderService。
    *
@@ -452,6 +453,9 @@ export interface ProviderHandlerDeps {
   /** Per-provider opt-in for remote Agent use; absent means disabled. */
   getRemoteProviderInvocationEnabled?(providerId: string): boolean;
   setRemoteProviderInvocationEnabled?(providerId: string, enabled: boolean): void | Promise<void>;
+  /** 供应商「运行于」：用户改选过的电脑(deviceId 或 'local')。 */
+  getProviderRunLocation?(providerId: string): string | undefined;
+  setProviderRunLocation?(providerId: string, location: string | null): void;
   /**
    * 「恢复默认」= 删除该供应商的整组停用 override(供应商级 + 全部逐模型条目,含
    * 指向已下架模型的陈旧条目)。语义遵循 docs/dev-rules/configuration-and-overrides.md
@@ -1256,9 +1260,11 @@ export function registerProviderHandlers(
               ),
             } : {}),
           };
+          const runLocation = deps.getProviderRunLocation?.(provider.id);
+          const located = runLocation ? { ...view, runLocation } : view;
           return remoteAccess
-            ? { ...view, remoteInvocationEnabled: remoteAccess(provider.id) }
-            : view;
+            ? { ...located, remoteInvocationEnabled: remoteAccess(provider.id) }
+            : located;
         }),
         providerOrder,
         modelVisibilityOverrides,
@@ -1347,6 +1353,100 @@ export function registerProviderHandlers(
   const providerImportScope = (): { dataOwnerId: string | null; generation: number } =>
     captureProviderOwnerSession() ?? { dataOwnerId: null, generation: 0 };
 
+  // Different new IDs can describe the same connection. Only local-import final
+  // comparisons/confirmation share this queue; scans and ordinary CRUD do not.
+  let localImportTail: Promise<unknown> = Promise.resolve();
+  const serializeLocalImport = <T,>(task: () => Promise<T>): Promise<T> => {
+    const run = localImportTail.then(task, task);
+    localImportTail = run.catch(() => undefined);
+    return run;
+  };
+  const equivalentStoredLocalImport = async (id: string): Promise<string | undefined> => {
+    const draft = localProviderImportDraft(id, providerImportScope());
+    for (const stored of await listCustomProviders()) {
+      if (stored.auth?.method === 'oauth') continue;
+      // Avoid decrypting unrelated connections while scanning a large saved catalog.
+      if (draft.kind !== 'custom' || Object.keys(draft.config.runtimes).sort().join() !== Object.keys(stored.runtimes).sort().join()
+        || CUSTOM_PROVIDER_RUNTIME_AGENTS.some(agent => {
+          const a = draft.config.runtimes[agent], b = stored.runtimes[agent];
+          return a && b && (a.baseUrl !== b.baseUrl || a.wireProtocol !== b.wireProtocol
+            || a.requestPath !== b.requestPath || a.modelsUrl !== b.modelsUrl);
+        })) continue;
+      // A concurrent settings mutation may have staged keys beside an old config.
+      // Do not classify that transient combination as an existing connection.
+      if (providerConfigMutationCounts.has(stored.id)) continue;
+      const keys: Partial<Record<AgentKind, string>> = {};
+      const config = { ...stored, runtimes: { ...stored.runtimes } };
+      let readable = true;
+      for (const agent of CUSTOM_PROVIDER_RUNTIME_AGENTS) {
+        const runtime = config.runtimes[agent];
+        if (!runtime) continue;
+        try {
+          const key = deps.readCustomProviderKeyForMutation(stored.id, agent);
+          const headers = deps.readCustomProviderHeadersForMutation(stored.id, agent);
+          if ((key !== null && typeof key !== 'string') || (headers !== null && typeof headers !== 'object')) { readable = false; break; }
+          if (typeof key === 'string') keys[agent] = key;
+          config.runtimes[agent] = { ...runtime, ...(headers ? { headers: headers as Record<string, string> } : {}) };
+        } catch { readable = false; break; }
+      }
+      if (readable && !providerConfigMutationCounts.has(stored.id) && equivalentLocalProvider(draft, config, keys)) return stored.id;
+    }
+  };
+
+  let localScanRunning = false;
+  registry.handle(MAKER_INVOKE.PROVIDER_IMPORT_LOCAL_SCAN, async (event, ...args: unknown[]): Promise<LocalProviderImportScan> => {
+    assertTrustedProviderMutationSender(event);
+    if (args.length || localScanRunning) throwIpcError('INVALID_PARAMS', 'local scan is already running or invalid');
+    const owner = providerImportScope();
+    const items: LocalProviderImportItem[] = [];
+    const sources: LocalProviderImportScan['sources'] = [];
+    localScanRunning = true;
+    try {
+      const context = deps.localProviderSourceContext?.() ?? localSourceContext();
+      const snapshot = { ...context, env: { ...context.env } };
+      for (const source of SOURCE_IDS) {
+        const result = await readLocalProviderSource(source, snapshot);
+        assertTrustedProviderMutationSender(event);
+        assertProviderMutationOwner(owner);
+        const added: LocalProviderImportItem[] = [];
+        try {
+          for (const entry of result.entries) {
+            // Capture the stable reference only, never the whole credential-bearing result.
+            const ref = entry.ref;
+            const item = createLocalProviderImport(source, entry, owner, async () => {
+              const fresh = await readLocalProviderSource(source, snapshot);
+              return fresh.issue ? undefined : fresh.entries.find(e => e.ref === ref);
+            });
+            added.push(item);
+            if (!item.issue && await equivalentStoredLocalImport(item.importId)) item.issue = 'duplicate';
+            assertProviderMutationOwner(owner);
+          }
+          items.push(...added);
+          sources.push({ source, ...(result.issue ? { issue: result.issue } : {}) });
+        } catch {
+          for (const item of added) cancelProviderImport(item.importId);
+          assertProviderMutationOwner(owner);
+          sources.push({ source, issue: 'limit' });
+        }
+      }
+      return { items, sources };
+    } catch {
+      for (const item of items) cancelProviderImport(item.importId);
+      throwIpcError('INVALID_PARAMS', 'local scan was cancelled or the active account changed');
+    } finally { localScanRunning = false; }
+  });
+  registry.handle(MAKER_INVOKE.PROVIDER_IMPORT_LOCAL_EDIT, async (event, id: unknown, input: unknown, ...extra: unknown[]) => {
+    assertTrustedProviderMutationSender(event);
+    if (extra.length) throwIpcError('INVALID_PARAMS', 'invalid local edit');
+    const owner = providerImportScope();
+    try {
+      const item = editLocalProviderImport(id, input, owner);
+      if (!item.issue && await equivalentStoredLocalImport(item.importId)) item.issue = 'duplicate';
+      assertProviderMutationOwner(owner);
+      return item;
+    } catch { throwIpcError('INVALID_PARAMS', 'local configuration is invalid or expired'); }
+  });
+
   registry.handle(MAKER_INVOKE.PROVIDER_IMPORT_FILE, async (event, ...args: unknown[]) => {
     assertTrustedProviderMutationSender(event);
     if (args.length) throwIpcError('INVALID_PARAMS', 'file import takes no arguments');
@@ -1403,10 +1503,8 @@ export function registerProviderHandlers(
     return { ok: true };
   });
 
-  registry.handle(
-    MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM,
-    async (
-      event,
+  const confirmProviderImport = async (
+      event: unknown,
       importId: unknown,
       target?: unknown,
       interrupt?: unknown,
@@ -1417,6 +1515,24 @@ export function registerProviderHandlers(
       const ownerAtIngress = providerImportScope();
       let started = false;
       try {
+        if (isLocalProviderImport(importId)) {
+          if (target !== undefined) throwIpcError('INVALID_PARAMS', 'local imports create connections only');
+          let completed: string | undefined;
+          try { completed = await checkLocalProviderImportSource(importId, ownerAtIngress); }
+          catch (error) {
+            assertProviderMutationOwner(ownerAtIngress);
+            if (localProviderImportItem(importId as string, ownerAtIngress).issue === 'changed')
+              throwIpcError('PRECONDITION_FAILED', 'saved API source changed; scan again');
+            throw error;
+          }
+          assertProviderMutationOwner(ownerAtIngress);
+          const existing = completed ?? await equivalentStoredLocalImport(importId as string);
+          assertProviderMutationOwner(ownerAtIngress);
+          if (existing) {
+            if (!completed) completeEquivalentLocalImport(importId as string, existing, ownerAtIngress);
+            return { ok: true, providerId: existing, authMethod: 'apiKey' };
+          }
+        }
         const providers = await deps.listProviders({ allowSideEffects: false });
         assertProviderMutationOwner(ownerAtIngress);
         const { draft, resolution } = beginProviderImportConfirm(
@@ -1520,8 +1636,11 @@ export function registerProviderHandlers(
           'provider import changed, is invalid or expired; preview again',
         );
       }
-    },
-  );
+    };
+  registry.handle(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, (event, id, target, interrupt) =>
+    isLocalProviderImport(id)
+      ? serializeLocalImport(() => confirmProviderImport(event, id, target, interrupt))
+      : confirmProviderImport(event, id, target, interrupt));
 
   function assertTrustedProviderMutationSender(event: unknown): void {
     if (event === MAIN_PROCESS_SENDER) return;
@@ -1827,6 +1946,24 @@ export function registerProviderHandlers(
     }
     deps.broadcastChanged();
     return { ok: true, enabled: value.enabled };
+  });
+
+  registry.handle(MAKER_INVOKE.PROVIDER_RUN_LOCATION_SET, async (event, input: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    const ownerAtIngress = captureProviderOwnerSession();
+    if (!deps.setProviderRunLocation) throwIpcError('INTERNAL', 'provider run location is not wired');
+    if (!input || typeof input !== 'object' || Array.isArray(input)) throwIpcError('INVALID_PARAMS', 'invalid input');
+    const value = input as Record<string, unknown>;
+    if (typeof value.providerId !== 'string' || value.providerId.length === 0 || value.providerId.length > 256) {
+      throwIpcError('INVALID_PARAMS', 'providerId required');
+    }
+    if (value.location !== null && (typeof value.location !== 'string' || !value.location || value.location.length > 256)) {
+      throwIpcError('INVALID_PARAMS', 'location must be a computer id, "local" or null');
+    }
+    assertProviderMutationOwner(ownerAtIngress, 'active account changed before persisting provider run location');
+    deps.setProviderRunLocation(value.providerId, value.location as string | null);
+    deps.broadcastChanged();
+    return { ok: true };
   });
 
   const parsePriceTarget = (value: unknown): ModelPriceOverrideTarget => {
@@ -2808,6 +2945,12 @@ export function registerProviderHandlers(
     const providerId = requireProviderId(input);
     let failure: ProviderModelDiscoveryFailure | null;
     try {
+      // Settings and helper rediscovery must use the same live source. The legacy
+      // discovery hook may be a no-op for SDK-backed subscription providers.
+      if (isBuiltinRefreshableProviderId(providerId)) {
+        await deps.refreshBuiltinModels(providerId);
+        return { ok: true };
+      }
       failure = await deps.rediscoverModels(providerId);
     } catch (err) {
       // 原文只进 Main 日志:凭证读取 / token 刷新等依赖抛出的消息可能含内部路径或上游

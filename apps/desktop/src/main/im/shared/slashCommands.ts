@@ -50,6 +50,9 @@ import {
   tokenizeBotCommand,
 } from './botCommands';
 
+/** 把本机桌面任务 / 项目接进当前对话的命令（与 card 里 control:* / project:* 按钮同一组能力）。 */
+const LOCAL_TASK_ACCESS_COMMANDS: ReadonlySet<string> = new Set(['/ctr', '/exctr', '/session', '/project']);
+
 /** Quick text-only check; treat anything starting with '/' (no spaces before) as a command. */
 export function looksLikeSlashCommand(text: string): boolean {
   return text.startsWith('/');
@@ -216,6 +219,12 @@ export function createSlashHandlers(
         ctx,
         ui.slash.interactiveCommandUnsupported?.(cmd) ?? ui.slash.unknownCommand(cmd),
       );
+      return true;
+    }
+
+    // 公共对话(服务器频道)不接入本机桌面任务 / 项目: 接管会把主人的私人任务挂进公共场合。
+    if (LOCAL_TASK_ACCESS_COMMANDS.has(cmd) && adapter.blocksLocalTaskAccess?.(ctx.userId)) {
+      await safeSendText(ctx, ui.slash.localTaskAccessUnavailable?.(cmd) ?? ui.slash.unknownCommand(cmd));
       return true;
     }
 

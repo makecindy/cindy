@@ -412,6 +412,9 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
       lastSyncedDraftScopeRef.current = draftScope;
       return;
     }
+    // A clear or external write can precede this render's passive effect.
+    // Do not mirror the stale snapshot back into the live attachment subscription.
+    if (attachments !== attachmentsRef.current) return;
     const existing = getComposerDraft(storageKey);
     // `discardDraft` synchronously clears mounted attachment state. Its state
     // update may render once before navigation; do not recreate an empty Map

@@ -1,6 +1,10 @@
 {
   "progress": {
-    "stop": "停止"
+    "stop": "停止",
+    "stopMine": "停止我發起的",
+    "stopAll": "全部停止",
+    "stopAllHint": "包括其他人發起的",
+    "step": "第 {{step}}/{{total}} 步"
   },
   "title": "群聊",
   "memberSeparator": "、",
@@ -79,7 +83,8 @@
     "planDone_one": "{{count}} 步都做完了",
     "planDone_other": "{{count}} 步都做完了",
     "planDoneGeneric": "分工做完了",
-    "olderOnComputer": "更早的訊息請在電腦上查看"
+    "olderOnComputer": "更早的訊息請在電腦上查看",
+    "endTalk": "結束"
   },
   "quote": {
     "label": "引用 {{name}}：{{summary}}",
@@ -98,6 +103,13 @@
     "stepFailed": "{{name}}這一步出錯了，沒做完",
     "stepTimeout": "{{name}}太久沒做完，這一步先停下",
     "stepUnavailable": "{{name}}現在無法使用，這一步沒辦法做",
+    "runtimeFailureReason": {
+      "unclaimed_timeout": {
+        "summary": "{{name}}未能在等待期限內開始處理，本次請求已結束。",
+        "advice": "請夥伴的主人檢查所屬電腦上的 Cindy 是否正常執行、網路是否連線。",
+        "details": "確認 Cindy 和網路恢復正常後，請重新傳送訊息。"
+      }
+    },
     "runtimeFailure": {
       "REMOTE_DEVICE_LIMIT": {
         "summary": "{{name}}無法回覆：夥伴所在裝置保留的遠端任務數已達上限。",
@@ -169,6 +181,8 @@
     "start": "開始",
     "dismiss": "不用了",
     "editHint": "想換人或改步驟，直接說",
+    "autoContinue": "做完一步自動交給下一位",
+    "autoContinueSaveFailed": "分工交接沒能儲存，請再試一次",
     "autoNote": "做完一步會自動交給下一位。",
     "pauseNote": "每做完一步會停下來，等你點「繼續」。",
     "superseded": "已更新",
@@ -212,12 +226,6 @@
     "stopping": "正在停止…",
     "planning": "正在安排…",
     "step": "正在做…"
-  },
-  "work": {
-    "queued": "排隊 {{count}}",
-    "active": "進行中 {{count}}",
-    "expand": "展開夥伴動態",
-    "collapse": "收起夥伴動態"
   },
   "task": {
     "state": {
@@ -324,7 +332,9 @@
     "groupDissolved": "群聊已解散，仍可查看有權存取的歷史訊息。",
     "lastOwner": "請先轉讓群主或解散群聊，再退出。",
     "allBotsMentionDisabled": "群主尚未開啟 @所有夥伴。",
-    "turnAlreadyStarted": "這位夥伴已開始執行，不能略過"
+    "turnAlreadyStarted": "這位夥伴已開始執行，不能略過",
+    "stopOwnershipUnknown": "部分工作未能停止：無法確認由誰發起",
+    "nothingToStop": "目前沒有可停止的工作"
   },
   "followUp": {
     "next": "分工 · 下一步",
@@ -623,5 +633,6 @@
       "uncertain": "尚未確認加入結果"
     },
     "externalFormatError": "請從原訊息重新開啟完整連結。"
-  }
+  },
+  "waitingForOwner": "等待主人確認"
 }

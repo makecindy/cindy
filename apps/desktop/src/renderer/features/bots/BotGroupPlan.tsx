@@ -78,10 +78,10 @@ function StepLead({ plan, step, index }: { plan: BotGroupPlanView; step: BotGrou
   if (plan.status === 'proposed' || plan.status === 'superseded' || plan.status === 'dismissed') {
     return <span className="text-12 tabular-nums text-[var(--text-tertiary)]">{index + 1}</span>;
   }
+  if (state === 'skipped') return <CircleMinus size={16} aria-hidden className="text-[var(--text-tertiary)]" />;
   if (step.status === 'done') {
     return <CircleCheck size={16} aria-hidden className="text-[var(--text-secondary)]" />;
   }
-  if (state === 'skipped') return <CircleMinus size={16} aria-hidden className="text-[var(--text-tertiary)]" />;
   if (state === 'running') {
     // Same running mark as the group speaking row (DESIGN.md §2 Thinking Orange).
     return <Sparkles size={15} aria-hidden className="text-[var(--status-bar-accent)]" />;

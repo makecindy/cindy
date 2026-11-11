@@ -23,6 +23,7 @@ import {
   resolvePiRuntimeModelDescriptor,
   resolveVerifiedContextWindow,
   resolveModelDefaultContextWindow,
+  resolveModelMaxOutputTokens,
   resolveModelContextProviderId,
 } from '../catalog-to-descriptors.js';
 import { sanitizeModelCatalogOverrides } from '../model-plane/localCatalogOverrides.js';
@@ -854,6 +855,35 @@ describe('resolveModelDefaultContextWindow — settings defaults configure the s
     expect(
       resolveModelDefaultContextWindow(catalog, 'codex', null, 'gpt-5.6-sol'),
     ).toBeNull();
+  });
+});
+
+// Regression: the CC runtime must use this connection's maxOutput, not the
+// first same-ID descriptor. Existing projections only tested display metadata.
+describe('resolveModelMaxOutputTokens', () => {
+  it('uses the selected connection and harness, including user overrides', () => {
+    const catalog = injectedCatalog();
+    for (const [id, maxOutput] of [['output-a', 48_000], ['output-b', 96_000]] as const) {
+      catalog.providers.push(buildUserProvider({
+        id, name: id, runtimes: {
+          'claude-code': { baseUrl: 'https://example.invalid', models: [{ id: 'shared', name: 'shared', maxOutputTokens: maxOutput }] },
+          codex: { baseUrl: 'https://example.invalid', models: [{ id: 'shared', name: 'shared', maxOutputTokens: 16_000 }] },
+        },
+      }));
+      expect(resolveModelMaxOutputTokens(catalog, 'claude-code', id, 'shared')).toBe(maxOutput);
+      expect(resolveModelMaxOutputTokens(catalog, 'codex', id, 'shared')).toBe(16_000);
+    }
+    expect(resolveModelMaxOutputTokens(catalog, 'claude-code', null, 'shared')).toBeNull();
+    expect(resolveModelMaxOutputTokens(catalog, 'claude-code', 'missing', 'shared')).toBeNull();
+    expect(resolveModelMaxOutputTokens(catalog, 'claude-code', 'output-a', 'missing')).toBeNull();
+    const provider = catalog.providers.find(p => p.id === 'output-a')!;
+    for (const invalid of [undefined, 0, -1, Number.NaN, 1.5]) {
+      provider.models['claude-code']![0]!.maxOutput = invalid;
+      expect(resolveModelMaxOutputTokens(catalog, 'claude-code', 'output-a', 'shared')).toBeNull();
+    }
+    provider.models['claude-code']![0]!.maxOutput = 48_000;
+    provider.routing['claude-code']!.disabled = true;
+    expect(resolveModelMaxOutputTokens(catalog, 'claude-code', 'output-a', 'shared')).toBeNull();
   });
 });
 

@@ -17,7 +17,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type Database from 'better-sqlite3';
-import { app } from 'electron';
 import { initializeTaskTagPresets } from './taskTagPresets';
 import { createLogger } from '../logger';
 import {
@@ -37,40 +36,41 @@ import {
   officialProfileWriterMigrationMessage,
   shouldRefuseOfficialProfileWriterMigration,
 } from './officialProfileMigrationPolicy';
+import { getMigrationRuntimeConfig } from './migrationRuntime';
 
 const log = createLogger('migrate');
 
 export { hashMigrationFile };
 
 export function getDrizzleDir(): string {
-  return resolveDrizzleDir();
+  return getMigrationRuntimeConfig().drizzleDir;
 }
 
 const MAX_ISO_BACKUPS = 3;
 
 /**
- * 解析 drizzle 目录路径：
+ * Desktop's own location rules, kept here so the Electron entry can install
+ * them once at startup:
  *   - packaged：`process.resourcesPath/drizzle`（forge.config.ts extraResource 配置）
  *   - dev：源码工作目录 `<projectRoot>/apps/desktop/drizzle`
  *
  * vite 把 main 入口产物输出到 `<workspace>/.vite/build/index.js`，运行时 `__dirname`
  * 指向该目录；从那里向上回退到工作根目录再加 `drizzle/`。
  */
-function resolveDrizzleDir(): string {
-  if (app.isPackaged) {
+export function resolveDesktopDrizzleDir(isPackaged: boolean): string {
+  if (isPackaged) {
     return path.join(process.resourcesPath, 'drizzle');
   }
-  // dev：__dirname = <repo>/apps/desktop/.vite/build → ../../drizzle
   return path.resolve(__dirname, '../../drizzle');
 }
 
 export async function runMigrations(db: Database.Database, dbFilePath: string): Promise<void> {
-  const drizzleDir = resolveDrizzleDir();
+  const { drizzleDir, isPackaged } = getMigrationRuntimeConfig();
   log.info(
     JSON.stringify({
       event: 'localDb.migrate.start',
       drizzleDir,
-      isPackaged: app.isPackaged,
+      isPackaged,
       dbFilePath,
     }),
   );
@@ -98,7 +98,7 @@ export async function runMigrations(db: Database.Database, dbFilePath: string): 
   }
   if (
     shouldRefuseOfficialProfileWriterMigration({
-      isPackaged: app.isPackaged,
+      isPackaged,
       officialSharedProfile: process.env.XDT_OFFICIAL_SHARED_PROFILE === '1',
       pendingCount: pending.length,
     })

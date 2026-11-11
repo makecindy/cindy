@@ -2,6 +2,7 @@ import type { RemoteActionInvokeRequest, RemoteActionInvokeResponse } from '@cin
 import {
   BOT_SETTINGS_HOST_OPS,
   BOT_SETTINGS_PROTOCOL_VERSION,
+  BOT_SETTINGS_RETIRED_OPS,
   isBotSettingsOp,
   type BotSettingsCaps,
   type BotSettingsOp,
@@ -37,9 +38,9 @@ const BOT_ID = /^[A-Za-z0-9_-]{1,128}$/;
 /**
  * Host-wide operations that still name a teammate in their arguments. The named teammate is held to
  * the same visibility as a teammate-scoped call, so a controller cannot reach a hidden or archived one
- * through them (e.g. make it the follow-up teammate).
+ * through them.
  */
-const HOST_OP_BOT_ARGS: Partial<Record<BotSettingsOp, string>> = { 'autonomy.set': 'schedulerBotId' };
+const HOST_OP_BOT_ARGS: Partial<Record<BotSettingsOp, string>> = {};
 const MAX_MESSAGE = 300;
 
 const failure = (code: string, message: string): BotSettingsResult => ({ ok: false, code, message: message.slice(0, MAX_MESSAGE) });
@@ -51,7 +52,8 @@ const failure = (code: string, message: string): BotSettingsResult => ({ ok: fal
  */
 export function createBotRemoteSettingsHost(deps: BotSettingsHostDeps) {
   const implemented = (): BotSettingsOp[] => (Object.keys(deps.ops) as BotSettingsOp[]).filter(isBotSettingsOp);
-  const caps = (): BotSettingsCaps => ({ version: BOT_SETTINGS_PROTOCOL_VERSION, ops: ['caps', ...implemented().filter(op => op !== 'caps')] });
+  const caps = (): BotSettingsCaps => ({ version: BOT_SETTINGS_PROTOCOL_VERSION,
+    ops: ['caps', ...implemented().filter(op => op !== 'caps' && !BOT_SETTINGS_RETIRED_OPS.includes(op))] });
 
   async function run(context: RemoteResourceHostContext, request: RemoteActionInvokeRequest): Promise<BotSettingsResult> {
     const input = request.input ?? {};

@@ -77,7 +77,7 @@ export interface AgentInputPluginResourceReference extends AgentInputReferenceBa
   description?: string;
 }
 
-/** One persistent Cindy Bot selected as the intended delegation or handoff target. */
+/** One persistent Cindy Bot selected as the intended collaboration target. */
 export interface AgentInputBotReference extends AgentInputReferenceBase {
   kind: 'bot';
   botId: string;
@@ -97,7 +97,10 @@ export interface AgentInputTodoReference extends AgentInputReferenceBase {
 export interface AgentInputBotHostSnapshot {
   availability: 'ready' | 'degraded' | 'failed' | 'unverified' | 'unavailable';
   activity: 'working' | 'idle' | 'unknown';
+  /** Always 0 since V1 teammate background tasks were retired; kept for older readers. */
   activeDelegations: number;
+  /** The teammate's main chat on this computer; messages to it go through send_to_session. */
+  mainSessionId?: string;
   /** Bounded host diagnosis; never raw capability or transcript data. */
   reason?: string;
 }
@@ -542,10 +545,14 @@ function readBotHostSnapshot(value: unknown): AgentInputBotHostSnapshot | null {
   const reason = typeof candidate.reason === 'string'
     ? oneLine(candidate.reason).slice(0, 240)
     : '';
+  const mainSessionId = typeof candidate.mainSessionId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(candidate.mainSessionId)
+    ? candidate.mainSessionId
+    : '';
   return {
     availability: availability as AgentInputBotHostSnapshot['availability'],
     activity: activity as AgentInputBotHostSnapshot['activity'],
     activeDelegations: activeDelegations as number,
+    ...(mainSessionId ? { mainSessionId } : {}),
     ...(reason ? { reason } : {}),
   };
 }
@@ -647,14 +654,14 @@ function formatReference(reference: AgentInputReference): string {
       'Resolution: the host already resolved this exact stable Bot ID. Do not list Bots, search chat history, or inspect another task runtime merely to identify or locate it.',
       ...(snapshot
         ? [
-            `Host status: availability=${snapshot.availability}; activity=${snapshot.activity}; active_tracked_tasks=${snapshot.activeDelegations}.`,
+            `Host status: availability=${snapshot.availability}; activity=${snapshot.activity}.`,
             ...(snapshot.reason ? [`Host note: ${quotedMetadata(snapshot.reason)}`] : []),
           ]
         : [
             "Host status: not refreshed. Do not invent availability or activity.",
           ]),
-      "Action: infer intent from the surrounding request. Answer status questions from Host status without sending a new message. To contact this teammate, call send_to_agent once with this Bot ID. For independently tracked work or deliverables, use start_session_task instead; it does not target a Bot.",
-      "Boundary: Do not blindly forward the surrounding user text. A teammate message only confirms delivery and must never stand in for a tracked task.",
+      `Action: infer intent from the surrounding request. Answer status questions from Host status without sending a new message. To contact this teammate, call send_to_session once with ${snapshot?.mainSessionId ? `target_session_id ${quotedMetadata(snapshot.mainSessionId)} (its main chat)` : 'the session_id that list_agents returns for this Bot ID'}.`,
+      "Boundary: Do not blindly forward the surrounding user text. A teammate message only confirms delivery, not that any work is done.",
       '[/Referenced Cindy Bot]',
     ].join('\n');
   }

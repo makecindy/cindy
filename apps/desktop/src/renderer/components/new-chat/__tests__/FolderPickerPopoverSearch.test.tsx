@@ -148,3 +148,103 @@ describe('FolderPickerPopover project search', () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 });
+
+// #9695: exercise the real portal and DOM event cancellation, which the old
+// source-string wheel check missed. jsdom cannot perform native scrolling;
+// real wheel displacement and scroll chaining still require browser validation.
+// Unit tier: one cancelable wheel outside the list exposes the passive-listener
+// failure; an icon target and a close/reopen cover native routing and lifetime.
+describe('FolderPickerPopover wheel routing', () => {
+  function scrollList() {
+    const list = document.querySelector<HTMLElement>('[data-folder-picker-scroll]')!;
+    Object.defineProperties(list, {
+      scrollHeight: { configurable: true, value: 1000 },
+      clientHeight: { configurable: true, value: 252 },
+    });
+    return list;
+  }
+
+  it.each([
+    [WheelEvent.DOM_DELTA_PIXEL, 24],
+    [WheelEvent.DOM_DELTA_LINE, 24 * 16],
+    [WheelEvent.DOM_DELTA_PAGE, 24 * window.innerHeight],
+  ])('cancels native default before forwarding delta mode %s from the search box', (deltaMode, delta) => {
+    renderPicker(manyProjects);
+    const list = scrollList();
+    const wheel = new WheelEvent('wheel', {
+      bubbles: true,
+      cancelable: true,
+      deltaY: 24,
+      deltaMode,
+    });
+
+    fireEvent(screen.getByPlaceholderText(SEARCH), wheel);
+
+    expect(wheel.defaultPrevented).toBe(true);
+    expect(list.scrollTop).toBe(delta);
+  });
+
+  it('leaves a wheel over a project icon to native scrolling without adding another delta', () => {
+    renderPicker(manyProjects);
+    const list = scrollList();
+    list.scrollTop = 40;
+    const wheel = new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: 24 });
+
+    fireEvent(list.querySelector('svg')!, wheel);
+
+    expect(wheel.defaultPrevented).toBe(false);
+    expect(list.scrollTop).toBe(40);
+  });
+
+  it('routes recent-folder header wheels to its separate list without intercepting its rows', () => {
+    // The legacy picker has a separate scroll node and no project-search ref.
+    // One cancelable header event must still cancel before manual forwarding.
+    localStorage.setItem('cc-agent-recent-folders', JSON.stringify(manyProjects));
+    try {
+      render(
+        <FolderPickerPopover open onOpenChange={vi.fn()} onSelect={vi.fn()}>
+          <button type="button">trigger</button>
+        </FolderPickerPopover>,
+      );
+      const list = scrollList();
+      const headerWheel = new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: 24 });
+      fireEvent(screen.getByText('newChat.folderPicker.recent'), headerWheel);
+      expect(headerWheel.defaultPrevented).toBe(true);
+      expect(list.scrollTop).toBe(24);
+
+      const rowWheel = new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: 24 });
+      fireEvent(list.querySelector('svg')!, rowWheel);
+      expect(rowWheel.defaultPrevented).toBe(false);
+      expect(list.scrollTop).toBe(24);
+    } finally {
+      localStorage.removeItem('cc-agent-recent-folders');
+    }
+  });
+
+  it('attaches to a late portal, detaches on close, and forwards only once after reopening', () => {
+    const props = { onOpenChange: vi.fn(), onSelect: vi.fn(), projectOptions: manyProjects };
+    const picker = (open: boolean) => (
+      <FolderPickerPopover {...props} open={open}>
+        <button type="button">trigger</button>
+      </FolderPickerPopover>
+    );
+    const { rerender } = render(picker(false));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    rerender(picker(true));
+    const oldList = scrollList();
+    const oldHeading = screen.getByText('newChat.folderPicker.projects');
+    rerender(picker(false));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    fireEvent.wheel(oldHeading, { deltaY: 24, cancelable: true });
+    expect(oldList.scrollTop).toBe(0);
+
+    rerender(picker(true));
+    const list = scrollList();
+    const heading = screen.getByText('newChat.folderPicker.projects');
+    fireEvent.wheel(heading, { deltaY: 24, cancelable: true });
+    expect(list.scrollTop).toBe(24);
+    // If the browser does not allow cancellation, do not add manual scrolling.
+    fireEvent.wheel(heading, { deltaY: 24, cancelable: false });
+    expect(list.scrollTop).toBe(24);
+  });
+});

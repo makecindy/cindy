@@ -1,7 +1,7 @@
 import { historyCompanionJson, parseHistoryCompanion } from './historyCompanion';
 import { normalizeTaskTags } from '@cindy/maker-shared';
 /** Shared database reads for local IPC, remote IPC and internal callers. */
-import { and, desc, eq, inArray, isNull, or, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, isNull, ne, or, sql, type SQL } from 'drizzle-orm';
 import type { DbClient } from './client/DbClient';
 import { sessions } from './schema';
 import { DESKTOP_TASK_LIST_SESSION_SOURCES } from '../../shared/sessionSource';
@@ -62,10 +62,11 @@ const SESSION_MESSAGE_COUNT_SQL = sql<number>`(
  * sidebar-card-mode：最近一条可见 user/assistant 的预览抽出 / role。
  * list_preview 已回填时 CASE 短路，不碰 messages。否则 SQL 侧 json_extract 纯文本，
  * 不把整段 content 跨 worker RPC。autoResume 只检查 user 行的 agent_meta。
+ * 空串等同未回填（见 SESSION_LIST_PROJECTION_BACKFILL_SQL），连带存下的旧 role 也不可信。
  */
 const LATEST_MSG_EXTRACT_SQL = sql<string | null>`(
   CASE
-    WHEN ${sessions.listPreview} IS NOT NULL THEN NULL
+    WHEN NULLIF(${sessions.listPreview}, '') IS NOT NULL THEN NULL
     ELSE (
       SELECT ${sql.raw(LIST_PREVIEW_EXTRACT_SQL)} FROM messages m
       WHERE m.session_id = ${OUTER_SESSION_ID_SQL}
@@ -77,7 +78,7 @@ const LATEST_MSG_EXTRACT_SQL = sql<string | null>`(
 )`.as('latest_message_extract');
 const LATEST_MSG_ROLE_SQL = sql<string | null>`(
   CASE
-    WHEN ${sessions.listPreviewRole} IS NOT NULL THEN ${sessions.listPreviewRole}
+    WHEN ${sessions.listPreviewRole} IS NOT NULL AND ${sessions.listPreview} IS NOT '' THEN ${sessions.listPreviewRole}
     ELSE (
       SELECT m.role FROM messages m
       WHERE m.session_id = ${OUTER_SESSION_ID_SQL}
@@ -143,6 +144,41 @@ export async function selectSessionWithCount(db: DbClient['drizzle'], id: string
 }
 
 /**
+ * Ordinary task lists share visibility, status, ordering and pinned completion
+ * across desktop IPC and the standalone Host. The caller supplies an owner-bound
+ * database and validates access to privileged cursors / ID subsets; this service
+ * does not choose an account or widen a transport's permissions.
+ */
+export async function selectOrdinarySessionListRows(
+  db: DbClient['drizzle'],
+  query: {
+    cap: number;
+    statusFilter: 'active' | 'archived' | null;
+    includePinned?: boolean;
+    before?: { updatedAt: number; id: string };
+    ids?: readonly string[];
+  },
+): Promise<SessionListRow[]> {
+  if (query.ids?.length === 0) return [];
+  const where = and(
+    ordinaryTaskListFilter(),
+    query.statusFilter ? eq(sessions.status, query.statusFilter) : ne(sessions.status, 'deleted'),
+    query.ids ? inArray(sessions.id, [...query.ids]) : undefined,
+  );
+  const rows = await selectSessionListRows(db, where, query.cap, query.before);
+  if (!query.includePinned) return rows;
+
+  const pinnedRows = await selectSessionListRows(db, and(where, isNotNull(sessions.pinnedAt)), null);
+  const seen = new Set(rows.map(row => row.session.id));
+  for (const row of pinnedRows) {
+    if (seen.has(row.session.id)) continue;
+    seen.add(row.session.id);
+    rows.push(row);
+  }
+  return rows;
+}
+
+/**
  * sessions:list 的行查询——**两段式**：CTE 先按排序取够 `cap` 个 id，主查询只对这批行算
  * messageCount 与 preview。
  *
@@ -185,4 +221,32 @@ export function selectSessionListRows(
     .innerJoin(picked, eq(picked.id, sessions.id))
     .where(where)
     .orderBy(desc(sessions.updatedAt), desc(sessions.id));
+}
+
+/** Atomic activity update shared by desktop and the independent runtime. */
+export async function touchUserSendRow(db: DbClient['drizzle'], id: string, ts: number) {
+  return db
+    .update(sessions)
+    .set({
+      userSendAt: ts,
+      lastActivityAt: sql`MAX(COALESCE(${sessions.lastActivityAt}, 0), ${ts})`,
+      updatedAt: sql`MAX(${sessions.updatedAt}, ${ts})`,
+    })
+    .where(
+      and(
+        eq(sessions.id, id),
+        sql`(${sessions.userSendAt} IS NULL OR ${sessions.userSendAt} < ${ts})`,
+      ),
+    )
+    .returning({
+      userSendAt: sessions.userSendAt,
+      lastActivityAt: sessions.lastActivityAt,
+      updatedAt: sessions.updatedAt,
+      workingDir: sessions.workingDir,
+      projectDir: sessions.projectDir,
+      workspaceKind: sessions.workspaceKind,
+      remoteHostId: sessions.remoteHostId,
+      source: sessions.source,
+      orcaRole: sessions.orcaRole,
+    });
 }

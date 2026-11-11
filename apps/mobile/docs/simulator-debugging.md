@@ -24,6 +24,25 @@ Windows Android Studio SDK location; they do not need to be on `PATH`. The
 command does not rebuild the native app, so install the matching development
 package first when switching build identity.
 
+Windows Android identity checks use the following command (replace the serial and
+port with the selected emulator and Metro):
+
+```sh
+pnpm mobile:sim:whoami -- --mock --udid emulator-5554 --port 8082 --json
+```
+
+They read the resolved `android.package`, installed version/debug flag and the APK's
+`assets/fingerprint`, compare it with the Android Expo Updates fingerprint, and reuse
+the Metro worktree/source/environment checks. Failed adb reads remain failures;
+APK fingerprint timeouts/unreadable results keep a distinct `native.reason` and
+ask you to repair adb/fingerprint reads and retry, without recommending a rebuild.
+If extracting the fingerprint exits unsuccessfully, a successful archive listing
+that lacks the exact `assets/fingerprint` entry identifies a missing fingerprint
+and recommends rebuilding. Failed listings remain probe failures.
+Multiple online emulators require an explicit serial. Physical phones are not selected.
+`--viewer` remains iOS-only: Android window and page verification requires a real screenshot.
+`mobile:sim:up` is still iOS-only; Windows uses `start` and `rebuild` separately.
+
 The three commands share Metro worktree, source, region and environment checks.
 `whoami` success proves identity consistency, not that the app has loaded a bundle
 or displayed a page (`pageVerified` remains false). `rebuild` reports installation
@@ -438,7 +457,9 @@ The native build number only proves native installation. `whoami` also compares
 the installed `EXUpdates.bundle/fingerprint` with the current worktree's Expo
 Updates fingerprint, using the same development environment and workflow as the
 native build. A missing/unreadable fingerprint (`native-unknown`) or difference
-(`native-mismatch`) fails the check even when Metro is correct. Run ordinary
+(`native-mismatch`) fails the check even when Metro is correct. For a read or
+calculation failure, fix the probe and retry before deciding whether to rebuild.
+For a genuinely missing fingerprint or a mismatch, run ordinary
 `mobile:sim:rebuild` without `--clean`; it rejects incompatible cached artifacts
 and checks the built and installed app before handing it off. For example,
 switching worktrees with different `@expo/ui` versions can otherwise silently
@@ -725,3 +746,17 @@ Run this checklist:
 - Manually touch the exact path that regressed in the simulator.
 - Run `pnpm mobile:sim:logcheck` afterward and report its result.
 - Tell the tester which simulator/device, runtime, and build were used.
+
+### Generic simulator builds and native library slices
+
+`sim-rebuild.mjs` passes `ARCHS=<simArch>` even for the generic iOS Simulator
+destination used by Cindy-managed devices. Agent-Net builds the simulator slice
+for the host architecture, and the simulator cache is keyed by that same architecture.
+Without this setting, Xcode can request both `arm64 x86_64`; CocoaPods then skips
+copying `CindyAgentNetNative.xcframework` because no slice contains both, and Swift
+reports `Unable to resolve module dependency: CindyAgentNetNative`. Do not patch
+generated Pods or remove the Swift import.
+
+Keep the full `xcodebuild` output (redirect it to a task log when needed), rather
+than using `-quiet`: the full build report identifies the failed target and missing
+module; the quiet log can instead lead with `exit code 0 but produced no further output`.

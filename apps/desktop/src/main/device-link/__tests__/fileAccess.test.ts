@@ -7,7 +7,7 @@ const owner = vi.hoisted(() => ({ current: true }));
 const cache = vi.hoisted(() => ({ get: vi.fn(), put: vi.fn(), invalidate: vi.fn() }));
 vi.mock('../remoteFileVersionCache', () => ({ remoteFileVersionCache: () => cache }));
 vi.mock('../filePeer', () => ({ tryPeerFile: peer }));
-vi.mock('../mediaTransfer', () => ({ removeRemote: remove }));
+vi.mock('../mediaTransfer.desktop', () => ({ removeRemote: remove }));
 vi.mock('../broadcast-tap', () => ({
   captureDataOwnerBroadcastScope: () => ({}),
   isDataOwnerBroadcastScopeCurrent: () => owner.current,
