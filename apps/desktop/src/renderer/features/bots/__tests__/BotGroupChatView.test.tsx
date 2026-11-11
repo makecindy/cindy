@@ -3027,6 +3027,27 @@ describe('BotGroupChatView', () => {
       }
     });
 
+    // #9909: a discussion turn that answered NO_REPLY posts no group message at all. The queue must
+    // say it was skipped, not spoken, or the group looks like it lost a reply.
+    it('tells a skipped discussion turn apart from one that posted a message', async () => {
+      const base = plan().steps[0]!;
+      const queue = plan({
+        status: 'waiting', currentStep: 1, kind: 'talk', canManage: true,
+        steps: [
+          { ...base, position: 0, task: '', status: 'done', resultMessageId: null },
+          { ...base, position: 1, task: '', status: 'done', resultMessageId: '90000000-0000-4000-8000-000000000001' },
+          { ...base, position: 2, task: '', status: 'pending' },
+        ],
+      });
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: withPlan(queue) });
+      renderView();
+      const card = await screen.findByTestId('bot-group-arrangement');
+      const steps = within(card).getAllByTestId('bot-group-plan-step');
+      expect(steps[0]?.textContent).toContain('bots.groupChat.plan.stepSkipped');
+      expect(steps[0]?.textContent).not.toContain('bots.groupChat.plan.stepSpoken');
+      expect(steps[1]?.textContent).toContain('bots.groupChat.plan.stepSpoken');
+    });
+
     // A waiting talk queue supports skipping, not reassigning (Plans.action only reassigns proposed plans).
     // Unit: the real card must send the pending position and enforce the projected management permission.
     it.each([[true, 1], [false, 0]] as const)('offers skipping a waiting queue turn only to a manager (canManage=%s)', async (canManage, buttons) => {
