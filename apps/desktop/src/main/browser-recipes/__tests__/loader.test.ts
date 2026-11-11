@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 // `buildUserRecipes` is importable in the node test env.
 vi.mock('electron', () => ({ app: { getPath: () => '/tmp/xdt-test-userdata' } }));
 
-const { buildUserRecipes } = await import('../loader.js');
+const { buildUserRecipes } = await import('../loader.desktop.js');
 
 const recipeJson = (id: string, url = 'https://u/') =>
   JSON.stringify({ id, steps: [{ action: 'navigate', url }] });

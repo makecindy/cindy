@@ -378,7 +378,7 @@ import {
   clearUserBrowserMarksForSession,
   getBrowserAvailability,
   openBrowserForLogin,
-} from '../mcp-integrations/browser.js';
+} from '../mcp-integrations/browser.desktop.js';
 import { readComputerStatusForSettings, type ComputerStatusRequest } from './computerStatusHandler.js';
 import { isBrowserOpenForLoginError } from '../../shared/browserBackend.js';
 import {
@@ -400,7 +400,7 @@ import {
   listComputerWindowsForAtMention,
   pauseComputerDriverPermissionProbe,
   updateComputerDriver,
-} from '../mcp-integrations/computer.js';
+} from '../mcp-integrations/computer.desktop.js';
 import { getRsbBrowserBridge } from '../rsb-browser-bridge/index.js';
 import {
   closeComputerPermissionGuideWindow,

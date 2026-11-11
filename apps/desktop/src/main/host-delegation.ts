@@ -22,6 +22,7 @@ import { startHostEventStream, type HostConnectionState } from '@cindy/maker-sha
 export interface HostDelegationConfig {
   readonly baseUrl: string;
   readonly token: string;
+  readonly instanceId?: string;
 }
 
 /** Env var that enables client mode; the value is the loopback base URL. */
@@ -56,7 +57,9 @@ export function resolveHostDelegation(input: {
     throw new Error(`host delegation requires the profile API token at ${tokenPath}; run cindy-host once first`);
   }
   if (!token) throw new Error('host delegation token is empty');
-  return { baseUrl: url.origin, token };
+  const instanceId = input.env.CINDY_HOST_INSTANCE?.trim();
+  if (instanceId && !/^[a-zA-Z0-9-]{1,128}$/.test(instanceId)) throw new Error('Invalid Host instance identity');
+  return { baseUrl: url.origin, token, ...(instanceId ? { instanceId } : {}) };
 }
 
 export interface HostClient {
@@ -68,10 +71,12 @@ export function createHostClient(config: HostDelegationConfig): HostClient {
     async request(path, body, signal) {
       const response = await fetch(`${config.baseUrl}${path}`, {
         method: 'POST',
+        redirect: 'error',
         signal,
         headers: {
           'content-type': 'application/json',
           authorization: `Bearer ${config.token}`,
+          ...(config.instanceId ? { 'x-cindy-host-instance': config.instanceId } : {}),
         },
         body: JSON.stringify(body ?? null),
       });
@@ -290,12 +295,14 @@ export function registerHostDelegatedSync(input: {
 export interface HostEventBridgeInput {
   readonly baseUrl: string;
   readonly token: string;
+  readonly instanceId?: string;
   readonly broadcast: (payload: unknown) => void;
   readonly onSettingsChanged?: (domain: string, value: unknown) => void;
   readonly onSessionChanged?: (event: unknown) => void;
   readonly onMessageCreated?: (event: unknown) => void;
   readonly onMessageDeleted?: (event: unknown) => void;
   readonly onErrorPersisted?: (event: unknown) => void;
+  readonly onRightSidebarTabsChanged?: (event: unknown) => void;
   readonly onSubagentRunsChanged?: (event: unknown) => void;
   readonly onProjectAliasesChanged?: () => void;
   readonly onInputProjection?: (projection: unknown) => void;
@@ -314,7 +321,8 @@ export interface HostEventBridgeInput {
 export function startHostEventBridge(input: HostEventBridgeInput): (() => void) & { reconnect(): void } {
   const connection = startHostEventStream({
     open: (query, signal) => fetch(`${input.baseUrl}/events${query}`, {
-      headers: { authorization: `Bearer ${input.token}` }, signal,
+      headers: { authorization: `Bearer ${input.token}`,
+        ...(input.instanceId ? { 'x-cindy-host-instance': input.instanceId } : {}) }, signal, redirect: 'error',
     }),
     onState: state => input.onConnectionState?.(state),
     beforeEvents: input.beforeEvents,
@@ -340,6 +348,8 @@ export function startHostEventBridge(input: HostEventBridgeInput): (() => void) 
         input.onMessageDeleted?.(payload);
       } else if (payload?.type === 'error_persisted') {
         input.onErrorPersisted?.(payload);
+      } else if (payload?.type === 'right_sidebar_tabs_changed') {
+        input.onRightSidebarTabsChanged?.({ sessionId: payload.sessionId });
       } else if (payload?.type === 'subagent_runs_changed') {
         input.onSubagentRunsChanged?.(payload);
       } else if (payload?.type === 'project_aliases_changed') {

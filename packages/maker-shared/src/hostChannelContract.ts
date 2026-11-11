@@ -31,6 +31,12 @@ export const HOST_CONTRACT_CHANNELS: readonly HostChannelDef[] = [
     hostPath: '/api/conversations/search',
     body: ([request]) => ({ request }),
   },
+  ...(['list', 'ensure-singleton', 'upsert', 'close', 'setActive', 'reorder'] as const).map(action => ({
+    desktopChannel: `local-db:right-sidebar-tabs:${action}`,
+    webPath: `localDb.rightSidebarTabs.${action === 'ensure-singleton' ? 'ensureSingleton' : action}`,
+    hostPath: `/api/right-sidebar-tabs/${action}`,
+    body: ([payload]: unknown[]) => payload ?? {},
+  })),
   // --- Sessions ---
   {
     desktopChannel: 'local-db:sessions:list',

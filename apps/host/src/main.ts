@@ -1,3 +1,6 @@
+import { clientMigrationContract } from './client-migration-contract.mjs';
+import { createRightSidebarTabsService } from '../../desktop/src/main/localDb/ipc/rightSidebarTabsService.js';
+import { createHostPlatformTools } from './platform/tools.js';
 import { createHostCodexRuntime } from './agent/codex-runtime.js';
 import { createAvailabilityPolicy } from '../../desktop/src/main/device-link/providerShareAvailabilityPolicyCore.js';
 import { configureWindowsAtomicRename } from '../../desktop/src/main/windowsAtomicRename.js';
@@ -93,6 +96,7 @@ import {
 } from './profile-settings.mjs';
 import { createCredentialStore } from './credentials/store.mjs';
 import { createHostServer } from './server.mjs';
+import { createPlatformClientBridge } from './platform/client-bridge.js';
 import { createSnapshotProcess } from './snapshot-process.mjs';
 import { configureGhostSnapshotProcess } from '../../desktop/src/main/cindy-brain/ghostSnapshotCapability.js';
 import { withCrossProcessLock } from '../../desktop/src/main/device-link/crossProcessLock.js';
@@ -419,6 +423,8 @@ const listProviders = createProviderCatalog({
   readOwner: () => ({ ...getActiveAppSession(), pending: isAppSessionBoundaryPending() }),
 });
 let stopPluginAuthorization: (() => void) | null = null;
+let platformClient: ReturnType<typeof createPlatformClientBridge> | null = null;
+let platformTools: ReturnType<typeof createHostPlatformTools> | null = null;
 let plugins: Awaited<ReturnType<typeof createHostPluginRuntime>> | null = null;
 let pluginGateway: ReturnType<typeof createHostPluginGateway> | null = null;
 let pluginManager: ReturnType<typeof createHostGhostManager> | null = null;
@@ -612,6 +618,22 @@ async function ensureRuntime(ownerId: string): Promise<void> {
     available: peer => deviceLink?.canAuthorize(peer) ?? false,
   });
 
+  platformClient = createPlatformClientBridge({ assertCurrent: plugins.assertCurrent, ownerId,
+    uploadRoots: async id => {
+      const meta = await agentGraph?.maker.getSessionMeta(id);
+      return meta?.workDir && !meta.remoteHostId ? [meta.workDir] : [];
+    },
+  });
+  platformTools = createHostPlatformTools({ profileDir: dataDir, client: platformClient,
+    assertCurrent: plugins.assertCurrent,
+    secretIo: providerConfig.recipeSecretIo,
+    browserExtensions: plugins.browserExtensions,
+    uploadRoots: async id => {
+      const meta = await agentGraph?.maker.getSessionMeta(id);
+      return meta?.workDir && !meta.remoteHostId ? [meta.workDir] : [];
+    },
+  });
+
   const claudeBinary = harnessBinaryPath('claude-code');
   const codexBinary = harnessBinaryPath('codex');
   const piBinary = harnessBinaryPath('pi');
@@ -630,6 +652,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       publish: (channel, payload) => eventHub.publish({ type: 'plugin_push', channel, payload }),
     });
     agentGraph = createHostAgentGraph({
+      onSessionClose: (id: string) => platformTools?.closeSession(id),
       codexRuntime,
       providerConfig,
       mcpRuntime,
@@ -646,7 +669,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       storage: sessionStorage,
       gateway,
       makerMemory,
-      mcpProviders: await pluginGateway.prepareMcpProviders([...createHostMemoryMcpProviders(makerMemory), pluginGateway.provider]),
+      mcpProviders: await pluginGateway.prepareMcpProviders([...createHostMemoryMcpProviders(makerMemory), ...platformTools.providers, pluginGateway.provider]),
       userDataDir: dataDir,
     });
     attachAgentsToMakerMemory(makerMemory, agentGraph.instances);
@@ -905,6 +928,10 @@ function writeProfileAppearance(patch: unknown) {
 const serverDeps = {
   executeTaskTags: taskTags.executeTaskTags,
   searchConversations: executeConversationSearch,
+  rightSidebarTabs: createRightSidebarTabsService({
+    getDb: () => getDbClient().drizzle,
+    changed: sessionId => { eventHub.publish({ type: 'right_sidebar_tabs_changed', sessionId }); },
+  }),
   instanceId,
   isOwnerReady: () => runtime.state === 'ready' && account.authenticated && !isAppSessionBoundaryPending(),
   requestStop: () => stop(),
@@ -964,6 +991,12 @@ const serverDeps = {
   probe: async () => ({
     status: 'ok',
     service: 'cindy-host',
+    clientProtocol: 1,
+    // Platform RPC now survives a client replacement, with live embedded pages
+    // deferring it. Full daily-client migration still requires the production
+    // adoption acceptance and feature parity (scheduler, companions and IM).
+    // The isolated platform acceptance must not open the whole-client gate.
+    clientHandoffReady: clientMigrationContract.ready,
     instanceId,
     pid: process.pid,
     region: resolveHostRegion(),
@@ -1444,6 +1477,8 @@ async function disposeOwnerRuntime(): Promise<void> {
     await attempt(() => (agentGraph?.maker as { shutdown?: () => Promise<void> } | undefined)?.shutdown?.());
     await attempt(() => codexRuntime?.close());
     await attempt(() => mcpRuntime?.close());
+    platformClient?.close(); platformClient = null;
+    await attempt(() => platformTools?.close());
     await attempt(closeClaudeCliProxyBridge);
     await attempt(() => makerMemory?.dispose());
     await attempt(() => drainedPlugins);
@@ -1451,6 +1486,7 @@ async function disposeOwnerRuntime(): Promise<void> {
     pluginManager?.disposeNotificationIndex();
     await attempt(() => closeStorage?.());
   } finally {
+    platformTools = null;
     plugins = null;
     pluginGateway = null;
     pluginManager = null;
@@ -1481,7 +1517,7 @@ async function disposeOwnerRuntime(): Promise<void> {
 let startup: Promise<void> = Promise.resolve();
 
 const service = createHostService(serverDeps);
-const server = createHostServer({ ...serverDeps, service,
+const server = createHostServer({ ...serverDeps, service, platformClient: () => platformClient,
   remoteControl: async (action: string, body: { deviceId?: string }) => {
     if (!deviceLink) throw new Error('Sign in and start the Host runtime first');
     if (action === 'status') return deviceLink.state();

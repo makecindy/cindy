@@ -197,6 +197,14 @@ describe('host proxy round trip', () => {
 });
 
 describe('createHostClient', () => {
+  it('pins requests to the original Host instance and refuses redirects', async () => {
+    const fetchMock = vi.fn(async () => new Response('{}'));
+    vi.stubGlobal('fetch', fetchMock);
+    await createHostClient({ baseUrl: 'http://127.0.0.1:3456', token: 'fixture', instanceId: 'original' }).request('/api/input/enqueue', {});
+    const [, options] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(options.headers).toMatchObject({ 'x-cindy-host-instance': 'original' });
+    expect(options.redirect).toBe('error');
+  });
   // Unit regression through the registered IPC boundary: the old contract
   // returned a bare boolean for approval and an object for steer, opposite to
   // what preload consumers expect. Also keep a successful refresh signed out.
@@ -336,6 +344,7 @@ describe('claimProxiedChannels and unsupported fallbacks', () => {
     const sessionEvents: unknown[] = [];
     const messageEvents: unknown[] = [];
     const historyChanges: unknown[] = [];
+    const sidebarChanges: unknown[] = [];
     let projectAliasesNotified = false;
     const errors: unknown[] = [];
 
@@ -358,6 +367,7 @@ describe('claimProxiedChannels and unsupported fallbacks', () => {
           res.write('data: {"seq":8,"type":"message_deleted","sessionId":"s1","clientId":"draft"}\n\n');
           res.write('data: {"seq":9,"type":"error_persisted","sessionId":"s1","persistId":"err"}\n\n');
           res.write('data: {"seq":10,"type":"subagent_runs_changed","sessionId":"s1"}\n\n');
+          res.write('data: {"seq":11,"type":"right_sidebar_tabs_changed","sessionId":"s1"}\n\n');
         } else {
           res.writeHead(404);
           res.end();
@@ -384,6 +394,7 @@ describe('claimProxiedChannels and unsupported fallbacks', () => {
       onMessageDeleted: (event) => historyChanges.push(event),
       onErrorPersisted: (event) => historyChanges.push(event),
       onSubagentRunsChanged: (event) => historyChanges.push(event),
+      onRightSidebarTabsChanged: (event) => sidebarChanges.push(event),
       onProjectAliasesChanged: () => {
         projectAliasesNotified = true;
       },
@@ -395,7 +406,7 @@ describe('claimProxiedChannels and unsupported fallbacks', () => {
 
     // Wait for the stream events to process
     for (let i = 0; i < 20; i++) {
-      if (historyChanges.length >= 3) break;
+      if (historyChanges.length >= 3 && sidebarChanges.length) break;
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
 
@@ -414,6 +425,7 @@ describe('claimProxiedChannels and unsupported fallbacks', () => {
       { seq: 9, type: 'error_persisted', sessionId: 's1', persistId: 'err' },
       { seq: 10, type: 'subagent_runs_changed', sessionId: 's1' },
     ]);
+    expect(sidebarChanges).toEqual([{ sessionId: 's1' }]);
     expect(projectAliasesNotified).toBe(true);
   });
 });

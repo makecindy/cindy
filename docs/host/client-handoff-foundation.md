@@ -1,0 +1,34 @@
+# 后台 Host 与窗口交接地基
+
+本层用于显式启用的开发者 Host 模式。普通 Desktop 未设置 `CINDY_HOST_API` 时，仍在
+Electron 内执行任务，使用原桌面装配；不自动启动 Host、不迁移 profile、不更换更新器。
+`client-migration.json` 与健康响应的 `clientHandoffReady` 保持 `false`。本层可测试窗口交接，
+不代表 Host 已具备完整桌面功能，也不允许据此开启整机迁移。
+
+## 生命周期与平台执行
+
+- `dev-with-host` 启动或复用由 profile 管理的后台 Host。窗口或启动终端退出不停止 Host；
+  停止后台仍使用已有 Host stop 命令。活着但无法验证的 Host 不会被自动替换。
+- 客户端按 Host instance ID 和 profile API token 连接，地址复用不能把旧请求发到新 Host。
+- 平台 WebSocket 只接收经认证的本机原生客户端，绑定账号、客户端 ID 和 PID。
+  电脑控制与内嵌浏览器操作由带系统授权的窗口进程执行；后台保存任务执行状态。
+- 交接先暂停新平台调用并检查在途操作、输入占用与活跃 webview。不能释放时拒绝交接，
+  旧窗口可恢复。只有尚未派发的请求能等候新窗口；已经派发但断线的输入返回结果不确定，
+  不自动重放。取消和账号变化会解除等待或拒绝旧结果。
+- 侧栏页签持久化复用同一服务，桌面 IPC 与 Host API 注入各自数据库和事件出口。
+  页签记录可恢复不代表活跃网页内存可恢复，因此有活跃 webview 时仍拒绝换窗。
+
+## 自动验证与边界
+
+`pnpm --filter @cindy/host test` 覆盖后台身份核验、真实 loopback RPC、冻结、取消、断线、
+账号隔离以及未派发请求恢复。桌面相关 Vitest 验证原电脑控制、浏览器设置、权限引导和
+账号恢复行为；两端类型检查均须运行。
+
+`apps/host/scripts/client-handoff-native.e2e.mjs` 是独立的进程级交接验收，不替代
+`codex-runtime.e2e.mjs` 中已合入的发送、插话和附件验收。它使用临时 profile、假凭证和
+本机模拟上游，要求显式传入 `CINDY_TEST_AGENT_BINARY`；可选 `CINDY_TEST_AGENT` 选择
+已支持的原生引擎。测试实际替换客户端进程，断言任务继续、文件副作用仅一次、确认请求
+在新客户端恢复且仅处理一次。GUI、Chromium、安装包等可选模式必须分别报告结果。
+
+首次迁移、profile 写入权切换、旧客户端恢复和个人版升级命令不属于本次地基。
+真实账号、真实模型服务、正式安装包、Windows、手机及整机迁移未实测时不能宣称通过。
