@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { CINDY_TOOL_FOLD_EXTENSION_SOURCE } from '../pi-tool-fold-source.js';
+import {
+  CINDY_TOOL_FOLD_ENV_NAMES,
+  CINDY_TOOL_FOLD_EXTENSION_SOURCE,
+} from '../pi-tool-fold-source.js';
 
 type Block = { type: string; [key: string]: unknown };
 type Message = { role?: string; toolCallId?: string; toolName?: string; isError?: boolean; content?: Block[]; [key: string]: unknown };
@@ -332,5 +335,19 @@ describe('cindy-tool-fold extension source', () => {
     // A live giant still recovers.
     const live = await tool.execute('t2', { call_id: 'giant-8' });
     expect(String(live.content![0].text)).toContain(`payload 8 ${'g'.repeat(25000)}`);
+  });
+  it('forwards every knob the extension reads to remote Pi sessions', () => {
+    // A knob that exists in the extension but is missing from the forward list is
+    // silently ignored on remote sessions (the default applies instead).
+    const read = new Set<string>();
+    const pattern = /CINDY_PI_TOOL_FOLD[A-Z_]*/g;
+    let hit = pattern.exec(CINDY_TOOL_FOLD_EXTENSION_SOURCE);
+    while (hit !== null) {
+      read.add(hit[0]);
+      hit = pattern.exec(CINDY_TOOL_FOLD_EXTENSION_SOURCE);
+    }
+    const forwarded = new Set<string>(CINDY_TOOL_FOLD_ENV_NAMES);
+    expect([...read].filter((name) => !forwarded.has(name))).toEqual([]);
+    expect(forwarded.has('CINDY_PI_TOOL_FOLD_GIANT_BUDGET')).toBe(true);
   });
 });
