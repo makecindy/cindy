@@ -1,5 +1,6 @@
 import { deviceDisplayName } from '@/lib/deviceName';
 import { ProviderShareVisibilitySection } from './ProviderShareVisibilitySection';
+import { SubscriptionFastSetting } from './SubscriptionFastSetting';
 import { RemoteModelAccessSection, RemoteModelAccessDialog } from './RemoteModelAccessSection';
 import { RemoteAgentLimitsSection } from './RemoteAgentLimitsSection';
 /**
@@ -513,6 +514,11 @@ export function ProviderShareManagePage({
         </SettingsSection>
       )}
 
+      {deviceId && providerForApproval?.subscriptionFastPolicy && (
+        <div className="mt-6 shrink-0">
+          <SubscriptionFastSetting provider={providerForApproval} deviceId={deviceId} />
+        </div>
+      )}
       <RemoteModelAccessSection key={`models:${deviceId ?? 'local'}:${providerId}`} providerId={providerId} deviceId={deviceId} />
 
       <ProviderGroupSection

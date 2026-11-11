@@ -251,9 +251,13 @@ void mountPage({
         onControlTargetChanged: subscription('controlTarget'),
       },
       providerGroup: {
-        command: async (cmd: { action: string }) => {
-          if (cmd.action === 'list') return ctx.case === 'owner' ? { xd: ownerGroup.config } : {};
-          if (cmd.action === 'get') return ctx.case === 'owner' ? ownerGroup : { providerId: 'xd', config: null, members: [] };
+        command: async (cmd: { action: string; request?: { action: string; command: Parameters<typeof command>[0] } }) => {
+          if (cmd.action === 'remote-manage' && cmd.request) {
+            if (cmd.request.action === 'manage-share') return command(cmd.request.command);
+            if (cmd.request.action === 'manage-group' && cmd.request.command.action === 'get') return ownerGroup;
+          }
+          if (cmd.action === 'list') return ctx.case.startsWith('owner') ? { xd: ownerGroup.config } : {};
+          if (cmd.action === 'get') return ctx.case.startsWith('owner') ? ownerGroup : { providerId: 'xd', config: null, members: [] };
           return forbid(`providerGroup.${cmd.action}`)();
         },
         onChanged: subscription('groupChanged'),
@@ -271,12 +275,15 @@ void mountPage({
         <p className="shrink-0 px-5 py-2 text-12 text-[var(--text-secondary)]">
           UI fixture · 测试数据 · Test data
         </p>
-        {ctx.case === 'owner' ? (
+        {ctx.case.startsWith('owner') ? (
           <div className="min-h-0 flex-1 overflow-auto px-5 pb-5">
             <ProviderShareManagePage
               providerId="xd"
               providerName="Cindy AI"
               providerIcon={<span>C</span>}
+              deviceId={ctx.case === 'owner-remote' ? 'fixture-host' : undefined}
+              deviceName={ctx.case === 'owner-remote' ? 'Remote Mac' : undefined}
+              initialGroup={ownerGroupConfig}
               gate="on"
               onBack={() => {}}
             />
