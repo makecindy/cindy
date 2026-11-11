@@ -26,6 +26,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Agent } from 'node:http';
 import { HostNetworkConnections } from './networkConnections.js';
+import { GHOST_SAVED_CREDENTIAL_MARKER } from '../../shared/pluginAccountReuse.js';
 
 import { sniffMediaMime, additionalMp3BytesNeeded } from '../cindy-media/sniffMediaMime.js';
 import { classifyFetchNetworkFailure, fetchTimeoutFailure } from './fetchFailure.js';
@@ -117,6 +118,8 @@ export interface NetworkSlotDeps {
    * 即生效);未配置 / 读失败返回 null。
    */
   readSecret(instanceKey: string, secretKey: string): string | null;
+  /** Invoked only for a Host-written saved-credential marker, never ordinary keys. */
+  resolveSavedCredential?(instanceKey: string, secretKey: string): { value: string; assertCurrent(): void } | null;
   /** source:'gh-cli' 的宿主 GitHub CLI 登录 token；不可用返回 null。 */
   readGhCliToken?: () => Promise<string | null>;
   /**
@@ -1998,6 +2001,7 @@ export class GhostNetworkSlot {
       return { value: result.accessToken, oauthAccountId: result.accountId, assertCurrent: result.assertCurrent };
     }
     let raw: string;
+    let assertCurrent: (() => void) | undefined;
     if (secret.source === 'login-email') {
       const resolved = this.resolveLoginEmail(secret);
       if ('error' in resolved) return resolved;
@@ -2007,13 +2011,19 @@ export class GhostNetworkSlot {
       if (stored === null || stored.length === 0) {
         return { error: `凭证「${secret.label}」尚未配置——请到主界面侧边栏「插件」的本插件详情页填入后再试` };
       }
-      raw = stored;
+      if (stored === GHOST_SAVED_CREDENTIAL_MARKER) {
+        const reused = this.deps.resolveSavedCredential?.(instanceKey, secret.key);
+        if (!reused) return { error: 'CREDENTIAL_REFERENCE_UNAVAILABLE' };
+        raw = reused.value;
+        assertCurrent = reused.assertCurrent;
+        assertCurrent();
+      } else raw = stored;
     }
-    if (secret.exchange === undefined) return { value: raw };
+    if (secret.exchange === undefined) return { value: raw, assertCurrent };
     const cacheKey = `${instanceKey}\u0000${secret.key}`;
     const cached = this.exchangedTokens.get(cacheKey);
     if (cached && cached.sourceValue === raw && Date.now() < cached.expiresAt) {
-      return { value: cached.token };
+      return { value: cached.token, assertCurrent };
     }
     let inflightExchange = this.exchangeInflight.get(cacheKey);
     if (!inflightExchange) {
@@ -2023,7 +2033,7 @@ export class GhostNetworkSlot {
       this.exchangeInflight.set(cacheKey, inflightExchange);
     }
     try {
-      return { value: await inflightExchange };
+      return { value: await inflightExchange, assertCurrent };
     } catch (err) {
       return { error: err instanceof Error ? err.message : String(err) };
     }

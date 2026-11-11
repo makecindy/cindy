@@ -4,9 +4,9 @@ import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
 import { SettingsCard, SettingsField, SettingsRow, SettingsSection, SettingsNotice } from '@/components/ui/settings-rows';
 import { useOptionalDataOwnerGeneration } from '@/contexts/AuthContext';
-import type { GhostAccountReuseAction, GhostAccountReuseGroup, GhostReusableOauthAccount } from '../../../shared/pluginAccountReuse';
+import type { GhostAccountReuseAction, GhostAccountReuseGroup } from '../../../shared/pluginAccountReuse';
 
-const choiceKey = (source: GhostReusableOauthAccount) => JSON.stringify([source.instanceKey, source.secretKey, source.accountId]);
+const choiceKey = (source: GhostAccountReuseGroup['options'][number]) => JSON.stringify(['kind' in source ? source.kind : 'oauth', source.instanceKey, source.secretKey, source.accountId]);
 
 export function GhostAccountReuseSection(props: { ghostId: string; declared: boolean; enabled: boolean }) {
   if (!props.declared) return null;
@@ -66,7 +66,7 @@ function AccountReuseControls({ ghostId, enabled }: { ghostId: string; enabled: 
             onValueChange={value => setSelection(old => ({ ...old, [group.key]: value }))} disabled={busy || !enabled || !group.options.length} className="flex-1" />
           <Button variant="secondary" disabled={busy || !enabled || !group.options.some(source => choiceKey(source) === selection[group.key])} onClick={() => {
             const source = group.options.find(source => choiceKey(source) === selection[group.key]);
-            if (source) void change({ kind: 'connect', secretKey: group.key, source: { instanceKey: source.instanceKey, secretKey: source.secretKey, accountId: source.accountId } });
+            if (source) void change({ kind: 'connect', secretKey: group.key, source: { ...('kind' in source ? { kind: source.kind } : {}), instanceKey: source.instanceKey, secretKey: source.secretKey, accountId: source.accountId } });
           }}>{t('settings.ghosts.detail.reuseAccountUse')}</Button>
         </div>
       </SettingsField>

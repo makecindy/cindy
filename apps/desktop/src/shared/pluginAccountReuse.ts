@@ -1,4 +1,4 @@
-/** Host-owned references to the current owner's already connected OAuth accounts.
+/** Host-owned references to the current owner's connected accounts and saved credentials.
  * These types contain no token, client secret or authorization response. */
 export interface GhostOauthAccountReference {
   instanceKey: string;

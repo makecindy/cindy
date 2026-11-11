@@ -1,4 +1,4 @@
-# 插件复用已有 OAuth 账号
+# 插件复用已有账号与已保存凭证
 
 > 通用规则与 Review 清单见[跨端协议兼容](../protocol-compatibility.md)；本文件记录对应能力的增量协议与旧端降级。
 
@@ -11,3 +11,12 @@
   停止使用只移除消费插件的引用；持久化失败时原 `/oauth` DELETE 回 500，不假回 204。
   Node 管子增量增加 `HOST_INJECTION_REQUIRED` 失败码，表明引用账号仅能由宿主代注入；
   普通账号的既有 Node 明文绑定保持不变，旧调用方按 `ok:false` 处理未知失败码。
+- 同一可信本机 IPC 增量接受 `kind:'secret'|'connection'` 的来源引用（实例、声明键、来源条目
+  ID），仍不进入插件管子或 device-link allowlist。普通 `network.secrets` 的权限声明与安装批准
+  不变；来源必须是兼容的已保存网络凭证。原有 OAuth 引用不增加字段，也不改变解释。
+  Host 在原加密 vault 中保存 `<key>-reused-credential` 引用，原凭证位只保存非密钥标记；
+  标记单独存在不授予读取其它凭证的权利，只有可信原生确认路径可写派生引用。普通密钥保持
+  单次原读取，无标记时不加载引用管理器。使用引用需新 Host；旧 Host 不会得到来源密钥，
+  不将复制来源值作为降级。Node 绑定仍返回 `HOST_INJECTION_REQUIRED`。选择替换目标原密钥，
+  来源仍独立管理；停止使用只删除目标引用，持久化失败返回 `VAULT_WRITE_FAILED`。
+  手机端建立这类引用尚不支持，调用既有引用不扩大凭证与账号边界。

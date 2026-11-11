@@ -37,6 +37,7 @@ import type {
   InstalledGhost,
 } from '../../shared/ghost.js';
 import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
+import { GHOST_SAVED_CREDENTIAL_MARKER } from '../../shared/pluginAccountReuse.js';
 import {
   GHOST_NODE_CHILD_MODE_FLAG,
   GHOST_NODE_MAX_CHILDREN_PER_GHOST,
@@ -807,6 +808,10 @@ export class GhostNodeRuntimeBroker {
             value = resolved.accessToken;
           } else {
             value = this.deps.readSecret?.(ghostId, binding.key) ?? null;
+            if (value === GHOST_SAVED_CREDENTIAL_MARKER) {
+              clearHostSecrets(hostSecrets);
+              return errorResult('HOST_INJECTION_REQUIRED', 'Use cindy.fetch for reused credentials');
+            }
           }
           if (value === null) {
             clearHostSecrets(hostSecrets);

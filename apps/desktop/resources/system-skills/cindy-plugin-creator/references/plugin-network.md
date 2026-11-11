@@ -489,3 +489,21 @@ Node Worker 使用 `cindy.fetch` 让 Host 代注入。`node.secretBindings` 不�
 设置页只有自有账号、没有引用账号时，既有 OAuth 和 Node 显式绑定语义不变。
 账号选择在执行电脑的 Cindy 详情页完成，其他客户端和 Node 可消费已配置引用，不能自报来源
 建立引用。旧 Host 仍使用原 OAuth 流程，旧插件与旧账号无需迁移或重配。
+
+### 已保存的 PAT 和其它网络凭证
+
+普通 `network.secrets`（缺省来源或 `source:'user'`）也可在同一详情区选择已保存的密钥。
+来源可以是同账号、同电脑中已批准且启用插件的普通网络凭证、`source:'gh-cli'` 的已保存
+备用 PAT，或 `network.connections` 中某条连接的 PAT；不读取 gh CLI 当前登录 token、
+Cindy 平台密钥、模型供应商密钥、OAuth client 凭证或其它插件的 Node 专用凭证。
+
+注入头名、格式及 `exchange` 声明必须一致，目标注入范围不能超过来源范围；连接 PAT
+只适用于它自身的精确域名。复用仍须用户在可信详情区选择并通过宿主原生确认。
+选择会替换目标插件当前填写的密钥；只在原有加密凭证存储中保存 Host 私有引用，原始值
+留在来源，不复制给目标。`cindy.fetch`、流式请求与 WebSocket 经同一个 networkSlot 注入；
+来源改钥后下一次请求使用新值，停用、删除来源或声明不再匹配即停止使用，不静默换来源。
+
+Node Worker 应调用 `cindy.fetch`；将这类引用用于 `node.secretBindings` 会返回
+`HOST_INJECTION_REQUIRED`。停止使用只移除目标引用，原来源的密钥或连接保留；删除失败
+会明确返回失败。引用不能作为另一个引用的来源。旧插件、普通密钥和原有 OAuth 账号
+无需迁移或重配；手机端建立引用尚不支持，仍在执行电脑的 Cindy 详情页操作。

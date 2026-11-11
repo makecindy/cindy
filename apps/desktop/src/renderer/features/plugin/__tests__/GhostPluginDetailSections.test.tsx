@@ -193,11 +193,11 @@ beforeEach(() => {
 
 // Tier 1: the real Host account controls must submit an exact chosen reference,
 // revoke only the consuming account, and discard another owner's late reply.
-it('selects an existing Host account and stops only its consumer reference', async () => {
+it.each([undefined, 'secret', 'connection'] as const)('selects an existing Host account or %s credential and stops only its consumer reference', async (kind) => {
   const scroll = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView');
   Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
   try {
-  const source = { instanceKey: 'source', secretKey: 'google', accountId: 'original', pluginName: 'Source', label: 'account@example.test', scopes: ['read'] };
+  const source = { ...(kind ? { kind } : {}), instanceKey: 'source', secretKey: 'google', accountId: 'original', pluginName: 'Source', label: 'account@example.test', scopes: ['read'] };
   let connected = false;
   const reusableAccounts = vi.fn(async () => [{ key: 'google', label: 'Google', options: [source],
     accounts: connected ? [{ id: 'consumer-reference', label: 'account@example.test', status: 'connected' as const }] : [] }]);
@@ -208,7 +208,7 @@ it('selects an existing Host account and stops only its consumer reference', asy
   fireEvent.click(await screen.findByRole('option', { name: 'Source · account@example.test' }));
   fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.detail.reuseAccountUse' }));
   await screen.findByRole('button', { name: 'settings.ghosts.detail.reuseAccountStop' });
-  expect(reuseAccount).toHaveBeenCalledWith('consumer', { kind: 'connect', secretKey: 'google', source: { instanceKey: 'source', secretKey: 'google', accountId: 'original' } });
+  expect(reuseAccount).toHaveBeenCalledWith('consumer', { kind: 'connect', secretKey: 'google', source: { ...(kind ? { kind } : {}), instanceKey: 'source', secretKey: 'google', accountId: 'original' } });
   fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.detail.reuseAccountStop' }));
   await waitFor(() => expect(screen.queryByRole('button', { name: 'settings.ghosts.detail.reuseAccountStop' })).toBeNull());
   expect(reuseAccount).toHaveBeenLastCalledWith('consumer', { kind: 'disconnect', secretKey: 'google', accountId: 'consumer-reference' });

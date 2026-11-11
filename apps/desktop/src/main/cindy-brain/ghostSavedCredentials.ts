@@ -5,10 +5,15 @@ import { GHOST_SAVED_CREDENTIAL_MARKER, isReusableSavedSecret,
   type GhostReusableSavedCredential } from '../../shared/pluginAccountReuse.js';
 import type { GhostConnectionManager, GhostConnectionsVault } from './ghostConnections.js';
 
+type ConnectionSource = { instanceKey: string; name: string; manifest: GhostManifest };
+
 interface Deps {
-  vault: Pick<GhostConnectionsVault, 'read' | 'store' | 'remove'>;
+  vault: Pick<GhostConnectionsVault, 'read' | 'store' | 'remove'> & {
+    readStrict?(id: string, key: string): string | null;
+  };
   connections: GhostConnectionManager;
-  connectionSources(): readonly { instanceKey: string; name: string; manifest: GhostManifest }[];
+  connectionSources(): readonly ConnectionSource[];
+  connectionSource(id: string): ConnectionSource | null;
   captureTarget(id: string): string | null;
   confirm(input: { instanceKey: string; secretKey: string; source: GhostReusableSavedCredential; hosts: string[] }): Promise<boolean>;
   withMutationLock<T>(id: string, task: () => T | Promise<T>): Promise<T>;
@@ -34,9 +39,8 @@ export class GhostSavedCredentialManager {
 
   private candidate(id: string, key: string, ref: GhostSavedCredentialReference) {
     if (id === ref.instanceKey) return null;
-    const sources = this.deps.connectionSources();
-    const target = sources.find(item => item.instanceKey === id);
-    const source = sources.find(item => item.instanceKey === ref.instanceKey);
+    const target = this.deps.connectionSource(id);
+    const source = this.deps.connectionSource(ref.instanceKey);
     const targetSecret = target?.manifest.network?.secrets?.find(item => item.key === key && isReusableSavedSecret(item));
     if (!target || !source || !targetSecret) return null;
     const secret = source.manifest.network?.secrets?.find(item => item.key === ref.secretKey &&
@@ -117,9 +121,15 @@ export class GhostSavedCredentialManager {
     } };
   }
 
-  disconnect(id: string, key: string, accountId: string): void {
-    if (this.reference(id, key)?.accountId !== accountId) return;
-    this.deps.vault.remove(id, key);
-    this.deps.vault.remove(id, referenceKey(key));
+  disconnect(id: string, key: string, accountId: string): GhostAccountReuseResult {
+    try {
+      const read = this.deps.vault.readStrict ?? this.deps.vault.read;
+      if (read(id, key) !== GHOST_SAVED_CREDENTIAL_MARKER) return { ok: true };
+      if (this.reference(id, key)?.accountId !== accountId) return { ok: false, error: 'INVALID_CONFIG' };
+      this.deps.vault.remove(id, key);
+      this.deps.vault.remove(id, referenceKey(key));
+      return read(id, key) === null && read(id, referenceKey(key)) === null
+        ? { ok: true } : { ok: false, error: 'VAULT_WRITE_FAILED' };
+    } catch { return { ok: false, error: 'VAULT_WRITE_FAILED' }; }
   }
 }

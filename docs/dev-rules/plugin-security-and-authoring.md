@@ -681,6 +681,15 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   插件页面不能调用。停止使用在 OAuth 原变更锁内复读当前记录，停用插件也可撤销；
   引用删除落库失败必须回失败，`/oauth` 同样不能返回 204 假称已断开。界面目录与请求结果
   按 owner generation 丢弃，不能在切换账号后显示旧账号资料。
+- 已保存 PAT／普通网络凭证沿用同一可信详情区、原生确认和变更锁。目标仍声明普通
+  `network.secrets`；来源限当前 owner 已批准、启用插件的普通网络密钥、gh-cli 的已保存
+  备用 PAT 或某条 `network.connections` PAT。注入头／格式和 exchange 一致且流向不扩张；
+  不读取平台密钥、供应商密钥、gh CLI 当前 token 或 Node 专用凭证。`GhostSavedCredentialManager`
+  只在既有加密 vault 的派生键保存引用，原凭证位的非密钥标记本身不能授权，插件不能写入
+  Host 派生键伪造引用。选择会替换目标当前填写的密钥，原来源仍独立管理；普通密钥的热路径
+  不新增引用读取。注入和流续读复核两端安装／owner 与来源资格，禁止引用链；Node 明文绑定
+  返回 `HOST_INJECTION_REQUIRED`。停止使用不删除来源，删除落盘失败不得假称成功。
+  不新增 manifest 字段、凭证库、授权账本或跨调用批准缓存，手机端建立引用尚未开放。
 - `source: "oidc-token"` 是 Host 托管的短时 Cindy Connection JWT：只对当前企业
   Membership 生效。资格有两条默认基座：当前组织的 Plugin Market organization 安装记录仍有效、
   且安装目录 `ghost.json` 的 raw SHA（旧记录迁移前为集中 legacy digest）与记录一致；

@@ -12,6 +12,7 @@ import { afterAll, describe, it, expect, vi } from 'vitest';
 
 import { GhostNetworkSlot, type NetworkSlotDeps } from '../networkSlot';
 import { createMcpAppsManualResolver } from '../mcpAppsManualHeaders';
+import { GHOST_SAVED_CREDENTIAL_MARKER } from '../../../shared/pluginAccountReuse';
 import {
   GHOST_FETCH_DIR_UPLOAD_MAX_BYTES_PER_FILE,
   GHOST_FETCH_DIR_UPLOAD_MAX_TOTAL_BYTES,
@@ -141,6 +142,35 @@ function makeSlot(overrides: Partial<NetworkSlotDeps> = {}): {
 }
 
 const BRAVE_URL = 'https://api.search.brave.com/res/v1/web/search?q=hi';
+
+// §4: saved credentials may only be injected by the Host; the existing direct
+// key cases cannot observe reference revocation or the unused-path IO budget.
+describe('saved credential Host injection', () => {
+  it('resolves a reference inside the Host and rechecks it before returning', async () => {
+    let valid = true;
+    const assertCurrent = () => { if (!valid) throw new Error('CREDENTIAL_REFERENCE_CHANGED'); };
+    const resolveSavedCredential = vi.fn(() => ({ value: 'source-private-token', assertCurrent }));
+    const h = makeSlot({ readSecret: () => GHOST_SAVED_CREDENTIAL_MARKER, resolveSavedCredential });
+    expect(await h.slot.handleFetchRequest('web-search', { url: BRAVE_URL })).toMatchObject({ ok: true });
+    expect(h.fetchImpl.mock.calls[0]?.[1]).toMatchObject({ headers: { 'X-Subscription-Token': 'source-private-token' } });
+    expect(resolveSavedCredential).toHaveBeenCalledWith('web-search', 'brave_api_key');
+    h.fetchImpl.mockImplementationOnce(async () => { valid = false; return fakeResponse(); });
+    const revoked = await h.slot.handleFetchRequest('web-search', { url: BRAVE_URL });
+    expect(revoked).toMatchObject({ ok: false });
+    expect(JSON.stringify(revoked)).not.toContain('source-private-token');
+  });
+
+  it('rejects a marker without an approved reference and does no reference lookup for an ordinary key', async () => {
+    const resolveSavedCredential = vi.fn(() => null);
+    const unused = makeSlot({ resolveSavedCredential });
+    expect(await unused.slot.handleFetchRequest('web-search', { url: BRAVE_URL })).toMatchObject({ ok: true });
+    expect(unused.readSecret).toHaveBeenCalledTimes(1);
+    expect(resolveSavedCredential).not.toHaveBeenCalled();
+    const forged = makeSlot({ readSecret: () => GHOST_SAVED_CREDENTIAL_MARKER, resolveSavedCredential });
+    expect(await forged.slot.handleFetchRequest('web-search', { url: BRAVE_URL })).toMatchObject({ ok: false });
+    expect(forged.fetchImpl).not.toHaveBeenCalled();
+  });
+});
 
 // Tier 1: the public network entry must return before a stream ends, preserve
 // reconnect cursors, and revoke live sockets on an installation/owner boundary.

@@ -1935,6 +1935,18 @@ describe('nodeRuntimeBroker · 意外死亡诊断(2026-07-26)', () => {
     expect(message).not.toContain('old failure from initialization');
   });
 
+  it('keeps a reused saved credential out of Node bindings and requires Host injection', async () => {
+    const ghost = fakeGhost();
+    ghost.manifest.node!.secretBindings = [{ key: 'api_key', label: 'PAT', methods: ['slow'] }];
+    const spawnProcess = vi.fn();
+    const broker = new GhostNodeRuntimeBroker({ getGhost: () => ghost,
+      readSecret: () => 'cindy:host-injected-saved-credential:v1', spawnProcess });
+    expect(await broker.handleRequest('node-ghost', rpcRequest('slow'))).toMatchObject({
+      ok: false, errorCode: 'HOST_INJECTION_REQUIRED',
+    });
+    expect(spawnProcess).not.toHaveBeenCalled();
+  });
+
   it('凭证值出现在 stderr 诊断行中时被脱敏', async () => {
     const ghost = fakeGhost();
     // secretBindings 绑定到所有方法(包括 slow)

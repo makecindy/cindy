@@ -439,6 +439,8 @@ import { handleGhostSecretsRequest } from './runtime/ghostSecretsEndpoint.js';
 import { handleGhostOauthRequest } from './runtime/ghostOauthEndpoint.js';
 import { handleGhostConnectionsRequest } from './runtime/ghostConnectionsEndpoint.js';
 import { GhostOauthAccountManager, type GhostOauthDecl } from './ghostOauthAccounts.js';
+import { GhostSavedCredentialManager } from './ghostSavedCredentials.js';
+import { isReusableSavedSecret, type GhostReusableOauthAccount } from '../../shared/pluginAccountReuse.js';
 import { withGhostOauthMutationLock } from './ghostOauthMutationLock.js';
 import { createGhostOauthOwnerReconciliationGate } from './ghostOauthOwnerReconciliation.js';
 import { cancelActiveGhostOauthFlow } from './ghostOauthFlow.js';
@@ -6304,34 +6306,55 @@ export async function reconcileGhostOauthAccountsForActiveOwner(): Promise<boole
   });
 }
 
+function ghostReusableConnectionSource(instanceKey: string) {
+  if (isGhostBoundaryPending()) return null;
+  const ghost = findGhostForInstanceId(instanceKey);
+  return ghost?.enabled && ghost.approval?.state === 'approved' && isGhostAvailableForActiveSession(instanceKey)
+    ? { instanceKey, name: ghost.manifest.name, manifest: ghost.manifest } : null;
+}
+
+function ghostReusableConnectionSources() {
+  return isGhostBoundaryPending() ? [] : getGhostManager().list().flatMap(installed => {
+    const source = ghostReusableConnectionSource(installedGhostStoragePart(installed));
+    return source ? [source] : [];
+  });
+}
+
+async function confirmGhostAccountReuse(input: { instanceKey: string; secretKey: string; source: GhostReusableOauthAccount; hosts: string[] }): Promise<boolean> {
+  const owner = activeOwnerScopeKey();
+  const parent = getDeepLinkMainWindow();
+  const ghost = findGhostForInstanceId(input.instanceKey);
+  if (isGhostBoundaryPending() || !ghost || !parent || parent.isDestroyed() || !isTrustedAppRendererWindow(parent)) return false;
+  const safe = (value: string) => sanitizeGhostNoticeText(value).replace(/\n+/g, ' ').slice(0, 200);
+  const decision = await dialog.showMessageBox(parent, {
+    type: 'question', title: t('settings.ghosts.detail.reuseAccountTitle'),
+    message: t('settings.ghosts.detail.reuseAccountConfirmMessage')
+      .replaceAll('{{name}}', () => safe(ghost.manifest.name))
+      .replaceAll('{{account}}', () => safe(input.source.label ?? input.source.accountId))
+      .replaceAll('{{source}}', () => safe(input.source.pluginName)),
+    detail: t('settings.ghosts.detail.reuseAccountConfirmDetail')
+      .replaceAll('{{hosts}}', () => input.hosts.join(', '))
+      .replaceAll('{{scopes}}', () => input.source.scopes.join('\n') || t('settings.ghosts.detail.reuseAccountUnknownScopes')),
+    buttons: [t('settings.ghosts.detail.reuseAccountUse'), t('common.cancel')], defaultId: 1, cancelId: 1, noLink: true,
+  });
+  return decision.response === 0 && !isGhostBoundaryPending() && owner === activeOwnerScopeKey() && !parent.isDestroyed();
+}
+
+let ghostSavedCredentialManagerSingleton: GhostSavedCredentialManager | null = null;
+function getGhostSavedCredentialManager(): GhostSavedCredentialManager {
+  return ghostSavedCredentialManagerSingleton ??= new GhostSavedCredentialManager({
+    vault: { read: readGhostSecret, readStrict: readGhostSecretStrict, store: storeGhostSecret, remove: removeGhostSecret },
+    connections: getGhostConnectionManager(), connectionSources: ghostReusableConnectionSources, connectionSource: ghostReusableConnectionSource,
+    captureTarget: ghostInstallMutationTargetFor, confirm: confirmGhostAccountReuse,
+    withMutationLock: withActiveOwnerGhostOauthMutationLock,
+  });
+}
+
 function getGhostOauthAccountManager(): GhostOauthAccountManager {
   if (!ghostOauthManagerSingleton) {
     ghostOauthManagerSingleton = new GhostOauthAccountManager({
-      connectionSources: () => isGhostBoundaryPending() ? [] : getGhostManager().list().flatMap(installed => {
-        const instanceKey = installedGhostStoragePart(installed);
-        const ghost = findGhostForInstanceId(instanceKey);
-        return ghost?.enabled && ghost.approval?.state === 'approved' && isGhostAvailableForActiveSession(instanceKey)
-          ? [{ instanceKey, name: ghost.manifest.name, manifest: ghost.manifest }] : [];
-      }),
-      confirmAccountReuse: async input => {
-        const owner = activeOwnerScopeKey();
-        const parent = getDeepLinkMainWindow();
-        const ghost = findGhostForInstanceId(input.instanceKey);
-        if (isGhostBoundaryPending() || !ghost || !parent || parent.isDestroyed() || !isTrustedAppRendererWindow(parent)) return false;
-        const safe = (value: string) => sanitizeGhostNoticeText(value).replace(/\n+/g, ' ').slice(0, 200);
-        const decision = await dialog.showMessageBox(parent, {
-          type: 'question', title: t('settings.ghosts.detail.reuseAccountTitle'),
-          message: t('settings.ghosts.detail.reuseAccountConfirmMessage')
-            .replaceAll('{{name}}', () => safe(ghost.manifest.name))
-            .replaceAll('{{account}}', () => safe(input.source.label ?? input.source.accountId))
-            .replaceAll('{{source}}', () => safe(input.source.pluginName)),
-          detail: t('settings.ghosts.detail.reuseAccountConfirmDetail')
-            .replaceAll('{{hosts}}', () => input.hosts.join(', '))
-            .replaceAll('{{scopes}}', () => input.source.scopes.join('\n') || t('settings.ghosts.detail.reuseAccountUnknownScopes')),
-          buttons: [t('settings.ghosts.detail.reuseAccountUse'), t('common.cancel')], defaultId: 1, cancelId: 1, noLink: true,
-        });
-        return decision.response === 0 && !isGhostBoundaryPending() && owner === activeOwnerScopeKey() && !parent.isDestroyed();
-      },
+      connectionSources: ghostReusableConnectionSources,
+      confirmAccountReuse: confirmGhostAccountReuse,
       vault: {
         read: (ghostId, storageKey) => readGhostSecret(ghostId, storageKey),
         readStrict: (ghostId, storageKey) => readGhostSecretStrict(ghostId, storageKey),
@@ -6794,6 +6817,7 @@ export function getGhostNetworkSlot(): GhostNetworkSlot {
       inFlightCallInfo: (callId) => getGhostCardService().inFlightCallInfoOf(callId),
       mcpAppsManual: bundledMcpAppsManual,
       readSecret: (ghostId, secretKey) => readGhostSecret(ghostId, secretKey),
+      resolveSavedCredential: (ghostId, secretKey) => getGhostSavedCredentialManager().resolve(ghostId, secretKey),
       readGhCliToken: () => getSharedGhCliTokenSource().readToken(),
       // source:'login-email' 凭证的值来源:现读登录态(切号/登出下一单即生效)。
       getLoginEmail: () => getAuthState().user?.email ?? null,
@@ -10483,13 +10507,16 @@ export function registerGhostIpc(): void {
     requireGhostAvailableForActiveSession(id);
     const ghost = findGhostForInstanceId(id);
     if (!ghost) throwIpcError('NOT_FOUND', 'Plugin not found');
-    const manager = getGhostOauthAccountManager();
-    return (ghost.manifest.network?.secrets ?? []).flatMap(secret => secret.source === 'oauth' && secret.oauth ? [{
-      key: secret.key, label: secret.label,
-      options: ghost.enabled && ghost.approval?.state === 'approved' ? manager.listReusableAccounts(id, secret.key, secret.oauth) : [],
-      accounts: manager.listAccounts(id, secret.key, secret.oauth).filter(account => account.reused)
-        .map(({ id, label, status }) => ({ id, label, status })),
-    }] : []);
+    return (ghost.manifest.network?.secrets ?? []).flatMap(secret => {
+      if (isReusableSavedSecret(secret)) return [{ ...getGhostSavedCredentialManager().list(id, secret.key), label: secret.label }];
+      if (secret.source !== 'oauth' || !secret.oauth) return [];
+      const manager = getGhostOauthAccountManager();
+      return [{ key: secret.key, label: secret.label,
+        options: ghost.enabled && ghost.approval?.state === 'approved' ? manager.listReusableAccounts(id, secret.key, secret.oauth) : [],
+        accounts: manager.listAccounts(id, secret.key, secret.oauth).filter(account => account.reused)
+          .map(({ id, label, status }) => ({ id, label, status })),
+      }];
+    });
   });
   ipcMain.handle('ghosts:reuse-account', async (event, id: unknown, payload: unknown) => {
     assertTrustedAppRendererEvent(event);
@@ -10497,8 +10524,28 @@ export function registerGhostIpc(): void {
     requireGhostAvailableForActiveSession(id);
     const request = payload as Record<string, unknown>;
     const ghost = findGhostForInstanceId(id);
-    const secret = ghost?.manifest.network?.secrets?.find(item => item.source === 'oauth' && item.key === request.secretKey);
-    if (!ghost || !secret?.oauth) throwIpcError('NOT_FOUND', 'OAuth declaration not found');
+    const secret = ghost?.manifest.network?.secrets?.find(item => item.key === request.secretKey);
+    if (!ghost || !secret) throwIpcError('NOT_FOUND', 'Credential declaration not found');
+    if (isReusableSavedSecret(secret)) {
+      const manager = getGhostSavedCredentialManager();
+      if (request.kind === 'disconnect' && typeof request.accountId === 'string') {
+        return withActiveOwnerGhostOauthMutationLock(id, () => {
+          const result = manager.disconnect(id, secret.key, request.accountId as string);
+          if (result.ok) getGhostSetupChangeBus().emit(id, { source: 'secret', ref: secret.key });
+          return result;
+        });
+      }
+      const source = request.source as Record<string, unknown> | null;
+      if (request.kind !== 'connect' || !source || typeof source !== 'object' || Array.isArray(source) ||
+          (source.kind !== 'secret' && source.kind !== 'connection') ||
+          !['instanceKey', 'secretKey', 'accountId'].every(key => typeof source[key] === 'string' && source[key].length > 0 && source[key].length <= 512)) throwIpcError('INVALID_PARAMS', 'Invalid saved credential reference');
+      if (!ghost.enabled || ghost.approval?.state !== 'approved') throwIpcError('PERMISSION_DENIED', 'Plugin is not enabled and approved');
+      const result = await manager.reuse(id, secret.key, { kind: source.kind,
+        instanceKey: source.instanceKey as string, secretKey: source.secretKey as string, accountId: source.accountId as string });
+      if (result.ok) getGhostSetupChangeBus().emit(id, { source: 'secret', ref: secret.key });
+      return result;
+    }
+    if (secret.source !== 'oauth' || !secret.oauth) throwIpcError('NOT_FOUND', 'OAuth declaration not found');
     const manager = getGhostOauthAccountManager();
     if (request.kind === 'disconnect' && typeof request.accountId === 'string') {
       return withActiveOwnerGhostOauthMutationLock(id, () => {
