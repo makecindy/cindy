@@ -28,6 +28,7 @@ describe("mobile locale resolution", () => {
     ["es-MX", "es"], ["es-419", "es"], ["fr-CA", "fr"], ["de-AT", "de"],
     ["pt-PT", "pt-PT"], ["pt-BR", "pt-BR"], ["PT_br", "pt-BR"],
     ["pt-Latn-BR", "pt-BR"], ["pt-AO", "pt-PT"], ["pt", "pt-PT"],
+    ["tr-TR", "tr"], ["tr", "tr"],
   ])("resolves %s to %s", (tag, expected) => {
     expect(resolveSystemLocale(tag)).toBe(expected);
   });

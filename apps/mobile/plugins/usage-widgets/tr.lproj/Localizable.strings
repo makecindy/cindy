@@ -1,0 +1,12 @@
+"Data source" = "Veri kaynağı";
+"Choose which computer this widget shows." = "Bu araç takımının hangi bilgisayarı göstereceğini seçin.";
+"Computer" = "Bilgisayar";
+"Automatic" = "Otomatik";
+"The computer that answered last" = "En son yanıt veren bilgisayar";
+"Account" = "Hesap";
+"Choose which computer this widget shows, which accounts come first and which to hide. Other accounts, including ones added later, follow in that computer's order." = "Bu araç takımının hangi bilgisayarı göstereceğini, hangi hesapların önce geleceğini ve hangilerinin gizleneceğini seçin. Daha sonra eklenenler de dahil diğer hesaplar bu bilgisayarın sırasını izler.";
+"Accounts first" = "Önce gelen hesaplar";
+"Hidden accounts" = "Gizlenen hesaplar";
+
+"activity.waitingForUpdate" = "Güncelleme bekleniyor";
+"activity.lastUpdated" = "Son güncelleme";

@@ -136,6 +136,7 @@ describe('updater failure retry UI', () => {
       ['pt-Latn-BR', 'Tentar novamente'],
       ['pt-AO', 'Repetir'],
       ['pt', 'Repetir'],
+      ['tr-TR', 'Tekrar dene'],
       ['it-IT', 'Retry'],
     ]) {
       const copy = context.retryCopy(locale);

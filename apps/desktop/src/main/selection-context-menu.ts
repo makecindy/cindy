@@ -83,6 +83,7 @@ function localizedActionLabel(
     if (resolvedLocale === 'de') return "Zum Chat hinzufügen";
     if (resolvedLocale === 'pt-PT') return "Adicionar à conversa";
     if (resolvedLocale === 'pt-BR') return "Adicionar à conversa";
+    if (resolvedLocale === 'tr') return 'Sohbete ekle';
     return 'Add to chat';
   }
   // Copy 是两套菜单共用的同一条命令,标签只保留 catalog 一处正本。
@@ -99,6 +100,7 @@ function localizedActionLabel(
     if (resolvedLocale === 'de') return `„${preview}“ nachschlagen`;
     if (resolvedLocale === 'pt-PT') return `Pesquisar «${preview}»`;
     if (resolvedLocale === 'pt-BR') return `Consultar “${preview}”`;
+    if (resolvedLocale === 'tr') return `“${preview}” Ara`;
     return `Look Up “${preview}”`;
   }
   if (resolvedLocale === 'zh-CN') return `在网页中搜索“${preview}”`;
@@ -112,6 +114,7 @@ function localizedActionLabel(
   if (resolvedLocale === 'de') return `Im Web nach „${preview}“ suchen`;
   if (resolvedLocale === 'pt-PT') return `Pesquisar «${preview}» na Web`;
   if (resolvedLocale === 'pt-BR') return `Pesquisar “${preview}” na Web`;
+  if (resolvedLocale === 'tr') return `Web'de “${preview}” ara`;
   return `Search the web for “${preview}”`;
 }
 
