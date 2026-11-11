@@ -1,7 +1,6 @@
-//! Updating Program Files needs elevation; running Cindy afterwards does not.
-//! Create the child with the verified SAME-user/session ordinary desktop shell
-//! as parent. Unlike COM ShellExecute this returns the actual process handle:
-//! there is no queued, uncancellable launch that can arrive during rollback.
+//! Disposable permission fixture for the deep-link integration check.
+//! Creates an ordinary sender through the verified same-user/session desktop.
+//! Compiled only by the integration script, never by cindy-updater.
 use std::{
     io, mem,
     os::windows::{
@@ -98,7 +97,7 @@ fn user(token: HANDLE) -> io::Result<Vec<usize>> {
 }
 
 /// None means the caller is already normal. Every Err occurs before a child
-/// was created, so the original detached fallback cannot duplicate a launch.
+/// was created, so the detached fallback cannot duplicate a fixture launch.
 /// Never change accounts, enable privileges, or alter ACLs to obtain a parent.
 pub(crate) fn launch_via_desktop_shell(exe: &Path) -> io::Result<Option<OwnedHandle>> {
     let mut handle = ptr::null_mut();
@@ -162,11 +161,11 @@ pub(crate) fn launch_via_desktop_shell(exe: &Path) -> io::Result<Option<OwnedHan
         ));
     }
     // This documented parent attribute inherits the verified shell token, not
-    // the elevated updater token. Keep the opened process handle throughout,
+    // the elevated test caller's token. Keep the opened process handle throughout,
     // so shell exit/PID reuse cannot select a different parent.
     // https://devblogs.microsoft.com/oldnewthing/20190425-00/?p=102443
-    // Environment and cwd deliberately retain the ORIGINAL detached launch's
-    // caller context; specifying a parent does not inherit Explorer's values.
+    // Environment and cwd retain the test caller's context; specifying a parent
+    // does not inherit Explorer's values.
     if !exe.is_absolute() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -249,10 +248,9 @@ pub(crate) fn spawn_detached(
         .map(Into::into)
 }
 
-/// Observe the exact created process for a bounded startup window. Creation
-/// returns before DLL initialization: a zero-duration query alone can discard
-/// the backup just before a loader failure/early crash. None means still alive;
-/// Some(code) is read only AFTER the handle is signalled, including exit 259.
+/// Observe the exact created fixture process for a bounded window. None means
+/// still alive; Some(code) is read only AFTER the handle is signalled, including
+/// exit 259.
 pub(crate) fn wait_for_exit(process: &OwnedHandle, timeout: Duration) -> io::Result<Option<u32>> {
     let millis = u32::try_from(timeout.as_millis())
         .ok()

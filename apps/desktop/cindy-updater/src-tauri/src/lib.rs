@@ -3,8 +3,6 @@ mod installation_version;
 mod installer;
 pub(crate) mod logger;
 mod pid_wait;
-#[cfg(target_os = "windows")]
-mod windows_launch;
 
 use std::sync::{Arc, Mutex};
 
@@ -32,8 +30,6 @@ struct StatusPayload {
     can_retry: bool,
     #[serde(skip)]
     relaunch_on_close: bool,
-    #[serde(skip)]
-    closing: bool,
     log_path: String,
 }
 
@@ -42,7 +38,7 @@ impl StatusPayload {
         if !matches!(self.phase, Phase::Done | Phase::Failed) {
             return Err("in_progress".into());
         }
-        if self.closing || self.phase != Phase::Failed || !self.can_retry {
+        if self.phase != Phase::Failed || !self.can_retry {
             return Err("unavailable".into());
         }
         let previous = self.clone();
@@ -55,11 +51,10 @@ impl StatusPayload {
     /// Taking the restart flag makes Close idempotent; an active attempt cannot
     /// be closed even before its first progress event has reached the WebView.
     fn take_close_relaunch(&mut self) -> Option<bool> {
-        if self.closing || !matches!(self.phase, Phase::Done | Phase::Failed) {
+        if !matches!(self.phase, Phase::Done | Phase::Failed) {
             return None;
         }
         self.can_retry = false;
-        self.closing = true;
         Some(std::mem::take(&mut self.relaunch_on_close))
     }
 }
@@ -88,23 +83,10 @@ fn open_log_dir(state: State<'_, AppState>) -> Result<(), String> {
 
 #[tauri::command]
 fn quit_now(app: AppHandle, state: State<'_, AppState>) {
-    let mut status = state.last_status.lock().unwrap();
-    let previous = status.clone();
-    if let Some(relaunch) = status.take_close_relaunch() {
-        let args = state.args.clone();
-        // Filesystem scans and Windows process creation may be delayed by the
-        // system. Keep both WebView and native Close off that blocking path.
-        // The closing flag excludes Retry and duplicate Close until it ends.
-        if let Err(error) = std::thread::Builder::new()
-            .name("cindy-update-close".into())
-            .spawn(move || {
-                installer::abandon_retry(&args, relaunch);
-                app.exit(0);
-            })
-        {
-            *status = previous;
-            logger::error(format!("[command] Close worker failed: {error}"));
-        }
+    let relaunch = state.last_status.lock().unwrap().take_close_relaunch();
+    if let Some(relaunch) = relaunch {
+        installer::abandon_retry(&state.args, relaunch);
+        app.exit(0);
     }
 }
 
@@ -172,7 +154,6 @@ pub fn run() {
         error: None,
         can_retry: false,
         relaunch_on_close: false,
-        closing: false,
         log_path: args.log.to_string_lossy().into(),
     };
     let last_status = Arc::new(Mutex::new(initial_status));
@@ -247,7 +228,6 @@ fn event_to_payload(event: InstallerEvent, handle: &AppHandle) -> StatusPayload 
             error: None,
             can_retry: false,
             relaunch_on_close: false,
-            closing: false,
             log_path,
         },
         InstallerEvent::Progress(phase, message, progress) => StatusPayload {
@@ -257,7 +237,6 @@ fn event_to_payload(event: InstallerEvent, handle: &AppHandle) -> StatusPayload 
             error: None,
             can_retry: false,
             relaunch_on_close: false,
-            closing: false,
             log_path,
         },
         InstallerEvent::Done => StatusPayload {
@@ -267,7 +246,6 @@ fn event_to_payload(event: InstallerEvent, handle: &AppHandle) -> StatusPayload 
             error: None,
             can_retry: false,
             relaunch_on_close: false,
-            closing: false,
             log_path,
         },
         InstallerEvent::Failed {
@@ -281,7 +259,6 @@ fn event_to_payload(event: InstallerEvent, handle: &AppHandle) -> StatusPayload 
             error: Some(error),
             can_retry,
             relaunch_on_close,
-            closing: false,
             log_path,
         },
     }
@@ -299,7 +276,6 @@ mod retry_state_tests {
             error: None,
             can_retry: true,
             relaunch_on_close: true,
-            closing: false,
             log_path: String::new(),
         }
     }
@@ -321,14 +297,9 @@ mod retry_state_tests {
     fn close_relaunches_at_most_once_even_when_retry_was_withdrawn() {
         let mut status = failed_status();
         status.can_retry = false;
-        let previous = status.clone();
         assert_eq!(status.take_close_relaunch(), Some(true));
-        assert_eq!(status.take_close_relaunch(), None);
+        assert_eq!(status.take_close_relaunch(), Some(false));
         assert_eq!(status.begin_retry().err().as_deref(), Some("unavailable"));
-        // The native worker may fail to spawn; restoring the snapshot must
-        // restore Close too, without leaving an uncloseable failure window.
-        status = previous;
-        assert_eq!(status.take_close_relaunch(), Some(true));
     }
 
     #[test]

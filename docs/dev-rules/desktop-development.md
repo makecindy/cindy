@@ -243,14 +243,7 @@ Windows 提权实例的深链交接使用 `windowsDeepLinkHandoff.ts` 和同包 
 管道 owner 的拒绝边界在同一提权终端运行
 `cargo test --manifest-path apps/desktop/native/windows-taskbar/Cargo.toml -- --include-ignored`；
 该 integration 用例用可连接但 owner 不匹配的真实管道，验证发送前拒绝。
-更新器启动权限另运行
-`node apps/desktop/scripts/check-windows-updater-launch.mjs --mt=<Windows SDK mt.exe>`，
-通过生产 launcher 检查普通进程、`requireAdministrator`/`RUNASADMIN` 的回退、
-令牌自查询、事件 IPC、后代进程、环境/工作目录和含空格/非 ASCII 路径；
-只创建隔离测试 exe，不更改正式程序的兼容性设置或系统注册表。
-加 `--transaction` 会再执行真实 Rust installer 入口的隔离事务，覆盖连续两次替换、
-损坏 exe 的失败回滚、Retry 与 Close；其文件树和程序均为测试夹具，仍不等同正式安装验收。
-脚本使用临时测试程序、真实普通/提权令牌和生产交接代码，检查同用户降权启动、交接、
+脚本用独立权限夹具构造普通发送端与提权接收端，通过生产交接代码检查交接、
 去重和锁域隔离；不修改安装版、正式 profile 或系统协议关联。它不代替打包版从浏览器点击
 共享邀请、OAuth 返回，以及最小化/托盘状态下前台唤起的验收。
 

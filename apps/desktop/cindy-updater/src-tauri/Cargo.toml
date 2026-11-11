@@ -26,8 +26,9 @@ thiserror = "2"
 open = "5"
 
 [target.'cfg(windows)'.dependencies]
-# Windows APIs for UAC installation and same-account desktop-shell relaunch.
-# Keep only the modules used by these two boundaries.
+# Used by installer::self_elevate to call ShellExecuteExW(verb="runas") and
+# trigger the UAC prompt. Minimal feature set — only the three modules whose
+# symbols we touch — to keep the release binary lean (we still strip + LTO).
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_UI_Shell",
@@ -36,8 +37,6 @@ windows-sys = { version = "0.59", features = [
     # itself is gated behind the Registry feature in windows-sys 0.59 even
     # though we never touch the registry. Required transitively.
     "Win32_System_Registry",
-    "Win32_Security",
-    "Win32_System_Threading",
 ] }
 
 [profile.release]

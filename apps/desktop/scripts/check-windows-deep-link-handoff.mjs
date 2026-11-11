@@ -1,6 +1,6 @@
 /**
  * Windows integration: elevated receiver + ordinary sender, using the production
- * native pipe, handoff controller, and updater desktop-shell launcher. No Cindy
+ * native pipe and handoff controller with disposable permission fixtures. No Cindy
  * install/profile/protocol registration is touched. Run from an elevated dev
  * terminal with --addon=<built cindy-windows-taskbar.node or .dll>.
  * Regression: browser deep links disappeared after Program Files updates.
@@ -8,7 +8,7 @@
  */
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import os from 'node:os';
@@ -79,13 +79,20 @@ try {
 
   const clientFile = path.join(fixture, 'client.cjs');
   const receipt = path.join(fixture, 'receipt.json');
+  const senderStarted = path.join(fixture, 'sender-started.txt');
+  const senderExit = path.join(fixture, 'sender-exit.txt');
+  // The fixture verifies the sender's user/session against this receiver.
+  // Prepare the malformed-frame endpoint before the sender's bounded run;
+  // a cold PowerShell startup is not part of the production pipe operation.
+  const identityCommand = '[pscustomobject]@{sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value;session=[Diagnostics.Process]::GetCurrentProcess().SessionId}|ConvertTo-Json -Compress';
+  const identity = JSON.parse(execFileSync(path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe'), ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(identityCommand, 'utf16le').toString('base64')], { encoding: 'utf8', windowsHide: true, timeout: 10_000 }));
+  const scope = createHash('sha256').update(path.win32.resolve(fixture).toLowerCase()).digest('hex');
+  const pipe = String.raw`\\.\pipe\cindy-deep-link-v1-` + identity.sid + '-' + identity.session + '-' + scope;
   await fs.writeFile(clientFile, `
 const fs = require('node:fs');
-const path = require('node:path');
 const net = require('node:net');
-const { createHash } = require('node:crypto');
-const { execFileSync } = require('node:child_process');
 (async () => {
+fs.writeFileSync(${JSON.stringify(senderStarted)}, 'entered');
 if (process.versions.electron) require('electron').app.setPath('userData', ${JSON.stringify(path.join(fixture, 'sender-profile'))});
 const addonModule = { exports: {} };
 process.dlopen(addonModule, ${JSON.stringify(binary)});
@@ -95,10 +102,7 @@ const failures = [];
 const options = { lockScopeDir: ${JSON.stringify(fixture)}, native, isDeepLink: url => url.startsWith('cindy://'), dispatch: () => { throw new Error('sender must not dispatch'); }, onFailure: stage => failures.push(stage) };
 const handoff = createWindowsDeepLinkHandoff(options);
 const elevated = native.isProcessElevated();
-const identityCommand = '[pscustomobject]@{sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value;session=[Diagnostics.Process]::GetCurrentProcess().SessionId}|ConvertTo-Json -Compress';
-const identity = JSON.parse(execFileSync(path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe'), ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(identityCommand, 'utf16le').toString('base64')], { encoding: 'utf8', windowsHide: true }));
-const scope = createHash('sha256').update(path.win32.resolve(options.lockScopeDir).toLowerCase()).digest('hex');
-const pipe = String.raw\`\\\\.\\pipe\\cindy-deep-link-v1-\` + identity.sid + '-' + identity.session + '-' + scope;
+const pipe = ${JSON.stringify(pipe)};
 const oversized = Buffer.alloc(4 + 32_769, 32);
 oversized.writeUInt32LE(32_769, 0);
 for (const frame of [Buffer.from([1]), oversized]) {
@@ -119,9 +123,9 @@ fs.writeFileSync(${JSON.stringify(receipt)}, JSON.stringify({ elevated, first, s
 })().catch(error => { fs.writeFileSync(${JSON.stringify(receipt)}, JSON.stringify({ error: String(error) })); process.exitCode = 1; }).finally(() => { if (process.versions.electron) require('electron').app.exit(process.exitCode || 0); });
 `);
 
-  // Compile the exact production launcher into a disposable probe. Its child
+  // Compile a disposable permission fixture for the ordinary sender. Its child
   // starts the same Node executable as the receiver, retaining the original
-  // detached launch's environment/cwd, and uses only synthetic URLs.
+  // fixture caller's environment/cwd, and uses only synthetic URLs.
   const project = path.join(fixture, 'launcher');
   await fs.mkdir(path.join(project, 'src'), { recursive: true });
   await fs.writeFile(path.join(project, 'Cargo.toml'), `[package]
@@ -131,24 +135,27 @@ edition = "2021"
 [dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Environment", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
 `);
-  const launchSource = path.join(root, 'apps/desktop/cindy-updater/src-tauri/src/windows_launch.rs');
+  const launchSource = path.join(root, 'apps/desktop/scripts/fixtures/windows-deep-link-launch.rs');
   await fs.writeFile(path.join(project, 'src/main.rs'), `
 #![windows_subsystem = "windows"]
 #[path = ${JSON.stringify(launchSource)}] mod windows_launch;
 use std::os::windows::process::CommandExt;
 fn main() {
   if std::env::args().len() > 1 {
-    // Pass the normal absolute path used by installer::launch_detached. Rust's
+    // Use a normal absolute fixture path. Rust's
     // current_exe can expose libuv's internal verbatim-path launch spelling.
     let exe = std::env::current_exe().unwrap();
     let text = exe.to_string_lossy();
     let text = text.strip_prefix(r"\\\\?\\").unwrap_or(&text);
     let process = windows_launch::spawn_detached(std::path::Path::new(text), |error| panic!("normal desktop parent required: {error}")).unwrap();
-    assert!(windows_launch::wait_for_exit(&process, std::time::Duration::ZERO).unwrap().is_none());
+    // A fast fixture can finish before this snapshot. Both live and successful
+    // exit are valid; the Node driver still verifies the real pipe deliveries.
+    assert!(matches!(windows_launch::wait_for_exit(&process, std::time::Duration::ZERO).unwrap(), None | Some(0)));
   } else {
     assert!(windows_launch::launch_via_desktop_shell(std::path::Path::new("missing-test-app.exe")).unwrap().is_none());
     let status = std::process::Command::new(${JSON.stringify(process.execPath)})
       .arg(${JSON.stringify(clientFile)}).creation_flags(0x08000000).status().unwrap();
+    std::fs::write(${JSON.stringify(senderExit)}, format!("{status:?}")).unwrap();
     std::process::exit(status.code().unwrap_or(1));
   }
 }
@@ -170,6 +177,11 @@ fn main() {
     try { result = JSON.parse(await fs.readFile(receipt, 'utf8')); break; } catch {}
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
+  if (result === undefined) {
+    const started = await fs.readFile(senderStarted, 'utf8').catch(() => 'not observed');
+    const exit = await fs.readFile(senderExit, 'utf8').catch(() => 'not observed');
+    assert.fail(`Sender did not produce its receipt within 10 seconds (entry: ${started}; exit: ${exit})`);
+  }
   assert.deepEqual(result, { elevated: false, first: true, second: true, wrongProfile: false, failures: [] });
   assert.deepEqual(failures, []);
   assert.deepEqual(deliveries, [
@@ -178,7 +190,7 @@ fn main() {
   ]);
   handoff.close();
   handoff = undefined;
-  console.log('PASS: ' + (electronApp ? 'Electron' : 'Node') + ' normal sender → elevated receiver; same-user desktop-shell launch; launch deduplication; profile isolation; malformed-client recovery');
+  console.log('PASS: ' + (electronApp ? 'Electron' : 'Node') + ' normal sender → elevated receiver; verified ordinary sender context; launch deduplication; profile isolation; malformed-client recovery');
 } catch (error) {
   process.exitCode = 1;
   console.error(error);

@@ -76,10 +76,7 @@ The Electron main process owns argument construction; see
 1. `waiting`    — polling sysinfo until `--pid` exits (60s timeout).
 2. `extracting` — unzipping `--zip` into a sibling `%TEMP%\…-extract-{ts}\`.
 3. `replacing`  — walking the extract tree and copying into `--app-dir/`.
-4. `launching`  — start `<app-dir>\<exe-name>` through `launch_detached`:
-   an elevated updater first uses the verified same-user, same-session,
-   unelevated desktop Shell; an ordinary updater or an unavailable Shell path
-   uses the original detached `CreateProcess` fallback.
+4. `launching`  — `CreateProcess` on `<app-dir>\<exe-name>` (detached).
 5. `done`       — `pgrep`-style verification passed; updater self-cleans.
 6. `failed`     — any step bubbled an error; lock file dropped, UI sticks.
 
@@ -103,36 +100,17 @@ and a rejected retry leaves the other updater's lock untouched.
 After failure Cindy stays closed until the user chooses Retry or Close. Close
 (including the native window close action) removes the retained retry package
 and restarts the unmodified or restored Cindy once. Closing is blocked during an
-active install. Close cleanup/relaunch runs off the UI thread; closing excludes
-duplicate Close and Retry. A failed or unsafe rollback never auto-restarts the app.
+active install. A failed rollback never starts the partially restored app.
 
-The original permission probe, UAC handoff and temporary staging location are
-retained. `launch_detached` now checks the updater's actual token elevation and,
-when elevated, uses the existing desktop Shell as the new process's parent after
-verifying that Shell belongs to the same user and login session and is not
-elevated. Synchronous `CreateProcessW` returns the actual process handle, without
-an uncancellable COM launch request. It does not switch accounts, enable extra
-privileges or modify token ACLs. Environment and cwd retain the original detached
-launch's updater context. If the Shell is unavailable or creation fails before
-there is a child, the original detached launch remains the fallback and may
-inherit the updater's elevation, including an explicitly admin-only target.
-Windows observes this handle for three seconds instead of a global name match
-or an immediate liveness snapshot. Nonzero early exits enter rollback; normal
-exit remains accepted, including single-instance handoff or the user quitting.
-Creation/observation is not a full application readiness check. An unknown handle
-state or surviving install-directory process blocks overwrite rollback, keeps
-the recovery backup and disables automatic Retry/relaunch. Running elevated clients
-are supported by the common Windows deep-link handoff; see the authoritative
-[startup-permission rules](../../../docs/dev-rules/cindy-updater.md#windows-更新后的启动权限).
-The existing seven-day temporary-directory cleanup still applies.
+The original permission probe, UAC handoff, temporary staging location and
+`launch_detached` startup are retained. This also retains the original inherited
+privileges after an elevated update. No token switching or ACL classification is
+performed. The existing seven-day temporary-directory cleanup still applies.
 
 Retry controls retain the five-language WebView catalog and existing theme styles.
 
 A release uses the updater bundled with the currently installed Cindy. Shipping
 a new updater does not change the process already performing that update.
-Installed-product tests must also cover the next update using the new updater.
-Builds and isolated fixtures do not establish antivirus/EDR compatibility;
-interception or quarantine needs validation in the relevant security environment.
 
 ## Build
 
@@ -159,14 +137,12 @@ cargo run -- \
   --zip path/to/anything.zip \
   --app-dir C:\Temp\fake-app \
   --exe-name notepad.exe \
-  --pid <known-exited-fixture-pid> \
+  --pid 0 \
   --log C:\Temp\updater-test.log \
   --lock C:\Temp\updater-test.lock
 ```
 
-Use the verified PID of an exited disposable test process; PID 0 is Windows'
-Idle process and does not bypass the wait phase. Never use the installed Cindy
-for this dummy-argument check.
+`--pid 0` exits the wait phase immediately.
 
 ## Prerequisites
 
