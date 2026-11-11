@@ -95,6 +95,12 @@ function wrapHandle(
           syncActivity();
           return result;
         };
+      if (property === 'commitRewindFiles' && target.commitRewindFiles)
+        return async (...args: Parameters<NonNullable<AgentSessionHandle['commitRewindFiles']>>) => {
+          const result = await target.commitRewindFiles!(...args);
+          syncActivity();
+          return result;
+        };
       if (property === 'events')
         return async function* () {
           for await (const event of target.events()) {

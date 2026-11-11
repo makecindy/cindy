@@ -747,10 +747,11 @@ describe('native account assignment on the executing computer', () => {
     expect(unsubscribe).toHaveBeenCalledOnce();
     expect(await state()).toMatchObject({ running: 0, waiting: 0 });
   });
-  // PR #9843: idle Claude teardown clears native work without another event or callback.
-  // Unit regression through startSession/events: EOF must clear the panel's waiting count
-  // and unblock account commands; event-driven completion above does not cover this path.
-  it.each([false, true])('clears stale waiting activity at natural EOF (pool=%s)', async (configured) => {
+  // PR #9843: idle teardown and rewind clear native work without an event or callback.
+  // Unit regression through the handle: EOF/rewind must clear the waiting count and
+  // unblock account commands; event-driven completion above does not cover these paths.
+  it.each([[false, 'eof'], [true, 'eof'], [false, 'rewind'], [true, 'rewind']] as const)(
+    'clears stale waiting activity (pool=%s, completion=%s)', async (configured, completion) => {
     const accountId = configured ? 'second' : 'default';
     if (!configured) h.pools = {};
     else h.bindings.set('task:idle-exit', { providerId: 'anthropic', accountId });
@@ -760,6 +761,7 @@ describe('native account assignment on the executing computer', () => {
       id: 'idle-exit-native',
       send: async () => {},
       close: vi.fn(async () => {}),
+      commitRewindFiles: vi.fn(async () => { tasks = []; pending = 0; }),
       listBackgroundTasks: () => tasks,
       countPendingWakeContinuations: () => pending,
       events: async function* () {
@@ -776,7 +778,12 @@ describe('native account assignment on the executing computer', () => {
     const events = handle.events()[Symbol.asyncIterator]();
     expect((await events.next()).value).toMatchObject({ type: 'done' });
     expect(await state()).toMatchObject({ running: 0, waiting: 1 });
-    expect((await events.next()).done).toBe(true);
+    if (completion === 'eof') {
+      expect((await events.next()).done).toBe(true);
+    } else {
+      // Rewind leaves the event stream open, unlike idle process exit.
+      await handle.commitRewindFiles!('user-turn', 'prior-assistant');
+    }
     expect(nativeHandle.close).not.toHaveBeenCalled();
     expect(await state()).toMatchObject({ running: 0, waiting: 0 });
     await runSubscriptionAccountCommand({ action: 'login', providerId: 'anthropic', accountId, loginKey: 'after-idle-exit' });
@@ -785,6 +792,7 @@ describe('native account assignment on the executing computer', () => {
       await runSubscriptionAccountCommand({ action: 'remove', providerId: 'anthropic', accountId });
       expect((await readSubscriptionPool('anthropic')).accounts.some(a => a.id === accountId)).toBe(false);
     }
+    await events.return?.();
   });
   it.each([['anthropic', 'api'], ['api', 'anthropic']])(
     'rebuilds the activity tracker when switching from %s to %s without a pool',
