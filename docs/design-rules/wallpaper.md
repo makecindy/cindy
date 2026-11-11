@@ -51,7 +51,8 @@ and preview fallback; only manifest entries with video metadata offer motion. Do
 as a 3px bottom track inside the selected thumbnail (user choice, 2026-10-19), with no visible
 percentage or separate row. Its transform interpolates the precise byte ratio over
 the base motion tier, linearly for this transfer indicator to avoid restarting an
-ease-in/out on every progress sample; reduced motion updates immediately.
+ease-in/out on every progress sample (registered narrow exception, `DESIGN.md` §14.4);
+reduced motion updates immediately.
 It follows real transfer progress and disappears once ready;
 cache hits show the original directly. A failed tile shows a retry icon and supports click,
 Enter and Space to retry, preserving the grid's single Tab stop and selected border.
@@ -245,7 +246,8 @@ and permit retry. The download and cache contract is defined in
 Decode one local video
 per window, suspend playback while hidden/minimized, and use the original still for
 reduced motion or playback failure. Static / Dynamic switches crossfade the video
-over the retained high-resolution still using base/ease-move (200ms), starting
+over the retained high-resolution still using fast/ease-move (150ms, the same pair as the
+still-image crossfade; maintainer ruling D-11, 2026-11-11), starting
 only after playback is ready. Switching back to Static releases the video after
 the fade; rapid toggles reverse it without adding a decoder. Reduced motion
 bypasses the transition and releases the video immediately.
