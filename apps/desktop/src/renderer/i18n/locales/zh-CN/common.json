@@ -2261,6 +2261,7 @@
         "desktopVisibilityHint": "透出 Cindy 后面的桌面与窗口，文字和控件保持清晰。",
         "desktopBlurLabel": "桌面模糊",
         "desktopBlurHint": "模糊窗口后面的桌面，0 为关闭，数值越大越模糊。不支持强度调节的系统使用默认效果。",
+        "desktopBlurSwitchHint": "用 Windows 系统效果模糊窗口后面的桌面。需要 Windows 11 22H2 或更高版本。",
         "blurLabel": "壁纸模糊",
         "blurHint": "仅模糊壁纸，0 为关闭。动态壁纸开启模糊后会增加显卡负载。",
         "motionLabel": "展示方式",
@@ -19827,7 +19828,12 @@
     "openDirectory": "打开账号目录",
     "openDirectoryFailed": "无法打开账号目录，它可能已被移动或删除。",
     "loginAgain": "重新登录",
-    "login": "登录"
+    "login": "登录",
+    "quotaAverage": "平均余量 {{percent}}%",
+    "quotaUpdating": "余量待更新",
+    "quotaResetSoon": "即将重置",
+    "quotaAverageHint": "周限额 · 按账号等权平均",
+    "quotaResetHint": "按当前使用速度，重置时可能仍有余量：24 小时内为黄色，6 小时内为红色。"
   },
   "sessionNotify": {
     "finished": "这个任务这一轮做完了，最终答复如下：",

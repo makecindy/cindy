@@ -29,6 +29,8 @@ export interface ProviderModelAutoRefreshDeps {
   refreshProvider(providerId: BuiltinRefreshableProviderId): Promise<void>;
   /** Refresh the shared public Catalog independently of any provider connection state. */
   refreshCatalog?: () => Promise<void>;
+  /** Saved-source recovery owns its retry cooldown; public success cannot defer it. */
+  refreshCustomSources?: () => Promise<void>;
   getScopeKey?: () => string | number;
   now(): number;
   log: Pick<Logger, 'debug' | 'warn'>;
@@ -67,6 +69,7 @@ export function createProviderModelRefreshCoordinator(
   let catalogLastAttemptAt: number | undefined;
   let catalogLastFailureAt: number | undefined;
   let catalogStartupGraceUntil: number | undefined;
+  let customSourcesInflight: { promise: Promise<void>; scopeGeneration: number } | null = null;
   let scopeKey = deps.getScopeKey?.();
   let scopeGeneration = 0;
 
@@ -83,6 +86,7 @@ export function createProviderModelRefreshCoordinator(
     forcedFollowUp.clear();
     providerGenerations.clear();
     catalogInflight = null;
+    customSourcesInflight = null;
     catalogLastAttemptAt = undefined;
     catalogLastFailureAt = undefined;
     catalogStartupGraceUntil = undefined;
@@ -106,6 +110,24 @@ export function createProviderModelRefreshCoordinator(
     catalogLastAttemptAt = undefined;
     catalogLastFailureAt = undefined;
     catalogStartupGraceUntil = undefined;
+  }
+
+  function refreshCustomSourcesAutomatically(trigger: ProviderModelAutoRefreshTrigger): Promise<void> {
+    // Startup catalog loading already launches nonblocking source recovery.
+    if (!deps.refreshCustomSources || trigger === 'startup') return Promise.resolve();
+    if (customSourcesInflight?.scopeGeneration === scopeGeneration) return customSourcesInflight.promise;
+    const generation = scopeGeneration;
+    const promise = Promise.resolve().then(() => {
+      if (generation === scopeGeneration) return deps.refreshCustomSources!();
+    }).catch((error: unknown) => {
+      deps.log.warn('custom provider source auto-refresh failed', {
+        trigger, error: error instanceof Error ? error.message : String(error),
+      });
+    }).finally(() => {
+      if (customSourcesInflight?.promise === promise) customSourcesInflight = null;
+    });
+    customSourcesInflight = { promise, scopeGeneration: generation };
+    return promise;
   }
 
   async function refreshCatalogAutomatically(
@@ -264,6 +286,7 @@ export function createProviderModelRefreshCoordinator(
     async requestAutoRefresh(trigger, providerIds): Promise<void> {
       syncScope();
       const catalogRefresh = refreshCatalogAutomatically(trigger);
+      const customSourcesRefresh = refreshCustomSourcesAutomatically(trigger);
       let providers: ProviderView[];
       try {
         providers = await deps.listProviders({ allowSideEffects: true });
@@ -272,7 +295,7 @@ export function createProviderModelRefreshCoordinator(
           trigger,
           error: err instanceof Error ? err.message : String(err),
         });
-        await catalogRefresh;
+        await Promise.all([catalogRefresh, customSourcesRefresh]);
         return;
       }
 
@@ -311,6 +334,7 @@ export function createProviderModelRefreshCoordinator(
               : String(result.reason),
         });
       });
+      await customSourcesRefresh;
     },
 
     async refreshManually(providerId): Promise<void> {

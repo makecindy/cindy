@@ -5,6 +5,7 @@ export async function collectModelDiscoveryPages(
   first: unknown,
   endpoint: string,
   fetchPage: (url: string) => Promise<unknown>,
+  options: { requireComplete?: boolean } = {},
 ): Promise<DiscoveredModel[] | null> {
   const origin = new URL(endpoint);
   const visited = new Set([origin.toString()]);
@@ -26,12 +27,13 @@ export async function collectModelDiscoveryPages(
   };
   let page = first;
   let current = origin;
+  let complete = false;
   for (let count = 0; count < 100; count++) {
     const parsed = parseModelsListResponse(page, endpoint);
-    if (!parsed) return models.size ? [...models.values()] : null;
+    if (!parsed) return !options.requireComplete && models.size ? [...models.values()] : null;
     append(parsed);
-    if (models.size >= 10_000) return [...models.values()];
-    if (!page || typeof page !== 'object' || Array.isArray(page)) break;
+    if (models.size >= 10_000) return options.requireComplete ? null : [...models.values()];
+    if (!page || typeof page !== 'object' || Array.isArray(page)) { complete = true; break; }
     const data = page as Record<string, unknown>;
     const next = new URL(current);
     const token = data.nextPageToken ?? data.next_page_token;
@@ -46,12 +48,18 @@ export async function collectModelDiscoveryPages(
       try { resolved = new URL(link, current); } catch { break; }
       if (resolved.origin !== origin.origin || resolved.pathname !== origin.pathname || resolved.username || resolved.password) break;
       next.href = resolved.href;
-    } else break;
+    } else {
+      complete = data.has_more !== true && !token && !cursor && !link;
+      break;
+    }
     if (visited.has(next.toString())) break;
     visited.add(next.toString());
     try { page = await fetchPage(next.toString()); } catch { break; }
     current = next;
   }
+  // Failure, malformed continuation, cycle, unsafe link or budget exhaustion
+  // is useful for best-effort import, but cannot prove a saved ID was removed.
+  if (options.requireComplete && !complete) return null;
   // The ordinary OpenRouter list excludes speech. Fetch its separate catalog on
   // the same credential-owned endpoint, using the caller's timeout/byte limits.
   // Explicit filtered catalogs stay user-owned. A speech outage must not discard chat.
@@ -60,8 +68,12 @@ export async function collectModelDiscoveryPages(
     speech.searchParams.set('output_modalities', 'speech');
     try {
       const parsed = parseModelsListResponse(await fetchPage(speech.toString()), speech.toString());
+      if (!parsed && options.requireComplete) return null;
       append((parsed ?? []).filter(model => model.discoveredMetadata?.mode === 'audio_speech'));
-    } catch { /* Keep the successfully fetched catalog, as for a failed pagination request. */ }
+    } catch {
+      if (options.requireComplete) return null;
+      /* Best-effort imports retain the successfully fetched chat catalog. */
+    }
   }
   return [...models.values()];
 }

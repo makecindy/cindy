@@ -49,11 +49,21 @@ import {
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { shouldApplyExclusiveProviderRerouteLive } from '../maker-host/model-route-guard-live.js';
 import { dbToMakerAgentKind, makerToDbAgentKind, normalizeDbAgentKind } from '../../shared/agentKindConversion.js';
+import { decideProviderGroupFailure, providerGroupFailureSignals } from '../provider-group/failurePolicy.js';
 
 function throwIfAgentSwitchAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted) {
     throw new Error('agent switch aborted');
   }
+}
+
+/**
+ * 要换过去的那台此刻接不了这个任务(连不上、保留的远程任务数已满、不提供这个模型等)，与原生记录能不能恢复无关：
+ * 改用摘要同样打不开。判定沿用供应商组的唯一口径(provider-group/failurePolicy)。
+ */
+function isSwitchTargetUnavailable(error: unknown): boolean {
+  const decision = decideProviderGroupFailure(providerGroupFailureSignals(error), 'target');
+  return decision.action === 'switch' && decision.cause === 'unavailable';
 }
 
 /**
@@ -1181,6 +1191,15 @@ export async function performSessionAgentSwitch(
           nativeBootstrapReady = true;
         } catch (error) {
           await restoreNativeProbeSource(error);
+          // The target cannot take the task at all, so a summary would fail the same way
+          // and only discard the native context. Do not ask: the caller keeps the task on
+          // the source computer and sends there (provider-groups.md §6.2「换不过去」).
+          if (isSwitchTargetUnavailable(error)) {
+            deps.log.warn('agent-switch: quota relocation target cannot take the task; staying on the source', {
+              sessionId, error: error instanceof Error ? error.message : String(error),
+            });
+            throw error;
+          }
           relocatedNativeId = null;
           handoff = buildFullHandoff();
           deps.log.warn('agent-switch: native quota relocation failed; restored source before summary confirmation', {

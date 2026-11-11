@@ -2261,6 +2261,7 @@
         "desktopVisibilityHint": "透出 Cindy 後面的桌面與視窗，文字和控制項保持清晰。",
         "desktopBlurLabel": "桌面模糊",
         "desktopBlurHint": "模糊視窗後面的桌面，0 為關閉，數值越大越模糊。不支援強度調整的系統使用預設效果。",
+        "desktopBlurSwitchHint": "以 Windows 系統效果模糊視窗後面的桌面。需要 Windows 11 22H2 或更新版本。",
         "blurLabel": "桌布模糊",
         "blurHint": "僅模糊桌布，0 為關閉。動態桌布開啟模糊後會增加顯示卡負載。",
         "motionLabel": "展示方式",
@@ -19827,7 +19828,12 @@
     "openDirectory": "開啟帳號目錄",
     "openDirectoryFailed": "無法開啟帳號目錄，它可能已被移動或刪除。",
     "loginAgain": "重新登入",
-    "login": "登入"
+    "login": "登入",
+    "quotaAverage": "平均餘額 {{percent}}%",
+    "quotaUpdating": "餘額待更新",
+    "quotaResetSoon": "即將重設",
+    "quotaAverageHint": "每週限額 · 各帳號等權平均",
+    "quotaResetHint": "依目前使用速度，重設時可能仍有餘量：24 小時內為黃色，6 小時內為紅色。"
   },
   "sessionNotify": {
     "finished": "這個任務這一輪做完了，最終答覆如下：",

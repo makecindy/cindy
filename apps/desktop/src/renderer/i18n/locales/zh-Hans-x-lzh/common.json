@@ -2261,6 +2261,7 @@
         "desktopVisibilityHint": "透见 Cindy 后之桌面与窗口，文字控件仍清晰。",
         "desktopBlurLabel": "桌面模糊",
         "desktopBlurHint": "模糊窗后桌面；0 则关闭，值愈大则愈朦胧。系统若不可调，仍用预设之效。",
+        "desktopBlurSwitchHint": "以 Windows 系统之效模糊窗后桌面；须 Windows 11 22H2 或更新之版。",
         "blurLabel": "壁纸朦胧",
         "blurHint": "仅朦胧壁纸，0 为阖。动态壁纸启朦胧则增显卡之负。",
         "motionLabel": "展示之式",
@@ -19827,7 +19828,12 @@
     "openDirectory": "启账号目录",
     "openDirectoryFailed": "账号目录未能启，或已移或已删。",
     "loginAgain": "重登",
-    "login": "登录"
+    "login": "登录",
+    "quotaAverage": "平均余量 {{percent}}%",
+    "quotaUpdating": "余量待新",
+    "quotaResetSoon": "将重置",
+    "quotaAverageHint": "周限额 · 诸账号等权均值",
+    "quotaResetHint": "依今耗速，重置或尚有余：距二十四时以内示黄，六时以内示红。"
   },
   "sessionNotify": {
     "finished": "此务此轮已毕，终答如下：",

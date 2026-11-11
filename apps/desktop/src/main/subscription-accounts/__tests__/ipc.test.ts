@@ -178,8 +178,9 @@ describe('subscription management boundary', () => {
     expect(mapIpcErrorToI18nKey(error)).toBe('ipcError.SUBSCRIPTION_CODEX_PROVIDER_AUTH');
   });
   it('admits the trusted owner and paired owner remote context, never an untrusted frame or shared-task guest', async () => {
-    const command = { action: 'read', providerId: 'anthropic' };
+    const command = { action: 'read', providerId: 'anthropic', taskId: 'task-one' };
     await invoke(command);
+    expect(h.execute).toHaveBeenLastCalledWith(command);
     h.trusted = false;
     await expect(invoke(command)).rejects.toThrow('untrusted');
     h.context = {};
@@ -198,6 +199,8 @@ describe('subscription management boundary', () => {
       { action: 'configure', accountId: 'default', limit: 0 },
       { action: 'configure', paused: false },
       { action: 'configure', strategy: 'unknown' },
+      { action: 'read', taskId: '../other-owner' },
+      { action: 'read', taskId: 42 },
     ])
       await expect(invoke({ providerId: 'anthropic', ...command })).rejects.toThrow(
         'INVALID_PARAMS',

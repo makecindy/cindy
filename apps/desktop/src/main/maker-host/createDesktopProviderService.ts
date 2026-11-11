@@ -663,7 +663,7 @@ const revalidateModelSources = createModelSourceRevalidator({
       return outboundFetch(url, init);
     };
     if (config.auth?.method === 'oauth') {
-      const result = await fetchSavedOAuthProviderModels(buildUserProvider(config), agent, config.id, isCurrent, guardedFetch, runtime.headers);
+      const result = await fetchSavedOAuthProviderModels(buildUserProvider(config), agent, config.id, isCurrent, guardedFetch, runtime.headers, { requireComplete: true });
       return result.ok ? result.models ?? null : null;
     }
     const authMethod = config.auth?.method ?? 'apiKey';
@@ -671,16 +671,16 @@ const revalidateModelSources = createModelSourceRevalidator({
     if (authMethod === 'apiKey' && !apiKey && !Object.keys(runtime.headers ?? {}).length) return null;
     const result = await fetchProviderModels({
       agent, baseUrl: runtime.baseUrl, modelsUrl: runtime.modelsUrl, wireProtocol: runtime.wireProtocol,
-      authMethod, apiKey, headers: runtime.headers, redirect: 'error', allowEmpty: true,
+      authMethod, apiKey, headers: runtime.headers, redirect: 'error', allowEmpty: true, requireComplete: true,
     }, guardedFetch);
     return result.ok ? result.models ?? null : null;
   },
 });
 
-function recoverCustomProviderModelSources(
+async function recoverCustomProviderModelSources(
   configs: Parameters<typeof revalidateModelSources>[0],
   shouldApply: () => boolean,
-): void {
+): Promise<void> {
   const owner = getActiveAppSession();
   const isCurrent = () => {
     const current = getActiveAppSession();
@@ -688,11 +688,24 @@ function recoverCustomProviderModelSources(
   };
   // Keep startup/routing responsive. Successful revalidation reloads the latest
   // DB state through the usual catalog path and its existing change broadcast.
-  void revalidateModelSources(configs, JSON.stringify([owner.dataOwnerId, owner.generation]), isCurrent).then(async changed => {
+  await revalidateModelSources(configs, JSON.stringify([owner.dataOwnerId, owner.generation]), isCurrent).then(async changed => {
     if (changed && isCurrent()) await refreshCustomProvidersIntoCatalog(isCurrent);
   }).catch(() => {
     log.warn('custom provider model source recovery failed');
   });
+}
+
+/** Retry display provenance independently of the public catalog's cooldown.
+ * This read does not migrate or publish configs; discovery itself shares reads
+ * and throttles failed requests for five minutes within the captured owner. */
+export async function refreshCustomProviderModelSources(): Promise<void> {
+  const owner = getActiveAppSession();
+  const isCurrent = () => {
+    const current = getActiveAppSession();
+    return owner.mode === current.mode && owner.dataOwnerId === current.dataOwnerId && owner.generation === current.generation;
+  };
+  const configs = await listCustomProvidersWithSecureHeaders();
+  if (isCurrent()) await recoverCustomProviderModelSources(configs, isCurrent);
 }
 
 export async function refreshCustomProvidersIntoCatalog(
@@ -755,13 +768,13 @@ export async function refreshCustomProvidersIntoCatalog(
         return;
       }
       setCustomProviderConfigs(fresh, { skipUnchanged: true });
-      recoverCustomProviderModelSources(fresh, ownerIsCurrent);
+      void recoverCustomProviderModelSources(fresh, ownerIsCurrent);
       requestCodexApiModelProbe();
       log.info('custom providers merged into active catalog after cas miss', { count: fresh.length });
       return;
     }
     setCustomProviderConfigs(next, { skipUnchanged: true });
-    recoverCustomProviderModelSources(next, ownerIsCurrent);
+    void recoverCustomProviderModelSources(next, ownerIsCurrent);
     // Publish old routes first: imported accounts retain these IDs for history and revocation.
     const access = readModelDisableOverrides();
     const nativeDefault = isNativeProviderAuthBound('openai');

@@ -3,6 +3,30 @@ import { collectModelDiscoveryPages } from '../model-discovery-pages.js';
 
 const endpoint = 'https://models.example/v1/models';
 describe('model list pagination', () => {
+  // #9882: partial catalogs cannot authorize deletion of missing provenance.
+  // Unit via the real collector; existing tests only covered best-effort import.
+  it.each(['offline', 'malformed', 'cycle', 'untrusted', 'page-limit', 'model-limit'] as const)(
+    'rejects incomplete %s catalogs when completeness is required', async scenario => {
+      const first = { data: [{ id: 'one' }], next: scenario === 'untrusted' ? 'https://other.example/v1/models?page=2' : '?page=2' };
+      let pageNumber = 2;
+      const fetchPage = vi.fn(async () => {
+        if (scenario === 'offline') throw new Error('offline');
+        if (scenario === 'malformed') return { error: 'invalid page' };
+        if (scenario === 'cycle') return first;
+        if (scenario === 'model-limit') return { data: Array.from({ length: 10_000 }, (_, i) => ({ id: String(i) })) };
+        return { data: [{ id: 'one' }], next: '?page=' + ++pageNumber };
+      });
+      expect(await collectModelDiscoveryPages(first, endpoint, fetchPage, { requireComplete: true })).toBeNull();
+      if (scenario === 'untrusted') expect(fetchPage).not.toHaveBeenCalled();
+    },
+  );
+
+  it('accepts complete pagination when completeness is required', async () => {
+    const rows = await collectModelDiscoveryPages({ data: ['one'], next: '?page=2' }, endpoint,
+      async () => ({ data: ['two'] }), { requireComplete: true });
+    expect(rows?.map(model => model.id)).toEqual(['one', 'two']);
+  });
+
   it('merges later metadata for repeated IDs without dropping earlier fields', async () => {
     const models = await collectModelDiscoveryPages({ data: [{ id: 'one', name: 'Named model',
       supports_fast_mode: true, max_output_tokens: 4000 }], next: '?page=2' }, endpoint,

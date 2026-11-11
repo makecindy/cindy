@@ -244,6 +244,7 @@ import {
   getDesktopProviderService,
   refreshActiveCatalogFromSource,
   refreshCustomProvidersIntoCatalog,
+  refreshCustomProviderModelSources,
   reloadActiveCatalogForEndpointChange,
   syncLocalCatalogOverridesIntoActiveCatalog,
 } from '../createDesktopProviderService.js';
@@ -271,6 +272,39 @@ function activeMarker(): string | undefined {
 }
 
 describe('provider catalog realm reload', () => {
+  // #9882 latest review: a good first page plus a failed second page must not
+  // erase a saved source. Unit via production recovery + HTTP parser + CAS;
+  // prior restart coverage only used a complete single-page response.
+  it('preserves saved Magpie sources when a later discovery page fails', async () => {
+    const saved: CustomProviderConfig = { id: 'magpie-partial', name: 'Magpie', auth: { method: 'none' }, runtimes: { pi: {
+      baseUrl: 'http://127.0.0.1:3425/v1', modelsUrl: 'http://127.0.0.1:3425/v1/models', wireProtocol: 'openai-chat', models: [{
+        id: 'b/foo', name: 'My model', discoveredSource: { kind: 'magpie', providerId: 'Saved', snapshotId: 'old:receipt' },
+      }],
+    } } };
+    const before = structuredClone(saved);
+    h.customProviderRead.mockResolvedValue([saved]);
+    h.casUpdate.mockClear();
+    h.outboundFetch.mockImplementation(async url => {
+      if (String(url).includes('page=2')) throw new Error('offline');
+      return new Response(JSON.stringify({ data: [{ id: 'a/foo', owned_by: 'A', magpie_label: 'Foo · A' }], next: '?page=2' }));
+    });
+    const events: number[] = [];
+    setActiveCatalogChangedListener(revision => events.push(revision));
+    try {
+      await refreshCustomProviderModelSources();
+      expect(h.outboundFetch).toHaveBeenCalledTimes(2);
+      expect(h.casUpdate).not.toHaveBeenCalled();
+      expect(saved).toEqual(before);
+      await refreshCustomProviderModelSources();
+      expect(h.outboundFetch).toHaveBeenCalledTimes(2);
+      expect(events).toHaveLength(0);
+    } finally {
+      setActiveCatalogChangedListener(null);
+      h.customProviderRead.mockReset();
+      h.outboundFetch.mockReset().mockRejectedValue(new Error('offline'));
+    }
+  });
+
   // #9882 review: deferred catalog reads must honor readiness-barrier adoption,
   // while ordinary refreshes and invalidated ABA work cannot publish. Unit tier;
   // existing tests did not vary the session generation during a pending read.

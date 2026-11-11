@@ -2291,6 +2291,7 @@
         "desktopVisibilityHint": "Reveal the desktop and windows behind Cindy. Text and controls stay clear.",
         "desktopBlurLabel": "Desktop Blur",
         "desktopBlurHint": "Blur the desktop behind the window. 0 turns it off; higher values increase blur. Systems without adjustable blur use their default effect.",
+        "desktopBlurSwitchHint": "Blur the desktop behind the window with the Windows system effect. Requires Windows 11 version 22H2 or later.",
         "blurLabel": "Wallpaper Blur",
         "blurHint": "Blur only the wallpaper. Set to 0 to turn off. Blurring animated wallpaper increases GPU usage.",
         "motionLabel": "Display",
@@ -19899,7 +19900,12 @@
     "openDirectory": "Open account folder",
     "openDirectoryFailed": "Couldn’t open the account folder. It may have been moved or deleted.",
     "loginAgain": "Sign in again",
-    "login": "Sign in"
+    "login": "Sign in",
+    "quotaAverage": "Average remaining {{percent}}%",
+    "quotaUpdating": "Quota updating",
+    "quotaResetSoon": "Resets soon",
+    "quotaAverageHint": "Weekly quota · Equal weight per account",
+    "quotaResetHint": "At the current pace, quota may remain at reset: yellow within 24 hours, red within 6 hours."
   },
   "sessionNotify": {
     "finished": "This task finished its turn. Its final answer:",

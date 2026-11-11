@@ -27,6 +27,17 @@ function fakeResponse(status: number, body: string): Response {
 }
 
 describe('import discovery limits', () => {
+  // #9882: background provenance recovery must require every page; ordinary
+  // settings import keeps its best-effort behavior. Unit, real fetch entry.
+  it('rejects partial discovery only when complete results are required', async () => {
+    const fetcher = vi.fn(async (url: RequestInfo | URL) => {
+      if (String(url).includes('page=2')) throw new Error('offline');
+      return fakeResponse(200, JSON.stringify({ data: [{ id: 'a/foo', owned_by: 'A', magpie_label: 'Foo · A' }], next: '?page=2' }));
+    });
+    expect((await fetchProviderModels(spec(), fetcher)).models?.[0].id).toBe('a/foo');
+    expect((await fetchProviderModels(spec({ requireComplete: true }), fetcher)).ok).toBe(false);
+  });
+
   // #9101 review regression: three identical Chat runtimes must perform one
   // HTTP read, while each consumer still issues its own agent-bound receipt.
   it('coalesces concurrent Hinoki reads without sharing agent provenance', async () => {

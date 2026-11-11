@@ -95,6 +95,8 @@ export interface ProviderModelsFetchSpec {
   /** Main-only import constraints; ordinary settings discovery keeps its existing policy. */
   redirect?: 'error';
   responseByteLimit?: number;
+  /** Main-only: partial pages must not authorize removal of saved provenance. */
+  requireComplete?: boolean;
 }
 
 /** 结构化结果（查询型返回：renderer 需要 code 渲染分类文案，不走 throwIpcError）。 */
@@ -118,6 +120,7 @@ export async function fetchSavedOAuthProviderModels(
   isCurrent: () => boolean,
   fetchImpl: typeof fetch = outboundFetch,
   headers?: Record<string, string>,
+  options: Pick<ProviderModelsFetchSpec, 'requireComplete'> = {},
 ): Promise<ProviderModelsFetchResult> {
   const oauth = provider?.auth.oauth;
   const route = provider?.routing[agent];
@@ -144,6 +147,7 @@ export async function fetchSavedOAuthProviderModels(
     apiKey: token,
     headers,
     redirect: 'error',
+    ...options,
   }, async (url, init) => {
     // Pagination and the separate speech catalog may run after the first reply.
     // Revoke the captured credentials before another request if ownership changed.
@@ -360,7 +364,7 @@ export async function fetchProviderModels(
     const page = await fetchImpl(nextUrl, { ...init, redirect: 'error', signal: AbortSignal.timeout(Math.max(1, Math.min(FETCH_TIMEOUT_MS, pageDeadline - Date.now()))) });
     if (!page.ok) { await page.body?.cancel(); throw new Error('catalog page failed'); }
     return JSON.parse(await readLimitedBody(page, spec.responseByteLimit ?? 8 * 1024 * 1024));
-  });
+  }, { requireComplete: spec.requireComplete });
   // These exact OpenAI-compatible catalog views can legitimately be empty. Keep
   // that success distinct in every consumer (wizard, edit and saved refresh),
   // without treating an error envelope as an empty catalog or an account grant.
