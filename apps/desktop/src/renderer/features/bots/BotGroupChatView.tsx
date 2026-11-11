@@ -1,4 +1,5 @@
 import { copyChatSelection } from '@/components/chat/chatSelectionClipboard';
+import { usePluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
 import { useProcessDisclosureScroll } from './useProcessDisclosureScroll';
 import { RemoveChatFromListButton } from './RemoveChatFromListButton';
 import { ChatInviteDialog } from './ChatInviteDialog';
@@ -27,7 +28,7 @@ import { cn } from '@/lib/utils';
  * 附件（§3.1）：托盘状态（`useAttachments`）由页面持有，文件拖到页面任意位置都进托盘，
  * 与普通任务的整区拖入一致；消息上的图片与文件复用普通聊天用户气泡的图片视图与附件 chip。
  */
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from 'react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type DragEvent } from 'react';
 import { ArrowLeft, CircleAlert, RefreshCcw, Settings2 } from 'lucide-react';
 import { useBotGroupWorkTargets } from './useBotGroupWorkTargets';
 import { useTranslation } from 'react-i18next';
@@ -50,6 +51,7 @@ import {
   isDataOwnerPushCurrent,
 } from '@/contexts/dataOwnerGeneration';
 import { useAttachments } from '@/hooks/useAttachments';
+import { useProportionalWidth } from '@/hooks/useProportionalWidth';
 import { discardDraftTree } from '@/lib/composerDraftStore';
 import {
   classifyUnclassifiedDroppedItems,
@@ -221,6 +223,7 @@ export function BotGroupChatView() {
 }
 
 function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boolean }) {
+  const pluginUi = usePluginUiMessageCandidates();
   const { t, i18n } = useTranslation();
   const locale = i18n.language;
   const controlledBy = useControlledBy();
@@ -1325,7 +1328,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
 
   return (
     <div ref={threadLayoutRef} className={cn('flex h-full min-w-0 overflow-hidden', threadResize.isDragging && 'select-none [&_*]:cursor-col-resize')}>
-    <main
+    <BotGroupChatMain
       className="relative flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-[var(--surface)]"
       onDragEnter={(event) => {
         if (!isAttachmentDrag(event)) return;
@@ -1386,9 +1389,9 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
           previousScrollTop.current = element.scrollTop;
           if (atBottom) acknowledgeSoon();
         }}
-        className="min-h-0 flex-1 overflow-y-auto px-5 pb-4 pt-4"
+        className="min-h-0 flex-1 overflow-y-auto pb-4 pt-4"
       >
-        <div ref={contentRef} className="mx-auto flex w-full max-w-[760px] flex-col">
+        <div ref={contentRef} className="mx-auto flex w-full max-w-[var(--cindy-message-width)] flex-col">
           {hasMoreBefore ? (
             <div className="mb-2 flex justify-center">
               <Button
@@ -1426,11 +1429,12 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
             const owned = !isPlanCard && message.authorKind === 'user' && message.isSelf === false
               ? botGroupOwnedBotNames(member, members).join(separator) : '';
             const isOpenPlanCard = isPlanCard && openPlan !== null && openPlan.id === message.planId;
-            const quotable = canQuote && !message.pending && isBotGroupMessageQuotable(message);
+            const quotable = canQuote && isBotGroupMessageQuotable(message);
             return (
               <Fragment key={adoptedKeysRef.current.get(message.id) ?? message.id}>
                 {rowLayout?.dateDivider != null ? <BotGroupDateDivider timestamp={rowLayout.dateDivider} locale={locale} /> : null}
                 <BotGroupTimelineItem
+                  pluginUi={pluginUi}
                   message={message}
                   continued={rowLayout?.continued ?? false}
                   authorName={authorName}
@@ -1450,7 +1454,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
                   quoteDisplay={quoteDisplays.get(message.id)?.display}
                   onLocateQuote={onLocateQuote}
                   onQuote={quotable ? onQuote : undefined}
-                  onOpenThread={group.serverBacked && !direct && !message.pending ? onOpenThread : undefined}
+                  onOpenThread={group.serverBacked && !direct ? onOpenThread : undefined}
                   onChanged={onChanged}
                   highlighted={highlightId === message.id}
                   focusable={jumpTarget === message.id || highlightId === message.id}
@@ -1516,8 +1520,8 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
           className={cn('shrink-0', messageNavigationVisible && 'invisible')}>
           {(group.threads?.length || personalMask) && !sharing && !group.archived ? (
             // Floats over the bottom of the timeline, at the column's right edge (bot-group-chat.md §10).
-            <div className="relative h-0 shrink-0 px-5">
-              <div className="pointer-events-none relative mx-auto h-0 w-full max-w-[760px] px-2">
+            <div className="relative h-0 shrink-0">
+              <div className="pointer-events-none relative mx-auto h-0 w-full max-w-[var(--cindy-message-width)] px-2">
                 <BotGroupThreadHint suppressed={messageNavigationVisible} key={group.id} threads={group.threads ?? []} members={group.members} openRootId={threadRootId}
                   onOpen={rootId => onOpenThread(rootId)} mentions={personalMask?.unreadMentions} onLocateMention={locateMention}
                   onReadMentions={personalMask ? () => personalMask.markMentionsRead() : undefined} saving={personalMask?.saving} />
@@ -1526,8 +1530,8 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
           ) : null}
           {hasControlledBanner && (
             // Like teammate chats, keep the collapsed breathing light above the composer.
-            <div className="shrink-0 px-5 pt-2">
-              <div className="mx-auto flex w-full max-w-[760px] justify-center px-2">
+            <div className="shrink-0 pt-2">
+              <div className="mx-auto flex w-full max-w-[var(--cindy-message-width)] justify-center px-2">
                 <ControlledBanner placement="composer" sessionId={controlledBannerKey} />
               </div>
             </div>
@@ -1543,9 +1547,9 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
               bottomOffset={indicatorBottomOffset} onClick={jumpToBottom} />
           </div>
         </div>}
-        <div data-chat-composer-stack>
-          {sharing ? <ShareSelectionBar sessionId={shareScope} barWidth="100%"
-            getContentWidth={() => contentRef.current?.querySelector('article')?.getBoundingClientRect().width ?? 760} /> : group.archived || group.dissolvedAt ? <p className="border-t border-[var(--border-default)] p-4 text-center text-13 text-[var(--text-tertiary)]">{t(group.dissolvedAt ? 'bots.groupChat.lifecycle.dissolved' : 'bots.groupChat.server.settings.archived')}</p> : <BotGroupComposer allowMentionAllBots={group.supportsMentionAudiences === true && group.allowMentionAllBots === true}
+        <div data-chat-composer-stack className={sharing ? 'flex justify-center' : undefined}>
+          {sharing ? <ShareSelectionBar sessionId={shareScope} barWidth="var(--cindy-input-width)"
+            getContentWidth={() => contentRef.current?.querySelector('article')?.getBoundingClientRect().width ?? 914} /> : group.archived || group.dissolvedAt ? <p className="border-t border-[var(--border-default)] p-4 text-center text-13 text-[var(--text-tertiary)]">{t(group.dissolvedAt ? 'bots.groupChat.lifecycle.dissolved' : 'bots.groupChat.server.settings.archived')}</p> : <BotGroupComposer allowMentionAllBots={group.supportsMentionAudiences === true && group.allowMentionAllBots === true}
             groupId={group.id}
             conversationKind={direct ? 'direct' : undefined}
             draftKey={attachmentScope}
@@ -1574,11 +1578,17 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
           }}
         />
       ) : null}
-    </main>
+    </BotGroupChatMain>
     {group.serverBacked && threadRootId && <ChatThreadPanel key={`${group.id}:${threadRootId}`} group={group} rootId={threadRootId} quoteSources={quoteSources}
       focus={threadFocus} sharedReplies={sharedReplies} onPostPending={beginPendingShare} onRevealShare={revealMainMessage} onClose={closeThread} resize={threadResize} />}
     </div>
   );
+}
+
+/** Mount the observer with the ready view, after the loading/error early returns. */
+function BotGroupChatMain(props: ComponentProps<'main'>) {
+  const { containerRef } = useProportionalWidth(914);
+  return <main {...props} ref={containerRef} />;
 }
 
 /** Older shares checked before the latest edit, deletion or reset: they may be out of date. */

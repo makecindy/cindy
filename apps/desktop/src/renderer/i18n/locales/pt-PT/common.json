@@ -1,4 +1,12 @@
 {
+  "runtimePlugins": {
+    "save": "Guardar",
+    "promptUnsupported": "Este local de execução do Pi não suporta fragmentos de instruções de sistema.",
+    "title": "Plugins da tarefa",
+    "description": "Selecione os plugins desta tarefa. As alterações aplicam-se a partir da próxima mensagem.",
+    "unsupported": "O processamento de cada pedido só está disponível com Pi local. O motor desta tarefa não o suporta.",
+    "failed": "Não foi possível carregar ou guardar as definições. Reabra este painel para tentar novamente."
+  },
   "sharedTaskRecovery": {
     "title": "Não é possível retomar no computador original",
     "description": "Escolha outro computador ou fornecedor para continuar com uma passagem de contexto. As mensagens são mantidas, mas o estado completo da execução no computador original não é transferido.",
@@ -3869,6 +3877,10 @@
           "openaiImagesHint": "Utiliza o endereço e a chave de API desta ligação para /images/generations e /images/edits. Ao ativar, esta passa a ser a única ligação Images do fornecedor. Adicione manualmente os IDs de modelos em falta e declare a respetiva capacidade de imagem nos detalhes do modelo.",
           "xaiVideos": "Utilizar Videos API compatível com xAI",
           "xaiVideosHint": "Utiliza o endereço e a chave de API desta ligação para submeter tarefas de vídeo e consultar o seu estado. Ao ativar, esta passa a ser a única ligação de vídeo do fornecedor. Adicione os IDs de modelos em falta e declare a capacidade de vídeo nos detalhes do modelo.",
+          "minimaxVideos": "Utilizar Videos API compatível com MiniMax",
+          "minimaxVideosHint": "Utiliza o endereço e a chave de API desta ligação para submeter tarefas de vídeo do MiniMax, como o MiniMax-H3, e consultar o seu estado. Um fornecedor só pode utilizar uma API de vídeo. Adicione os IDs de modelos em falta e declare a capacidade de vídeo nos detalhes do modelo.",
+          "openaiVideos": "Utilizar Videos API compatível com OpenAI (/v1/videos)",
+          "openaiVideosHint": "Utiliza o endereço e a chave de API desta ligação para submeter tarefas com POST /v1/videos e consultar o seu estado, o formato usado pela maioria dos relays, como o tu-zi; modelos como o MiniMax-H3 funcionam através dele. Um fornecedor só pode utilizar uma API de vídeo. Adicione os IDs de modelos em falta e declare a capacidade de vídeo nos detalhes do modelo.",
           "runtimeSupportsImageGeneration": "Suporta geração e edição de imagens",
           "runtimeSupportsImageGenerationHelpLabel": "Acerca do suporte para geração e edição de imagens",
           "runtimeSupportsImageGenerationConditionTitle": "Quando ativar",
@@ -6713,8 +6725,27 @@
             "copied": "Código de associação copiado",
             "hint": "Ou envie este código ao bot Cindy por mensagem direta no Feishu / Lark"
           },
+          "linkedAccounts": "Contas associadas: {{count}}",
+          "connectionTenant": "Empresa: {{tenant}}",
           "setWorkingDevice": "Definir como computador de trabalho",
-          "workingDeviceSet": "Computador de trabalho definido"
+          "workingDeviceSet": "Computador de trabalho definido",
+          "appType": {
+            "self_built": "Aplicação da organização",
+            "store": "Aplicação da loja"
+          },
+          "linkedBotsSummary": "Bots associados: {{bots}} · contas: {{accounts}}",
+          "chooseBot": "Escolhe um bot para associar. Podes usar vários bots ao mesmo tempo.",
+          "connectBot": "Associar este bot",
+          "linkAnotherAccount": "Associar outra conta Feishu",
+          "botFallback": "Bot Cindy",
+          "bridgeTitle": "Bots do Feishu / Lark",
+          "bridgeDescription": "Os bots apenas encaminham as tuas mensagens do Feishu / Lark para a Cindy. As mensagens de cada conta associada vão para o respetivo computador de trabalho, e as sessões ficam separadas por bot e por conta.",
+          "settingsTitle": "Diretórios de trabalho e modelos",
+          "settingsDescription": "Pertencem à tua conta Cindy neste computador, não a um bot nem a uma conta do Feishu / Lark: todos os bots do Feishu / Lark usam os mesmos. A lista de diretórios também é partilhada com outros canais.",
+          "workingDeviceLabel": "Computador de trabalho: {{name}}",
+          "workingDeviceThisComputer": "Este computador",
+          "workingDeviceUnknown": "Computador de trabalho ainda não sincronizado",
+          "workingDeviceUnnamed": "Computador sem nome"
         }
       },
       "summary": {
@@ -8140,8 +8171,18 @@
         "subscribeScheduleRunDetail": "As automatizações em que o escolheres em Verificação prévia consultam-no primeiro. Vê o nome e as instruções e pode ignorar ou parar essa execução, mas não aprovar nada por ti.",
         "subscribeRoutineRun": "Pode verificar rotinas de colegas escolhidas antes de serem executadas",
         "subscribeRoutineRunDetail": "As rotinas em que o escolheres em Verificação prévia consultam-no primeiro. Vê as instruções e os eventos que as acionaram e pode ignorar ou parar essa execução, mas não aprovar nada por ti.",
+        "systemPrompt": "Pode adicionar instruções de sistema às tarefas selecionadas",
+        "systemPromptDetail": "Os textos estáticos abaixo seguem as instruções fixas da Cindy apenas nas tarefas que selecionam este plugin. O pacote define a ordem e os motores. As alterações aplicam-se a partir da próxima mensagem; os erros seguem a definição da tarefa.",
+        "subscribeComposeContext": "Pode adicionar referências antes das respostas nas tarefas selecionadas",
+        "subscribeComposeContextDetail": "Só as tarefas selecionadas partilham a mensagem atual. Os resultados são referências normais, não instruções de sistema nem autorizações. Os erros seguem a definição da tarefa.",
+        "subscribeSearchMemory": "Pode fornecer memórias às tarefas selecionadas",
+        "subscribeSearchMemoryDetail": "Adiciona resultados completos com o nome do plugin ao memory_search. A pesquisa de memória tem de estar ativada. Só a consulta é partilhada; se falhar, os resultados da Cindy são mantidos.",
+        "subscribeStartTurn": "Pode escolher um modelo antes de cada resposta nas sessões selecionadas",
+        "subscribeStartTurnDetail": "Só as sessões em que seleciona este plugin partilham com ele a mensagem atual. Pode escolher um modelo ligado, o esforço de raciocínio e Fast. Os erros seguem a definição da sessão; não pode aprovar ações por si.",
+        "subscribeModelRequest": "Pode processar cada pedido ao modelo nas sessões selecionadas",
+        "subscribeModelRequestDetail": "Só as sessões em que seleciona este plugin partilham com ele os pedidos ao modelo. Pode ajustar modelos, parâmetros e conteúdo. Atualmente, só é suportado no Pi local; os erros seguem a definição da sessão. As credenciais de ligação não são incluídas.",
         "subscribeStartTask": "Pode escolher o modelo de novas tarefas",
-        "subscribeStartTaskDetail": "Quando uma nova tarefa usa um modelo fornecido por ele, lê a primeira mensagem e escolhe um dos seus modelos ligados. Escolhe uma vez; o modelo não muda durante a tarefa.",
+        "subscribeStartTaskDetail": "Quando uma nova tarefa usa um modelo fornecido por ele, lê a primeira mensagem e escolhe um dos seus modelos ligados. Esta etapa é executada apenas antes da primeira mensagem.",
         "card": "Apresenta cartões de mensagens",
         "cardExternalLink": "Os cartões podem declarar ligações externas que abrem o navegador após confirmação",
         "cardExternalLinkDetail": "Clicar numa ligação de um cartão apresenta uma caixa de diálogo de confirmação; o URL só abre no navegador do sistema após a sua aprovação. Apenas são permitidos endereços http/https.",
@@ -8200,7 +8241,9 @@
         "mcpUi": "Apresentar páginas interativas na conversa",
         "mcpUiDomains": "Domínios de rede da página: {{domains}}",
         "mcpAppOnly": "Apenas a página",
-        "uiPageAccess": "Páginas: {{pages}}; domínios: {{domains}}; ferramentas disponíveis para as páginas: {{tools}}"
+        "uiPageAccess": "Páginas: {{pages}}; domínios: {{domains}}; ferramentas disponíveis para as páginas: {{tools}}",
+        "uiHost": "Fornecer interfaces e ações do anfitrião no Cindy",
+        "uiHostAccess": "{{subject}}: {{access}}"
       },
       "connections": {
         "confirmTitle": "Adicionar endereço de ligação",
@@ -9419,6 +9462,9 @@
     }
   },
   "quotaCard": {
+    "codexRefreshFailed": "Não foi possível atualizar a quota do ChatGPT. Tente consultá-la novamente; as restantes informações de utilização são mantidas.",
+    "retryQuota": "Voltar a Consultar a Quota",
+    "retryingQuota": "A consultar a quota…",
     "usageCritical": "Utilização elevada",
     "usageWarning": "Utilização acima do normal",
     "usageTitle": "Detalhes de utilização",
@@ -11899,7 +11945,7 @@
       "remove": "Remover",
       "removeAria": "Remover {{platform}}",
       "empty": "Adiciona um bot que já tenhas ou liga o teu WeChat pessoal abaixo, e {{name}} responderá aí.",
-      "externalNote": "Qualquer pessoa que envie mensagens a este bot está a falar com {{name}}. As tuas mensagens são executadas com as permissões de {{name}}; todas as outras pessoas têm uma tarefa oculta separada com permissões restritas.",
+      "externalNote": "Após a associação, Telegram e Feishu/Lark só aceitam mensagens privadas do proprietário. Os grupos seguem as definições de participação de cada plataforma e as permissões das ferramentas de {{name}}. Tarefas separadas partilham ficheiros e memória.",
       "sharedMemoryNote": "{{name}} utiliza em conjunto informações daqui e de outras conversas. Para manter as memórias separadas, utiliza outro colega.",
       "groups": {
         "title": "Grupos",
@@ -14212,6 +14258,7 @@
       "groupThreadSent": "Enviado por \"{{name}}\" num tópico de \"{{group}}\"",
       "orcaFromLead": "Mensagem do Lead",
       "orcaFromWorker": "Mensagem do Worker",
+      "orcaFromWorkerBatch": "Relatório do sistema: {{count}} resultados de Worker",
       "orcaFromWorkerNamed": "Mensagem do Worker \"{{role}}\"",
       "hookChannelFrom": "De {{channel}}",
       "deviceSentMobileNamed": "Enviado do telemóvel \"{{name}}\"",
@@ -19611,6 +19658,12 @@
       "restore": "Repor predefinições"
     }
   },
+  "pluginUi": {
+    "display": "Apresentação",
+    "original": "Original",
+    "menu": "Vistas e comandos do plugin",
+    "actionFailed": "Não foi possível concluir a ação do plugin. Tente novamente."
+  },
   "mcpApps": {
     "sharedTaskReadOnly": "Só o proprietário da sessão pode interagir com este cartão.",
     "retry": "Recarregar",
@@ -20082,6 +20135,7 @@
   },
   "subscriptionAccounts": {
     "unassigned": "Conta por atribuir",
+    "boundUnavailable": "Conta indisponível",
     "providerManagedAuth": "O fornecedor atual do Codex não disponibiliza informações da conta ChatGPT. Ao adicionar o fornecedor, selecione «$t(subscriptionAccounts.signIn.anotherAccount)» para usar uma pasta separada.",
     "signIn": {
       "checking": "A verificar a conta local…",
@@ -20110,6 +20164,10 @@
     "openDirectoryFailed": "Não foi possível abrir a pasta da conta. Pode ter sido movida ou eliminada.",
     "loginAgain": "Iniciar sessão novamente",
     "login": "Iniciar sessão",
+    "quotaRecoverIn": "Disponível dentro de {{duration}}",
+    "quotaExhausted": "Quota esgotada",
+    "quotaFiveHourRemaining": "Quota de 5 horas restante: {{percent}}%",
+    "quotaFiveHourExhausted": "Quota de 5 horas esgotada",
     "quotaAverage": "Média restante {{percent}}%",
     "quotaUpdating": "Quota a aguardar atualização",
     "quotaResetSoon": "Reposição em breve",

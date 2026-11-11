@@ -6,16 +6,33 @@ export default {
   notCovered:
     'Native login, real quotas, dispatch and mobile rendering; host account snapshots are fixtures',
   cases: {
+    'quota-low': { about: 'Single account nearly exhausted' },
+    'quota-exhausted': { about: 'Single account recovery countdown' },
+    'quota-pool': { about: 'Pool exhausted; earliest usable account recovery' },
+    'quota-partial': { about: 'Partially exhausted pool stays quiet' },
     'full-panel': { about: 'Full production ModelSelector popup with pooled accounts and red reset time' },
     'full-panel-warning': { about: 'Full production ModelSelector popup with pooled accounts and yellow reset time' },
     default: { about: 'Paused first account; unique eligible second account' },
     bound: { about: 'Existing task remains bound to the paused first account' },
+    'session-bound': { about: 'Executing host resolves the native session to the second account, overriding the picker preview' },
     ambiguous: { about: 'Two accounts; average once in provider heading and separate details' },
     'reset-soon': { about: 'One account retains 80% with 12 hours until weekly reset; time is yellow' },
     'reset-urgent': { about: 'One account retains 80% with 5 hours until weekly reset; time is red' },
     unknown: { about: 'Unknown account prevents a misleading average but not a known reset reminder' },
   },
   async check(page, ui) {
+    if (ui.case.startsWith('quota-')) {
+      const summary = page.locator('[data-pool-quota-summary]');
+      await summary.waitFor();
+      if (ui.case === 'quota-partial') {
+        if (await summary.locator('[data-quota-warning]').count()) throw new Error('Partial pool must not warn');
+      } else await summary.locator('[data-quota-warning]').waitFor();
+      await ui.capture('quota-summary');
+      await summary.click();
+      await page.getByRole('tooltip').filter({hasText:'second@example.test'}).waitFor();
+      await ui.capture('quota-details');
+      return;
+    }
     if (ui.case.startsWith('full-panel')) {
       await page.locator('[data-full-picker-trigger] button').first().click();
       await page.locator('[data-morph-side][data-state="open"]').waitFor();

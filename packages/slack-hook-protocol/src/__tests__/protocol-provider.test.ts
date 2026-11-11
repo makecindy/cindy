@@ -529,3 +529,84 @@ describe('working computer selection', () => {
     expectReject({ ...makeProviderBindSelection({ ...payload, ok: true }), payload: { ...payload, ok: 'true' } }, 'ok');
   });
 });
+
+
+// Multi-account snapshots grant task authority. The production parser must reject
+// ambiguous/nested identities rather than letting the UI authorize an unrelated account.
+describe('Feishu store multi-account contract', () => {
+  it('round-trips distinct identities and rejects nested, duplicate, cross-app or mismatched snapshots', () => {
+    const first: ProviderBindStatusPayload = { ...CONFIRMED, provider: 'feishu', tenantKey: 'tenant-a' };
+    const second: ProviderBindStatusPayload = { ...first, bindingId: 'binding-2', principalId: 'ou_second', tenantKey: 'tenant-b' };
+    roundTrip(makeProviderBindState({ ...first, bindings: [first, second] }));
+    roundTrip(makeProviderBindUpdate({ ...second, completedAttemptId: 'attempt-2' }));
+    for (const rows of [[first, first], [first, { ...second, scopeId: 'different-app' }],
+      [first, { ...second, bindings: [] }], [second], [second, first],
+      [{ ...first, principalName: 'different-name' }, second], [{ ...first, actions: [] }, second]]) {
+      expectReject(makeProviderBindState({ ...first, bindings: rows }), 'bindings');
+    }
+    expectReject(makeProviderBindUpdate({ ...first, bindings: [first] }), 'bindings');
+    expectReject(makeProviderBindState({ ...first, provider: 'telegram', tenantKey: undefined, bindings: [first] }), 'bindings');
+  });
+});
+
+// The application set is the authority for multiple bot accounts. Old single-app
+// frames still round-trip; ambiguous projections and cross-app bindings cannot.
+describe('Feishu application coexistence contract', () => {
+  // Review regression / unit: both container and row are independently valid,
+  // but the same app cannot have different brand/type identities inside one frame.
+  it.each(['brand', 'appType'] as const)('rejects contradictory nested app %s metadata', (field) => {
+    const app = { appId: CONFIRMED.scopeId!, brand: 'feishu' as const, appType: 'store' as const, botName: 'Cindy', organization: null };
+    const contradictory = field === 'brand' ? { ...app, brand: 'lark' as const } : { ...app, appType: 'self_built' as const };
+    const row: ProviderBindStatusPayload = { ...CONFIRMED, provider: 'feishu', appInfo: contradictory };
+    expectReject(makeProviderBindState({ ...row, applications: [{ app, bindings: [row] }] }), 'applications');
+  });
+
+  it('accepts two app scopes and rejects duplicated apps, foreign bindings and nested authority', () => {
+    const first: ProviderBindStatusPayload = { ...CONFIRMED, provider: 'feishu' };
+    const org: ProviderBindStatusPayload = { ...first, scopeId: 'cli_org', bindingId: 'org-binding', principalId: 'org-user' };
+    const app = { appId: first.scopeId!, brand: 'feishu' as const, appType: 'store' as const, botName: 'Cindy', organization: null };
+    const other = { ...app, appId: 'cli_org', appType: 'self_built' as const, botName: 'Acme Cindy', tenantName: 'Feishu Acme' };
+    const applications = [{ app, bindings: [first] }, { app: other, bindings: [org] }];
+    roundTrip(makeProviderBindState({ ...first, applications }));
+    // Presentation labels may reflect the saved owner; app identity stays stable.
+    const enriched = { ...first, appInfo: { ...app, botName: null, organization: 'saved-owner' } };
+    roundTrip(makeProviderBindState({ ...enriched, applications: [{ app, bindings: [enriched] }, applications[1]!] }));
+    roundTrip(makeProviderBindState(first));
+    const secondary = { ...first, bindingId: 'store-second', principalId: 'store-user-2' };
+    expectReject(makeProviderBindState({ ...secondary, applications: [{ app, bindings: [first, secondary] }, applications[1]!] }), 'applications');
+    expectReject(makeProviderBindState({ ...first, applications: [{ app, bindings: [{ ...first, principalName: 'different-name' }] }, applications[1]!] }), 'applications');
+    expectReject(makeProviderBindState({ ...first, bindings: [secondary, first], applications: [{ app, bindings: [first, secondary] }, applications[1]!] }), 'applications');
+    for (const invalid of [
+      [applications[0], applications[0]],
+      [{ app, bindings: [org] }, applications[1]],
+      [{ app, bindings: [{ ...first, applications }] }, applications[1]],
+      [applications[0], { app: other, bindings: [org, { ...org, bindingId: 'org-2', principalId: 'org-user-2' }] }],
+      [applications[1]],
+    ]) expectReject({ ...makeProviderBindState(first), payload: { ...first, applications: invalid } }, 'applications');
+    expectReject(makeProviderBindUpdate({ ...first, applications }), 'applications');
+  });
+});
+
+// Display metadata must not contradict the authoritative legacy projection.
+describe('Feishu working computer metadata', () => {
+  it('round-trips optional names and rejects malformed or contradictory metadata', () => {
+    const row = { ...CONFIRMED, provider: 'feishu' as const, workingDevice: { name: 'Office PC', isCurrent: false } };
+    roundTrip(makeProviderBindState({ ...row, bindings: [row] }));
+    for (const workingDevice of [{ name: 42, isCurrent: false }, { name: 'Office PC', isCurrent: 'yes' }, null]) {
+      expectReject({ ...makeProviderBindState(row), payload: { ...row, workingDevice } }, 'workingDevice');
+    }
+    expectReject(makeProviderBindState({ ...row, bindings: [{ ...row, workingDevice: { name: 'Other PC', isCurrent: true } }] }), 'bindings');
+    roundTrip(makeProviderBindSelection({ requestId: 'select', provider: 'feishu', bindingId: 'b', ok: true, workingDevice: { name: null, isCurrent: true } }));
+    expectReject({ ...makeProviderBindSelection({ requestId: 'select', provider: 'feishu', bindingId: 'b', ok: false }), payload: { requestId: 'select', provider: 'feishu', bindingId: 'b', ok: false, workingDevice: row.workingDevice } }, 'workingDevice');
+  });
+});
+
+// An empty authoritative app set revokes all prior identities, not a stale snapshot.
+it('accepts an empty Feishu application set only with an empty legacy projection', () => {
+  const empty: ProviderBindStatusPayload = { ...CONFIRMED, provider: 'feishu', state: 'none', bindingId: null,
+    principalId: null, principalName: null, scopeId: null, scopeName: null, remediationUrl: null, actions: [], applications: [], bindings: [] };
+  roundTrip(makeProviderBindState(empty));
+  expectReject(makeProviderBindState({ ...empty, scopeId: 'stale-app' }), 'applications');
+  expectReject(makeProviderBindState({ ...empty, actions: ['open_provider'] }), 'applications');
+  expectReject(makeProviderBindState({ ...empty, bindings: [{ ...CONFIRMED, provider: 'feishu' }] }), 'applications');
+});

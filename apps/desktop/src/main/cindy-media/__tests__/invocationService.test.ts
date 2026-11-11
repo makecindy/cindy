@@ -204,6 +204,8 @@ vi.mock('../mediaInvocationStore.js', () => ({
 }));
 
 import { callCindyMedia as invokeMedia } from '../invocationService.js';
+import { invokeLegacyMedia } from '../legacyMediaInvocation.js';
+import { ServerApiError } from '../../serverApiClient.desktop.js';
 
 // This harness supplies a real Host approval boundary. Individual cases replace
 // its decision; production never receives approval flags through tool arguments.
@@ -211,7 +213,7 @@ const callCindyMedia: typeof invokeMedia = (request, context = {
   assertActive: () => undefined,
   confirm: mocks.confirm,
   approvals: new Set<string>(),
-}, sessionId) => invokeMedia(request, context, sessionId);
+}, sessionId, observeResponse) => invokeMedia(request, context, sessionId, observeResponse);
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1]);
 const MP4 = Buffer.from([
@@ -250,6 +252,68 @@ function resolvedGuide(op: Record<string, unknown>) {
       revision: '2026-08-13.1',
       connection: { providerId: 'xd' },
       operations: [op],
+    },
+  };
+}
+
+/** Representative Server responses; identifiers are deliberately unrelated to executors. */
+function providerServerGuide(modelId: string, protocol: string) {
+  if (protocol === 'minimax-videos' || protocol === 'openai-videos') {
+    const minimax = protocol === 'minimax-videos';
+    return { modelId, guide: {
+      schemaVersion: 1, guideId: `server-opaque-${protocol}`, revision: 'server-protocol-revision',
+      operations: ['video.generate', 'video.image_to_video'].map(capability => ({
+        ...operation({ mode: 'async', taskIdPath: [minimax ? 'task_id' : 'id'], poll: {
+          method: 'GET', path: minimax ? '/v2/query/video_generation/{taskId}' : '/videos/{taskId}',
+          ...(!minimax ? { contentPath: '/videos/{taskId}/content' } : {}),
+          statusPath: minimax ? ['task', 'status'] : ['status'],
+          successValues: [minimax ? 'succeeded' : 'completed'], failureValues: ['failed', 'cancelled', 'expired'],
+          recommendedIntervalMs: 5_000, timeoutMs: 30_000, maxResponseBytes: 1_048_576,
+          media: minimax ? [{ path: ['task', 'content', 'url'], encoding: 'url', kind: 'video', allowedUrlHosts: ['hailuoai.com'] }]
+            : [{ path: ['video_url'], encoding: 'url', kind: 'video', allowedUrlHosts: [] }, { path: ['url'], encoding: 'url', kind: 'video', allowedUrlHosts: [] }],
+        } }, minimax ? '/v2/video_generation' : '/videos'), capability,
+        inputSchema: { type: 'object', additionalProperties: false,
+          required: minimax ? ['content', 'resolution', 'duration'] : ['prompt'],
+          properties: { content: { type: 'array' }, resolution: { type: 'string' }, duration: { type: 'integer' },
+            ratio: { type: 'string' }, ...(!minimax ? { prompt: { type: 'string' }, seconds: { type: 'string' },
+              size: { type: 'string' }, watermark: { type: 'boolean' }, input_reference: {} } : {}) },
+        },
+      })),
+    } };
+  }
+  const video = protocol === 'xai-videos';
+  const capabilities = video ? ['video.generate', 'video.image_to_video'] : ['image.generate', 'image.edit'];
+  return {
+    modelId,
+    guide: {
+      schemaVersion: 1, guideId: `server-opaque-${protocol}`, revision: 'server-protocol-revision',
+      operations: capabilities.map(capability => ({
+        ...operation(video ? {
+          mode: 'async', taskIdPath: ['request_id'], poll: {
+            method: 'GET', path: '/videos/{taskId}', statusPath: ['status'],
+            successValues: ['done'], failureValues: ['failed', 'expired'],
+            recommendedIntervalMs: 5_000, timeoutMs: 30_000, maxResponseBytes: 1_048_576,
+            media: [{ path: ['video', 'url'], encoding: 'url', kind: 'video', allowedUrlHosts: ['vidgen.x.ai'] }],
+          },
+        } : { mode: 'sync', media: [{ path: ['image'], encoding: 'base64', kind: 'image' }] },
+        video ? '/videos/generations' : '/client-provider-media'),
+        capability,
+        instructions: '来自 Server 的协议说明',
+        request: {
+          method: 'POST', path: video ? '/videos/generations' : '/client-provider-media',
+          bodyModelPath: ['model'], timeoutMs: 120_000,
+          maxRequestBytes: 129 * 1024 * 1024, maxResponseBytes: 32 * 1024 * 1024,
+        },
+        inputSchema: {
+          type: 'object', additionalProperties: !video && protocol !== 'provider-images',
+          required: capability.endsWith('edit') || capability.endsWith('image_to_video') ? ['prompt', 'image'] : ['prompt'],
+          properties: {
+            prompt: { type: 'string' }, image: { type: 'string' }, aspect_ratio: { type: 'string' },
+            ...(protocol === 'openai' ? { size: { type: 'string' }, quality: { type: 'string', enum: ['auto', 'low', 'medium', 'high', 'xhigh', 'max'] } } : {}),
+            ...(['gemini', 'xai'].includes(protocol) ? { resolution: { type: 'string' } } : {}),
+          },
+        },
+      })),
     },
   };
 }
@@ -298,7 +362,10 @@ describe('Cindy Core media invocation state and security boundary', () => {
     mocks.providerInvoke.mockReset();
     mocks.videoConnection.mockReset();
     mocks.onClaim.mockReset();
-    mocks.guide.mockReset();
+    mocks.guide.mockReset().mockImplementation(async (modelId: string, protocol?: string) => {
+      if (!protocol || protocol === 'gateway') throw new Error('Gateway Guide fixture must be explicit');
+      return providerServerGuide(modelId, protocol);
+    });
     mocks.outboundFetch.mockReset();
     mocks.release.mockClear();
     // Preserve the existing upstream/download response sequences while checking
@@ -333,14 +400,120 @@ describe('Cindy Core media invocation state and security boundary', () => {
     mocks.prune.mockClear();
   });
 
-  function setupCustomVideo() {
-    const model = { id: 'private-video', name: 'Video', providerId: 'relay', mode: 'video_generation', videoProtocol: 'xai-videos', modalities: { input: ['text', 'image'], output: ['video'] } };
-    const connection = { baseUrl: 'https://relay.example/v1', headers: { authorization: 'Bearer test-relay-key' }, revision: '1:original', assertCurrent: vi.fn() };
+  function setupCustomVideo(videoProtocol: 'xai-videos' | 'minimax-videos' | 'openai-videos' = 'xai-videos') {
+    const model = { id: 'private-video', name: 'Video', providerId: 'relay', mode: 'video_generation', videoProtocol, modalities: { input: ['text', 'image'], output: ['video'] } };
+    // The MiniMax connection is rooted at the API origin; its paths carry their own /v2 version.
+    const connection = { baseUrl: videoProtocol === 'minimax-videos' ? 'https://relay.example' : 'https://relay.example/v1', headers: { authorization: 'Bearer test-relay-key' }, revision: '1:original', assertCurrent: vi.fn() };
     mocks.models.mockResolvedValue([model, { ...model, providerId: 'xd' }]);
     mocks.providerModel.mockReturnValue(model);
     mocks.videoConnection.mockReturnValue(connection);
     return connection;
   }
+
+  it('uses the Server video protocol and keeps its revision independent of the connection', async () => {
+    const connection = setupCustomVideo();
+    const result = await callCindyMedia({ action: 'prepare', providerId: 'relay', modelId: 'private-video', capability: 'video.generate' });
+    expect(mocks.guide).toHaveBeenCalledWith('private-video', 'xai-videos');
+    expect(result).toMatchObject({ ok: true, instructions: '来自 Server 的协议说明', guide_revision: 'server-protocol-revision' });
+    expect(mocks.rows.get(result.invocation_id as string)?.guide).toMatchObject({
+      revision: 'server-protocol-revision',
+      binding: { providerId: 'relay', executor: 'provider-video', connectionRevision: connection.revision },
+    });
+    expect(mocks.rows.get(result.invocation_id as string)?.guide).not.toHaveProperty('connection');
+  });
+
+  it('does not synthesize a provider Guide when Server documentation is unavailable', async () => {
+    setupCustomVideo();
+    mocks.guide.mockRejectedValue(new ServerApiError('MEDIA_INVOCATION_GUIDE_NOT_FOUND', 404, 'missing'));
+    expect(await callCindyMedia({ action: 'prepare', providerId: 'relay', modelId: 'private-video', capability: 'video.generate' }))
+      .toMatchObject({ ok: false, errorCode: 'GUIDE_NOT_AVAILABLE' });
+    expect(mocks.rows.size).toBe(0);
+    expect(mocks.outboundFetch).not.toHaveBeenCalled();
+  });
+
+  it('awaits native video credentials, keeps catalog identity, and observes the original receipt', async () => {
+    const connection = setupCustomVideo();
+    mocks.videoConnection.mockResolvedValue({ ...connection, requestModelId: 'native-video' });
+    mocks.outboundFetch.mockResolvedValueOnce(Response.json({ request_id: 'native-task' }));
+    const prepared = await callCindyMedia({
+      action: 'prepare', providerId: 'relay', modelId: 'private-video', capability: 'video.generate',
+    });
+    const receipt = vi.fn();
+    expect(await callCindyMedia({
+      action: 'request', invocationId: prepared.invocation_id as string, body: { prompt: 'cat' },
+    }, undefined, 'legacy-session', receipt)).toMatchObject({ status: 'pending' });
+    expect(JSON.parse(mocks.outboundFetch.mock.calls[0][1].body)).toMatchObject({ model: 'native-video' });
+    expect(mocks.rows.get(prepared.invocation_id as string)?.modelId).toBe('private-video');
+    expect(receipt).toHaveBeenCalledWith({ request_id: 'native-task' });
+  });
+
+  it('does not pay if the owner changes while resolving asynchronous video credentials', async () => {
+    const connection = setupCustomVideo();
+    const prepared = await callCindyMedia({
+      action: 'prepare', providerId: 'relay', modelId: 'private-video', capability: 'video.generate',
+    });
+    mocks.videoConnection.mockImplementation(async () => {
+      mocks.ownerGeneration += 1;
+      return connection;
+    });
+    expect(await callCindyMedia({
+      action: 'request', invocationId: prepared.invocation_id as string, body: { prompt: 'cat' },
+    })).toMatchObject({ ok: false });
+    expect(mocks.outboundFetch).not.toHaveBeenCalled();
+  });
+
+  it('notifies native account authentication handling when its request is rejected', async () => {
+    const connection = setupCustomVideo();
+    const onAuthRejected = vi.fn(async () => undefined);
+    mocks.videoConnection.mockReturnValue({ ...connection, onAuthRejected });
+    mocks.outboundFetch.mockResolvedValueOnce(new Response('expired native token', { status: 403 }));
+    const prepared = await callCindyMedia({
+      action: 'prepare', providerId: 'relay', modelId: 'private-video', capability: 'video.generate',
+    });
+    expect(await callCindyMedia({
+      action: 'request', invocationId: prepared.invocation_id as string, body: { prompt: 'cat' },
+    })).toMatchObject({ ok: false });
+    expect(onAuthRejected).toHaveBeenCalledWith({ status: 403, body: 'expired native token' });
+    expect(mocks.outboundFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries only the native read once after credential recovery, never its paid submission', async () => {
+    const connection = setupCustomVideo();
+    const onAuthRejected = vi.fn(async () => {
+      connection.headers.authorization = 'Bearer recovered-native-token';
+      return true;
+    });
+    mocks.videoConnection.mockReturnValue({ ...connection, onAuthRejected });
+    mocks.outboundFetch
+      .mockResolvedValueOnce(Response.json({ request_id: 'paid-once' }))
+      .mockResolvedValueOnce(new Response('expired', { status: 401 }))
+      .mockResolvedValueOnce(Response.json({ status: 'pending' }));
+    const prepared = await callCindyMedia({
+      action: 'prepare', providerId: 'relay', modelId: 'private-video', capability: 'video.generate',
+    });
+    const invocationId = prepared.invocation_id as string;
+    await callCindyMedia({ action: 'request', invocationId, body: { prompt: 'cat' } });
+    expect(await callCindyMedia({ action: 'poll', invocationId })).toMatchObject({ status: 'pending' });
+    expect(mocks.outboundFetch.mock.calls.map(([, init]) => init.method)).toEqual(['POST', 'GET', 'GET']);
+    expect(mocks.outboundFetch.mock.calls[2][1].headers.authorization).toBe('Bearer recovered-native-token');
+    expect(onAuthRejected).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a rejected paid request known when native credential recovery itself fails', async () => {
+    const connection = setupCustomVideo();
+    mocks.videoConnection.mockReturnValue({
+      ...connection, onAuthRejected: vi.fn(async () => { throw new Error('native account logged out'); }),
+    });
+    mocks.outboundFetch.mockResolvedValueOnce(new Response('rejected', { status: 403 }));
+    const prepared = await callCindyMedia({
+      action: 'prepare', providerId: 'relay', modelId: 'private-video', capability: 'video.generate',
+    });
+    const invocationId = prepared.invocation_id as string;
+    expect(await callCindyMedia({ action: 'request', invocationId, body: { prompt: 'cat' } }))
+      .toMatchObject({ ok: false, errorCode: 'UPSTREAM_REJECTED' });
+    expect(mocks.rows.get(invocationId)?.state).toBe('failed');
+    expect(mocks.outboundFetch).toHaveBeenCalledTimes(1);
+  });
 
   it.each(['reference-read', 'claim'] as const)('rechecks custom video availability after %s before paying, and preserves prepared', async boundary => {
     setupCustomVideo();
@@ -419,6 +592,115 @@ describe('Cindy Core media invocation state and security boundary', () => {
       expect(mocks.guardedOutboundFetch).not.toHaveBeenCalled();
     } else expect(mocks.outboundFetch.mock.calls[3]![1].headers ?? {}).not.toHaveProperty('authorization');
     expect(mocks.providerInvoke).not.toHaveBeenCalled();
+  });
+
+  // MiniMax V2 (MiniMax-H3): native content[] body, task and query under /v2 at the API root.
+  // Before this protocol, a relay's MiniMax video model could not be prepared at all.
+  it('custom MiniMax image-to-video submits one native task under /v2 and ingests the result', async () => {
+    setupCustomVideo('minimax-videos');
+    mocks.readBlob.mockResolvedValue({ buffer: PNG, mimeType: 'image/png' });
+    mocks.ingestMedia.mockResolvedValue({ url: `cindy-media://blobs/${'a'.repeat(64)}.mp4` });
+    const prepared = await callCindyMedia({ action: 'prepare', providerId: 'relay', modelId: 'private-video', capability: 'video.image_to_video' });
+    const invocationId = prepared.invocation_id as string;
+    expect(mocks.guide).toHaveBeenCalledWith('private-video', 'minimax-videos');
+    expect(parsePreparedMediaInvocationGuide(JSON.parse(JSON.stringify(mocks.rows.get(invocationId)?.guide)))).toMatchObject({ ok: true });
+    const ref = { type: 'image_url', image_url: { url: `cindy-media://blobs/${'a'.repeat(64)}.png` } };
+    // Reference-to-video is outside this protocol: rejected before any paid request.
+    expect(await callCindyMedia({ action: 'request', invocationId, body: {
+      content: [{ type: 'text', text: 'cat waves' }, { ...ref, role: 'reference_image' }], resolution: '768P', duration: 6,
+    } })).toMatchObject({ errorCode: 'REQUEST_INVALID' });
+    expect(mocks.outboundFetch).not.toHaveBeenCalled();
+    expect(mocks.rows.get(invocationId)?.state).toBe('prepared');
+    mocks.outboundFetch.mockResolvedValueOnce(Response.json({ task_id: 'paid-task' }))
+      .mockResolvedValueOnce(Response.json({ task: { status: 'running' } }))
+      .mockResolvedValueOnce(Response.json({ task: { status: 'succeeded', content: { url: 'https://cdn.hailuoai.com/result.mp4' } } }))
+      .mockResolvedValueOnce(new Response(MP4, { headers: { 'content-type': 'video/mp4' } }));
+    expect(await callCindyMedia({ action: 'request', invocationId, body: {
+      content: [{ type: 'text', text: 'cat waves' }, { ...ref, role: 'first_frame' }], resolution: '768P', duration: 6,
+    } })).toMatchObject({ ok: true, status: 'pending' });
+    const [url, init] = mocks.outboundFetch.mock.calls[0]!;
+    expect(url).toBe('https://relay.example/v2/video_generation');
+    expect(init.headers.authorization).toBe('Bearer test-relay-key');
+    expect(JSON.parse(init.body)).toEqual({
+      model: 'private-video', resolution: '768P', duration: 6,
+      content: [{ type: 'text', text: 'cat waves' }, { type: 'image_url', image_url: { url: `data:image/png;base64,${PNG.toString('base64')}` }, role: 'first_frame' }],
+    });
+    expect(await callCindyMedia({ action: 'poll', invocationId })).toMatchObject({ status: 'pending' });
+    expect(await callCindyMedia({ action: 'poll', invocationId })).toMatchObject({ status: 'complete', xdt_video_urls: [`cindy-media://blobs/${'a'.repeat(64)}.mp4`] });
+    expect(mocks.outboundFetch.mock.calls[1]![0]).toBe('https://relay.example/v2/query/video_generation/paid-task');
+    expect(mocks.outboundFetch.mock.calls[3]![1].headers ?? {}).not.toHaveProperty('authorization');
+    expect(mocks.outboundFetch.mock.calls.filter(([, call]) => call.method === 'POST')).toHaveLength(1);
+  });
+
+  // /v1/videos 回归：原用例只测试返回了媒体 URL 的任务；unit，经真实 Core 入口验证
+  // 标准图片引用展开与 completed + id 的成片入仓，且只提交一次付费请求。
+  it.each([false, true])('relay image inputs reach the upstream and completed tasks use Guide contentPath (array=%s)', async array => {
+    setupCustomVideo('openai-videos');
+    mocks.readBlob.mockResolvedValue({ buffer: PNG, mimeType: 'image/png' });
+    mocks.ingestMedia.mockResolvedValue({ url: `cindy-media://blobs/${'a'.repeat(64)}.mp4` });
+    const prepared = await callCindyMedia({ action: 'prepare', providerId: 'relay', modelId: 'private-video', capability: 'video.image_to_video' });
+    const invocationId = prepared.invocation_id as string;
+    const ref = `cindy-media://blobs/${'a'.repeat(64)}.png`;
+    const data = `data:image/png;base64,${PNG.toString('base64')}`;
+    mocks.outboundFetch.mockResolvedValueOnce(Response.json({ id: 'paid-task', status: 'queued' }))
+      .mockResolvedValueOnce(Response.json({ id: 'paid-task', status: 'completed' }))
+      .mockResolvedValueOnce(new Response(MP4, { headers: { 'content-type': 'video/mp4' } }));
+    expect(await callCindyMedia({ action: 'request', invocationId, body: {
+      prompt: 'cat waves', input_reference: array ? [ref, ref] : ref, seconds: '8',
+    } })).toMatchObject({ ok: true, status: 'pending' });
+    expect(JSON.parse(mocks.outboundFetch.mock.calls[0]![1].body)).toEqual({
+      model: 'private-video', prompt: 'cat waves', input_reference: array ? [data, data] : data, seconds: '8',
+    });
+    expect(await callCindyMedia({ action: 'poll', invocationId })).toMatchObject({ status: 'complete',
+      xdt_video_urls: [`cindy-media://blobs/${'a'.repeat(64)}.mp4`] });
+    const download = mocks.outboundFetch.mock.calls[2]!;
+    expect(download[0]).toBe('https://relay.example/v1/videos/paid-task/content');
+    expect(download[1]).toMatchObject({ method: 'GET', redirect: 'manual', headers: { authorization: 'Bearer test-relay-key' } });
+    expect(mocks.ingestMedia).toHaveBeenCalledOnce();
+    expect(mocks.outboundFetch.mock.calls.filter(([, init]) => init.method === 'POST')).toHaveLength(1);
+    expect(mocks.rows.get(invocationId)?.state).toBe('complete');
+  });
+
+  // Relay /v1/videos (tu-zi style): the documented MiniMax-H3 body is sent as-is under /v1,
+  // and the result is read from video_url (public) or url (the relay's own private content endpoint).
+  it.each([
+    ['video_url', 'https://relay.example/files/result.mp4', false],
+    ['url', 'https://relay.example/v1/videos/paid-task/content', true],
+    ['video_url', 'https://foreign.example/result.mp4', false],
+  ] as const)('custom relay /v1/videos submits one task and ingests %s', async (field, resultUrl, privateContent) => {
+    setupCustomVideo('openai-videos');
+    mocks.ingestMedia.mockResolvedValue({ url: `cindy-media://blobs/${'a'.repeat(64)}.mp4` });
+    const prepared = await callCindyMedia({ action: 'prepare', providerId: 'relay', modelId: 'private-video', capability: 'video.generate' });
+    const invocationId = prepared.invocation_id as string;
+    expect(mocks.guide).toHaveBeenCalledWith('private-video', 'openai-videos');
+    expect(parsePreparedMediaInvocationGuide(JSON.parse(JSON.stringify(mocks.rows.get(invocationId)?.guide)))).toMatchObject({ ok: true });
+    mocks.outboundFetch.mockResolvedValueOnce(Response.json({ id: 'paid-task', status: 'queued' }))
+      .mockResolvedValueOnce(Response.json({ id: 'paid-task', status: 'in_progress' }))
+      .mockResolvedValueOnce(Response.json({ id: 'paid-task', status: 'completed', [field]: resultUrl }))
+      .mockResolvedValueOnce(new Response(MP4, { headers: { 'content-type': 'video/mp4' } }));
+    const body = { content: [{ text: '一个男孩在海边打篮球', type: 'text' }], duration: 5, ratio: '16:9', resolution: '768P', prompt: '一个男孩在海边打篮球', seconds: '8', size: '1280x720', watermark: false };
+    for (const invalid of [{ ...body, seconds: 8 }, { ...body, input_reference: 'unsupported' }]) {
+      expect(await callCindyMedia({ action: 'request', invocationId, body: invalid })).toMatchObject({ errorCode: 'REQUEST_INVALID' });
+      expect(mocks.rows.get(invocationId)?.state).toBe('prepared');
+      expect(mocks.outboundFetch).not.toHaveBeenCalled();
+    }
+    expect(await callCindyMedia({ action: 'request', invocationId, body })).toMatchObject({ ok: true, status: 'pending' });
+    const [url, init] = mocks.outboundFetch.mock.calls[0]!;
+    expect(url).toBe('https://relay.example/v1/videos');
+    expect(init.headers.authorization).toBe('Bearer test-relay-key');
+    expect(JSON.parse(init.body)).toEqual({ ...body, model: 'private-video' });
+    expect(await callCindyMedia({ action: 'poll', invocationId })).toMatchObject({ status: 'pending' });
+    expect(await callCindyMedia({ action: 'poll', invocationId })).toMatchObject({ status: 'complete', xdt_video_urls: [`cindy-media://blobs/${'a'.repeat(64)}.mp4`] });
+    expect(mocks.outboundFetch.mock.calls[1]![0]).toBe('https://relay.example/v1/videos/paid-task');
+    const download = mocks.outboundFetch.mock.calls[3]!;
+    if (privateContent) {
+      expect(download[0]).toBe('https://relay.example/v1/videos/paid-task/content');
+      expect(download[1].headers.authorization).toBe('Bearer test-relay-key');
+      expect(download[1].redirect).toBe('manual');
+    } else expect(download[1].headers ?? {}).not.toHaveProperty('authorization');
+    expect(mocks.outboundFetch.mock.calls.filter(([, call]) => call.method === 'POST')).toHaveLength(1);
+    if (new URL(resultUrl).hostname === 'foreign.example') expect(mocks.confirm).toHaveBeenCalledOnce();
+    else expect(mocks.confirm).not.toHaveBeenCalled();
   });
 
   it('private task content stops at a redirect without following it or forwarding the key', async () => {
@@ -501,7 +783,10 @@ describe('Cindy Core media invocation state and security boundary', () => {
       } })));
     });
     expect(await callCindyMedia({ action: 'request', invocationId, body: { prompt: 'cat' } })).toMatchObject({ errorCode: 'CONNECTION_CHANGED', retryable: false });
-    expect(mocks.rows.get(invocationId)).toMatchObject({ state: 'pending', taskId: 'paid-task', guideRevision: '1:original' });
+    expect(mocks.rows.get(invocationId)).toMatchObject({
+      state: 'pending', taskId: 'paid-task', guideRevision: 'server-protocol-revision',
+      guide: { binding: { connectionRevision: '1:original' } },
+    });
     expect(await callCindyMedia({ action: 'poll', invocationId })).toMatchObject({ errorCode: 'CONNECTION_CHANGED' });
     expect(mocks.outboundFetch).toHaveBeenCalledTimes(1);
     connection.assertCurrent.mockReset();
@@ -739,7 +1024,7 @@ describe('Cindy Core media invocation state and security boundary', () => {
     await callCindyMedia({ action: 'request', invocationId, body: { prompt: 'cat' } });
 
     expect(prepared).toMatchObject({ ok: true, model_id: fullModelId });
-    expect(mocks.guide).toHaveBeenCalledWith(fullModelId);
+    expect(mocks.guide).toHaveBeenCalledWith(fullModelId, 'gateway');
     expect(mocks.rows.get(invocationId)?.modelId).toBe(fullModelId);
     const [, init] = mocks.outboundFetch.mock.calls[0];
     expect(JSON.parse(init.body)).toMatchObject({ model: fullModelId });
@@ -777,7 +1062,7 @@ describe('Cindy Core media invocation state and security boundary', () => {
       provider_id: providerId,
       model_id: providerModel.id,
     });
-    expect(mocks.guide).not.toHaveBeenCalled();
+    expect(mocks.guide).toHaveBeenCalledWith(providerModel.id, 'provider-images');
 
     // The real DB parses the serialized snapshot again before dispatch.
     expect(parsePreparedMediaInvocationGuide(
@@ -1009,7 +1294,7 @@ describe('Cindy Core media invocation state and security boundary', () => {
       provider_id: 'xd',
       model_id: model.id,
     });
-    expect(mocks.guide).toHaveBeenCalledWith(model.id);
+    expect(mocks.guide).toHaveBeenCalledWith(model.id, 'gateway');
     expect(mocks.providerModel).not.toHaveBeenCalled();
   });
 
@@ -1442,7 +1727,7 @@ describe('Cindy Core media invocation state and security boundary', () => {
     expect(mocks.outboundFetch).toHaveBeenCalledTimes(1);
   });
 
-  it('建连失败发生在派发前时恢复 prepared，不把 invocation 卡在 submitting', async () => {
+  it('Server 旧响应里的连接字段不改变本地选择的执行连接', async () => {
     const resolved = resolvedGuide(
       operation({
         mode: 'sync',
@@ -1451,18 +1736,18 @@ describe('Cindy Core media invocation state and security boundary', () => {
     );
     resolved.guide.connection.providerId = 'unsupported';
     mocks.guide.mockResolvedValue(resolved);
+    mocks.outboundFetch.mockResolvedValueOnce(Response.json({ data: PNG.toString('base64') }));
 
     const invocationId = await prepare();
     await expect(
       callCindyMedia({ action: 'request', invocationId, body: { prompt: 'cat' } }),
     ).resolves.toMatchObject({
-      ok: false,
-      errorCode: 'CONNECTION_NOT_SUPPORTED',
-      outcomeKnown: true,
-      retryable: false,
+      ok: true,
+      status: 'complete',
     });
-    expect(mocks.rows.get(invocationId)?.state).toBe('prepared');
-    expect(mocks.outboundFetch).not.toHaveBeenCalled();
+    expect(mocks.rows.get(invocationId)?.guide).toMatchObject({ binding: { providerId: 'xd', executor: 'gateway' } });
+    expect(mocks.rows.get(invocationId)?.guide).not.toHaveProperty('connection');
+    expect(mocks.outboundFetch.mock.calls[0][0]).toBe('https://gateway.example.com/images/generations');
   });
 
   it('上游成功后响应持久化抛错时保留 unknown，禁止自动重提', async () => {
@@ -1492,6 +1777,45 @@ describe('Cindy Core media invocation state and security boundary', () => {
       callCindyMedia({ action: 'request', invocationId, body: { prompt: 'cat' } }),
     ).resolves.toMatchObject({ ok: false, errorCode: 'INVOCATION_ALREADY_USED' });
     expect(mocks.outboundFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('旧入口等待付费 claim 时开始切号，即使 owner 代次未变也不提交', async () => {
+    const op = { ...operation({ mode: 'sync', media: [{ path: ['data'], encoding: 'base64', kind: 'image' }] }),
+      inputSchema: { type: 'object', properties: { prompt: { type: 'string' } }, required: ['prompt'] } };
+    mocks.guide.mockResolvedValue(resolvedGuide(op));
+    mocks.outboundFetch.mockResolvedValue(Response.json({ data: PNG.toString('base64') }));
+    let boundaryPending = false;
+    mocks.onClaim.mockImplementationOnce(() => { boundaryPending = true; });
+    await expect(invokeLegacyMedia({ kind: 'gen_image', model: 'image-model', prompt: 'cat' }, {
+      callCore: invokeMedia, timeoutMs: 1000,
+      assertCurrent() { if (boundaryPending) throw new Error('owner boundary pending'); },
+    })).rejects.toThrow('owner boundary pending');
+    expect(mocks.outboundFetch).not.toHaveBeenCalled();
+    expect(mocks.ingestMedia).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])('旧入口结果下载复用 Host 审批（allow=%s），不重复付费', async allow => {
+    const op = { ...operation({ mode: 'sync', media: [{ path: ['data'], encoding: 'url', kind: 'image', allowedUrlHosts: ['known.example.com'] }] }),
+      inputSchema: { type: 'object', properties: { prompt: { type: 'string' } }, required: ['prompt'] } };
+    mocks.guide.mockResolvedValue(resolvedGuide(op));
+    mocks.confirm.mockResolvedValue(allow);
+    mocks.outboundFetch.mockResolvedValueOnce(Response.json({ data: 'https://new.example.com/generated.png' }))
+      .mockResolvedValueOnce(new Response(PNG, { headers: { 'content-type': 'image/png' } }));
+    const result = invokeLegacyMedia({ kind: 'gen_image', model: 'image-model', prompt: 'cat' }, {
+      callCore: invokeMedia, timeoutMs: 1000, assertCurrent() {},
+      downloadContext: { assertActive() {}, confirm: mocks.confirm, approvals: new Set<string>() },
+    });
+    if (allow) {
+      await expect(result).resolves.toMatchObject({ url: `cindy-media://blobs/${'a'.repeat(64)}.png` });
+      expect(mocks.ingestMedia).toHaveBeenCalledOnce();
+      expect(mocks.outboundFetch.mock.calls[1]?.[1]?.headers).toBeUndefined();
+    } else {
+      await expect(result).rejects.toThrow('用户未允许本次下载');
+      expect(mocks.ingestMedia).not.toHaveBeenCalled();
+      expect(mocks.outboundFetch).toHaveBeenCalledOnce();
+    }
+    expect(mocks.confirm).toHaveBeenCalledOnce();
+    expect(mocks.outboundFetch.mock.calls.filter(([, init]) => init.method === 'POST')).toHaveLength(1);
   });
 
   it('付费提交准备参数期间账号切换时不发出上游请求', async () => {

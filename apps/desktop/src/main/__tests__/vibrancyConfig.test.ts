@@ -156,7 +156,7 @@ describe('E4D resolveVibrancyConfig(familyId→vibrancy/backgroundColor 映射)'
     process.env.XDT_BACKDROP_MATERIAL = 'none';
     expect(
       resolveVibrancyConfig('cindy', false, 'win32', {
-        getSystemVersion: () => '10.0.22000',
+        getSystemVersion: () => '10.0.22621',
       }),
     ).toEqual({
       vibrancy: null,
@@ -188,6 +188,17 @@ describe('E4D resolveVibrancyConfig(familyId→vibrancy/backgroundColor 映射)'
     expect(
       resolveVibrancyConfig('cindy', false, 'win32', {
         getSystemVersion: () => '10.0.19045',
+      }),
+    ).toEqual({
+      vibrancy: null,
+      backgroundColor: '#f8f8f6',
+      backgroundMaterial: 'none',
+    });
+    // Windows 11 21H2 has no Electron system backdrop: keep the opaque surface instead
+    // of a translucent Acrylic backing without its material.
+    expect(
+      resolveVibrancyConfig('cindy', false, 'win32', {
+        getSystemVersion: () => '10.0.22000',
       }),
     ).toEqual({
       vibrancy: null,

@@ -1296,26 +1296,26 @@ body.resizing-pane [data-ghost-webview] {
   /* Light theme highlight.js styles are the default (imported globally at top of file) */
   --model-budget-gradient: linear-gradient(
     90deg,
-    #e11d48,
-    #ea580c,
-    #d97706,
-    #ca8a04,
-    #65a30d,
-    #16a34a,
-    #0d9488
+    var(--model-spectrum-1),
+    var(--model-spectrum-2),
+    var(--model-spectrum-3),
+    var(--model-spectrum-4),
+    var(--model-spectrum-5),
+    var(--model-spectrum-6),
+    var(--model-spectrum-7)
   );
 }
 
 .dark {
   --model-budget-gradient: linear-gradient(
     90deg,
-    #fb7185,
-    #fb923c,
-    #fbbf24,
-    #fde047,
-    #a3e635,
-    #4ade80,
-    #2dd4bf
+    var(--model-spectrum-1),
+    var(--model-spectrum-2),
+    var(--model-spectrum-3),
+    var(--model-spectrum-4),
+    var(--model-spectrum-5),
+    var(--model-spectrum-6),
+    var(--model-spectrum-7)
   );
 }
 
@@ -2131,6 +2131,16 @@ html:is([data-wallpaper-active='true'], [data-desktop-background='true']) :is(.l
   backdrop-filter: blur(28px);
   -webkit-backdrop-filter: blur(28px);
 }
+
+/* Plugin presentation keeps layout preferences and pending permission UI intact. */
+html[data-plugin-ui-hidden~='workspace'] [data-plugin-ui-element='workspace'] { visibility: hidden; }
+html[data-plugin-ui-hidden~='workspace'] [data-plugin-ui-keep-visible] { visibility: visible; }
+html[data-plugin-ui-hidden~='sidebar'] [data-plugin-ui-element='sidebar'],
+html[data-plugin-ui-hidden~='header'] [data-plugin-ui-element='header'],
+html[data-plugin-ui-hidden~='messages'] [data-plugin-ui-element='messages'],
+html[data-plugin-ui-hidden~='composer'] [data-chat-input-root],
+html[data-plugin-ui-hidden~='tools'] [data-plugin-ui-element='tools'],
+html[data-plugin-ui-hidden~='windowControls'] [data-plugin-ui-element='windowControls'] { display: none !important; }
 /* 模式2 主面板:用户勘误 2026-07-17 — 主内容区不透壁纸(macOS 标准范式),撤销 blur。
    content-area 回落 --content-area(=var(--surface-hsl) 不透明,2026-08 起 #F2F2ED/#181818),无 blur。
    surface-translucent-main token 保留注册但 CINDY override 改不透明等价值(见 cindy themes)。 */

@@ -85,6 +85,28 @@ function createLogger() {
   return logger;
 }
 
+describe('Maker atomic idle close', () => {
+  it('records runtime refresh only after an idle close is accepted', async () => {
+    let busy = true;
+    const handle = createHandle({ id: 'idle-thread' });
+    handle.hasPendingHostOperation = () => busy;
+    const close = vi.spyOn(handle, 'close');
+    const maker = new Maker({ agents: { codex: createAgent(async () => handle) },
+      storage: createStorage(), logger: createLogger() });
+    const session = await maker.createSession({ id: 'idle-task', agentKind: 'codex', workingDir: '/repo', model: 'm' });
+    const closed = vi.fn();
+    maker.on(event => { if (event.type === 'session:closed') closed(event); });
+    try {
+      expect(await maker.closeSessionIfCurrent(session, 'runtime-refresh', { onlyIfIdle: true })).toBeUndefined();
+      expect(close).not.toHaveBeenCalled();
+      expect(maker.getSessionCloseReason(session)).toBe('unexpected');
+      busy = false;
+      expect(await maker.closeSessionIfCurrent(session, 'runtime-refresh', { onlyIfIdle: true })).toBe('closed');
+      expect(closed).toHaveBeenCalledWith(expect.objectContaining({ session, reason: 'runtime-refresh' }));
+    } finally { await maker.shutdown(); }
+  });
+});
+
 describe('Maker agent status', () => {
   it('represents an optional unregistered runtime as binary-missing', async () => {
     const maker = new Maker({
