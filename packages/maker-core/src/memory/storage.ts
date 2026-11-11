@@ -54,8 +54,11 @@ const mutationQueues = new Map<string, Promise<unknown>>();
 const BRIEF_LOCK_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
 const BRIEF_LOCK_BACKOFF_MS = [10, 20, 40, 80, 160];
 
-async function renameRetryingBriefLocks(from: string, to: string): Promise<void> {
+async function renameRetryingBriefLocks(from: string, to: string, beforeReplace?: () => void): Promise<void> {
   for (let attempt = 0; ; attempt += 1) {
+    // Rechecked before every attempt: the owner may switch accounts during a backoff, and a
+    // replacement made after that cannot be undone by the checks that run after the write.
+    beforeReplace?.();
     try {
       await fs.rename(from, to);
       return;
@@ -73,11 +76,11 @@ async function renameRetryingBriefLocks(from: string, to: string): Promise<void>
  * existing path) is renamed over it. A memory folder can sit inside a project its tasks edit
  * (a teammate's project), so a link planted in it must not redirect the host's writes.
  */
-async function writeFileNoFollow(target: string, content: string): Promise<void> {
+async function writeFileNoFollow(target: string, content: string, beforeReplace?: () => void): Promise<void> {
   const tmp = `${target}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
   await fs.writeFile(tmp, content, { encoding: 'utf8', flag: 'wx' });
   try {
-    await renameRetryingBriefLocks(tmp, target);
+    await renameRetryingBriefLocks(tmp, target, beforeReplace);
   } catch (error) {
     await fs.unlink(tmp).catch(() => {});
     throw error;
@@ -284,7 +287,7 @@ export class MemoryStorage {
         createdAt: new Date().toISOString(),
         lastUsedAt: new Date().toISOString(),
       };
-      await writeFileNoFollow(metaPath, JSON.stringify(meta, null, 2));
+      await writeFileNoFollow(metaPath, JSON.stringify(meta, null, 2), this.beforeFileWrite);
     });
   }
 
@@ -440,7 +443,7 @@ export class MemoryStorage {
     // tryReadRaw 的 await 窗口后、真正写盘前复核 owner scope (review #2388
     // Codex 8th P1): 边界不得把 shard 写入旧 owner 根。
     this.beforeFileWrite?.();
-    await writeFileNoFollow(fullPath, fileText);
+    await writeFileNoFollow(fullPath, fileText, this.beforeFileWrite);
     // shard write 后、索引重建前复核 (review #2388 Codex 12th P1): writeFile
     // await 期间边界可能发生, 不得继续在旧 owner 下 rebuildIndex / 返回成功。
     // not-ready 时文件已落盘但 MEMORY.md 未更新 → 标记派生索引 dirty (Codex 23rd)。
@@ -596,7 +599,7 @@ export class MemoryStorage {
     // 索引写盘前复核 (review #2388 Codex 13th P1): rebuildIndex 自身有多次
     // awaited shard reads, 边界不得在旧 owner 下重写 MEMORY.md。
     this.beforeFileWrite?.();
-    await writeFileNoFollow(path.join(this.dir, INDEX_FILENAME), content);
+    await writeFileNoFollow(path.join(this.dir, INDEX_FILENAME), content, this.beforeFileWrite);
     this.indexCache = content;
   }
 

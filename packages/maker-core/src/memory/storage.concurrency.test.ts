@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryStorage } from './storage.js';
 import { MakerMemoryStore } from './store.js';
+import { MemoryError } from './types.js';
 import Database from 'better-sqlite3';
 import type { Logger } from '../interfaces/logger.js';
 
@@ -125,7 +126,9 @@ describe('conditional memory mutations', () => {
  *   （PR #10035 a73f4a3、#10037 92a0e69）：两个 store 同时首次打开同一文件夹，各自 rename 替换
  *   meta.json / MEMORY.md，重叠的 rename 报 EPERM；杀毒、索引器短暂占用目标时单次 rename 也会 EPERM。
  * - 现有覆盖缺口：POSIX 上重叠 rename 不报错，只有 Windows runner 偶发暴露；这里按 Windows 语义模拟。
- * - 最小失败输入：同一文件夹两个 store 并发 init；目标被短暂占用、首次 rename 返回 EPERM 的一次写入。
+ *   重试必须在每次 rename 前复核账号，退避期间切换账号不得覆盖旧账号的记忆（PR #10044 review）。
+ * - 最小失败输入：同一文件夹两个 store 并发 init；目标被短暂占用、首次 rename 返回 EPERM 的一次写入；
+ *   首次 rename EPERM 后账号切换。
  * - tier：unit（临时目录真实文件 I/O，只替换 rename 的失败语义）。
  */
 describe('replacing memory files under Windows rename semantics', () => {
@@ -166,6 +169,21 @@ describe('replacing memory files under Windows rename semantics', () => {
     windowsRename(new Set([path.resolve(dir, filename)]));
     await storage.write({ ...seed, mode: 'update', body: 'Saved through a lock' });
     expect((await storage.read(filename)).body).toBe('Saved through a lock');
+  });
+
+  it('does not replace the old account memory when the account switches while waiting out a lock', async () => {
+    let switched = false;
+    const guarded = new MemoryStorage(dir, undefined, () => {
+      if (switched) throw new MemoryError('not-ready', 'owner scope changed');
+    });
+    windowsRename().mockImplementationOnce(async () => {
+      switched = true;
+      throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' });
+    });
+    await expect(guarded.write({ ...seed, mode: 'update', body: 'Written for the old account' }))
+      .rejects.toMatchObject({ code: 'not-ready' });
+    expect((await storage.read(filename)).body).toBe('Original');
+    expect((await fs.readdir(dir)).filter((name) => name.endsWith('.tmp'))).toEqual([]);
   });
 });
 
