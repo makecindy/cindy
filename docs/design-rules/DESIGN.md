@@ -227,7 +227,7 @@ Desktop roles (rewritten 2026-11-11, audit B-02 / B-03 / B-11). Sizes are `text-
 | Code, compact | code stack, `calc(var(--app-code-font-size) - 1px)` and the other registered derivatives | 400 | — | Compact chat cards; only the derivatives registered in the guard's EXEMPTIONS |
 | Code in UI chrome | code stack, 11–12px from the UI ladder | 400 / 500 | — | Paths, IDs and tags shown inside ordinary UI (they follow the UI size setting, not `codeSize`) |
 
-Brand canvases (§16 login / Splash family and its self-contained pages) keep their own design-px titles — conceptually Display 48px, Section Heading 36px, Sub-heading 30px. Their values live in the canvas constants and §16 tables, not in app code, and their weights are the only place titles may differ from 500: the login canvas uses the 700 registered in the 「排版豁免登记表」 below (scope limited to the files listed in that row). Mobile has its own role table (`apps/mobile/docs/mobile-design-guide.md` §3). This table describes roles; the whitelist constrains values.
+Brand canvases (§16 login / Splash family and its self-contained pages) keep their own design-px titles — conceptually Display 48px, Section Heading 36px, Sub-heading 30px. Their values live in the canvas constants and §16 tables, not in app code, and they are the only place titles may differ from 500: a title there follows its own §16 / [login-flow.md](./login-flow.md) specification — the Bold 700 registered in the 「排版豁免登记表」 below (scope limited to the files listed in that row), or a weight the login spec states explicitly, such as the account-deletion bubble's Regular 400. A login-related surface without such a specification (for example the captcha overlay) uses 500. Mobile has its own role table (`apps/mobile/docs/mobile-design-guide.md` §3). This table describes roles; the whitelist constrains values.
 
 ### Principles
 
@@ -247,7 +247,7 @@ Brand canvases (§16 login / Splash family and its self-contained pages) keep th
 | 600 | Semibold | 限量强调(徽标、表头、选中态等局部加重)，**不用于标题**。新增使用要能说出「为什么 500 不够」 |
 | 700 | Bold     | **仅限下方豁免登记表中的域**,禁止出现在普通 UI chrome                       |
 
-- **标题一律 500**(2026-11-11 维护者裁决,设计审核 B-03 方案 B):桌面端标题不再按「普通确认框 / 表单弹窗 / 紧凑提示」区分字重,原先 600 的表单弹窗标题、紧凑提示与交互提示卡标题已改回 500;分组小标签、表头与名称(服务商名、目录名等)不是标题,仍可按 600 的限量强调使用;层级靠字号区分(见上方 Hierarchy)。唯一例外是品牌画布:登录 / Splash 家族按下方豁免登记表「登录 / Splash 品牌画布」行使用 700,范围只限该行列出的文件;登录相关但不在该行的界面(如设置里的账号页、其他弹窗)仍按本条用 500。手机端按自己的角色表选字重(见下一条),不受本条约束。
+- **标题一律 500**(2026-11-11 维护者裁决,设计审核 B-03 方案 B):桌面端标题不再按「普通确认框 / 表单弹窗 / 紧凑提示」区分字重,原先 600 的表单弹窗标题、紧凑提示与交互提示卡标题已改回 500;分组小标签、表头与名称(服务商名、目录名等)不是标题,仍可按 600 的限量强调使用;层级靠字号区分(见上方 Hierarchy)。唯一例外是品牌画布:登录 / Splash 家族的标题按 §16 / `login-flow.md` 的明确规定取字重——下方豁免登记表「登录 / Splash 品牌画布」行的 700(范围只限该行列出的文件),或登录规范写明的字重(如注销状态气泡标题 Regular 400);登录规范没有规定的界面(如人机验证弹窗)同样用 500;登录相关但不在该行的界面(如设置里的账号页、其他弹窗)仍按本条用 500。手机端按自己的角色表选字重(见下一条),不受本条约束。
 - 与手机端 `apps/mobile/src/theme/tokens.ts` 的 `fontWeight` token(regular / medium / semibold / bold)一一对应 —— 两端一张梯子。
 - **手机端按角色选字重**(2026-09-26 用户定稿):标题 600、列表行 / 按钮 500、正文与说明 400、分组小标签 600;浅色字不配粗字重。角色表正本见 `apps/mobile/docs/mobile-design-guide.md` §3。
 - **两端 700 口径**:手机端 UI chrome 的上限仍是 600（正本为 `apps/mobile/docs/mobile-design-guide.md`,该文已同步登记本例外）。`bold` / 700 在手机端**只允许**出现在下表登记的域——原生 Markdown strong 与登录品牌画布。也就是说「四档梯子」是两端共用的**档位定义**,不等于两端 chrome 都可用 700。
