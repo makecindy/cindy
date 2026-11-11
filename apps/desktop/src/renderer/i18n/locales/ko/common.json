@@ -860,6 +860,7 @@
       "assignLocalAria": "{{name}}에서 다른 컴퓨터의 새 작업 수신 허용",
       "moreAria": "{{name}} 추가 작업",
       "remove": "그룹에서 제외",
+      "removeLocalBlocked": "그룹을 만든 컴퓨터는 그룹에서 제외할 수 없습니다",
       "status": {
         "checking": "확인 중…",
         "idle": "대기 중",
@@ -12588,47 +12589,47 @@
         "claude-code": {
           "ask": {
             "label": "기본 권한",
-            "description": "워크스페이스 안의 읽기/쓰기를 허용하고, 더 높은 권한, 네트워크 접근, 워크스페이스 밖 경로가 필요할 때 확인합니다."
+            "description": "필요한 경우 사용자가 작업을 승인합니다."
           },
           "acceptEdits": {
             "label": "편집 자동 승인",
-            "description": "파일 편집 요청을 자동으로 승인해 반복 확인을 줄입니다. 더 위험한 명령이나 권한은 기반 권한 정책을 따릅니다."
+            "description": "파일 편집은 바로 허용하고, 다른 작업은 필요한 경우 사용자가 승인합니다."
           },
           "auto": {
             "label": "자동 리뷰",
-            "description": "워크스페이스 안의 읽기/쓰기를 허용하고 권한 상승 요청을 자동으로 검토하며, 고위험 작업은 거부되거나 확인을 요청할 수 있습니다. 중단은 줄지만 실수할 수 있습니다."
+            "description": "AI 모델이 작업을 승인하므로 추가 대기 시간이 생길 수 있습니다. 필요한 경우 사용자가 확인합니다."
           },
           "bypassPermissions": {
             "label": "전체 접근",
-            "description": "추가 확인 없이 모든 파일 편집과 네트워크 명령 실행을 허용합니다. 가장 위험하므로 신뢰할 수 있는 작업에서만 사용하세요."
+            "description": "일반 작업은 바로 허용하며, 작업 공간 밖의 파일과 네트워크 명령도 사용할 수 있습니다."
           }
         },
         "codex": {
           "ask": {
             "label": "기본 권한",
-            "description": "워크스페이스 안의 읽기/쓰기를 허용하고, 더 높은 권한, 네트워크 접근, 워크스페이스 밖 경로가 필요할 때 확인합니다."
+            "description": "필요한 경우 사용자가 작업을 승인합니다."
           },
           "auto": {
             "label": "자동 리뷰",
-            "description": "보호된 워크스페이스 샌드박스 안에서 명령을 자동 실행합니다. 경계를 넘는 작업은 자동 리뷰어가 판단하며, 고위험 작업은 거부되거나 확인을 요청할 수 있습니다."
+            "description": "AI 모델이 작업을 승인하므로 추가 대기 시간이 생길 수 있습니다. 필요한 경우 사용자가 확인합니다."
           },
           "bypassPermissions": {
             "label": "전체 접근",
-            "description": "추가 확인 없이 모든 파일 편집과 네트워크 명령 실행을 허용합니다. 가장 위험하므로 신뢰할 수 있는 작업에서만 사용하세요."
+            "description": "일반 작업은 바로 허용하며, 작업 공간 밖의 파일과 네트워크 명령도 사용할 수 있습니다."
           }
         },
         "pi": {
           "ask": {
             "label": "기본 권한",
-            "description": "읽기 전용 도구는 바로 실행하고, 파일 쓰기·명령 실행·MCP 도구는 매번 확인합니다."
+            "description": "필요한 경우 사용자가 작업을 승인합니다."
           },
           "auto": {
             "label": "자동 리뷰",
-            "description": "워크스페이스 안의 쓰기와 안전한 명령은 자동 실행하고, 경계 밖 쓰기·위험한 명령·MCP 도구는 확인합니다."
+            "description": "AI 모델이 작업을 승인하므로 추가 대기 시간이 생길 수 있습니다. 필요한 경우 사용자가 확인합니다."
           },
           "bypassPermissions": {
             "label": "전체 접근",
-            "description": "추가 확인 없이 모든 파일 편집과 네트워크 명령 실행을 허용합니다. 가장 위험하므로 신뢰할 수 있는 작업에서만 사용하세요."
+            "description": "일반 작업은 바로 허용하며, 작업 공간 밖의 파일과 네트워크 명령도 사용할 수 있습니다."
           }
         }
       }
@@ -13502,8 +13503,8 @@
       "dismissTitle": "이전 실패 알림 닫기"
     },
     "worktreeRestoreBanner": {
-      "text": "이 세션의 워크트리가 정리되었습니다(디렉터리가 존재하지 않음).",
-      "textPendingSnapshot": "이 세션에 적용되지 않은 변경 스냅샷이 있습니다.",
+      "text": "이 세션의 워크트리({{name}})가 정리되었습니다(디렉터리가 존재하지 않음).",
+      "textPendingSnapshot": "이 세션의 워크트리({{name}})에 적용되지 않은 변경 스냅샷이 있습니다.",
       "restoreAction": "워크트리 복원",
       "applySnapshotAction": "변경 사항 적용",
       "restoring": "복원 중…",
@@ -14095,7 +14096,7 @@
       "errors": {
         "noPriorAssistantPreview": "AI 응답 뒤의 질문에서 rewind 하세요(이전에 assistant 응답이 없습니다)",
         "sessionRunning": "작업 중지 대기 시간이 초과되었습니다. 다시 되돌리세요",
-        "noLiveQuery": "세션이 비활성 상태입니다 — 아무 메시지(예: \"ok\")라도 보내 SDK를 깨운 뒤 rewind 하세요",
+        "noLiveQuery": "작업 실행 환경을 복원하지 못해 되돌리기를 완료하지 못했습니다.",
         "noPriorAssistantCommit": "AI 응답 뒤의 질문에서 rewind 하세요",
         "commitGeneric": "rewind 실패, 다시 시도하세요",
         "remoteNotSupported": "원격 Claude Code 세션은 아직 rewind를 지원하지 않습니다"

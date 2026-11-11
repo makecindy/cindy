@@ -2087,7 +2087,9 @@ export function ChatInput({
   const activePermissionModeRef = useRef(activePermissionMode);
   activePermissionModeRef.current = activePermissionMode;
   // handlePermissionModeChange 定义在 useEditor 之后, ref 桥接 (同 dispatchSendRef)。
-  const handlePermissionModeChangeRef = useRef<(mode: PermissionMode) => void | Promise<void>>(
+  const handlePermissionModeChangeRef = useRef<
+    (mode: PermissionMode, options?: { confirmFullAccess?: boolean }) => void | Promise<void>
+  >(
     () => {},
   );
 
@@ -2794,7 +2796,8 @@ export function ChatInput({
           );
           if (!next) return false;
           event.preventDefault();
-          void handlePermissionModeChangeRef.current(next);
+          // 快捷键轮切没有列表说明可看: 升级到完全访问时仍先确认。
+          void handlePermissionModeChangeRef.current(next, { confirmFullAccess: true });
           return true;
         }
 
@@ -9101,10 +9104,11 @@ export function ChatInput({
   }, [navigate, activeProviderId, activeModel, currentModelAgentKind]);
 
   const handlePermissionModeChange = useCallback(
-    async (newMode: PermissionMode) => {
+    async (newMode: PermissionMode, options?: { confirmFullAccess?: boolean }) => {
       if (settingsLocked) return;
+      // 列表里直接选择完全访问不再确认; 只有快捷键轮切(options.confirmFullAccess)保留确认。
       const previousMode = activePermissionModeRef.current;
-      if (requiresFullAccessConfirmation(previousMode, newMode)) {
+      if (options?.confirmFullAccess && requiresFullAccessConfirmation(previousMode, newMode)) {
         const confirmed = await confirmDialog({
           title: t('newChat.chatInput.fullAccessConfirmation.title'),
           description: t('newChat.chatInput.fullAccessConfirmation.description'),

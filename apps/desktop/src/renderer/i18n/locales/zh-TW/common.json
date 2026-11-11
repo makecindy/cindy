@@ -860,6 +860,7 @@
       "assignLocalAria": "允許 {{name}} 接收外部新任務",
       "moreAria": "{{name}} 的更多操作",
       "remove": "移出組",
+      "removeLocalBlocked": "組所在的電腦無法移出組",
       "status": {
         "checking": "正在檢查…",
         "idle": "空閒",
@@ -12588,47 +12589,47 @@
         "claude-code": {
           "ask": {
             "label": "預設權限",
-            "description": "允許在工作區內讀寫；需要更高權限、聯網或訪問工作區外路徑時再詢問。"
+            "description": "操作按需由你審批。"
           },
           "acceptEdits": {
             "label": "允許編輯",
-            "description": "自動接受檔案編輯請求，減少反覆確認；涉及更高風險的命令或權限仍按底層權限策略處理。"
+            "description": "檔案編輯直接允許，其他操作按需由你審批。"
           },
           "auto": {
             "label": "自動審批",
-            "description": "允許在工作區內讀寫，並自動審批提權請求；高風險操作可能被拒絕或要求確認。能減少打斷，但存在誤判風險。"
+            "description": "操作由 AI 模型審批，可能需要額外等待；必要時由你確認。"
           },
           "bypassPermissions": {
             "label": "完全訪問",
-            "description": "允許修改任意檔案並執行聯網命令，無需再次確認。風險最高，只適合可信任務。"
+            "description": "一般操作直接允許，可存取工作區外檔案及連網執行命令。"
           }
         },
         "codex": {
           "ask": {
             "label": "預設權限",
-            "description": "允許在工作區內讀寫；需要更高權限、聯網或訪問工作區外路徑時再詢問。"
+            "description": "操作按需由你審批。"
           },
           "auto": {
             "label": "自動審批",
-            "description": "在受保護的工作區沙箱內自動執行命令；需要越過沙箱邊界的操作交給自動審查器判斷，高風險操作可能被拒絕或要求確認。"
+            "description": "操作由 AI 模型審批，可能需要額外等待；必要時由你確認。"
           },
           "bypassPermissions": {
             "label": "完全訪問",
-            "description": "允許修改任意檔案並執行聯網命令，無需再次確認。風險最高，只適合可信任務。"
+            "description": "一般操作直接允許，可存取工作區外檔案及連網執行命令。"
           }
         },
         "pi": {
           "ask": {
             "label": "預設權限",
-            "description": "只讀工具直接執行；寫檔案、跑命令和 MCP 工具每次都詢問。"
+            "description": "操作按需由你審批。"
           },
           "auto": {
             "label": "自動審批",
-            "description": "工作區內寫檔案與安全命令自動執行；越界寫、危險命令和 MCP 工具仍會詢問。"
+            "description": "操作由 AI 模型審批，可能需要額外等待；必要時由你確認。"
           },
           "bypassPermissions": {
             "label": "完全訪問",
-            "description": "允許修改任意檔案並執行聯網命令，無需再次確認。風險最高，只適合可信任務。"
+            "description": "一般操作直接允許，可存取工作區外檔案及連網執行命令。"
           }
         }
       }
@@ -13501,8 +13502,8 @@
       "dismissTitle": "關閉歷史失敗提示"
     },
     "worktreeRestoreBanner": {
-      "text": "該任務的 worktree 已被回收（目錄不存在）。",
-      "textPendingSnapshot": "該任務有一份未應用的更改快照。",
+      "text": "該任務的 worktree「{{name}}」已被回收（目錄不存在）。",
+      "textPendingSnapshot": "該任務的 worktree「{{name}}」有一份未應用的更改快照。",
       "restoreAction": "恢復 worktree",
       "applySnapshotAction": "恢復更改",
       "restoring": "恢復中…",
@@ -14094,7 +14095,7 @@
       "errors": {
         "noPriorAssistantPreview": "請在 AI 回覆之後的提問上 rewind（這條之前沒有 assistant 回覆）",
         "sessionRunning": "等待任務停止超時，請重新回退",
-        "noLiveQuery": "Agent 會話未啟用——請先傳送任意一條訊息（哪怕一句\"ok\"）讓 SDK 起來再 rewind",
+        "noLiveQuery": "未能恢復任務執行環境，回退未完成。",
         "noPriorAssistantCommit": "請在 AI 回覆之後的提問上 rewind",
         "commitGeneric": "rewind 失敗，請重試",
         "remoteNotSupported": "遠端 Claude Code 會話暫不支援 rewind"

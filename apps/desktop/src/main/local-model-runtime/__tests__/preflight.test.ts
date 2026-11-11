@@ -83,13 +83,15 @@ describe('ensureManagedOllamaReadyForSession', () => {
   });
 
   it('starts the sidecar with the caller userDataDir and the session start wait', async () => {
+    const controller = new AbortController();
     await ensureManagedOllamaReadyForSession({
       providerId: MANAGED_OLLAMA_PROVIDER_ID,
       remoteHostId: null,
       userDataDir: '/tmp/cindy-sidecar-data',
+      signal: controller.signal,
     });
     expect(startOfficialOllamaApp).toHaveBeenCalledWith(
-      expect.objectContaining({ userDataDir: '/tmp/cindy-sidecar-data', startTimeoutMs: 120_000 }),
+      expect.objectContaining({ userDataDir: '/tmp/cindy-sidecar-data', startTimeoutMs: 120_000, signal: controller.signal }),
     );
   });
 

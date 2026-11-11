@@ -4160,6 +4160,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     kind: 'done' | 'error' | 'needs-reply';
     inputHandoffRequestId?: string;
     remoteDeviceId?: string;
+    /**
+     * Stable identity of a repeated needs-reply or error. Main turns two
+     * deliveries of the same id into one desktop toast. Completions omit it.
+     */
+    alertEventId?: string;
     channels?: { desktop?: boolean; feishu?: boolean; mobile?: boolean };
     markAttention?: boolean;
   }): Promise<void> => ipcRenderer.invoke('notification:show-session-event', payload),

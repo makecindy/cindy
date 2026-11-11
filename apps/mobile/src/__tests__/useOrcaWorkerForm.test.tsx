@@ -15,7 +15,6 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
 vi.mock('react-native', () => ({ Alert: { alert: vi.fn() } }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({ subscribeRemoteOrcaWorkerChanged: () => () => undefined }));
 vi.mock('@/session/ContextSheetCollabView', () => ({ canSubmitOrcaWorkerForm: () => true }));
-vi.mock('@/session/fullAccessConfirmation', () => ({ confirmFullAccessChange: async () => true }));
 
 const { useOrcaWorkerForm } = await import('@/session/useSessionOrcaCollab');
 const { resetOrcaWorkerCreationPrefsMemory, saveOrcaWorkerCreationPrefs, defaultOrcaWorkerCreationPrefs, readOrcaWorkerCreationPrefs } =
@@ -1249,4 +1248,14 @@ describe('optimistic Worker archive', () => {
       remoteSessionStore.clear();
     }
   });
+});
+
+it('applies Full access immediately without opening an alert', async () => {
+  const { Alert } = await import('react-native');
+  await act(async () => { root.render(<Probe maker={fakeMaker()} />); await flush(); });
+  await act(async () => { latest!.changePermission('auto'); });
+  vi.mocked(Alert.alert).mockClear();
+  await act(async () => { latest!.changePermission('bypassPermissions'); });
+  expect(latest!.form.permissionMode).toBe('bypassPermissions');
+  expect(Alert.alert).not.toHaveBeenCalled();
 });
