@@ -20086,7 +20086,12 @@
     "openDirectory": "Abrir carpeta de la cuenta",
     "openDirectoryFailed": "No se pudo abrir la carpeta de la cuenta. Puede que se haya movido o eliminado.",
     "loginAgain": "Iniciar sesión nuevamente",
-    "login": "Iniciar sesión"
+    "login": "Iniciar sesión",
+    "quotaAverage": "Media restante {{percent}} %",
+    "quotaUpdating": "Cuota pendiente de actualizar",
+    "quotaResetSoon": "Se restablece pronto",
+    "quotaAverageHint": "Cuota semanal · Mismo peso por cuenta",
+    "quotaResetHint": "Al ritmo actual, puede quedar cuota al restablecerse: amarillo si faltan hasta 24 horas y rojo si faltan hasta 6 horas."
   },
   "sessionNotify": {
     "finished": "Esta tarea terminó su turno. Su respuesta final:",

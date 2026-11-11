@@ -58,10 +58,12 @@ export interface SubscriptionPoolView {
   providerId: SubscriptionProvider;
   configured: boolean;
   strategy: ProviderGroupStrategy;
+  /** Present only for an explicitly task-scoped read; null means no recorded binding. */
+  boundAccountId?: string | null;
   accounts: SubscriptionAccountView[];
 }
 export type SubscriptionAccountCommand =
-  | { action: 'read'; providerId: SubscriptionProvider }
+  | { action: 'read'; providerId: SubscriptionProvider; taskId?: string }
   /** Advisory login presentation only; never binds detected system credentials. */
   | { action: 'preview'; providerId: SubscriptionProvider }
   | { action: 'add'; providerId: SubscriptionProvider; loginKey: string }

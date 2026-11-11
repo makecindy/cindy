@@ -20086,7 +20086,12 @@
     "openDirectory": "Abrir pasta da conta",
     "openDirectoryFailed": "Não foi possível abrir a pasta da conta. Pode ter sido movida ou eliminada.",
     "loginAgain": "Iniciar sessão novamente",
-    "login": "Iniciar sessão"
+    "login": "Iniciar sessão",
+    "quotaAverage": "Média restante {{percent}}%",
+    "quotaUpdating": "Quota a aguardar atualização",
+    "quotaResetSoon": "Reposição em breve",
+    "quotaAverageHint": "Quota semanal · Peso igual por conta",
+    "quotaResetHint": "Ao ritmo atual, pode restar quota na reposição: amarelo até 24 horas, vermelho até 6 horas."
   },
   "sessionNotify": {
     "finished": "Esta tarefa concluiu a ronda. Resposta final:",

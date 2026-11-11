@@ -442,6 +442,7 @@ function accountUsage(usage: Usage | undefined): { usage?: SubscriptionAccountUs
 export async function readSubscriptionPool(
   provider: SubscriptionProvider,
   previewDefault = false,
+  taskId?: string,
 ): Promise<SubscriptionPoolView> {
   const state = currentRuntime();
   const pool = readPool(provider) ?? defaultPool();
@@ -494,6 +495,7 @@ export async function readSubscriptionPool(
     providerId: provider,
     configured: readPool(provider) !== null,
     strategy: pool.strategy,
+    ...(taskId ? { boundAccountId: readAccountBinding(`task:${taskId}`, provider)?.accountId ?? null } : {}),
     accounts,
   };
 }
@@ -684,7 +686,7 @@ export async function runSubscriptionAccountCommand(
   const state = currentRuntime();
   assertOwner(state);
   const provider = command.providerId;
-  if (command.action === 'read') return readSubscriptionPool(provider);
+  if (command.action === 'read') return readSubscriptionPool(provider, false, command.taskId);
   if (command.action === 'preview') return readSubscriptionPool(provider, true);
   if (command.action === 'cancel') {
     state.logins.get(`${provider}:${command.loginKey}`)?.abort.abort();
