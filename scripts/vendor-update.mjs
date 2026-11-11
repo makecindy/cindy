@@ -183,6 +183,18 @@ export function vendorRecord() {
   return components;
 }
 
+/**
+ * Platforms whose upstream URL, SHA-256 or size differ between a freshly written pin and the record of
+ * what the gate tested. GitHub release assets can be replaced under the same tag, so re-resolving a
+ * version after the gate is not enough: the pin must name the exact bytes the gate ran.
+ */
+export function recordedAssetMismatches(pinned = {}, recorded) {
+  if (!recorded) return ['record has no runtimeAssets'];
+  const platforms = [...new Set([...Object.keys(pinned), ...Object.keys(recorded)])].sort();
+  return platforms.filter((platform) => ['url', 'sha256', 'size']
+    .some((key) => pinned[platform]?.[key] !== recorded[platform]?.[key]));
+}
+
 /** What a packaged platform takes from the pins: bundled (ripgrep, SDK) or fetched at runtime (CDN or Linux fallback). */
 const shippedKinds = (platform) => (platform.startsWith('linux-') ? ['claude', 'codex-cli', 'ripgrep'] : ['claude', 'codex', 'pi', 'ripgrep']);
 
@@ -289,6 +301,15 @@ export async function updateVendors({ target = 'latest', kinds = VENDOR_KINDS, m
         } else if (!run(process.execPath, [UPDATER[kind], `--version=${to}`, `--platform=${platformKey}`]).ok) {
           fail(`${kind}: updater failed for ${to} (download or checksum verification)`);
         }
+      }
+    }
+    // Replaying another run's record (the PR job, or --vendors <build-info.json>): the new pins must be
+    // the bytes that run tested, not whatever the same release tag serves now. npm versions are
+    // immutable, so the SDK is bound by its version and the lockfile integrity alone.
+    if (typeof target === 'object') {
+      for (const { kind, to } of changes.filter((c) => c.kind !== 'claude-sdk')) {
+        const mismatched = recordedAssetMismatches(readJson(PIN[kind]).runtimeAssets, target[kind]?.runtimeAssets);
+        if (mismatched.length) fail(`${kind} ${to}: upstream assets differ from the tested record (${mismatched.join(', ')})`);
       }
     }
     if (changes.length && !syncHeadlessProfiles()) fail('could not refreeze the Cindy Headless profile locks');
