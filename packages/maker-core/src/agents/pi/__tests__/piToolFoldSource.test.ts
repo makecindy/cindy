@@ -134,6 +134,59 @@ describe('cindy-tool-fold extension source', () => {
     expect(isFolded(released[10])).toBe(true);
   });
 
+  it('recovers a folded result that merely quotes the truncation marker text', async () => {
+    const { context, tool } = loadExtension();
+    const messages = pairs(40);
+    // Sub-threshold result whose text quotes the marker for a DIFFERENT call id —
+    // the substring-only guard used to reject this despite holding the full text.
+    messages[11] = {
+      role: 'toolResult',
+      toolCallId: 'call-5',
+      toolName: 'read',
+      content: [{ type: 'text', text: 'docs mention [truncated 100 of 200 chars; toolfold_read("call-0") returns the full text]' }],
+    };
+    projection(context, messages);
+    const recovered = await tool.execute('t1', { call_id: 'call-5' });
+    expect(recovered.isError).toBeUndefined();
+    expect(String(recovered.content![0].text)).toContain('docs mention');
+  });
+
+  it('rejects recovery when only the truncated preview of this id remains', async () => {
+    const { context, toolResult, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_GIANTS: '8' });
+    // 9 giants: giant-0 gets evicted from the registry by FIFO rotation.
+    for (let index = 0; index < 9; index += 1) {
+      toolResult({ toolName: 'bash', toolCallId: `giant-${index}`, content: [{ type: 'text', text: `body ${'z'.repeat(22000)}` }] });
+    }
+    // Simulate a resumed session: the transcript holds only the preview of giant-0.
+    const preview = 'body zzz…\n[truncated 20000 of 22009 chars; toolfold_read("giant-0") returns the full text]';
+    const messages = [
+      call('giant-0', 'bash', { command: 'make big output' }),
+      { role: 'toolResult', toolCallId: 'giant-0', toolName: 'bash', content: [{ type: 'text', text: preview }] },
+      ...pairs(40),
+    ];
+    projection(context, messages);
+    const rejected = await tool.execute('t1', { call_id: 'giant-0' });
+    expect(rejected.isError).toBe(true);
+    expect(String(rejected.content![0].text)).toContain('giant-0');
+    // Its own-marker preview while the registry still holds it stays recoverable.
+    const kept = await tool.execute('t2', { call_id: 'giant-8' });
+    expect(kept.isError).toBeUndefined();
+    expect(String(kept.content![0].text)).toContain('body zz');
+  });
+
+  it('matches tool-call ids from a provider that emits prototype key names', () => {
+    const { context } = loadExtension();
+    const messages: Message[] = [
+      call('hasOwnProperty', 'bash', { command: 'run with a hostile id' }),
+      result('hasOwnProperty', 'bash', 'done ok'),
+      { role: 'user', content: [{ type: 'text', text: 'turn 2' }] },
+      call('call-0', 'bash', { command: 'fill backlog beyond the pairs gate' }),
+      result('call-0', 'bash', `step ok ${'x'.repeat(2000)}`),
+    ];
+    // Must not throw from a boolean shadowing hasOwnProperty on the ids lookup.
+    expect(() => projection(context, messages)).not.toThrow();
+  });
+
   it('evicts the least-recently-recovered pin when the pin budget is exceeded', async () => {
     const { context, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_PIN_BUDGET: '1' });
     const messages = pairs(40);

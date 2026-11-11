@@ -185,14 +185,14 @@ export default function (pi) {
         if (block && block.type === 'toolCall' && typeof block.id === 'string') calls.push(block);
       }
       if (calls.length === 0) continue;
-      var ids = {};
+      var ids = Object.create(null);
       for (var c = 0; c < calls.length; c++) ids[calls[c].id] = false;
       var results = [];
       var indexes = [];
       var hasImage = false;
       for (var next = index + 1; next < messages.length; next++) {
         var candidate = messages[next];
-        if (!candidate || candidate.role !== 'toolResult' || !ids.hasOwnProperty(candidate.toolCallId)) break;
+        if (!candidate || candidate.role !== 'toolResult' || !(candidate.toolCallId in ids)) break;
         ids[candidate.toolCallId] = true;
         results.push(candidate);
         indexes.push(next);
@@ -313,7 +313,7 @@ export default function (pi) {
     if (!messages) return null;
     var callBlock = null;
     var resultMsg = null;
-    var truncatedResult = false;
+    var truncatedPreview = null;
     for (var i = 0; i < messages.length; i++) {
       var message = messages[i];
       if (!message) continue;
@@ -325,16 +325,27 @@ export default function (pi) {
       } else if (message.role === 'toolResult' && String(message.toolCallId) === key) {
         resultMsg = message;
         var resultText = textOf(message.content);
-        // Ingestion-truncated entries whose full text is gone (registry evicted or lost
-        // on resume) must refuse recovery: serving the preview as the original would
-        // let the model proceed on incomplete data behind the recovery contract.
-        if (resultText.indexOf('[truncated ') !== -1 && resultText.indexOf('toolfold_read') !== -1) truncatedResult = true;
+        // Ingestion truncation appends exactly one marker and it is the last thing in
+        // the result. Matching the id inside a marker that ENDS the text keeps ordinary
+        // results that merely quote the marker text recoverable — the preview is only
+        // ambiguous when the whole result is just the preview.
+        var marker = '[truncated ';
+        var markerAt = resultText.indexOf(marker);
+        while (markerAt !== -1) {
+          var markerEnd = resultText.indexOf(']', markerAt);
+          if (markerEnd !== -1) {
+            var markerBody = resultText.slice(markerAt, markerEnd + 1);
+            if (markerBody.indexOf('toolfold_read("' + key + '")') !== -1
+              && resultText.slice(markerEnd + 1).trim().length === 0) truncatedPreview = markerBody;
+          }
+          markerAt = resultText.indexOf(marker, markerAt + 1);
+        }
       }
     }
     if (!callBlock && !resultMsg) return null;
-    // Evicted/lost giant with only the call block: the result in context is the
-    // truncation preview, not the original — refuse rather than serve it.
-    if (truncatedResult) return null;
+    // Evicted/lost giant with only the truncation preview in context (the marker ends
+    // the text): refuse rather than serve the preview as the original.
+    if (truncatedPreview) return null;
     var bits = [];
     if (callBlock) {
       bits.push('call: ' + callSummary(callBlock));
