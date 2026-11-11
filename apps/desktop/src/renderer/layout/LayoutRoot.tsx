@@ -962,6 +962,8 @@ interface LayoutRootProps {
   rightTabsCollapsed?: boolean;
   /** Wait for the initial route/session restoration before observing open transitions. */
   sidebarExpansionReady?: boolean;
+  /** The latest visibility change came from the sidebar toggle; session switches keep the window width. */
+  rightTabsUserToggle?: boolean;
 }
 
 export function LayoutRoot({
@@ -969,6 +971,7 @@ export function LayoutRoot({
   suppressNonChatPanels = false,
   rightTabsCollapsed = false,
   sidebarExpansionReady = true,
+  rightTabsUserToggle = true,
 }: LayoutRootProps = {}): ReactNode {
   // 幂等注册内置面板 —— 放组件体而非模块副作用:HMR / 测试 reset 后再渲染也能自愈。
   registerBuiltinPanels();
@@ -1008,6 +1011,7 @@ export function LayoutRoot({
         sidebar: entry.node.type === 'pane' && entry.node.panelKind === 'right-tabs',
         preferredWidth: entry.node.type === 'pane' ? entry.node.preferredWidth : undefined,
       }))),
+    rightTabsUserToggle,
   );
   const rememberSidebarWidth = useRef<() => void>(() => undefined);
   rememberSidebarWidth.current = () => {

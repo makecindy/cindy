@@ -624,6 +624,24 @@ describe('LayoutRoot sidebar window growth', () => {
     rendered.rerender(view(false));
     expect(expand).not.toHaveBeenCalled();
   });
+  // Bug: opening a task from the system island restores that task's remembered
+  // sidebar state, and the session switch restored the standalone window width.
+  it('keeps the window width when a session switch restores a collapsed sidebar', () => {
+    const expand = vi.fn(async () => undefined);
+    window.electronAPI.windowSidebarExpansion = expand;
+    const view = (collapsed: boolean) => (
+      <BuiltinPanelBridgeProvider value={bridge}>
+        <LayoutRoot rightTabsCollapsed={collapsed} rightTabsUserToggle={false} />
+      </BuiltinPanelBridgeProvider>
+    );
+    const rendered = render(view(true));
+    vi.spyOn(screen.getByTestId('layout-root-content'), 'getBoundingClientRect')
+      .mockReturnValue({ width: 800 } as DOMRect);
+    rendered.rerender(view(false));
+    expect(expand).not.toHaveBeenCalled();
+    rendered.rerender(view(true));
+    expect(expand).not.toHaveBeenCalled();
+  });
 });
 
 

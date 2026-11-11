@@ -319,6 +319,9 @@ export function MainLayout() {
   );
   // 右侧边栏(第三块布局,与左栏对称)：折叠态 + 宽度各自持久化。
   const [isRightSidebarCollapsed, setIsRightSidebarCollapsed] = useState(getInitialRightCollapsed);
+  // 只有用户亲手开/关右栏才改主窗口矩形；切任务按各会话记忆恢复开合时保持窗口不动
+  // (见 layout/sidebarPresentation.ts)。每次写折叠态时同步标记来源。
+  const [rightTabsUserToggle, setRightTabsUserToggle] = useState(false);
   // 「侧边栏在新窗口中显示」偏好 + 子窗口开闭(main 权威,广播镜像)。
   // 副窗(会话多开窗)不参与 detach:内嵌行为保持不变,只有主窗联动子窗口
   // (main 侧 SET_CONTEXT 也只信主窗 sender,双保险)。
@@ -370,6 +373,7 @@ export function MainLayout() {
       const nextCollapsed = hasInitialCollapsed
         ? opts.initialCollapsed === true
         : readCollapsedFor(sessionId);
+      setRightTabsUserToggle(false);
       setIsRightSidebarCollapsed(nextCollapsed);
       if (hasInitialCollapsed && opts.writeInitialCollapsedRecord === true) {
         writeCollapsedFor(sessionId, nextCollapsed);
@@ -943,6 +947,7 @@ export function MainLayout() {
     // 显式 prime RightSidebar 走动画。
     rightSidebarRef.current?.requestAnimateNextChange();
     writeCollapsedFor(rightSidebarSessionId, false);
+    setRightTabsUserToggle(true);
     setIsRightSidebarCollapsed(false);
   }, [isRightSidebarCollapsed, rightSidebarSessionId, rsbDetached, rsbWindow.loaded]);
 
@@ -951,6 +956,7 @@ export function MainLayout() {
     if (rsbDetached || isRightSidebarCollapsed) return;
     rightSidebarRef.current?.requestAnimateNextChange();
     writeCollapsedFor(rightSidebarSessionId, true);
+    setRightTabsUserToggle(true);
     setIsRightSidebarCollapsed(true);
   }, [isRightSidebarCollapsed, rightSidebarSessionId, rsbDetached]);
 
@@ -989,6 +995,8 @@ export function MainLayout() {
     const sessionId = rightSidebarSessionIdRef.current;
     if (sessionId == null) return;
     rightSidebarRef.current?.requestAnimateNextChange();
+    // 关掉最后一个页签只是间接收起(也可能由新任务的空页签桶触发),不改窗口矩形。
+    setRightTabsUserToggle(false);
     setIsRightSidebarCollapsed(true);
     writeCollapsedFor(sessionId, true);
   }, [rsbDetached]);
@@ -1007,6 +1015,7 @@ export function MainLayout() {
   // 直接同步,切 session "瞬间生效"(用户体感:不应看着一栏慢慢展开/收起)。
   useLayoutEffect(() => {
     if (!rsbWindow.loaded || !rightSidebarSessionId || rsbDetached) return;
+    setRightTabsUserToggle(false);
     setIsRightSidebarCollapsed(readCollapsedFor(rightSidebarSessionId));
   }, [rightSidebarSessionId, rsbDetached, rsbWindow.loaded]);
 
@@ -1057,6 +1066,7 @@ export function MainLayout() {
       }
       if (targetSessionId === currentSessionId) {
         // 前台路径:走 UI + 持久化
+        setRightTabsUserToggle(opts.userInitiated !== false);
         setIsRightSidebarCollapsed((prev) => {
           if (prev === targetCollapsed) return prev;
           if (shouldAnimateSidebarVisibilityRequest(opts)) {
@@ -1220,6 +1230,7 @@ export function MainLayout() {
           });
         });
         writeCollapsedFor(sessionId, false);
+        setRightTabsUserToggle(true);
         setIsRightSidebarCollapsed(false);
       }
     }
@@ -1341,6 +1352,7 @@ export function MainLayout() {
         }
         if (isRightSidebarCollapsedRef.current && !rsbDetachedRef.current) {
           writeCollapsedFor(rightSidebarSessionIdRef.current, false);
+          setRightTabsUserToggle(true);
           setIsRightSidebarCollapsed(false);
         }
         return;
@@ -1364,6 +1376,7 @@ export function MainLayout() {
           });
           if (isRightSidebarCollapsedRef.current && !rsbDetachedRef.current) {
             writeCollapsedFor(sessionId, false);
+            setRightTabsUserToggle(true);
             setIsRightSidebarCollapsed(false);
           }
         });
@@ -2010,6 +2023,7 @@ export function MainLayout() {
               onInstalledGhostsChange={handleInstalledGhostsChange}
               suppressNonChatPanels={isSettingsRoute}
               sidebarExpansionReady={rightSidebarAvailable && rsbWindow.loaded && !rsbDetached}
+              rightTabsUserToggle={rightTabsUserToggle}
               rightTabsCollapsed={
                 !rightSidebarMounted || isRightSidebarCollapsed || rightSidebarForceCollapsed
               }
