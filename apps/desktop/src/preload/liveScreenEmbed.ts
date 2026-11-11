@@ -1,4 +1,5 @@
 import { ipcRenderer } from 'electron';
+import { NATIVE_TRACKPAD_HOST } from '../shared/nativeTrackpad';
 import { LIVE_SCREEN_EMBED, type LiveScreenEmbedBridge } from '../shared/remoteDesktopViewer';
 
 function onPayload<T>(channel: string, cb: (payload: T) => void): () => void {
@@ -20,5 +21,8 @@ export function createLiveScreenEmbedBridge(): LiveScreenEmbedBridge {
       ipcRenderer.invoke(LIVE_SCREEN_EMBED.CHANNEL_REPLY, embedId, generation, id, outcome),
     onActive: (listener) => onPayload(LIVE_SCREEN_EMBED.ACTIVE, listener),
     onChannelRequest: (listener) => onPayload(LIVE_SCREEN_EMBED.CHANNEL_REQUEST, listener),
+    trackpadStart: () => ipcRenderer.invoke(NATIVE_TRACKPAD_HOST.START),
+    trackpadStop: () => ipcRenderer.invoke(NATIVE_TRACKPAD_HOST.STOP),
+    onTrackpadFrame: (listener) => onPayload(NATIVE_TRACKPAD_HOST.FRAME, listener),
   };
 }

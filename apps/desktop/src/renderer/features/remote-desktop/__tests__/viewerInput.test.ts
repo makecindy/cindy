@@ -922,7 +922,8 @@ it('takes no contacts on a device without touch and returns to desktop input whe
 });
 
 // 测试价值：设备画面（模拟器等）在电脑上用鼠标操作——左键即手指、右键不发给设备、滚轮与触控板
-// 变成两指平移／捏合（与本机模拟器页面一致，而不是被控端会拒收的桌面滚动）、
+// 变成两指平移／捏合（与本机模拟器页面一致，而不是被控端会拒收的桌面滚动）、按住 Option 的双指、
+// 触控板真实双指与手指圆点、点击涟漪、
 // 能打字的设备点一下即可键入。被控端对设备画面拒收桌面指针与滚轮并因此结束会话，
 // 既有用例只覆盖整屏远程桌面的鼠标路径。最小输入：一次 deviceTouch 开关；unit tier。
 it('turns the mouse into a finger on a device screen and keeps desktop-only input away from it', () => {
@@ -955,26 +956,37 @@ it('turns the mouse into a finger on a device screen and keeps desktop-only inpu
         ...init,
       }),
     );
-  wheel({ deltaY: 60 });
-  wheel({ deltaY: 60 });
-  vi.advanceTimersByTime(200);
-  const pan = events();
-  expect(pan.map((event) => event.kind)).toEqual(['touch', 'touch', 'touch']);
+  const dots = () =>
+    [...stage.querySelectorAll<HTMLElement>('.device-finger')].map((dot) => [
+      Math.round(parseFloat(dot.style.left)),
+      Math.round(parseFloat(dot.style.top)),
+    ]);
   const phases = (event: Record<string, unknown>) =>
     (event.touches as { id: number; x: number; y: number; phase: string }[]).map((t) => t.phase);
+  const at = (event: Record<string, unknown>) =>
+    (event.touches as { x: number; y: number }[]).map((t) => [+t.x.toFixed(3), +t.y.toFixed(3)]);
+  wheel({ deltaY: 60 });
+  wheel({ deltaY: 60 });
+  // The pair is drawn on the picture while it is down, where the device has it.
+  expect(dots()).toEqual([
+    [620, 180],
+    [380, 180],
+  ]);
+  vi.advanceTimersByTime(200);
+  expect(dots()).toEqual([]);
+  const pan = events();
   expect(pan.map(phases)).toEqual([
     ['began', 'began'],
     ['moved', 'moved'],
+    ['moved', 'moved'],
     ['ended', 'ended'],
   ]);
-  const at = (event: Record<string, unknown>) =>
-    (event.touches as { x: number; y: number }[]).map((t) => [+t.x.toFixed(3), +t.y.toFixed(3)]);
   // The pair sits a fifth of the shorter side (0.12 of this 1000×600 picture) each side of the pointer.
   expect(at(pan[0])).toEqual([
     [0.62, 0.5],
     [0.38, 0.5],
   ]);
-  expect(at(pan[1])).toEqual([
+  expect(at(pan[2])).toEqual([
     [0.62, 0.3],
     [0.38, 0.3],
   ]);
@@ -992,6 +1004,65 @@ it('turns the mouse into a finger on a device screen and keeps desktop-only inpu
   expect(apart[0][0]).toBeGreaterThan(0.62);
   expect(apart[1][0]).toBeLessThan(0.38);
   expect(apart[0][0] - 0.5).toBeCloseTo(0.5 - apart[1][0], 3);
+  // Option shows where a pinch would put its fingers before anything is pressed;
+  // dragging with it held pinches around the centre: the cursor and its mirror.
+  const held = (type: string, x: number, y: number, init: MouseEventInit = {}) => {
+    const e = new MouseEvent(type, {
+      clientX: x,
+      clientY: y,
+      altKey: true,
+      bubbles: true,
+      cancelable: true,
+      ...init,
+    });
+    Object.defineProperty(e, 'pointerId', { value: 1 });
+    stage.dispatchEvent(e);
+  };
+  messages.length = 0;
+  held('pointermove', 250, 202);
+  expect(dots()).toEqual([
+    [250, 150],
+    [750, 450],
+  ]);
+  expect(events()).toEqual([]);
+  held('pointerdown', 250, 202);
+  held('pointermove', 400, 292);
+  held('pointerup', 400, 292);
+  const mirrored = events();
+  expect(mirrored.map(phases)).toEqual([
+    ['began', 'began'],
+    ['moved', 'moved'],
+    ['ended', 'ended'],
+  ]);
+  expect(at(mirrored[1])).toEqual([
+    [0.4, 0.4],
+    [0.6, 0.6],
+  ]);
+  // The trackpad's two real fingers: both go down together, one may lift first.
+  messages.length = 0;
+  viewer.receive({
+    type: 'deviceContacts',
+    phase: 'begin',
+    touches: [
+      { id: 0, x: 0.2, y: 0.2 },
+      { id: 1, x: 0.4, y: 0.6 },
+    ],
+  });
+  expect(dots()).toEqual([
+    [200, 120],
+    [400, 360],
+  ]);
+  viewer.receive({ type: 'deviceContacts', phase: 'change', touches: [{ id: 1, x: 0.5, y: 0.6 }] });
+  expect(dots()).toEqual([]);
+  viewer.receive({ type: 'deviceContacts', phase: 'end', touches: [] });
+  expect(events().map(phases)).toEqual([['began', 'began'], ['ended', 'moved'], ['ended']]);
+  // A click that stays put leaves a ripple where it landed.
+  pointer('pointerdown');
+  pointer('pointerup');
+  expect(stage.querySelectorAll('.device-tap-ripple')).toHaveLength(1);
+  vi.advanceTimersByTime(600);
+  expect(stage.querySelectorAll('.device-tap-ripple')).toHaveLength(0);
+  messages.length = 0;
   // A device with a keyboard takes typing after a click on it.
   viewer.receive({ type: 'deviceTouch', enabled: true, maxTouches: 5, keyboard: true });
   pointer('pointerdown');
@@ -1004,5 +1075,30 @@ it('turns the mouse into a finger on a device screen and keeps desktop-only inpu
   expect(events()).toEqual([
     { kind: 'key', code: 'ArrowLeft', down: true },
     { kind: 'key', code: 'ArrowLeft', down: false },
+  ]);
+  // Paste types this computer's clipboard into the device: the hidden input takes
+  // the paste and the device never sees the chord (it would paste its own clipboard).
+  messages.length = 0;
+  const key = (type: string, init: KeyboardEventInit) =>
+    keyboard.dispatchEvent(new KeyboardEvent(type, { bubbles: true, cancelable: true, ...init }));
+  key('keydown', { code: 'ControlLeft', key: 'Control', ctrlKey: true });
+  const paste = new KeyboardEvent('keydown', {
+    code: 'KeyV',
+    key: 'v',
+    ctrlKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  keyboard.dispatchEvent(paste);
+  expect(paste.defaultPrevented).toBe(false);
+  (keyboard as HTMLTextAreaElement).value += 'pasted text';
+  keyboard.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertFromPaste' }));
+  key('keyup', { code: 'KeyV', key: 'v', ctrlKey: true });
+  key('keyup', { code: 'ControlLeft', key: 'Control' });
+  vi.advanceTimersByTime(100);
+  expect(events()).toEqual([
+    { kind: 'key', code: 'ControlLeft', down: true },
+    { kind: 'key', code: 'ControlLeft', down: false },
+    { kind: 'text', text: 'pasted text' },
   ]);
 });

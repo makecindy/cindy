@@ -39,3 +39,14 @@ export function isNativeTrackpadFrame(value: unknown): value is NativeTrackpadFr
     return true;
   });
 }
+
+/**
+ * The same two-finger samples for a trusted Cindy page of its own (not a
+ * webview guest): the page asks while the pointer is over the surface it wants
+ * touched, and maps the samples itself. Local IPC only; nothing here is remote.
+ */
+export const NATIVE_TRACKPAD_HOST = {
+  START: 'native-trackpad-host:start',
+  STOP: 'native-trackpad-host:stop',
+  FRAME: 'native-trackpad-host:frame',
+} as const;

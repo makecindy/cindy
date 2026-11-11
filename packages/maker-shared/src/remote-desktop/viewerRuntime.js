@@ -168,12 +168,26 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     // Desktop only: a click on a device that takes typing focuses the keyboard.
     deviceKeyboard = false;
   const deviceContacts = new Map();
-  // Desktop only: a wheel or trackpad over a device screen is a pair of
-  // synthesized fingers (one on a single-touch device) that pans, or pinches
-  // with Ctrl held, which is how a trackpad pinch arrives. A wheel has no
-  // "finger up", so the fingers lift after a short pause.
+  // Desktop only: besides the mouse as one finger, a device screen takes
+  // synthesized fingers, the same ways the device plugin's own page offers:
+  //  - wheel / trackpad scroll: a pair that pans, or pinches with Ctrl held
+  //    (how a trackpad pinch arrives); it lifts after a short pause, since a
+  //    wheel has no "finger up";
+  //  - Option + drag: a pinch around the centre; with Shift, a parallel pan;
+  //  - the trackpad's two real fingers, as the host delivers them
+  //    (`deviceContacts`).
+  // One of these owns the fingers at a time, never together with a mouse finger,
+  // and a pair is drawn on the picture so the user sees where it is.
   const WHEEL_TOUCH_IDLE_MS = 120;
+  const TAP_SLOP_PX = 8;
   let wheelTouch = null;
+  let dragTouch = null;
+  let fingerOwner = null;
+  let fingers = [];
+  let fingerLayer = null;
+  let hover = null;
+  // Stream pixels per device point, so the pair sits 80 points each side.
+  let deviceScale = 0;
   const mouseButtons = find("mouse-buttons"),
     wheel = find("mouse-wheel"),
     wheelGrip = find("mouse-wheel-grip");
@@ -1042,6 +1056,10 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     deviceContacts.clear();
     if (wheelTouch) clearTimeout(wheelTouch.timer);
     wheelTouch = null;
+    dragTouch = null;
+    fingerOwner = null;
+    fingers = [];
+    showFingers([]);
     nativeTouchpad = null;
     stopEdgePan();
     desktopPan = null;
@@ -1175,22 +1193,88 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
   function onlyMoves(event) {
     return event.touches.every((t) => t.phase === "moved" || t.phase === "stationary");
   }
-  function wheelTouches(phase) {
-    const g = wheelTouch;
-    const clamp01 = (v) => Math.max(0, Math.min(1, v));
-    return g.fingers.map((f, id) => ({ id, x: clamp01(f.x), y: clamp01(f.y), phase }));
+  const clamp01 = (v) => Math.max(0, Math.min(1, v));
+  function showFingers(points) {
+    if (!config.desktop) return;
+    if (!points.length) {
+      fingerLayer?.replaceChildren();
+      return;
+    }
+    if (!fingerLayer) {
+      fingerLayer = stage.ownerDocument.createElement("div");
+      fingerLayer.className = "device-fingers";
+      stage.appendChild(fingerLayer);
+    }
+    while (fingerLayer.children.length < points.length) {
+      const dot = stage.ownerDocument.createElement("div");
+      dot.className = "device-finger";
+      fingerLayer.appendChild(dot);
+    }
+    while (fingerLayer.children.length > points.length)
+      fingerLayer.removeChild(fingerLayer.firstChild);
+    const r = layout();
+    points.forEach((p, i) => {
+      fingerLayer.children[i].style.left = r.x + clamp01(p.x) * r.width + "px";
+      fingerLayer.children[i].style.top = r.y + clamp01(p.y) * r.height + "px";
+    });
   }
-  function endWheelTouch() {
-    if (!wheelTouch) return;
-    clearTimeout(wheelTouch.timer);
-    const touches = wheelTouches("ended");
+  function tapRipple(local) {
+    const ring = stage.ownerDocument.createElement("div");
+    ring.className = "device-tap-ripple";
+    ring.style.left = local.x + "px";
+    ring.style.top = local.y + "px";
+    stage.appendChild(ring);
+    setTimeout(() => ring.remove(), 500);
+  }
+  /** Half the distance between a synthesized pair, as a share of the picture's width. */
+  function pairSpread() {
+    return deviceScale > 0 ? (80 * deviceScale) / dw : (0.2 * Math.min(dw, dh)) / dw;
+  }
+  /** The synthesized fingers now on the device: new ones go down, missing ones lift. */
+  function sendFingers(next, cancelled = false) {
+    const touches = [];
+    for (const f of fingers)
+      if (!next.some((n) => n.id === f.id))
+        touches.push({ id: f.id, x: f.x, y: f.y, phase: cancelled ? "cancelled" : "ended" });
+    const now = next.map((n) => ({ id: n.id, x: clamp01(n.x), y: clamp01(n.y) }));
+    for (const n of now)
+      touches.push({ ...n, phase: fingers.some((f) => f.id === n.id) ? "moved" : "began" });
+    fingers = now;
+    if (touches.length) {
+      queue({ kind: "touch", touches });
+      flush();
+    }
+    showFingers(fingers.length === 2 ? fingers : []);
+  }
+  function endSyntheticTouch() {
+    if (wheelTouch) clearTimeout(wheelTouch.timer);
     wheelTouch = null;
-    queue({ kind: "touch", touches });
-    flush();
+    dragTouch = null;
+    fingerOwner = null;
+    sendFingers([]);
+  }
+  /** Option held over the device shows where a pinch (or, with Shift, a pan) would put its fingers. */
+  function previewFingers() {
+    if (!config.desktop || !deviceTouch || fingerOwner || deviceContacts.size) return;
+    if (!control || !hover?.alt || !hover.inside || deviceTouchMax < 2) {
+      showFingers([]);
+      return;
+    }
+    const p = point(hover.local),
+      spread = pairSpread();
+    showFingers(
+      hover.shift
+        ? [
+            { x: 0.5 + spread, y: 0.5 },
+            { x: 0.5 - spread, y: 0.5 },
+          ]
+        : [p, { x: 1 - p.x, y: 1 - p.y }],
+    );
   }
   function deviceWheelInput(e) {
-    // A finger already on the device owns it; the wheel waits.
+    // Fingers already on the device own it; the wheel waits.
     if (!control || deviceTouchMax < 1 || deviceContacts.size) return;
+    if (fingerOwner && fingerOwner !== "wheel") return;
     const local = desktopPoint(e);
     if (!wheelTouch && !insideDesktop(local)) return;
     const r = layout();
@@ -1198,10 +1282,10 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     const pair = deviceTouchMax >= 2;
     const kind = e.ctrlKey && pair ? "pinch" : "pan";
     if (!wheelTouch || wheelTouch.kind !== kind) {
-      endWheelTouch();
+      endSyntheticTouch();
       const c = point(local);
-      // About a fifth of the shorter side apart, each side of the pointer.
-      const spread = pair ? (0.2 * Math.min(dw, dh)) / dw : 0;
+      const spread = pair ? pairSpread() : 0;
+      fingerOwner = "wheel";
       wheelTouch = {
         kind,
         cx: c.x,
@@ -1209,13 +1293,13 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         scale: 1,
         fingers: pair
           ? [
-              { x: c.x + spread, y: c.y },
-              { x: c.x - spread, y: c.y },
+              { id: 0, x: c.x + spread, y: c.y },
+              { id: 1, x: c.x - spread, y: c.y },
             ]
-          : [{ x: c.x, y: c.y }],
+          : [{ id: 0, x: c.x, y: c.y }],
         timer: null,
       };
-      queue({ kind: "touch", touches: wheelTouches("began") });
+      sendFingers(wheelTouch.fingers);
     }
     const g = wheelTouch;
     if (kind === "pinch") {
@@ -1237,9 +1321,52 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         f.y += dy;
       }
     }
-    queue({ kind: "touch", touches: wheelTouches("moved") });
+    sendFingers(g.fingers);
     clearTimeout(g.timer);
-    g.timer = setTimeout(endWheelTouch, WHEEL_TOUCH_IDLE_MS);
+    g.timer = setTimeout(() => {
+      if (wheelTouch === g) endSyntheticTouch();
+    }, WHEEL_TOUCH_IDLE_MS);
+  }
+  /** Option + drag: the cursor and its mirror through the centre pinch; with Shift a centred pair pans. */
+  function deviceDragInput(e, local) {
+    if (e.type === "pointerdown") {
+      endSyntheticTouch();
+      const p = point(local),
+        spread = pairSpread();
+      fingerOwner = "drag";
+      dragTouch = { pointerId: e.pointerId, pan: e.shiftKey, start: p, spread };
+      if (!e.nativeInput) stage.setPointerCapture(e.pointerId);
+      sendFingers(
+        dragTouch.pan
+          ? [
+              { id: 0, x: 0.5 + spread, y: 0.5 },
+              { id: 1, x: 0.5 - spread, y: 0.5 },
+            ]
+          : [
+              { id: 0, x: p.x, y: p.y },
+              { id: 1, x: 1 - p.x, y: 1 - p.y },
+            ],
+      );
+      return;
+    }
+    if (e.type === "pointermove") {
+      const p = point(local),
+        g = dragTouch;
+      sendFingers(
+        g.pan
+          ? [
+              { id: 0, x: 0.5 + g.spread + p.x - g.start.x, y: 0.5 + p.y - g.start.y },
+              { id: 1, x: 0.5 - g.spread + p.x - g.start.x, y: 0.5 + p.y - g.start.y },
+            ]
+          : [
+              { id: 0, x: p.x, y: p.y },
+              { id: 1, x: 1 - p.x, y: 1 - p.y },
+            ],
+      );
+      return;
+    }
+    endSyntheticTouch();
+    previewFingers();
   }
   /** Device touch: every contact goes to the device; nothing pans or zooms the picture. */
   function deviceTouchInput(e) {
@@ -1247,38 +1374,67 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     if (!control) return;
     const local = config.desktop ? desktopPoint(e) : { x: e.clientX, y: e.clientY };
     const contact = deviceContacts.get(e.pointerId);
+    if (config.desktop) {
+      hover = { local, inside: insideDesktop(local), alt: e.altKey, shift: e.shiftKey };
+      if (dragTouch) {
+        if (e.pointerId === dragTouch.pointerId) deviceDragInput(e, local);
+        return;
+      }
+      if (
+        e.type === "pointerdown" &&
+        e.button === 0 &&
+        e.altKey &&
+        deviceTouchMax >= 2 &&
+        !deviceContacts.size &&
+        hover.inside
+      ) {
+        deviceDragInput(e, local);
+        return;
+      }
+      if (e.type === "pointermove" && !contact) {
+        previewFingers();
+        return;
+      }
+    }
     let edge;
     if (e.type === "pointerdown") {
       // A mouse touches the device with its primary button only.
       if (config.desktop && e.button !== 0) return;
       if (contact || deviceContacts.size >= deviceTouchMax || !insideDesktop(local)) return;
-      // A real finger replaces the wheel's synthesized ones.
-      endWheelTouch();
+      // A real finger replaces the synthesized ones.
+      endSyntheticTouch();
       if (config.desktop) showKeyboard(deviceKeyboard);
       if (!e.nativeInput) stage.setPointerCapture(e.pointerId);
       let id = 0;
       const used = new Set([...deviceContacts.values()].map((c) => c.id));
       while (used.has(id)) id++;
       const p = point(local);
-      deviceContacts.set(e.pointerId, { id, x: p.x, y: p.y, phase: "began" });
+      deviceContacts.set(e.pointerId, { id, x: p.x, y: p.y, phase: "began", from: local, still: true });
       // A swipe that starts at the very edge is a system gesture (Home, back).
       if (deviceContacts.size === 1) {
-        const r = layout(),
-          band = Math.max(12, Math.min(28, Math.min(r.width, r.height) * 0.04));
-        const near = {
-          bottom: r.y + r.height - local.y,
-          top: local.y - r.y,
-          left: local.x - r.x,
-          right: r.x + r.width - local.x,
-        };
-        edge = Object.keys(near)
-          .filter((key) => near[key] <= band)
-          .sort((a, b) => near[a] - near[b])[0];
+        if (config.desktop) {
+          // The bands the device plugin's own page uses for a mouse.
+          edge = p.y >= 0.93 ? "bottom" : p.y <= 0.07 ? "top" : undefined;
+        } else {
+          const r = layout(),
+            band = Math.max(12, Math.min(28, Math.min(r.width, r.height) * 0.04));
+          const near = {
+            bottom: r.y + r.height - local.y,
+            top: local.y - r.y,
+            left: local.x - r.x,
+            right: r.x + r.width - local.x,
+          };
+          edge = Object.keys(near)
+            .filter((key) => near[key] <= band)
+            .sort((a, b) => near[a] - near[b])[0];
+        }
       }
     } else if (!contact) return;
     else if (e.type === "pointermove") {
       const p = point(local);
       if (Math.abs(p.x - contact.x) < 0.0005 && Math.abs(p.y - contact.y) < 0.0005) return;
+      if (Math.hypot(local.x - contact.from.x, local.y - contact.from.y) >= TAP_SLOP_PX)
+        contact.still = false;
       contact.x = p.x;
       contact.y = p.y;
       contact.phase = "moved";
@@ -1287,6 +1443,8 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         const p = point(local);
         contact.x = p.x;
         contact.y = p.y;
+        // A click that stayed put is a tap: mark where it landed.
+        if (config.desktop && contact.still) tapRipple(contact.from);
       }
       contact.phase = e.type === "pointerup" ? "ended" : "cancelled";
     }
@@ -1714,6 +1872,19 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     release();
     settlePan();
   });
+  if (config.desktop) {
+    listen(stage, "pointerleave", () => {
+      if (hover) hover.inside = false;
+      previewFingers();
+    });
+    for (const type of ["keydown", "keyup"])
+      listen(window, type, (e) => {
+        if (!hover || !["Alt", "AltGraph", "Shift"].includes(e.key)) return;
+        hover.alt = e.altKey;
+        hover.shift = e.shiftKey;
+        previewFingers();
+      });
+  }
   listen(stage, "lostpointercapture", () => {
     desktopPan = null;
     if (config.desktop && heldMouse.size) release();
@@ -1844,6 +2015,21 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         (keyboardEnabled && ["Backspace", "Enter"].includes(e.code)))
     )
       return;
+    if (config.desktop && deviceTouch && deviceKeyboard && control) {
+      // A device screen shares no clipboard with this computer: pasting types
+      // this computer's text into the device. The hidden input takes the
+      // paste and commits it as text; the device never sees the chord, and
+      // the modifier is lifted first so the text is not typed with it held.
+      const modifier = macKeyboard ? "MetaLeft" : "ControlLeft";
+      const chord = macKeyboard ? e.metaKey : e.ctrlKey;
+      if (chord && !e.altKey && e.code === "KeyV") {
+        if (releaseKey(modifier, true)) flush();
+        return;
+      }
+      // Still held for the next shortcut: the device gets it back.
+      if (chord && !hardwareKeys.has(modifier) && normalizedKey(e.code) !== modifier)
+        pressKey(modifier);
+    }
     if (control && validKeys.has(normalizedKey(e.code))) {
       e.preventDefault();
       const code = normalizedKey(e.code);
@@ -2781,8 +2967,32 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
             ? Math.max(0, Math.min(10, message.maxTouches))
             : 0;
         deviceKeyboard = deviceTouch && message.keyboard === true;
+        deviceScale =
+          deviceTouch && Number.isFinite(message.scale) && message.scale > 0 ? message.scale : 0;
         if (config.desktop && !deviceKeyboard) showKeyboard(false);
         break;
+      // Desktop only: the trackpad's two real fingers on a device screen, as
+      // positions in the picture (0..1). `begin` carries both; `end` / `cancel` none.
+      case "deviceContacts": {
+        if (!config.desktop || !deviceTouch || !control) break;
+        const ending = message.phase === "end" || message.phase === "cancel";
+        if (fingerOwner !== "native") {
+          if (message.phase !== "begin" || deviceContacts.size || deviceTouchMax < 2) break;
+          endSyntheticTouch();
+          fingerOwner = "native";
+        }
+        const next = ending || !Array.isArray(message.touches)
+          ? []
+          : message.touches
+              .filter(
+                (t) => t && (t.id === 0 || t.id === 1) && Number.isFinite(t.x) && Number.isFinite(t.y),
+              )
+              .slice(0, 2)
+              .map((t) => ({ id: t.id, x: t.x, y: t.y }));
+        sendFingers(next, message.phase === "cancel");
+        if (!next.length) fingerOwner = null;
+        break;
+      }
       case "mode":
         release();
         if (message.mode !== "pointer") followRest = null;
@@ -2903,6 +3113,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     receive: (message) => receive({ data: JSON.stringify(message) }),
     dispose: () => {
       release();
+      fingerLayer?.remove();
       epoch = null;
       closeRtc(false);
       if (bgDrawFrame !== null) cancelAnimationFrame(bgDrawFrame);

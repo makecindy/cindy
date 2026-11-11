@@ -366,3 +366,52 @@
   padding-inline: var(--space-3);
   font-size: var(--text-12);
 }
+
+/* Synthesized fingers on a device screen and the mark a tap leaves, drawn the
+   way the device plugin's own page draws them (same sizes, fill, ring and
+   glow), so a device looks and answers the same whichever computer it runs
+   on. The plugin page uses its own indigo; here the colour is the theme's
+   "where input goes" role, which follows Light and Dark. */
+.remote-viewer-content .device-fingers {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9;
+}
+.remote-viewer-content .device-finger {
+  position: absolute;
+  width: 36px;
+  height: 36px;
+  margin: -18px 0 0 -18px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--focus-ring) 35%, transparent);
+  border: 2px solid color-mix(in srgb, var(--focus-ring) 90%, transparent);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--focus-ring) 50%, transparent);
+}
+.remote-viewer-content .device-tap-ripple {
+  position: absolute;
+  border: 2px solid var(--focus-ring);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 10;
+  animation: device-tap-ripple 0.5s ease-out forwards;
+}
+@keyframes device-tap-ripple {
+  0% {
+    opacity: 1;
+    width: 10px;
+    height: 10px;
+  }
+  50% {
+    opacity: 0.7;
+    width: 30px;
+    height: 30px;
+  }
+  100% {
+    opacity: 0;
+    width: 50px;
+    height: 50px;
+    border-width: 1px;
+  }
+}

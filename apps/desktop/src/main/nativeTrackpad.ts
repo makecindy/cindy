@@ -38,6 +38,9 @@ const deliverContacts = `function(frame, anchor) {
 const requireNative = createRequire(__filename);
 const log = createLogger('nativeTrackpad');
 let native: NativeInput | null | undefined;
+export function loadNativeTrackpad(): NativeInput | null {
+  return load();
+}
 function load(): NativeInput | null {
   if (native !== undefined) return native;
   try {

@@ -1126,6 +1126,8 @@ it('shows a device screen as that device: touches, its own buttons and its turns
     enabled: true,
     maxTouches: 5,
     keyboard: true,
+    // A 390-pixel-wide phone stream is a 2× device: finger pairs sit 80 points each side.
+    scale: 2,
   });
   present();
   expect(snapshot.screen?.name).toBe('iPhone');

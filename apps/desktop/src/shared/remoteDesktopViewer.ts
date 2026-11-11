@@ -1,5 +1,6 @@
 import { REMOTE_DESKTOP_DEFAULT_IDLE_MINUTES } from '@cindy/device-link';
 import type { DesktopIceServer, RemoteDesktopRequest } from '@cindy/device-link';
+import type { NativeTrackpadFrame } from './nativeTrackpad';
 
 export const REMOTE_VIEWER = {
   OPEN: 'remote-desktop-viewer:open',
@@ -64,6 +65,14 @@ export interface LiveScreenEmbedBridge {
   onChannelRequest(
     listener: (payload: { embedId: string } & RemoteViewerChannelRequest) => void,
   ): () => void;
+  /**
+   * This computer's trackpad, two fingers at a time, while the pointer is over
+   * the device (macOS only; false when it cannot start). The panel turns the
+   * samples into two touches on the device, as the plugin's own page does.
+   */
+  trackpadStart(): Promise<boolean>;
+  trackpadStop(): Promise<void>;
+  onTrackpadFrame(listener: (frame: NativeTrackpadFrame) => void): () => void;
 }
 
 export interface RemoteViewerTarget {

@@ -32,3 +32,15 @@ contacts 在每次 begin 投递前核对原元素仍连接、仍声明 contacts�
 路径的部分抬指使用 released IDs；仅发送剩余触点的 touchMove 不会释放缺失手指。
 这与 contacts DOM 事件始终表示「全部仍按下触点」的约定不同；以真实 Electron 的
 部分抬指、完整结束和取消回归核对，不能只靠 CDP mock 推断浏览器行为。
+
+## Cindy 自己的页面（2026-11-11）
+
+上面的路径面向 webview 访客：Main 用 CDP 在访客里命中并映射。Cindy 自己的受信页面（远程任务的
+「设备画面」页签）知道自己的画面在哪，所以走更窄的一条：页面在光标位于画面上时经
+`NATIVE_TRACKPAD_HOST`（`main/nativeTrackpadHost.ts`，仅本机 IPC）请求开始，Main 只把校验过的原始
+双指采样交给发起的页面，页面自己映射（`renderer/features/remote-desktop/trackpadContacts.ts`）。
+映射规则与本文件上面的约定逐条相同：落指中心是光标、按触控板物理比例与画面长边等比、到边即停不累计
+越界。两份实现各有回归（`nativeTrackpad.test.ts`、`trackpadContacts.test.ts`），改一处必须同步另一处。
+原生采集全应用只有一份，窗口失去 key 时自行结束；访客路径启动采集会顶掉这条，反之亦然——两者按光标
+所在位置互斥。不新增远程请求：页面把映射后的两个触点作为设备画面租约里已有的 `touch` 输入发出。
+

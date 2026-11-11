@@ -840,6 +840,7 @@ import { resolveRsbHostContextFromSession } from './right-sidebar-window/resolve
 import { createRightSidebarWindow } from './right-sidebar-window/window.js';
 import { registerRsbWindowIpc } from './right-sidebar-window/ipc.js';
 import { RemoteDesktopViewerWindows } from './remote-desktop-viewer/windows.js';
+import { registerNativeTrackpadHostIpc } from './nativeTrackpadHost.js';
 import { ResourceUsageWindowController } from './resource-usage-window/controller.js';
 import { createResourceUsageWindow } from './resource-usage-window/window.js';
 import { registerResourceUsageWindowIpc } from './resource-usage-window/ipc.js';
@@ -2751,6 +2752,7 @@ const remoteDesktopViewerWindows = new RemoteDesktopViewerWindows((sender) =>
   }),
 );
 remoteDesktopViewerWindows.register();
+registerNativeTrackpadHostIpc();
 
 const rsbBrowserRegistry = getRsbBrowserBridge();
 registerRsbNativePopupSurfaceIpc(rsbBrowserRegistry);

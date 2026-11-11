@@ -13,6 +13,7 @@ import { Tip } from '@/components/ui/tooltip';
 import { toast } from '@/lib/toast';
 import { DesktopViewerController, type ViewerSnapshot } from './viewerController';
 import { createLiveScreenEmbedApi } from './liveScreenEmbedApi';
+import { createTrackpadContactMapper } from './trackpadContacts';
 import { LIVE_SCREEN_ICONS, liveScreenToolbarButtons } from './liveScreenButtons';
 import './viewerWindow.css';
 
@@ -101,6 +102,78 @@ export function LiveScreenPanel({
       setState(null);
     };
   }, [live, attempt, bridge, deviceId, screen.plugin, screen.id]);
+
+  // The trackpad's two real fingers become two touches on the device, as on the
+  // plugin's own page. The capture is asked for only while the cursor is over
+  // the picture, and belongs to whichever panel the cursor is over.
+  const multiTouch = (state?.screen?.maxTouches ?? 0) >= 2 && !!state?.ready && !ended;
+  useEffect(() => {
+    const host = root.current;
+    if (!multiTouch || !bridge?.trackpadStart || !host) return;
+    if (window.electronAPI.platform !== 'darwin') return;
+    const mapper = createTrackpadContactMapper();
+    let pointer = { x: 0, y: 0 };
+    let armed = false;
+    let asked = 0;
+    let over = false;
+    const picture = () => host.querySelector('video')?.getBoundingClientRect();
+    const arm = (event: PointerEvent) => {
+      pointer = { x: event.clientX, y: event.clientY };
+      const rect = picture();
+      over =
+        !!rect &&
+        pointer.x >= rect.left &&
+        pointer.x < rect.right &&
+        pointer.y >= rect.top &&
+        pointer.y < rect.bottom;
+      if (!over || armed || event.buttons || Date.now() - asked < 400) return;
+      asked = Date.now();
+      void bridge
+        .trackpadStart()
+        .then((started) => {
+          armed = started && over;
+          if (started && !over) void bridge.trackpadStop().catch(() => {});
+        })
+        .catch(() => {});
+    };
+    const disarm = () => {
+      over = false;
+      mapper.reset();
+      if (!armed) return;
+      armed = false;
+      controller.current?.contacts({ phase: 'cancel', touches: [] });
+      void bridge.trackpadStop().catch(() => {});
+    };
+    // The window stopped being in front: the capture ended by itself.
+    const lost = () => {
+      armed = false;
+      asked = 0;
+      mapper.reset();
+    };
+    const off = bridge.onTrackpadFrame((frame) => {
+      if (!armed) return;
+      const rect = picture();
+      if (!rect) return;
+      const mapped = mapper.map(
+        frame,
+        { x: rect.left, y: rect.top, width: rect.width, height: rect.height },
+        pointer,
+      );
+      if (mapped) controller.current?.contacts(mapped);
+    });
+    host.addEventListener('pointermove', arm);
+    host.addEventListener('pointerdown', arm);
+    host.addEventListener('pointerleave', disarm);
+    window.addEventListener('blur', lost);
+    return () => {
+      off();
+      host.removeEventListener('pointermove', arm);
+      host.removeEventListener('pointerdown', arm);
+      host.removeEventListener('pointerleave', disarm);
+      window.removeEventListener('blur', lost);
+      disarm();
+    };
+  }, [multiTouch, bridge]);
 
   const name = state?.screen?.name ?? screen.name ?? t('remoteDesktop.liveScreenTitle');
   const ready = !!state?.ready && state.controlling && !ended;
