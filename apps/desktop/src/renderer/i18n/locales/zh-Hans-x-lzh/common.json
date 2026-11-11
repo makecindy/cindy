@@ -11775,7 +11775,7 @@
       "remove": "除",
       "removeAria": "除 {{platform}}",
       "empty": "增君已有之机器人，或于下方接个人微信，{{name}} 即于彼处回复。",
-      "externalNote": "凡遣讯予此机器人者，皆与 {{name}} 言谈。君之讯依 {{name}} 之权柄行事；他人各有一条隐藏差事，权柄受限。",
+      "externalNote": "Telegram 与飞书/Lark 既绑定，私讯惟受主人。群讯依各平台参与之设，工具循 {{name}} 之权柄。差事虽分，资料与记忆共用。",
       "sharedMemoryNote": "{{name}} 将合用此处与他处言谈之信息。欲隔记忆，请换一同僚。",
       "groups": {
         "title": "诸群",

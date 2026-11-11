@@ -11919,7 +11919,7 @@
       "remove": "Quitar",
       "removeAria": "Eliminar {{platform}}",
       "empty": "Agrega un bot que ya tengas o conecta tu WeChat personal abajo, y {{name}} responderá allí.",
-      "externalNote": "Cualquiera que le escriba a este bot habla con {{name}}. Tus propios mensajes se procesan con los permisos de {{name}}; los de los demás se procesan en una tarea oculta independiente con permisos restringidos.",
+      "externalNote": "Tras la vinculación, Telegram y Feishu/Lark solo aceptan mensajes privados del propietario. Los grupos siguen la configuración de participación de cada plataforma y los permisos de herramientas de {{name}}. Las tareas separadas comparten archivos y memoria.",
       "sharedMemoryNote": "{{name}} combina información de aquí y de otras conversaciones. Para mantener los recuerdos separados, usa otro compañero.",
       "groups": {
         "title": "Grupos",
