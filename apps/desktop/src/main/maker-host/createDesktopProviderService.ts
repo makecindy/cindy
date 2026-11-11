@@ -42,6 +42,7 @@ import {
   isModelDisabled,
   isProviderDisabled,
   storedCustomProviderId,
+  buildUserProvider,
   type Catalog,
   type CatalogCapabilityEvidence,
   type CatalogIO,
@@ -94,6 +95,9 @@ import { createProviderService, type ProviderService } from './provider-service.
 import { readModelDisableOverrides } from './model-disable-store.js';
 import { listCustomProvidersWithSecureHeaders } from './custom-provider-header-secrets.js';
 import { updateCustomProviderIfUnchanged } from './custom-provider-store.js';
+import { createModelSourceRevalidator } from './model-source-revalidation.js';
+import { fetchProviderModels, fetchSavedOAuthProviderModels } from './provider-model-fetch.js';
+import { outboundFetch } from './outbound-fetch.desktop.js';
 import { migrateManagedOllamaProvider } from '../local-model-runtime/managedOllamaProvider.js';
 import { migrateLocalConnectProvider } from '../../shared/localConnectHarness.js';
 import {
@@ -102,6 +106,8 @@ import {
   setOAuthTokenReader,
   setProviderOAuthTokenReader,
   setProviderViewsReader,
+  getProviderRouteCredentialRevision,
+  isProviderRouteMutationInProgress,
   type ProviderOAuthTokenReadOptions,
 } from './provider-route.js';
 import { setDiagnosticsKeyReader, setDiagnosticsOAuthTokenReader } from './provider-diagnostics.js';
@@ -636,6 +642,58 @@ export async function refreshDiscoveredCodexModels(
 // the in-memory routing catalog until the next full app restart.
 let customProviderCatalogRefreshGeneration = 0;
 
+const revalidateModelSources = createModelSourceRevalidator({
+  credentialRevision: getProviderRouteCredentialRevision,
+  isMutating: isProviderRouteMutationInProgress,
+  now: Date.now,
+  async save(id, previous, next) {
+    try {
+      return await updateCustomProviderIfUnchanged(id, previous, next);
+    } catch {
+      log.warn('custom provider model source recovery could not persist');
+      return false;
+    }
+  },
+  async fetchModels(config, agent, isCurrent) {
+    const runtime = config.runtimes[agent];
+    if (!runtime || runtime.headersState === 'unknown' || !isCurrent()) return null;
+    const guardedFetch: typeof fetch = (url, init) => {
+      if (!isCurrent()) return Promise.reject(new Error('Model source context changed'));
+      return outboundFetch(url, init);
+    };
+    if (config.auth?.method === 'oauth') {
+      const result = await fetchSavedOAuthProviderModels(buildUserProvider(config), agent, config.id, isCurrent, guardedFetch, runtime.headers);
+      return result.ok ? result.models ?? null : null;
+    }
+    const authMethod = config.auth?.method ?? 'apiKey';
+    const apiKey = authMethod === 'apiKey' ? readCustomProviderKey(config.id, agent) : null;
+    if (authMethod === 'apiKey' && !apiKey && !Object.keys(runtime.headers ?? {}).length) return null;
+    const result = await fetchProviderModels({
+      agent, baseUrl: runtime.baseUrl, modelsUrl: runtime.modelsUrl, wireProtocol: runtime.wireProtocol,
+      authMethod, apiKey, headers: runtime.headers, redirect: 'error', allowEmpty: true,
+    }, guardedFetch);
+    return result.ok ? result.models ?? null : null;
+  },
+});
+
+function recoverCustomProviderModelSources(
+  configs: Parameters<typeof revalidateModelSources>[0],
+  shouldApply: () => boolean,
+): void {
+  const owner = getActiveAppSession();
+  const isCurrent = () => {
+    const current = getActiveAppSession();
+    return shouldApply() && owner.dataOwnerId === current.dataOwnerId && owner.generation === current.generation;
+  };
+  // Keep startup/routing responsive. Successful revalidation reloads the latest
+  // DB state through the usual catalog path and its existing change broadcast.
+  void revalidateModelSources(configs, JSON.stringify([owner.dataOwnerId, owner.generation]), isCurrent).then(async changed => {
+    if (changed && isCurrent()) await refreshCustomProvidersIntoCatalog(isCurrent);
+  }).catch(() => {
+    log.warn('custom provider model source recovery failed');
+  });
+}
+
 export async function refreshCustomProvidersIntoCatalog(
   shouldApply: () => boolean = () => true,
 ): Promise<void> {
@@ -644,8 +702,13 @@ export async function refreshCustomProvidersIntoCatalog(
     return;
   }
   const generation = ++customProviderCatalogRefreshGeneration;
+  const owner = getActiveAppSession();
+  const ownerIsCurrent = (): boolean => {
+    const current = getActiveAppSession();
+    return shouldApply() && owner.dataOwnerId === current.dataOwnerId && owner.generation === current.generation;
+  };
   const isCurrent = (): boolean =>
-    generation === customProviderCatalogRefreshGeneration && shouldApply();
+    generation === customProviderCatalogRefreshGeneration && ownerIsCurrent();
   try {
     const configs = await listCustomProvidersWithSecureHeaders();
     if (!isCurrent()) {
@@ -686,11 +749,13 @@ export async function refreshCustomProvidersIntoCatalog(
         return;
       }
       setCustomProviderConfigs(fresh);
+      recoverCustomProviderModelSources(fresh, ownerIsCurrent);
       requestCodexApiModelProbe();
       log.info('custom providers merged into active catalog after cas miss', { count: fresh.length });
       return;
     }
     setCustomProviderConfigs(next);
+    recoverCustomProviderModelSources(next, ownerIsCurrent);
     requestCodexApiModelProbe();
     log.info('custom providers merged into active catalog', { count: next.length });
   } catch (err) {

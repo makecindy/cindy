@@ -154,8 +154,14 @@ Magpie 的 `magpie_label` / `owned_by` 作为连接内、完整 wire 模型 ID �
 不显示该快捷方式，既有字段与协议不变。替换密钥或请求头后，新发现收据按提交的新上下文验证，
 不能因为旧上下文已失效而丢弃有效的新来源。
 重启后，缺少当前 Main 发现标记的持久化来源仅从目录展示投影移除，保留原始配置和完整 ID，
-直到正常发现成功；这也覆盖凭证已写入、配置尚未提交时进程中断的情况。
-实现及回归见 `modelSource.ts`、`model-source-snapshots.ts` 和
+直到正常发现成功；这也覆盖凭证已写入、配置尚未提交时进程中断的情况。加载自定义供应商时，
+Main 后台用当前保存的端点和凭证重新验证旧来源，不阻塞启动或等待用户手动刷新。按完整 wire ID
+仅更新来源，不导入新增模型、不改名称、窗口、开关或其它用户覆盖；成功响应中已不存在的来源清除。
+同上下文并发加载共用发现，失败保留隐藏状态，后续加载须间隔至少五分钟才重试，无定时轮询。
+后续加载复用已有打开模型菜单、回到前台等自动目录刷新信号及其冷却，启动时网关不可用也能自动恢复。
+账号或凭证变化、配置编辑及删除会使旧结果失效；配置写入使用现有 CAS，成功后通过普通目录更新广播。
+实现及回归见 `modelSource.ts`、`model-source-snapshots.ts`、`model-source-revalidation.ts`、
+`providerCatalogRealmReload.test.ts`、`modelSourceSnapshots.test.ts` 和
 `renderer/__tests__/magpieModelSourceRow.test.tsx`。
 
 同系列不同接入路径复用用途说明；特殊长上下文版本保留单独的费用提醒。

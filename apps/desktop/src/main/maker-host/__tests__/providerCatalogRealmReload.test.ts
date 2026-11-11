@@ -33,6 +33,7 @@ const h = vi.hoisted(() => ({
   recoverGrokAuthAfterRejection: vi.fn(),
   warn: vi.fn(),
   request: vi.fn(),
+  outboundFetch: vi.fn<typeof fetch>(async () => { throw new Error('offline'); }),
   catalogIo: null as Parameters<typeof import('@cindy/model-providers').loadCatalog>[1] | null,
 }));
 
@@ -160,10 +161,11 @@ vi.mock('../../secrets/providerSecretStore.js', () => ({
   addProviderSecretsClearedListener: (listener: () => void) => h.secretsClearedListeners.add(listener),
 }));
 vi.mock('../outbound-fetch.desktop.js', () => ({
-  outboundFetch: vi.fn(async () => { throw new Error('offline'); }),
+  outboundFetch: h.outboundFetch,
 }));
 vi.mock('../provider-route.js', () => ({
   getProviderRouteCredentialRevision: () => 0,
+  isProviderRouteMutationInProgress: () => false,
   setCustomProviderHeaderReader: () => undefined,
   setCustomProviderKeyReader: () => undefined,
   setOAuthTokenReader: () => undefined,
@@ -252,6 +254,55 @@ function activeMarker(): string | undefined {
 }
 
 describe('provider catalog realm reload', () => {
+  // Unit regression: the real catalog-load entry hid saved Magpie labels after
+  // restart and never rediscovered them. Existing restart coverage only checked
+  // suppression/manual recovery. One old-epoch route per engine is sufficient;
+  // use the real HTTP parser and catalog projection, with in-memory persistence.
+  // Standalone file: 7.49s on 2026-11-10 (1.57s tests; existing service imports dominate).
+  it('automatically restores saved Magpie sources after restart without changing model settings', async () => {
+    let saved: CustomProviderConfig = { id: 'magpie-restart', name: 'Magpie', auth: { method: 'none' }, runtimes: {} };
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      saved.runtimes[agent] = { baseUrl: 'http://127.0.0.1:3425/v1', modelsUrl: 'http://127.0.0.1:3425/v1/models', wireProtocol: 'openai-chat', models: [
+        { id: 'deepseek/deepseek-v4-flash', name: 'My model', nameExplicit: true, contextWindow: 123456, defaultEnabled: false, opaqueModelId: true,
+          discoveredSource: { kind: 'magpie', providerId: 'Old account', snapshotId: 'previous-process:receipt' } },
+      ] };
+    }
+    const before = structuredClone(saved);
+    h.customProviderRead.mockImplementation(async () => [saved]);
+    h.casUpdate.mockImplementation(async (_id, expected, next) => {
+      if (JSON.stringify(expected) !== JSON.stringify(saved)) return false;
+      saved = next as CustomProviderConfig;
+      return true;
+    });
+    h.outboundFetch.mockImplementation(async () => new Response(JSON.stringify({ data: [
+      { id: 'deepseek/deepseek-v4-flash', display_name: 'Upstream name', owned_by: 'DeepSeek', magpie_label: 'DeepSeek V4 Flash · DeepSeek' },
+      { id: 'new/other-model', owned_by: 'Other', magpie_label: 'Other' },
+    ] }), { status: 200 }));
+    try {
+      await refreshCustomProvidersIntoCatalog();
+      await vi.waitFor(() => {
+        const provider = getActiveCatalog().providers.find(p => p.id === saved.id)!;
+        for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+          expect(provider.models[agent]?.[0].discoveredSource?.providerId).toBe('DeepSeek');
+        }
+      });
+      for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+        const { discoveredSource: _source, ...model } = saved.runtimes[agent]!.models[0];
+        const { discoveredSource: _old, ...original } = before.runtimes[agent]!.models[0];
+        expect(model).toEqual(original);
+        expect(saved.runtimes[agent]!.models).toHaveLength(1);
+      }
+      const reads = h.outboundFetch.mock.calls.length;
+      await refreshCustomProvidersIntoCatalog();
+      expect(h.outboundFetch).toHaveBeenCalledTimes(reads);
+    } finally {
+      setCustomProviders([]);
+      h.customProviderRead.mockReset();
+      h.casUpdate.mockReset().mockResolvedValue(true);
+      h.outboundFetch.mockReset().mockRejectedValue(new Error('offline'));
+    }
+  });
+
   // #6768 unit regression: a hidden TTS route needs channel readiness in the
   // actual provider-list wiring before its management switch can be used.
   // Renderer tests inject that snapshot and could not catch missing Main wiring.
@@ -329,14 +380,15 @@ describe('provider catalog realm reload', () => {
       resolveOwnerA = resolve;
     });
     h.customProviderRead.mockReturnValueOnce(ownerALoad);
-    let ownerAIsCurrent = true;
-    const staleRefresh = refreshCustomProvidersIntoCatalog(() => ownerAIsCurrent);
+    const previousOwner = h.owner;
+    const staleRefresh = refreshCustomProvidersIntoCatalog();
 
     setCustomProviders([]);
-    ownerAIsCurrent = false;
+    h.owner = 'owner-b-after-custom-read';
     resolveOwnerA([provider]);
     await staleRefresh;
     expect(getActiveCatalog().providers.some((entry) => entry.id === provider.id)).toBe(false);
+    h.owner = previousOwner;
 
     setCustomProviders([buildUserProvider(provider)]);
     h.customProviderRead.mockRejectedValueOnce(new Error('stale owner A DB read failed'));

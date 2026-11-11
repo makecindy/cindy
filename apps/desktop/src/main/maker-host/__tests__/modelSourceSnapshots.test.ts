@@ -1,4 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import type { CustomProviderConfig, DiscoveredModel } from '@cindy/model-providers';
+import { createModelSourceRevalidator } from '../model-source-revalidation';
 import { acceptsModelSourceSnapshot, bindModelSourceSnapshot, issueModelSourceSnapshot, modelSourceRequestSignature } from '../model-source-snapshots';
 
 const issue = () => issueModelSourceSnapshot([{ id: 'a/foo', name: 'Foo', discoveredSource: { kind: 'magpie', providerId: 'A' } }], 'pi', 'signature');
@@ -29,5 +31,95 @@ describe('model source receipts', () => {
     expect(sig(url, { Authorization: 'fake-A', 'X-Agent': 'cindy' })).toBe(sig(url, { 'x-agent': 'cindy', authorization: 'fake-A' }));
     expect(sig(url, { Authorization: 'fake-A' })).not.toBe(sig(url, { Authorization: 'fake-B' }));
     expect(sig(url, {})).not.toBe(sig(url + '?account=B', {}));
+  });
+});
+
+// Unit regressions for the reported restart label loss. The catalog integration
+// checks automatic recovery; these deferred responses cover the missing owner,
+// credential, edit and offline timing branches through the production revalidator.
+// Standalone Vitest duration: 1.13s on 2026-11-10 (10 tests).
+const savedGateway = (): CustomProviderConfig => ({
+  id: 'saved-gateway', name: 'Magpie', auth: { method: 'none' }, runtimes: { pi: {
+    baseUrl: 'http://127.0.0.1:3425/v1', wireProtocol: 'openai-chat', models: [{
+      id: 'a/foo', name: 'My name', nameExplicit: true, contextWindow: 123456, opaqueModelId: true,
+      discoveredSource: { kind: 'magpie', providerId: 'Old account', snapshotId: 'previous-process:receipt' },
+    }],
+  } },
+});
+
+describe('model source automatic revalidation', () => {
+  it.each(['none', 'owner', 'credential', 'mutation', 'edit'] as const)(
+    'shares concurrent discovery and respects %s changes before saving', async change => {
+      const config = savedGateway();
+      let saved = config;
+      let current = true;
+      let revision = 0;
+      let mutating = false;
+      let reply!: (models: DiscoveredModel[]) => void;
+      const fetching = new Promise<DiscoveredModel[]>(resolve => { reply = resolve; });
+      const fetchModels = vi.fn(async () => fetching);
+      const revalidate = createModelSourceRevalidator({
+        fetchModels, credentialRevision: () => revision, isMutating: () => mutating, now: () => 0,
+        save: async (_id, expected, next) => {
+          if (JSON.stringify(saved) !== JSON.stringify(expected)) return false;
+          saved = next;
+          return true;
+        },
+      });
+      const first = revalidate([config], 'owner-A', () => current);
+      const second = revalidate([config], 'owner-A', () => current);
+      await Promise.resolve();
+      expect(fetchModels).toHaveBeenCalledTimes(1);
+      if (change === 'owner') current = false;
+      if (change === 'credential') revision++;
+      if (change === 'mutation') mutating = true;
+      if (change === 'edit') saved = { ...config, name: 'Edited by user' };
+      reply(issue());
+      const outcomes = await Promise.all([first, second]);
+      if (change === 'none') {
+        expect(outcomes.some(Boolean)).toBe(true);
+        expect(saved.runtimes.pi!.models[0].discoveredSource?.providerId).toBe('A');
+      } else {
+        expect(outcomes).toEqual([false, false]);
+        expect(saved.runtimes.pi!.models[0].discoveredSource?.providerId).toBe('Old account');
+      }
+      expect(saved.name).toBe(change === 'edit' ? 'Edited by user' : 'Magpie');
+    },
+  );
+
+  it('keeps failed discovery hidden, throttles retries and clears sources absent from a successful response', async () => {
+    let saved = savedGateway();
+    const config = saved;
+    let now = 0;
+    const fetchModels = vi.fn<() => Promise<DiscoveredModel[] | null>>()
+      .mockResolvedValueOnce(null).mockResolvedValueOnce([]);
+    const save = vi.fn(async (_id: string, _previous: CustomProviderConfig, next: CustomProviderConfig) => { saved = next; return true; });
+    const revalidate = createModelSourceRevalidator({
+      fetchModels, save, credentialRevision: () => 0, isMutating: () => false, now: () => now,
+    });
+    expect(await revalidate([config], 'owner-A', () => true)).toBe(false);
+    expect(save).not.toHaveBeenCalled();
+    expect(await revalidate([config], 'owner-A', () => true)).toBe(false);
+    expect(fetchModels).toHaveBeenCalledTimes(1);
+    now += 5 * 60_000;
+    expect(await revalidate([config], 'owner-A', () => true)).toBe(true);
+    const { discoveredSource: _old, ...original } = config.runtimes.pi!.models[0];
+    expect(saved.runtimes.pi!.models).toEqual([original]);
+    expect(fetchModels).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the failure cooldown when another engine successfully recovers its sources', async () => {
+    let saved = savedGateway();
+    saved.runtimes.codex = structuredClone(saved.runtimes.pi!);
+    const fetchModels = vi.fn(async (_config: CustomProviderConfig, agent: string) => agent === 'pi' ? issue() : null);
+    const save = vi.fn(async (_id: string, _previous: CustomProviderConfig, next: CustomProviderConfig) => { saved = next; return true; });
+    const revalidate = createModelSourceRevalidator({
+      fetchModels, save, credentialRevision: () => 0, isMutating: () => false, now: () => 0,
+    });
+    expect(await revalidate([saved], 'owner-A', () => true)).toBe(true);
+    expect(saved.runtimes.pi!.models[0].discoveredSource?.providerId).toBe('A');
+    expect(await revalidate([saved], 'owner-A', () => true)).toBe(false);
+    expect(fetchModels).toHaveBeenCalledTimes(2);
+    expect(save).toHaveBeenCalledTimes(1);
   });
 });

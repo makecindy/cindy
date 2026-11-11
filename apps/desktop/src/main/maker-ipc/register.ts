@@ -7653,7 +7653,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 通知唯一出口是 active-catalog changedListener(capabilities 先对齐再广播);
     // 这里不再补发 PROVIDER_CHANGED——no-op/拒收刷新就该是 0 次广播。
     refreshCatalog: async () => {
-      await refreshActiveCatalogFromSource();
+      // Existing foreground/menu refresh hints also retry stale connection
+      // provenance if its gateway was unavailable during startup. Both paths
+      // retain their own scope guards, in-flight sharing and retry cooldowns.
+      await Promise.all([refreshActiveCatalogFromSource(), refreshCustomProvidersIntoCatalog()]);
     },
     refreshProvider: (providerId) =>
       refreshBuiltinProviderModels(providerId, {
