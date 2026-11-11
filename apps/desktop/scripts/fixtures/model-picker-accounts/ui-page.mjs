@@ -32,6 +32,8 @@ export default {
       await page.locator('[data-pool-quota-summary]').hover();
       await page.getByRole('tooltip').filter({hasText:'second@example.test'}).waitFor();
       await ui.capture('account-details');
+      await page.mouse.move(0, 0);
+      await page.getByRole('tooltip').waitFor({state:'hidden'});
       return;
     }
     const pool = ['ambiguous', 'reset-soon', 'reset-urgent', 'unknown'].includes(ui.case);
