@@ -37,7 +37,7 @@ function packageFilePath(root: string, relative: string): string {
       throw new CindyFileError('invalid');
     }
   }
-  if (!isRealPathWithinRoot(fs.realpathSync(current), root)) throw new CindyFileError('invalid');
+  if (!isRealPathWithinRoot(fs.realpathSync.native(current), root)) throw new CindyFileError('invalid');
   return current;
 }
 
@@ -45,7 +45,7 @@ function packageDirectory(parent: string, name: string): string {
   const dir = path.join(parent, name);
   const stat = fs.lstatSync(dir);
   if (!stat.isDirectory() || stat.isSymbolicLink()) throw new CindyFileError('invalid');
-  const real = fs.realpathSync(dir);
+  const real = fs.realpathSync.native(dir);
   if (!isRealPathWithinRoot(real, parent)) throw new CindyFileError('invalid');
   return real;
 }
@@ -109,7 +109,7 @@ function readInstalledReferences(packages: string): InstalledThemeReference[] {
 /** Read canonical active documents; runtime metadata is never persisted. */
 export function readPackagedThemesSync(themesDir: string): PackagedThemeEntry[] {
   const result: PackagedThemeEntry[] = [];
-  const root = fs.realpathSync(themesDir);
+  const root = fs.realpathSync.native(themesDir);
   let packages: string;
   let installed: InstalledThemeReference[];
   try {
@@ -277,7 +277,7 @@ export async function installThemePackage(
 export async function readThemePackageResource(themesDir: string, id: string, reference: string): Promise<{
   bytes: Buffer; resource: AppearanceResourceDefinition; packageSha256: string; hash: string;
 }> {
-  const root = fs.realpathSync(themesDir);
+  const root = fs.realpathSync.native(themesDir);
   const packages = packageDirectory(root, PACKAGES_DIR);
   const ref = readInstalledReferences(packages).find(entry => entry.id === id);
   if (!ref) throw new CindyFileError('invalid');

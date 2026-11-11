@@ -178,6 +178,20 @@ describe('theme package installation and loading', () => {
     const dir = path.join(getLocalThemesDir(), '.packages', inspected.packageSha256);
     expect(fs.readFileSync(path.join(dir, 'themes/0.json'), 'utf8')).toBe(JSON.stringify(theme));
     expect(fs.readFileSync(path.join(dir, 'assets/body.ttf'))).toEqual(font);
+    // Windows JS realpath can preserve an outer alias while promises.realpath
+    // uses native canonical spelling. Simulate only that filesystem boundary;
+    // the installed package, safe reader and byte assertions remain real. Unit.
+    const alias = path.join(root, 'theme-root-alias');
+    fs.symlinkSync(getLocalThemesDir(), alias, process.platform === 'win32' ? 'junction' : 'dir');
+    const originalRealpath = fs.realpathSync;
+    const legacyRealpath = vi.spyOn(fs, 'realpathSync').mockImplementation(((...args: Parameters<typeof fs.realpathSync>) => {
+      const resolved = originalRealpath(...args);
+      return typeof args[0] === 'string' && args[0].startsWith(alias) ? args[0] : resolved;
+    }) as typeof fs.realpathSync);
+    Object.assign(legacyRealpath, { native: originalRealpath.native });
+    try {
+      expect((await readThemePackageResource(alias, light.id, 'asset:body')).bytes).toEqual(font);
+    } finally { legacyRealpath.mockRestore(); }
     expect((await readThemePackageResource(getLocalThemesDir(), light.id, 'asset:body')).bytes).toEqual(font);
     await expect(readThemePackageResource(getLocalThemesDir(), light.id, 'asset:undeclared')).rejects.toThrow();
     const open = vi.spyOn(fs, 'openSync');
