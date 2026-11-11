@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef } from 'react';
 import type { Session } from '@/lib/ccAgent.types';
 import { isOrcaLeadSession } from '@/lib/orcaSessionIdentity';
 import type { OrcaWorkerStatus } from '../../../../shared/orca-worker-status';
+import type { WorkerReportState } from './workerProjectionStore';
 import {
   getWorkerProjectionSnapshot,
   useWorkerProjectionOwners,
@@ -18,6 +19,8 @@ export interface WorkerAttentionRecord {
   leadSessionId: string;
   status: OrcaWorkerStatus;
   focused: boolean;
+  /** 最新结构化回报状态；'dropped' 表示无需人工处理，因此不记未读。 */
+  reportState?: WorkerReportState;
 }
 
 export interface WorkerAttentionUpdates {
@@ -45,7 +48,9 @@ export function computeWorkerAttentionUpdates(
     // snapshot can safely restore unread attention after a late mount or reload.
     const enteredDone = prevStatus !== 'done' && worker.status === 'done';
     const isViewed = worker.focused && worker.leadSessionId === activeSessionId;
-    if (enteredDone && !isViewed) {
+    // 「无需处理」没有要让用户看的结果，不该亮完成未读点。
+    const nothingToReview = worker.reportState === 'dropped';
+    if (enteredDone && !isViewed && !nothingToReview) {
       toMark.push(worker.workerId);
     }
   }
@@ -84,6 +89,7 @@ export function useOrcaWorkerAttentionByLeadIds(
           leadSessionId,
           status: worker.status,
           focused: worker.focused,
+          ...(worker.latestReport ? { reportState: worker.latestReport.state } : {}),
         })),
       );
     const updates = computeWorkerAttentionUpdates(

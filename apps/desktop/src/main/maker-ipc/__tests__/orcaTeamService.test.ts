@@ -360,6 +360,7 @@ function createDeps(overrides: Partial<OrcaTeamServiceDeps> = {}) {
     ),
     getLiveSession: vi.fn(() => null),
     resumeWorkerSession: vi.fn(async () => {}),
+    setWorkerLatestReport: vi.fn(async () => {}),
     updateWorkerStatus: vi.fn(async (workerId, status) => {
       calls.push(`updateWorkerStatus:${status}`);
       workers = workers.map((worker) =>
@@ -1780,7 +1781,8 @@ describe('OrcaTeamService', () => {
     { state: 'waiting' as const, turn: 'done' as const, status: 'idle' as const },
     { state: 'ready' as const, turn: 'done' as const, status: 'done' as const },
     { state: 'dropped' as const, turn: 'done' as const, status: 'done' as const },
-    { state: 'blocked' as const, turn: 'done' as const, status: 'error' as const },
+    // 一轮干净结束、只是在等人回答：不是执行异常，落 done 让用户看到，问题由面板标记与通知承载。
+    { state: 'blocked' as const, turn: 'done' as const, status: 'done' as const },
     { state: 'failed' as const, turn: 'error' as const, status: 'error' as const },
   ])('maps a $state report to a $status worker without a text bridge', async ({ state, turn, status }) => {
     const leadMessages: string[] = [];
@@ -1816,6 +1818,53 @@ describe('OrcaTeamService', () => {
     }
     // 结构化回报已送达 Lead：本轮不再补发一段自由文本。
     expect(leadMessages).toEqual([]);
+  });
+
+  // 终态先到、回报后到（真实竞态）：回报侧必须补做映射，否则 waiting / blocked 会永久停在 done。
+  it('maps an in-flight report that lands after the terminal turn', async () => {
+    const { deps, getWorker, service } = createDeps();
+    await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: '干活',
+    });
+    // 回执在终态前捕获、在终态之后落地：真实竞态，不能停在 done。
+    const finish = service.captureLocalWorkerReport('worker-session-1');
+    const terminal = service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'done',
+      finalText: '文本',
+    });
+    await finish(true, {
+      delivered: true,
+      report: { state: 'waiting', summary: '这一轮做完了，没有遗留问题' },
+    });
+    await terminal;
+
+    expect(getWorker().status).toBe('idle');
+    expect(deps.setWorkerLatestReport).toHaveBeenCalledWith('worker-1', expect.objectContaining({ state: 'waiting' }));
+  });
+
+  it('persists the latest report so the panel never shows a stale question', async () => {
+    const { deps, service } = createDeps();
+    await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: '干活',
+    });
+    await service.captureLocalWorkerReport('worker-session-1')(true, {
+      delivered: true,
+      report: { state: 'blocked', question: '选方案 A 还是 B' },
+    });
+    expect(service.hasPendingWorkerReports('lead-1')).toBe(false);
+    expect(deps.setWorkerLatestReport).toHaveBeenCalledWith('worker-1', expect.objectContaining({ question: '选方案 A 还是 B' }));
+
+    // 之后一轮干净结束必须覆盖旧的「等回复」，而不是继续显示旧问题。
+    await service.captureLocalWorkerReport('worker-session-1')(true, {
+      delivered: true,
+      report: { state: 'waiting', summary: '已按方案 A 完成' },
+    });
+    expect(deps.setWorkerLatestReport).toHaveBeenLastCalledWith('worker-1', expect.objectContaining({ state: 'waiting' }));
   });
 
   it('records a progress report without settling the assignment or bridging text', async () => {

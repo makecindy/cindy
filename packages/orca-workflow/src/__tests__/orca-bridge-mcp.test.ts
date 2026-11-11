@@ -544,6 +544,7 @@ describe('orca_worker_bridge MCP helpers', () => {
     lead: FakeSession,
     dispatchInterAgentMessage?: OrcaBridgeMcpDeps['dispatchInterAgentMessage'],
     workerReportQueue?: OrcaWorkerReportQueueBridge,
+    extraDeps: Partial<OrcaBridgeMcpDeps> = {},
   ) {
     const logger = makeLogger();
     const workerLink: OrcaWorkerLink = {
@@ -569,6 +570,7 @@ describe('orca_worker_bridge MCP helpers', () => {
       captureLocalWorkerReport,
       dispatchInterAgentMessage,
       workerReportQueue,
+      ...extraDeps,
       getMaker: () => base.maker as unknown as Maker,
       logger: logger as never,
       persistUserMessage: async (sessionId, message) => {
@@ -691,6 +693,62 @@ describe('orca_worker_bridge MCP helpers', () => {
     // 无问题就不派发：Lead 不会收到一条无法回答的“等人工”，也不需要结算任何欠回报。
     expect(h.finishReport).not.toHaveBeenCalled();
     expect(lead.sent).toEqual([]);
+  });
+
+  // 2026-11-10 结构化回报的交付语义：report 是 Lead 要读的内容，不是宿主私货回执。
+  // 生产入口：send_to_lead 公开 tool handler；unit tier 同本文件其余用例。
+  it('delivers the structured evidence and question to the Lead, not only to the receipt', async () => {
+    const lead = makeSession('lead-1');
+    const h = makeWorkerBridgeLeadHarness(lead);
+    await h.server._registeredTools.send_to_lead.handler({
+      worker_id: 'worker-1',
+      message: '需要你定方案',
+      report: {
+        state: 'blocked',
+        question: '选方案 A 还是 B',
+        summary: '两条路径都验证过',
+        verification: 'node --test 447 pass',
+      },
+    });
+
+    expect(lead.sent).toHaveLength(1);
+    const delivered = lead.sent[0] as { content?: string } | string;
+    const text = typeof delivered === 'string' ? delivered : String(delivered.content ?? '');
+    expect(text).toContain('需要你定方案');
+    expect(text).toContain('选方案 A 还是 B');
+    expect(text).toContain('node --test 447 pass');
+    expect(text).toContain('blocked');
+  });
+
+  it('records progress without dispatching it to the Lead', async () => {
+    const lead = makeSession('lead-1');
+    const recordWorkerReport = vi.fn(async () => {});
+    const h = makeWorkerBridgeLeadHarness(lead, undefined, undefined, { recordWorkerReport });
+    const json = parseToolJson(await h.server._registeredTools.send_to_lead.handler({
+      worker_id: 'worker-1',
+      message: '做到一半',
+      report: { state: 'progress', summary: '已完成一半' },
+    }));
+
+    expect(json).toMatchObject({ ok: true, recorded: 'progress' });
+    expect(lead.sent).toEqual([]);
+    expect(recordWorkerReport).toHaveBeenCalledWith('worker-session-1', expect.objectContaining({ state: 'progress' }));
+    // progress 不结算欠回报：仍然照旧走后续 Auto-bridge。
+    expect(h.finishReport).not.toHaveBeenCalled();
+  });
+
+  it('rejects a blocked report without a question before dispatch', async () => {
+    const lead = makeSession('lead-1');
+    const h = makeWorkerBridgeLeadHarness(lead);
+    const json = expectToolError(await h.server._registeredTools.send_to_lead.handler({
+      worker_id: 'worker-1',
+      message: '卡住了',
+      report: { state: 'blocked' },
+    }));
+
+    expect(json).toMatchObject({ error: expect.stringContaining('blocked report must carry one concrete question') });
+    expect(lead.sent).toEqual([]);
+    expect(h.captureLocalWorkerReport).not.toHaveBeenCalled();
   });
 
   it('persists the report without completing the still-running Worker', async () => {

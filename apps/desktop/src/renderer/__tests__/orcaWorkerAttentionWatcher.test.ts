@@ -14,16 +14,39 @@ function worker(
   workerId: string,
   status: OrcaWorkerStatus,
   focused = false,
+  reportState?: WorkerAttentionRecord['reportState'],
 ): WorkerAttentionRecord {
   return {
     workerId,
     leadSessionId: LEAD_ID,
     status,
     focused,
+    ...(reportState ? { reportState } : {}),
   };
 }
 
 describe('computeWorkerAttentionUpdates', () => {
+  // 结构化回报 dropped = 无需人工处理，不该亮「完成未读」绿点。
+  it('does not mark attention for a worker that reported nothing to act on', () => {
+    const result = computeWorkerAttentionUpdates(
+      new Map([[WORKER_ID, 'running']]),
+      [worker(WORKER_ID, 'done', false, 'dropped')],
+      LEAD_ID,
+    );
+
+    expect(result.toMark).toEqual([]);
+  });
+
+  it('still marks attention for ready and blocked reports that need a person', () => {
+    const ready = computeWorkerAttentionUpdates(
+      new Map([[WORKER_ID, 'running'], [OTHER_WORKER_ID, 'running']]),
+      [worker(WORKER_ID, 'done', false, 'ready'), worker(OTHER_WORKER_ID, 'done', false, 'blocked')],
+      LEAD_ID,
+    );
+
+    expect(ready.toMark).toEqual([WORKER_ID, OTHER_WORKER_ID]);
+  });
+
   it('marks attention on running to done transition', () => {
     const result = computeWorkerAttentionUpdates(
       new Map([[WORKER_ID, 'running']]),

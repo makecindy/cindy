@@ -2,6 +2,7 @@ export {
   createOrcaWorkerBridgeMcpProvider,
   formatAgentMessage,
   formatOrcaCommunicationMessage,
+  formatWorkerReportForLead,
   ORCA_WORKER_REPORT_STATES,
   type OrcaBridgeMcpDeps,
   type OrcaToolResult,

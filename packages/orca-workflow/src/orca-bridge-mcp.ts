@@ -168,6 +168,15 @@ export interface OrcaBridgeMcpDeps {
     sessionId: string,
   ) => (accepted: boolean, receipt?: OrcaWorkerReportReceipt) => Promise<void>;
   /**
+   * Persist a report-only update (progress) without dispatching it to the Lead and
+   * without settling the assignment: internal progress must cost neither a model turn
+   * nor a queued message.
+   */
+  recordWorkerReport?: (
+    sessionId: string,
+    report: OrcaStructuredWorkerReport,
+  ) => Promise<void>;
+  /**
    * Worker-scoped view and control of the Worker's own reports still waiting in its Lead's
    * queue. The bridge passes the attested Worker link; callers never choose a session id.
    */
@@ -234,6 +243,30 @@ export const ORCA_WORKER_REPORT_STATES = [
   'dropped',
 ] as const;
 export type OrcaWorkerReportState = (typeof ORCA_WORKER_REPORT_STATES)[number];
+
+/**
+ * 结构化回报的 Lead 可见文本。报告是 Lead 要读的内容,不是宿主私货回执:
+ * 证据与问题必须跟 message 一起进入 Lead 的消息和历史记录。
+ */
+export function formatWorkerReportForLead(
+  report: OrcaStructuredWorkerReport,
+  message: string,
+): string {
+  const section = (label: string, value?: string) =>
+    value && value.trim() ? `${label}: ${value.trim()}` : null;
+  const lines = [
+    message.trim(),
+    '',
+    `[Orca Worker report: ${report.state}]`,
+    ...[
+      section('Question', report.question),
+      section('Summary', report.summary),
+      section('Verification', report.verification),
+      section('Risk', report.risk),
+    ].filter((line): line is string => line !== null),
+  ];
+  return lines.join('\n');
+}
 
 /** 结构化回报载荷;缺省时与本变更前完全一致。 */
 export interface OrcaStructuredWorkerReport {
@@ -992,6 +1025,26 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
           const resolved = await resolveLead(worker_id);
           if (!resolved.ok) return text(resolved.error, true);
           const { link, entry } = resolved;
+          // progress 只是内部进度：只落库，不派发。否则空闲的 Lead 会为一条进度开启新 turn，
+          // 忙碌时它会占住队列;这不是「不打扰」的含义。
+          if (report?.state === 'progress') {
+            try {
+              await deps.recordWorkerReport?.(link.workerSessionId, report);
+            } catch (err) {
+              log.warn('record worker progress failed', {
+                err: err instanceof Error ? err.message : String(err),
+                workerId: link.workerId,
+              });
+            }
+            return text({
+              ok: true,
+              recorded: 'progress',
+              worker_id: link.workerId,
+              lead_session_id: link.leadSessionId,
+            });
+          }
+          // 结构化证据与问题必须跟 message 一起送达 Lead 并进入历史；只放进回执就等于没送。
+          const deliveredText = report ? formatWorkerReportForLead(report, message) : message;
           if (!entry.session) {
             return text({
               error: 'lead session is not running',
@@ -1032,9 +1085,9 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
               session: liveEntry.session,
               // 宿主派发路径(dispatchInterAgentMessage)会按 workerId 反查 role 再包前缀;
               // 这里是无宿主派发时的直发兜底,link 上没有 role,只带 worker_id。
-              message: { type: 'user', content: formatAgentMessage('worker', message, link.workerId) },
+              message: { type: 'user', content: formatAgentMessage('worker', deliveredText, link.workerId) },
               deps,
-              rawContent: message,
+              rawContent: deliveredText,
               source: 'worker',
               senderLabel: link.workerId,
               ...(delivery ? { delivery } : {}),
@@ -1092,7 +1145,7 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
             markLeadDispatchAccepted();
             await deps.persistUserMessage(link.leadSessionId, {
               clientId: randomUUID(),
-              content: formatOrcaCommunicationMessage('worker', message),
+              content: formatOrcaCommunicationMessage('worker', deliveredText),
             }).catch((err) => {
               log.warn('persist lead message failed', {
                 err: String(err),

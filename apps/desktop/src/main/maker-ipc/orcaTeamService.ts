@@ -388,6 +388,8 @@ export interface OrcaTeamServiceDeps {
   /** 取消该 worker session 尚未落地的后台唤醒（focus 预热）；释放 runtime 前调用。 */
   cancelWorkerResume?(sessionId: string): void;
   updateWorkerStatus(workerId: string, status: OrcaWorkerStatus, latestReport?: OrcaStructuredWorkerReport | null): Promise<void>;
+  /** 只落最新结构化回报，不改状态（progress 与已映射过的终态用）。 */
+  setWorkerLatestReport(workerId: string, latestReport: OrcaStructuredWorkerReport | null): Promise<void>;
   markWorkerIdle(workerId: string): Promise<void>;
   markWorkerIdleIfStatus(workerId: string, expectedStatus: 'done'): Promise<boolean>;
   restoreWorkerDoneIfIdle(workerId: string): Promise<boolean>;
@@ -587,6 +589,8 @@ export interface OrcaTeamService {
   hasPendingWorkerReports(leadSessionId: string): boolean;
   restoreWorkerPendingReport(sessionId: string, input: { workerId: string; leadSessionId: string }): void;
   handleWorkerTurnStarted(sessionId: string): Promise<void>;
+  /** 只落库、不派发、不结算的结构化进度回报。 */
+  recordWorkerReport(sessionId: string, report: OrcaStructuredWorkerReport): Promise<void>;
   captureWorkerTerminalTurn(sessionId: string): WorkerTerminalTurnCapture;
   /** Synchronous product boundary; never call for a suppressed vendor terminal. */
   noteWorkerProductTerminal(capture: WorkerTerminalTurnCapture | undefined): void;
@@ -601,6 +605,8 @@ interface AutoBridgeState {
    * 因此这里只剩终态映射与面板/通知读取用途。
    */
   structuredReport?: OrcaStructuredWorkerReport;
+  /** 该回报已按六态映射到 worker 状态；终态早于回报时由回报侧补映射。 */
+  reportApplied?: boolean;
   /** Reports of this assignment that reached the Lead directly or by same-turn steer. */
   deliveredReports: number;
   /**
@@ -711,6 +717,42 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       ?? await deps.captureDeliveryAuthority?.(leadSessionId).catch(() => undefined)
       ?? opts.assertCurrent;
   };
+
+/**
+ * 结构化回报到 worker 状态与持久化的**唯一**映射点。
+ * 必须只由持有该派活的同一临界区调用；两次调用是幂等重放（最新一份回报覆盖旧的一份）。
+ * waiting 不进入完成待确认；dropped 无人工动作；blocked 等人回答但仍属正常终态；
+ * ready 跟随轮次真实终态；failed 才是执行异常。
+ */
+  async function applyWorkerReportState(
+    state: AutoBridgeState,
+    report: OrcaStructuredWorkerReport,
+    turnStatus: 'done' | 'error',
+  ): Promise<void> {
+    await deps.setWorkerLatestReport(state.workerId, report);
+    state.reportApplied = true;
+    switch (report.state) {
+      case 'waiting':
+        await deps.markWorkerIdle(state.workerId);
+        break;
+      case 'dropped':
+        await deps.updateWorkerStatus(state.workerId, 'done', report);
+        break;
+      case 'blocked':
+        // 一轮干净结束、只是在等人回答：不是执行异常。
+        await deps.updateWorkerStatus(state.workerId, 'done', report);
+        break;
+      case 'failed':
+        await deps.updateWorkerStatus(state.workerId, 'error', report);
+        break;
+      case 'ready':
+      case 'progress':
+      default:
+        await deps.updateWorkerStatus(state.workerId, turnStatus, report);
+        break;
+    }
+    deps.broadcastOrcaWorkerChanged(state.leadSessionId);
+  }
 
   async function withWorkerTransition<T>(
     workerId: string,
@@ -2115,6 +2157,15 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     clearAutoBridgeState(sessionId) {
       clearRuntimeState(sessionId);
     },
+    async recordWorkerReport(sessionId, report) {
+      const state = autoBridge.get(sessionId);
+      const link = await deps.getWorkerLinkBySessionId(sessionId);
+      if (!link) return;
+      // 只记最新进度：不结算欠回报、不改 worker 状态，面板与通知读得到即可。
+      if (state) state.structuredReport = report;
+      await deps.setWorkerLatestReport(link.workerId, report);
+      deps.broadcastOrcaWorkerChanged(link.leadSessionId);
+    },
     captureLocalWorkerReport(sessionId) {
       const state = autoBridge.get(sessionId);
       // Direct user turns have no Lead obligation. In particular, a late callback must
@@ -2146,7 +2197,16 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
             const provisional = provisionalDispatches.get(sessionId);
             const ownsState = autoBridge.get(sessionId) === state
               || provisional?.previousPendingIdentity === state;
-            if (report && ownsState) state.structuredReport = report;
+            if (report && ownsState) {
+              state.structuredReport = report;
+              // 终态先到、回报后到：由回报侧补做映射，否则晚到的 waiting / blocked 会永久停在 done。
+              if (state.terminalObserved && !state.reportApplied) {
+                await applyWorkerReportState(state, report, 'done');
+              } else if (!state.terminalObserved) {
+                // 终态还没到：至少把最新回报落盘，面板与通知不读旧问题。
+                await deps.setWorkerLatestReport(state.workerId, report);
+              }
+            }
             if (accepted && settlesReport && ownsState) settlePendingReport(state);
           });
         } finally {
@@ -2331,17 +2391,13 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
             return;
           }
 
-          // 结构化回报的六态映射：waiting 不进入完成待确认，dropped 不弹完成提醒，
-          // blocked / failed 进现有等人工路径并携带问题；ready 与旧路径一致。
-          const structured = state?.structuredReport;
-          if (structured?.state === 'waiting') {
-            await deps.markWorkerIdle(link.workerId);
-          } else if (structured?.state === 'dropped') {
-            await deps.updateWorkerStatus(link.workerId, 'done', structured);
-          } else if (structured?.state === 'blocked' || structured?.state === 'failed') {
-            await deps.updateWorkerStatus(link.workerId, 'error', structured);
+          // 结构化回报的六态映射只在一处做（applyWorkerReportState）；已映射过的
+          // （终态先到、回报后到时由回报侧补映射）不再覆盖。无结构化回报时保持旧路径。
+          const structured = state && !state.reportApplied ? state.structuredReport : undefined;
+          if (state && structured) {
+            await applyWorkerReportState(state, structured, params.status);
           } else {
-            await deps.updateWorkerStatus(link.workerId, params.status, structured);
+            await deps.updateWorkerStatus(link.workerId, params.status);
           }
           if (state) state.terminalObserved = true;
           deps.broadcastOrcaWorkerChanged(link.leadSessionId);
