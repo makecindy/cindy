@@ -53,8 +53,10 @@ function TemplateParamControl({
   const placeholder = parameter.placeholder ?? parameter.default ?? '';
   if (parameter.type === 'boolean') {
     const checked = value === 'true';
+    // The parameter row is already a label (TemplateParamForm), so this row stays a span:
+    // one label owns the checkbox.
     return (
-      <label
+      <span
         className={cn(
           'inline-flex h-9 w-fit items-center gap-2 rounded-md px-1.5',
           'cursor-pointer',
@@ -64,7 +66,7 @@ function TemplateParamControl({
       >
         <Checkbox checked={checked} onChange={() => onChange(checked ? 'false' : 'true')} />
         {parameter.placeholder ?? parameter.label}
-      </label>
+      </span>
     );
   }
 
