@@ -288,7 +288,7 @@ export class ProjectAutomationLoader {
         config,
       ],
     };
-    await this.writeProjectAutomationsFile(workingDir, next);
+    const writtenContent = await this.writeProjectAutomationsFile(workingDir, next);
     // The save action approves this one definition, not unrelated repository data.
     const current = (await this.deps.storage.list()).find((s) => s.source === 'project'
       && sameWorkingDir(s.workingDir, workingDir) && s.projectConfigId === config.id);
@@ -300,7 +300,7 @@ export class ProjectAutomationLoader {
     } catch (err) {
       // A rejected save (e.g. a model its computer cannot run) must not leave the rejected
       // choice in the project file while the saved automation keeps its old configuration.
-      await this.restoreProjectAutomationsFile(workingDir, read);
+      await this.restoreProjectAutomationsFile(workingDir, read, writtenContent);
       throw err;
     }
     this.emit({ type: 'reconciled', workingDir, inserted, updated, deleted: 0,
@@ -410,31 +410,48 @@ export class ProjectAutomationLoader {
     }
   }
 
-  /** Put the file back exactly as `read` saw it; best effort, the original error stays the one reported. */
-  private async restoreProjectAutomationsFile(workingDir: string, read: CachedRead): Promise<void> {
+  /** Best effort: restore only our own write, never a later edit seen after validation settles. */
+  private async restoreProjectAutomationsFile(
+    workingDir: string, read: CachedRead, writtenContent: string,
+  ): Promise<void> {
     const filePath = path.join(workingDir, AUTOMATIONS_REL_PATH);
+    let tmpPath: string | undefined;
     try {
+      if (read.kind !== 'loaded' && read.kind !== 'missing') return;
       if (read.kind === 'loaded') {
-        const tmpPath = `${filePath}.tmp.${randomUUID()}`;
+        tmpPath = `${filePath}.tmp.${randomUUID()}`;
         await fs.writeFile(tmpPath, read.content, 'utf8');
+      }
+      // Compare raw bytes, not parsed configs: even a partial external edit must survive.
+      // Stage the restoration before this check so its I/O cannot hide a newer write.
+      if (await fs.readFile(filePath, 'utf8') !== writtenContent) return;
+      if (tmpPath) {
         await fs.rename(tmpPath, filePath);
-      } else if (read.kind === 'missing') {
+      } else {
         await fs.rm(filePath, { force: true });
       }
     } catch (restoreErr) {
+      // Deleting the file while validation was pending is also a later user decision.
+      if ((restoreErr as NodeJS.ErrnoException).code === 'ENOENT') return;
       this.deps.logger.warn?.('[project-automation] restore after rejected save failed', {
         workingDir,
         error: restoreErr instanceof Error ? restoreErr.message : String(restoreErr),
       });
     } finally {
       this.cache.delete(path.resolve(workingDir));
+      if (tmpPath) await fs.rm(tmpPath, { force: true }).catch((cleanupErr: unknown) => {
+        this.deps.logger.warn?.('[project-automation] restore temp cleanup failed', {
+          workingDir,
+          error: cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr),
+        });
+      });
     }
   }
 
   private async writeProjectAutomationsFile(
     workingDir: string,
     file: ProjectAutomationsFile,
-  ): Promise<void> {
+  ): Promise<string> {
     const filePath = path.join(workingDir, AUTOMATIONS_REL_PATH);
     const dir = path.dirname(filePath);
     await fs.mkdir(dir, { recursive: true });
@@ -444,6 +461,7 @@ export class ProjectAutomationLoader {
     await fs.rename(tmpPath, filePath);
     // A read cached before this write (e.g. "no file yet") must not hide it.
     this.cache.delete(path.resolve(workingDir));
+    return content;
   }
 
   private async listKnownWorkingDirs(): Promise<string[]> {

@@ -143,7 +143,9 @@ Worker 工具省略 working_dir 时保持继承 Lead 任务记录目录，不跟
   `apps/desktop/src/main/scheduler-host/runner.ts`（按那台电脑的已授权目录解析，不回落本机同名来源）。
 - 自动化显式模型保存：桌面表单、Agent 工具、项目配置和跨电脑写入共用 Scheduler 保存前校验，
   按 `modelAgentDeviceId`（空字符串为自动化所在电脑）或绑定任务的实际电脑检查来源与模型。
-  失败不写入，不启动或切换任务；错误说明实际检查位置及模型位置参数。仅改名称、时间等无关
+  失败不写入调度数据库，不启动或切换任务；错误说明实际检查位置及模型位置参数。项目编辑器
+  先写文件的路径在拒绝保存后尝试恢复原内容，但只有读回内容仍等于本次写入时才回滚；校验期间
+  后来保存、删除或直接编辑的文件保持原样。此为乐观核对，不是跨进程文件事务。仅改名称、时间等无关
   字段不读取目录。旧的无 `modelAgentKind` 配置继续跟随任务；SSH 保留原生目录校验路径。
 - 跨电脑定时任务：`packages/lizi-mcps/src/scheduler/_devices.ts`、
   `apps/desktop/src/main/mcp-integrations/schedulerDevices.ts`。
