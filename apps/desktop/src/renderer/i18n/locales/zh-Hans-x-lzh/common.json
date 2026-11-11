@@ -13442,6 +13442,7 @@
       "codexUsageLimitWithReset": "今所连之 Codex 名籍，耗用已达上限，预计于 {{resetAt}} 恢复。",
       "codexUsageLimit": "今所连之 Codex 名籍，耗用已达上限。请俟上限重置，或易他可用名籍，再试。",
       "gatewayQuotaExhausted": "Cindy AI 余资不足，请储值后续之",
+      "gatewayUpstreamQuotaExhausted": "此模型上游供方之限额不可用，请易他模型再试。",
       "viewBalance": "览余资",
       "viewBalanceTitle": "开「耗用与计费」，览余资并储值",
       "credentialSwitchBusy": "Codex 方行于他差事，暂不能依此差事所择之模型来源而易（须重启共用之 Codex 后台进程）。俟其毕，点「再试」即可。",

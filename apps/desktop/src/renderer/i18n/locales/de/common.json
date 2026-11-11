@@ -13471,6 +13471,7 @@
       "codexUsageLimitWithReset": "Das verbundene Codex-Konto hat sein Nutzungslimit erreicht. Die Nutzung wird voraussichtlich um {{resetAt}} zurückgesetzt.",
       "codexUsageLimit": "Das verbundene Codex-Konto hat sein Nutzungslimit erreicht. Warte, bis das Limit zurückgesetzt wird, oder wechsle vor dem erneuten Versuch zu einem anderen verfügbaren Konto.",
       "gatewayQuotaExhausted": "Dein Cindy AI-Guthaben ist aufgebraucht. Lade Guthaben auf, um fortzufahren.",
+      "gatewayUpstreamQuotaExhausted": "Das Kontingent beim Anbieter des Modells ist nicht verfügbar. Wechsle zu einem anderen Modell und versuche es erneut.",
       "viewBalance": "Guthaben anzeigen",
       "viewBalanceTitle": "Öffne „Nutzung und Abrechnung“, um dein Guthaben zu prüfen und aufzuladen",
       "credentialSwitchBusy": "Eine andere Codex-Aufgabe läuft noch. Daher kann der Anbieter für diese Sitzung noch nicht angewendet werden (der gemeinsam genutzte Codex-Prozess muss neu gestartet werden). Versuch es erneut, sobald diese Aufgaben abgeschlossen sind.",

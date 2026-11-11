@@ -57,7 +57,10 @@ import { isOverloadErrorMessage, parseOverloadRetryProgress } from '@/utils/over
 import {
   isStreamInterruptedErrorMessage,
 } from '@/utils/streamInterruptError';
-import { isQuotaExhaustedErrorMessage } from '@/utils/quotaError';
+import {
+  isQuotaExhaustedErrorMessage,
+  isUpstreamResourceQuotaErrorMessage,
+} from '@/utils/quotaError';
 import { parseTerminalRateLimitRetryProgress } from '@/utils/rateLimitRetry';
 import type { UsageLimitRecoveryHint } from '@/lib/usageLimitRecovery';
 import { errorReasonI18nKey as resolveErrorReasonI18nKey } from './errorReasonI18n';
@@ -290,7 +293,13 @@ export function ErrorBanner({
   // 时两者会分叉,用当前值会误判来源。来源不明确(null)或非 xd 时不提供 Cindy
   // 充值入口；余额摘要仍可使用供应商通用提示。
   const isQuotaExhausted = isQuotaExhaustedErrorMessage(error);
+  // #7180: an upstream resource package is separate from the user's Cindy balance.
+  // Keep the error-time provider snapshot and the original quota/retry semantics.
+  const isGatewayUpstreamQuotaExhausted =
+    (errorSourceProviderId?.trim() || null) === 'xd' &&
+    isUpstreamResourceQuotaErrorMessage(error);
   const isGatewayQuotaExhausted =
+    !isGatewayUpstreamQuotaExhausted &&
     (errorSourceProviderId?.trim() || null) === 'xd' &&
     Boolean(onViewBalance) &&
     isQuotaExhausted;
@@ -512,6 +521,8 @@ export function ErrorBanner({
     displayError = t('chat.errorBanner.claudeSubscriptionOpusPlanMismatch');
   } else if (isGatewayProxyTokenInvalid) {
     displayError = t('chat.errorBanner.gatewayProxyTokenInvalidNoRetry');
+  } else if (isGatewayUpstreamQuotaExhausted) {
+    displayError = t('chat.errorBanner.gatewayUpstreamQuotaExhausted');
   } else if (isGatewayQuotaExhausted) {
     // 「配额或余额不足，请检查供应商账户」对网关用户是半句话:账户就在 Cindy 里,
     // 该说的是「去充值」而不是「去检查」。右端的内联出口负责「去哪充」。
@@ -602,6 +613,7 @@ export function ErrorBanner({
   const showUnwrappedRaw = !hasSpecialGuidance || isResponsesLiteParallelToolCallsError(error);
   if (sharedRecoveryReason) displayError = t(`sharedTaskRecovery.reason.${sharedRecoveryReason}`);
   const canShowErrorDetails =
+    isGatewayUpstreamQuotaExhausted ||
     isNetworkishError ||
     isOverloadError ||
     isStreamInterrupted ||
