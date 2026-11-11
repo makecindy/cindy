@@ -1465,6 +1465,33 @@ describe('Chat Server result delivery and refresh', () => {
       data: { ...processRecord.data, deviceId: 'execution-mac' } });
   });
 
+  // bot-group-chat.md §4.0: teammates ask each other with @. The turn lists who is in the group
+  // (owner and, where known, description); the reply's @ names go out as the completion's mentions.
+  it.each([true, false])('sends the teammates a reply names with @ (server support: %s)', async supported => {
+    const luna = '20000000-0000-4000-8000-000000000002';
+    const members = [
+      { id: botId, kind: 'bot', name: 'Bot', displayName: 'Bot', nickname: null, state: 'joined', ownerActorId: selfId, ownerName: 'Owner', role: 'member', guestAccess: 'chat', accessRevision: 1, avatar: null },
+      { id: luna, kind: 'bot', name: 'Luna', displayName: 'Luna', nickname: null, state: 'joined', ownerActorId: selfId, ownerName: 'Owner', role: 'member', guestAccess: 'chat', accessRevision: 1, avatar: null },
+      { id: selfId, kind: 'human', name: 'Owner', displayName: 'Owner', nickname: null, state: 'joined', ownerActorId: selfId, ownerName: 'Owner', role: 'owner', guestAccess: 'none', accessRevision: 1, avatar: null },
+    ];
+    fixture.handle.mockImplementation(route => {
+      if (route === '/me') return { body: { actor: { id: selfId }, capabilities: supported ? { groupTeammateMentions: 1 } : {} } };
+      if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members, messages: [], cursor: '1' } };
+      return response(route);
+    });
+    fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', description: 'Writes the code', avatar: null, status: 'active' }];
+    await vi.advanceTimersByTimeAsync(2000);
+    const prompt = vi.mocked(deps.dispatch).mock.calls[0][0].message;
+    expect(prompt).not.toContain('Do not call another participant');
+    expect(prompt.includes('write @ and its name')).toBe(supported);
+    const data = [...prompt.matchAll(/<untrusted-data>\n(.*?)\n<\/untrusted-data>/g)].map(match => JSON.parse(match[1])).find(block => block.participants);
+    expect(data.participants).toContainEqual({ name: 'Bot (Owner)', kind: 'bot', you: true, owner: 'Owner', description: 'Writes the code' });
+    expect(data.participants).toContainEqual({ name: 'Luna (Owner)', kind: 'bot', owner: 'Owner' });
+    await service.settleLaneTurn({ ...terminal, resultText: '@Luna can you review this? @Bot is done.' });
+    if (supported) expect(deliveries()[0][2].mentions).toEqual([luna]);
+    else expect(deliveries()[0][2]).not.toHaveProperty('mentions');
+  });
+
   // #7583, unit: runtime close without an SDK terminal left the leased execution
   // alive. Existing cases start from done/error; exercise the close adapter with
   // the real Chat Server service and assert the terminal wire result and lease retirement.
