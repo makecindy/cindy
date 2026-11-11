@@ -42,6 +42,7 @@ vi.mock('electron', async (importOriginal) => {
 import {
   getOutboundPathSnapshotFor,
   parseChromiumProxyResult,
+  probeOutboundPathFor,
   resetOutboundProxyResolverStateForTest,
   resolveDesktopOutboundProxy,
 } from '../outbound-proxy-resolver.js';
@@ -428,5 +429,52 @@ describe('getOutboundPathSnapshotFor', () => {
       kind: 'unknown',
       reason: 'resolve_failed',
     });
+  });
+});
+
+describe('probeOutboundPathFor (#9537 连接诊断)', () => {
+  // Issue #9537:降级横幅要能说出「本机经 Proxy 出站」这一事实,但只有它是事实时才说。
+  it('loopback 候选一律不报,且不发起解析', async () => {
+    // 自建中转常驻 127.0.0.1;真实传输层(outbound-fetch resolveProxyTarget /
+    // dispatcher pick)对 loopback 一律直连,诊断必须复刻这条例外。
+    electronState.resolveProxy.mockResolvedValue('PROXY 127.0.0.1:7890');
+    await expect(probeOutboundPathFor(['http://127.0.0.1:8080'])).resolves.toBe(null);
+    expect(electronState.resolveProxy).not.toHaveBeenCalled();
+  });
+
+  it('loopback 混在远程候选里也不报(env 代理 + 自建中转的误报场景)', async () => {
+    // Greptile review #9959 P2:HTTP_PROXY 无对应 NO_PROXY 时,env 优先的通用解析器
+    // 对 127.0.0.1 也返回代理,真实传输层却一律直连 —— 照报就是谎称走了代理。
+    process.env.HTTP_PROXY = 'http://127.0.0.1:6152';
+    electronState.resolveProxy.mockResolvedValue('PROXY 127.0.0.1:7890');
+    await expect(
+      probeOutboundPathFor(['http://127.0.0.1:8080', 'https://relay.example.com']),
+    ).resolves.toBe(null);
+  });
+
+  it('候选判定不一致(代理 / 直连混存)→ null,宁可不报', async () => {
+    // 两条线路都可能承载这次失败(同账号走当前中转,共享任务走独立官方连接),
+    // 只报其中一条会张冠李戴。
+    electronState.resolveProxy.mockImplementation(async (url: string) =>
+      url.startsWith('https://relay.example.com') ? 'DIRECT' : 'PROXY 127.0.0.1:7890');
+    await expect(
+      probeOutboundPathFor(['https://relay.example.com', 'https://official.example.com']),
+    ).resolves.toBe(null);
+  });
+
+  it('候选一致判代理时给出脱敏快照;同一 origin 重复只解析一次', async () => {
+    electronState.resolveProxy.mockResolvedValue('PROXY 127.0.0.1:7890');
+    const snap = await probeOutboundPathFor([
+      'https://relay.example.com/api/device-link',
+      'https://relay.example.com',
+      'https://official.example.com',
+    ]);
+    expect(snap).toMatchObject({ kind: 'proxy', proxy: 'http://127.0.0.1:7890' });
+    // 带 path 的 base 与裸 origin 归并为同一个 origin,去重后只解析两次。
+    expect(electronState.resolveProxy).toHaveBeenCalledTimes(2);
+  });
+
+  it('空候选 → null', async () => {
+    await expect(probeOutboundPathFor([])).resolves.toBe(null);
   });
 });

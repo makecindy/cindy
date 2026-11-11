@@ -257,7 +257,7 @@ describe('device-link IPC handlers', () => {
     });
   });
 
-  it('#9537 出站路径判定:按中转 origin 探测并透传脱敏判定;无判定 → null', async () => {
+  it('#9537 出站路径判定:两条候选线路 origin 都探测,透传脱敏判定', async () => {
     const probe = vi.fn(async () => ({
       source: 'system' as const,
       kind: 'proxy' as const,
@@ -269,8 +269,12 @@ describe('device-link IPC handlers', () => {
       kind: 'proxy',
       proxy: 'http://127.0.0.1:7890',
     });
-    // 探测目标必须是当前 device-link 中转 REST origin(官方或自建),不能另写死地址
-    expect(probe).toHaveBeenCalledWith('https://continuity.test.invalid');
+    // 两条候选:当前中转(同账号设备)+ 官方中转(自建中转下共享任务走独立官方连接)。
+    // 测试端点替身对两者同值,无自建中转时即退化为单候选。
+    expect(probe).toHaveBeenCalledWith([
+      'https://continuity.test.invalid',
+      'https://continuity.test.invalid',
+    ]);
   });
 
   it('#9537 出站路径判定:没问出判定(unknown)照实透传、地址缺省归一 null;无快照 → null', async () => {
