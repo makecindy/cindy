@@ -314,11 +314,13 @@ function observePiPackageChangeToken(): Promise<void> {
     });
   }).finally(() => {
     if (changeTokenReadInFlight === pending) changeTokenReadInFlight = undefined;
+    // A replaced package home can be recreated after its watcher already
+    // failed to reattach, or while the watcher is still bound to the old
+    // directory, and this read may have seen the new one. Reattach now instead
+    // of waiting for the poll, then read once more for an edge that landed
+    // between this read and the attach.
+    detachReplacedChangeTokenDirectoryWatcher();
     if (!changeTokenDirectoryWatcher) {
-      // A replaced package home can be recreated after its watcher already
-      // failed to reattach, and this read may have seen the new directory.
-      // Attach now instead of waiting for the poll, then read once more for
-      // an edge that landed between this read and the attach.
       watchPiPackageChangeTokenDirectory();
       if (changeTokenDirectoryWatcher) changeTokenReadQueued = true;
     }
@@ -416,9 +418,9 @@ function readChangeTokenDirectoryIdentity(): string | undefined {
 
 /**
  * Fallback for platforms that report a replaced package home neither as `error`
- * nor as a rename of the directory itself: the stat poll runs this before
- * reattaching, so a handle bound to the old directory is replaced instead of
- * blocking reattachment for the rest of the session.
+ * nor as a rename of the directory itself: the stat poll and each finished
+ * token read run this before reattaching, so a handle bound to the old
+ * directory is replaced instead of blocking reattachment.
  */
 function detachReplacedChangeTokenDirectoryWatcher(): void {
   if (!changeTokenDirectoryWatcher) return;
