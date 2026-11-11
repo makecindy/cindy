@@ -7,6 +7,7 @@
  */
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { TFunction } from 'i18next';
+import { useOptionalDataOwnerGeneration } from '@/contexts/AuthContext';
 
 import {
   getDataOwnerGeneration,
@@ -40,12 +41,12 @@ type TaskUsageOnly = {
   state: 'usage-only';
   usage: SubscriptionAccountUsage | null;
 };
-type ReadResult = SubscriptionSessionAccountView | TaskUsageOnly;
-
 export type SessionSubscriptionAccountState =
-  | ReadResult
+  | SubscriptionSessionAccountView
+  | TaskUsageOnly
   /** 第一次还没读到：不显示默认账号的名字与用量。 */
   | { providerId: SubscriptionProvider; state: 'loading' };
+type ReadResult = SessionSubscriptionAccountState;
 
 /** 2026-11-07 起的执行端都认这个附加参数(任务额度重置查询同一个)，返回这个原生会话所在账号的窗口。 */
 async function readOlderHostTaskUsage(
@@ -142,6 +143,7 @@ export function SessionSubscriptionAccountProvider({
   const pool =
     isSubscriptionProvider(providerId) && (sessionId || nativeSessionId) ? providerId : null;
   const remoteDeviceId = deviceId || null;
+  const ownerGeneration = useOptionalDataOwnerGeneration();
   const foreground = useDocumentVisible(pool !== null);
   const reconnectEpoch = useDeviceLinkReconnectEpoch(
     pool && remoteDeviceId ? remoteDeviceId : undefined,
@@ -183,18 +185,18 @@ export function SessionSubscriptionAccountProvider({
           : await window.electronAPI.subscriptionAccounts?.sessionAccount?.(query);
         view = parseSubscriptionSessionAccountView(raw, pool);
       } catch {
-        // 执行任务的电脑版本较旧，不认识这个查询。
+        // 旧执行端或临时读取失败，先尝试已有的原生会话查询。
       }
       // 旧版本仍能按原生会话读出这个任务所在账号的用量；原来的读取只读那台的默认账号，不能沿用。
       if (!view && remoteDeviceId && nativeSessionId)
         view = await readOlderHostTaskUsage(remoteDeviceId, pool, nativeSessionId).catch(() => null);
       if (!view) {
-        // 一时读不到时保留上次的结果；从没读到过才沿用原来的读取。
+        // 读取失败不能证明任务用的是默认账号；保留已知结果，否则保持未知并继续重试。
         const previous = lastKnown.get(key);
         view =
           previous && isDataOwnerGenerationCurrent(previous.owner)
             ? previous.view
-            : { providerId: pool, state: 'legacy' };
+            : { providerId: pool, state: 'loading' };
       }
       if (disposed || request !== latest || !isDataOwnerGenerationCurrent(owner)) return;
       remember(view);
@@ -219,7 +221,7 @@ export function SessionSubscriptionAccountProvider({
       offChanged?.();
       window.removeEventListener('focus', onFocus);
     };
-  }, [pool, key, remoteDeviceId, sessionId, nativeSessionId, foreground, refreshKey, reconnectEpoch]);
+  }, [pool, key, remoteDeviceId, sessionId, nativeSessionId, foreground, refreshKey, reconnectEpoch, ownerGeneration]);
 
   const loading = useMemo<SessionSubscriptionAccountState | null>(
     () => (pool ? { providerId: pool, state: 'loading' } : null),
@@ -315,7 +317,7 @@ export function sessionAccountCodexPayload(
     ...credits,
     source: 'codex-app-server',
     appServerBuckets: buckets,
-    // ChatGPT 桥接模型消耗的也是这个账号；账号池只有原生桶，用它的通用桶。
-    webSnapshot: general ? { ...general, ...credits, source: 'openai-web' } : null,
+    // 账号池仅有原生桶，不伪造 WHAM；桥接模型同样按实际模型选择原生桶。
+    webSnapshot: null,
   };
 }

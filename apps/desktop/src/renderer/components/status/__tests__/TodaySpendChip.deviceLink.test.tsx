@@ -679,6 +679,37 @@ describe('existing UI with remote account data', () => {
 // computer), not the account the task is pinned to. Existing chip cases have one account per
 // provider. Minimal input: the default/next pick at 90% 5h used, the task's account at 30%.
 describe('TodaySpendChip on a subscription account pool', () => {
+  // PR #9918 review (unit): a ChatGPT bridge consumes the pinned account's
+  // model bucket. A depleted generic bucket must not replace that model's 70%.
+  it.each([true, false])('uses the bridge model native bucket (generic bucket present: %s)', async (generic) => {
+    mocks.localProviders = [{ id: 'openai', auth: { native: 'codex' } }];
+    const bucket = (usedPercent: number, limitId: string, limitName: string | null) => ({
+      limitId, limitName, updatedAt: Date.now(),
+      primary: { usedPercent, windowMinutes: 300, resetsAt: null }, secondary: null,
+    });
+    const reply = {
+      providerId: 'openai', state: 'bound', account: {
+        isDefault: false, number: 2, paused: false, status: 'ready',
+        usage: { codex: { credits: null, buckets: {
+          ...(generic ? { codex: bucket(100, 'codex', null) } : {}),
+          spark: bucket(30, 'spark', 'GPT-5.3-Codex-Spark'),
+        } } },
+      },
+    };
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: {
+      openExternal: mocks.openExternal,
+      subscriptionAccounts: { sessionAccount: async () => reply, onChanged: () => () => {} },
+    } });
+    const { container } = render(
+      <SessionSubscriptionAccountProvider providerId="openai" deviceId={null} sessionId={`pool-bridge-${generic}`} nativeSessionId={`sdk-bridge-${generic}`}>
+        <TodaySpendChip vendorKey="cc" providerId="openai" modelId="chatgpt/gpt-5.3-codex-spark" sessionId={`pool-bridge-${generic}`} />
+      </SessionSubscriptionAccountProvider>,
+    );
+    await act(async () => {});
+    expect(container.textContent).toContain('5h 剩余 70%');
+    expect(container.textContent).not.toContain('剩余 0%');
+  });
+
   it.each([
     { where: 'this computer', deviceId: null },
     { where: 'a provider-group computer', deviceId: 'device-abc' },

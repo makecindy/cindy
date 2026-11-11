@@ -1167,8 +1167,10 @@ export function TodaySpendChip({
     isDeviceLinkRemote || readsTaskAccountUsage
       ? selectRemoteCodexAccountUsage(
           readsTaskAccountUsage ? taskAccountCodexPayload : remoteCodexAccountPayload,
-          isChatgptBridge ? 'openai-web' : 'app-server',
-          modelId,
+          isChatgptBridge && !readsTaskAccountUsage ? 'openai-web' : 'app-server',
+          readsTaskAccountUsage && isChatgptBridge
+            ? modelId?.slice(CHATGPT_MODEL_PREFIX.length)
+            : modelId,
         )
       : localAccountUsage;
   // 重置次数属于默认账号；任务用的是账号池里的其他账号时不显示。
