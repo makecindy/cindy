@@ -1120,7 +1120,11 @@ describe('same-Bot capability updates while editing settings', () => {
     expect(screen.queryByRole('switch', { name: 'old-skill' })).toBeNull();
     expect(screen.getByRole('switch', { name: 'new-skill' })).toBeTruthy();
     expect(mocks.listAgentSkills).toHaveBeenLastCalledWith('codex', {
-      forceReload: true, workingDir: '/bot/workspace', remoteHostId,
+      forceReload: true,
+      workingDir: '/bot/workspace',
+      remoteHostId,
+      // 伙伴目录不展示 Claude Code 插件 Skill：伙伴会话不加载用户插件。
+      excludePluginSkills: true,
     });
     expect(mocks.updateBotProfile).not.toHaveBeenCalled();
   });

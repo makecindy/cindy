@@ -28,6 +28,7 @@ import {
   writeSkillFile,
 } from '../scanner';
 import type { Maker } from '@cindy/maker-core';
+import { prepareSkillScanGrants } from '../skillScanGrants';
 import { registryService, type StoredInstall } from '../registry';
 
 const tempRoots: string[] = [];
@@ -127,6 +128,118 @@ describe('scanAllSkills', () => {
       absolutePath: fs.realpathSync(skillDir),
       mdPath: path.join(skillDir, 'SKILL.md'),
     });
+  });
+
+  it('keeps the plugin namespace and disables management for Claude plugin Skills', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'skillhub-plugin-skill-'));
+    tempRoots.push(root);
+    const skillDir = path.join(
+      root, '.claude', 'plugins', 'cache', 'alpha', '1.0.0', 'skills', 'browser',
+    );
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(skillDir, 'SKILL.md'),
+      '---\nname: browser\ndescription: Plugin skill\n---\nBody\n',
+      'utf-8',
+    );
+    const maker = {
+      listCustomizations: vi.fn(async () => ({
+        errors: [],
+        items: [{
+          engine: 'claude-code' as const,
+          kind: 'skill' as const,
+          scope: 'global' as const,
+          name: 'alpha:browser',
+          pluginName: 'alpha',
+          description: 'Plugin skill',
+          absolutePath: skillDir,
+          mdPath: path.join(skillDir, 'SKILL.md'),
+          files: [],
+        }],
+      })),
+    } as unknown as Maker;
+
+    const result = await scanAllSkills({}, maker);
+
+    // 名称必须保留 `alpha:` 命名空间：两个插件提供同名 Skill 时要能区分来源。
+    // managedByPlugin 让界面禁用启停开关——Claude 忽略插件 Skill 的
+    // skillOverrides，开关只会造成「显示已关闭但仍加载」的假象。
+    expect(result.skills[0]).toMatchObject({
+      name: 'alpha:browser',
+      managedByPlugin: true,
+      canUninstall: false,
+    });
+  });
+
+  it('keeps the scanned plugin Skill name when the Skill folder is a symlink', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'skillhub-plugin-symlink-'));
+    tempRoots.push(root);
+    const target = path.join(root, 'shared', 'browser-skill');
+    fs.mkdirSync(target, { recursive: true });
+    fs.writeFileSync(path.join(target, 'SKILL.md'), '---\nname: browser\n---\nBody\n', 'utf-8');
+    const skillDir = path.join(
+      root, '.claude', 'plugins', 'cache', 'alpha', '1.0.0', 'skills', 'browser',
+    );
+    fs.mkdirSync(path.dirname(skillDir), { recursive: true });
+    fs.symlinkSync(target, skillDir, process.platform === 'win32' ? 'junction' : 'dir');
+    const maker = {
+      listCustomizations: vi.fn(async () => ({
+        errors: [],
+        items: [{
+          engine: 'claude-code' as const,
+          kind: 'skill' as const,
+          scope: 'global' as const,
+          name: 'alpha:browser',
+          pluginName: 'alpha',
+          absolutePath: skillDir,
+          mdPath: path.join(skillDir, 'SKILL.md'),
+          files: [],
+        }],
+      })),
+    } as unknown as Maker;
+
+    const result = await scanAllSkills({}, maker);
+
+    // realPath 解析后指向 browser-skill；若用 basename(realPath) 重拼会得到
+    // alpha:browser-skill，与 `/` 菜单里的 alpha:browser 对不上。
+    expect(result.skills[0]).toMatchObject({ name: 'alpha:browser' });
+  });
+
+  it('keeps two aliases of the same plugin Skill that share a physical target', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'skillhub-plugin-alias-'));
+    tempRoots.push(root);
+    const target = path.join(root, 'shared', 'browser-skill');
+    fs.mkdirSync(target, { recursive: true });
+    fs.writeFileSync(path.join(target, 'SKILL.md'), '---\nname: browser\n---\nBody\n', 'utf-8');
+    const skillsRoot = path.join(root, '.claude', 'plugins', 'cache', 'alpha', '1.0.0', 'skills');
+    fs.mkdirSync(skillsRoot, { recursive: true });
+    const linkType = process.platform === 'win32' ? 'junction' : 'dir';
+    fs.symlinkSync(target, path.join(skillsRoot, 'browser'), linkType);
+    fs.symlinkSync(target, path.join(skillsRoot, 'browse'), linkType);
+    const maker = {
+      listCustomizations: vi.fn(async () => ({
+        errors: [],
+        items: ['browser', 'browse'].map((alias) => ({
+          engine: 'claude-code' as const,
+          kind: 'skill' as const,
+          scope: 'global' as const,
+          name: `alpha:${alias}`,
+          pluginName: 'alpha',
+          absolutePath: path.join(skillsRoot, alias),
+          mdPath: path.join(skillsRoot, alias, 'SKILL.md'),
+          files: [],
+        })),
+      })),
+    } as unknown as Maker;
+
+    const result = await scanAllSkills({}, maker);
+
+    // 两个别名解析到同一物理目录，但运行时是两个独立可调用的命令；
+    // 只按 realPath 去重会让 SkillHub 少一个而 `/` 菜单仍是两个。
+    expect(result.skills.map((skill) => skill.name).sort()).toEqual([
+      'alpha:browse',
+      'alpha:browser',
+    ]);
   });
 
   it('uses the nested skill root when excluding package files', async () => {
@@ -432,10 +545,10 @@ describe('scanAllSkills', () => {
       projects: [{ projectRoot, hash: 'abcd1234' }],
     }, maker);
 
-    expect(maker.listCustomizations).toHaveBeenCalledWith({
+    expect(maker.listCustomizations).toHaveBeenCalledWith(expect.objectContaining({
       workingDirs: [projectRoot],
       forceReload: false,
-    });
+    }));
     expect(result.skills[0]).toMatchObject({
       id: 'claude-code:skill:project:abcd1234:demo',
       urlKey: 'skill:project:abcd1234:demo',
@@ -616,10 +729,10 @@ describe('scanAllSkills', () => {
       projects: [{ projectRoot: 'relative/project', hash: 'badroot' }],
     }, maker);
 
-    expect(maker.listCustomizations).toHaveBeenCalledWith({
+    expect(maker.listCustomizations).toHaveBeenCalledWith(expect.objectContaining({
       workingDirs: [],
       forceReload: false,
-    });
+    }));
   });
 
   it('dedupes the same global skill across Claude and Codex, preferring the shared .agents path', async () => {
@@ -1125,5 +1238,47 @@ describe('skill file access', () => {
       success: true,
       entries: [{ name: 'settings.json', kind: 'file' }],
     });
+  });
+});
+
+describe('plugin Skill grants', () => {
+  it('attests the plugin root so its content is readable outside the user whitelist', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'skillhub-plugin-grant-'));
+    tempRoots.push(root);
+    const skillDir = path.join(root, 'plugins', 'cache', 'alpha', '1.0.0', 'skills', 'browser');
+    fs.mkdirSync(skillDir, { recursive: true });
+    const mdPath = path.join(skillDir, 'SKILL.md');
+    fs.writeFileSync(mdPath, '---\nname: browser\ndescription: Plugin skill\n---\nBody\n', 'utf-8');
+
+    const grants = prepareSkillScanGrants({
+      skills: [{
+        id: 'claude-code:skill:global:alpha:browser',
+        urlKey: 'skill:global:alpha:browser',
+        engine: 'claude-code' as const,
+        linkedEngines: [],
+        kind: 'skill' as const,
+        scope: 'global' as const,
+        name: 'alpha:browser',
+        absolutePath: skillDir,
+        discoveredPath: skillDir,
+        mdPath,
+        files: [],
+        registryEntry: null,
+        pluginSkill: true,
+      }],
+      managedSkillRoots: [],
+      builtInSkills: [],
+    });
+
+    expect(grants.entries).toEqual([
+      expect.objectContaining({ root: fs.realpathSync.native(skillDir), pluginSkill: true }),
+    ]);
+
+    // 词法白名单不认 plugins/cache 布局；只有扫描确认的根能读到内容。
+    await expect(readSkillContent({ mdPath })).resolves.toMatchObject({ success: false });
+    await expect(readSkillContent({
+      mdPath,
+      attestedRoot: grants.entries[0]!.root,
+    })).resolves.toMatchObject({ success: true });
   });
 });

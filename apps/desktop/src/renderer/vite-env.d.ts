@@ -6237,6 +6237,8 @@ interface ElectronAPI {
         remoteHostId?: string;
         forceReload?: boolean;
         sessionId?: string;
+        /** 伙伴目录：排除 Claude Code 插件 Skill（伙伴会话不加载它们）。 */
+        excludePluginSkills?: boolean;
       },
     ) => Promise<{
       success: boolean;

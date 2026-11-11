@@ -35,6 +35,7 @@ export * from './pathText.js';
 export * from './permissionMode.js';
 export * from './presentationLocalization.js';
 export * from './queue.js';
+export * from './remoteClaudeConfig.js';
 export * from './scheduleDelete.js';
 export * from './scheduleEvents.js';
 export * from './scheduleForm.js';

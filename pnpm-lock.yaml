@@ -1445,6 +1445,9 @@ importers:
       '@anthropic-ai/claude-agent-sdk':
         specifier: 0.3.292
         version: 0.3.292(@anthropic-ai/sdk@0.93.0(zod@4.3.6))(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(zod@4.3.6)
+      '@cindy/maker-shared':
+        specifier: workspace:*
+        version: link:../maker-shared
     devDependencies:
       '@types/node':
         specifier: '*'

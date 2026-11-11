@@ -95,6 +95,8 @@ import { configureLocalMachineActivity, readLocalMachineStatus } from '../machin
 import { getHostSourceDevice, getSelfDeviceId, onRemotePushChannel, remoteBackgroundInvoke, remoteInvoke as invokeBotPeer } from '../device-link/index.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import { readDeviceProviderViews, readRemoteProviderRoute } from '../remote-agent/controller/deviceCatalog.js';
+import { claudeConfigDir } from '../remote-agent/controller/projectFiles.js';
+import { readBoundClaudeConfigDir } from '../subscription-accounts/store.js';
 import { checkDeviceRoute } from '../remote-agent/controller/deviceRouteCheck.js';
 import { cancelPendingRemoteStart } from '../remote-agent/controller/startRemote.js';
 import { createNativeHistoryRelocator } from '../remote-agent/controller/relocateNativeHistory.js';
@@ -8368,6 +8370,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           remoteHostId?: string;
           forceReload?: boolean;
           sessionId?: string;
+          /** Partner catalogs exclude Claude Code plugin Skills; see ListAgentSkillsOptions. */
+          excludePluginSkills?: boolean;
+          /** Host-resolved config directory of the session's Claude runtime. */
+          runtimeConfigDir?: string;
         };
         const linksChanged = skillParams.remoteHostId
           ? false
@@ -8386,6 +8392,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();
           }
         });
+        // Discovery must read the directory the session's runtime actually uses.
+        // A non-default subscription account keeps its own CLAUDE_CONFIG_DIR; the
+        // default account (and sessions without an SDK id yet) fall back to the
+        // process-level directory.
+        if (kind === 'claude-code' && !skillParams.remoteHostId) {
+          const sessionMeta = skillParams.sessionId
+            ? await maker.getSessionMeta(skillParams.sessionId)
+            : null;
+          const boundDir = sessionMeta?.sdkSessionId
+            ? readBoundClaudeConfigDir(sessionMeta.sdkSessionId)
+            : undefined;
+          skillParams.runtimeConfigDir = boundDir ?? claudeConfigDir();
+        }
         let descriptors: Awaited<ReturnType<typeof builtInSkillDescriptorsAsync>> | undefined;
         let disabled: ReadonlySet<string> | undefined;
         const readActivation = async () => {

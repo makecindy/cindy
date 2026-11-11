@@ -1,8 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
-import path from 'node:path';
 
-const REMOTE_CLAUDE_CONFIG_SEGMENTS = ['.xdt-server', 'v1', 'claude-home'] as const;
+import { remoteClaudeConfigDir } from '@cindy/maker-shared';
 
 // Keep in sync with maker-core's env-builder. The standalone daemon cannot
 // inherit the remote shell's credentials or provider routing into a session.
@@ -41,16 +40,14 @@ export function stripSensitiveAnthropicEnv(env: NodeJS.ProcessEnv = process.env)
   return stripped;
 }
 
-/** Resolve the Cindy-managed Claude config directory on the remote POSIX host. */
+/**
+ * Resolve the Cindy-managed Claude config directory on the remote POSIX host.
+ *
+ * The segment list lives in `@cindy/maker-shared` so discovery in maker-core
+ * reads exactly the directory this daemon writes.
+ */
 export function resolveRemoteClaudeConfigDir(remoteHomeDir: string = os.homedir()): string {
-  // cc-manager only runs on bash-capable SSH hosts. Normalize separators so
-  // Windows unit tests can inject a POSIX home without changing production
-  // path semantics.
-  const normalizedHome = remoteHomeDir.replaceAll('\\', '/').replace(/\/+$/, '');
-  if (!normalizedHome) {
-    throw new Error('remote home directory is empty');
-  }
-  return path.posix.join(normalizedHome, ...REMOTE_CLAUDE_CONFIG_SEGMENTS);
+  return remoteClaudeConfigDir(remoteHomeDir);
 }
 
 /**

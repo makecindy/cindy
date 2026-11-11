@@ -24,7 +24,8 @@
   },
   "license": "Apache-2.0",
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.3.292"
+    "@anthropic-ai/claude-agent-sdk": "0.3.292",
+    "@cindy/maker-shared": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "*",

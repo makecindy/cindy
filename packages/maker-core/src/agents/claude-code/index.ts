@@ -1166,12 +1166,28 @@ export class ClaudeCodeAgent extends BaseAgent {
   }
 
   override async listAgentSkills(opts: ListAgentSkillsOptions): Promise<ListAgentSkillsResult> {
+    // The session's own config directory. `runtimeConfigDir` is host-resolved
+    // and already accounts for non-default subscription accounts; the default
+    // below only covers sessions running on the default account.
+    const configDir = opts.runtimeConfigDir ?? path.join(os.homedir(), '.claude');
     if (opts.remoteHostId) {
       const fileOps = this.deps.getRemoteAgentFileOps?.(opts.remoteHostId);
       if (!fileOps) throw new Error('Claude Code remote Skill discovery requires remote file operations');
-      return scanRemoteClaudeSkills({ fileOps, workingDir: opts.workingDir });
+      return scanRemoteClaudeSkills({
+        fileOps,
+        workingDir: opts.workingDir,
+        excludePluginSkills: opts.excludePluginSkills,
+      });
     }
-    const raw = await scanClaudeSlashCommands(opts.workingDir);
+    // Project-scoped installs record the cwd at install time, and Claude Code
+    // resolves project settings by walking up from the cwd — so the working
+    // directory itself is the correct match target, not a derived Git root.
+    const raw = await scanClaudeSlashCommands({
+      ...(opts.workingDir ? { workingDir: opts.workingDir } : {}),
+      configDir,
+      ...(opts.workingDir ? { projectRoots: [path.resolve(opts.workingDir)] } : {}),
+      ...(opts.excludePluginSkills ? { excludePluginSkills: true } : {}),
+    });
     return {
       skills: [...await this.managedSkillCommands(raw.map((item) => item.name)), ...raw.map((c) => ({
         kind: 'agent-skill' as const,
