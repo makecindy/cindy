@@ -514,7 +514,11 @@ export function ProviderShareManagePage({
         </SettingsSection>
       )}
 
-      {providerForApproval?.subscriptionFastPolicy && <SubscriptionFastSetting provider={providerForApproval} deviceId={deviceId} />}
+      {deviceId && providerForApproval?.subscriptionFastPolicy && (
+        <div className="mt-6 shrink-0">
+          <SubscriptionFastSetting provider={providerForApproval} deviceId={deviceId} />
+        </div>
+      )}
       <RemoteModelAccessSection key={`models:${deviceId ?? 'local'}:${providerId}`} providerId={providerId} deviceId={deviceId} />
 
       <ProviderGroupSection
