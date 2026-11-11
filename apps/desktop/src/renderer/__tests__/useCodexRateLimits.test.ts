@@ -26,6 +26,32 @@ afterEach(() => {
 });
 
 describe('useCodexRateLimits', () => {
+  // F13 unit regression: the old hook swallowed a rejected read. Exercise the
+  // public hook with no cache and with a cache, then retry without losing data.
+  it.each([false, true])('reports failed reads and recovers on retry (cached=%s)', async (cached) => {
+    let finishRetry!: (value: MobileCodexRateLimitsResult) => void;
+    const reader = vi.fn();
+    if (cached) reader.mockResolvedValueOnce(result);
+    reader.mockRejectedValueOnce(new Error('Bearer F13_FAKE_SECRET user_content=F13_FAKE_CONTENT'))
+      .mockImplementationOnce(() => new Promise(resolve => { finishRetry = resolve; }));
+    vi.stubGlobal('electronAPI', { maker: { usage: { getCodexRateLimits: reader } } });
+    const hook = renderHook(() => useCodexRateLimits(true));
+    if (cached) {
+      await waitFor(() => expect(hook.result.current.snapshot).toBe(result));
+      await act(async () => hook.result.current.refresh());
+    }
+    await waitFor(() => expect(hook.result.current.failed).toBe(true));
+    expect(hook.result.current.snapshot).toBe(cached ? result : null);
+    expect(JSON.stringify(hook.result.current)).not.toContain('F13_FAKE');
+    act(() => hook.result.current.refresh());
+    expect(hook.result.current.refreshing).toBe(true);
+    expect(hook.result.current.failed).toBe(true);
+    act(() => hook.result.current.refresh());
+    expect(reader).toHaveBeenCalledTimes(cached ? 3 : 2);
+    await act(async () => finishRetry(result));
+    expect(hook.result.current).toMatchObject({ snapshot: result, failed: false, refreshing: false });
+  });
+
   // Unit regression r4362108215: a resumed live card queues behind a pending
   // read. Existing clear/unmount tests did not have such a queue; neither may
   // start another read after the old reply settles or restore a cleared quota.

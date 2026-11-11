@@ -43,6 +43,8 @@ const mocks = vi.hoisted(() => ({
   resetSnapshot: null as MobileCodexRateLimitsResult | null,
   consumeReset: vi.fn(),
   fetchProviderAccountUsage: vi.fn(),
+  codexQuotaReadFailed: false,
+  codexQuotaRefreshing: false,
 }));
 
 vi.mock('react-i18next', () => ({
@@ -155,6 +157,8 @@ vi.mock('@/hooks/useCodexRateLimits', () => ({
   useCodexRateLimits: () => ({
     snapshot: mocks.resetSnapshot,
     refresh: mocks.refreshCodexRateLimits,
+    failed: mocks.codexQuotaReadFailed,
+    refreshing: mocks.codexQuotaRefreshing,
   }),
 }));
 // device-link 远程会话读被控端镜像 hook(#3789);本文件不铺隧道 API,镜像一律返回 null →
@@ -269,6 +273,8 @@ beforeEach(() => {
   mocks.codexSnapshot = null;
   mocks.resetSnapshot = null;
   mocks.consumeReset.mockReset();
+  mocks.codexQuotaReadFailed = false;
+  mocks.codexQuotaRefreshing = false;
   mocks.xaiSnapshot = null;
   mocks.gatewaySnapshot = null;
   mocks.creditSnapshot = null;
@@ -438,6 +444,33 @@ describe('TodaySpendChip credit snapshot time', () => {
 });
 
 describe('TodaySpendChip Claude subscription popover', () => {
+  // F13 unit: exercise the task entry, where quota data and read details come
+  // from separate hooks. A detail read failure must keep the available meter.
+  it('keeps task quota visible and connects its failed-read retry action', () => {
+    mocks.codexAuthInjection = 'oauth-bearer';
+    mocks.codexQuotaReadFailed = true;
+    mocks.codexSnapshot = {
+      source: 'codex-app-server',
+      primary: { usedPercent: 25, windowMinutes: 300 },
+    };
+    const props = { vendorKey: 'codex' as const, providerId: 'openai', sessionId: 'f13-codex' };
+    const view = render(<TodaySpendChip {...props} />);
+    fireEvent.mouseEnter(screen.getByRole('button', { name: '用量明细' }));
+    act(() => vi.advanceTimersByTime(300));
+    const card = screen.getByTestId('quota-hover-card');
+    expect(within(card).getByRole('status').textContent).toBe('quotaCard.codexRefreshFailed');
+    expect(within(card).getByRole('progressbar').getAttribute('aria-valuenow')).toBe('75');
+    mocks.refreshCodexRateLimits.mockClear();
+    const retryButton = within(card).getByRole('button', { name: 'quotaCard.retryQuota' });
+    fireEvent.focus(retryButton);
+    expect(mocks.refreshCodexRateLimits).not.toHaveBeenCalled();
+    fireEvent.click(retryButton);
+    expect(mocks.refreshCodexRateLimits).toHaveBeenCalledTimes(1);
+    mocks.codexQuotaReadFailed = false;
+    view.rerender(<TodaySpendChip {...props} />);
+    expect(within(card).queryByRole('status')).toBeNull();
+  });
+
   it.each(['accountId', 'source', 'limitId'] as const)(
     'does not celebrate a Codex %s switch as a reset',
     (field) => {
