@@ -653,7 +653,7 @@ describe('model source for an existing task on a subscription account pool', () 
       usage: { claude: { sevenDay: { utilization: 20, resetsAt: now / 1000 + 86400 } } },
     },
   };
-  function mount(deviceId: string | null, reply: () => Promise<unknown>) {
+  function mount(deviceId: string | null, reply: () => Promise<unknown>, readable = true) {
     const sessionAccount = vi.fn(reply);
     const unconfigured = { providerId: 'anthropic', configured: false, accounts: [] };
     const command = vi.fn(async () => unconfigured);
@@ -668,7 +668,7 @@ describe('model source for an existing task on a subscription account pool', () 
     } });
     const view = render(
       <SessionSubscriptionAccountProvider providerId="anthropic" deviceId={deviceId} sessionId={`task-${deviceId}`} nativeSessionId="sdk-1">
-        <ModelSourceUsageProvider providers={[provider('anthropic', 'claude')]} scope={{ deviceId }}>
+        <ModelSourceUsageProvider providers={[provider('anthropic', 'claude')]} scope={readable ? { deviceId } : null}>
           <ModelSourceDetails providerId="anthropic" label="Claude" accountIdentity="a@example.test" modelId="claude-sonnet" />
         </ModelSourceUsageProvider>
       </SessionSubscriptionAccountProvider>,
@@ -693,6 +693,13 @@ describe('model source for an existing task on a subscription account pool', () 
     const query = { action: 'session', providerId: 'anthropic', sessionId: `task-${deviceId}`, nativeSessionId: 'sdk-1' };
     if (deviceId) expect(invoke).toHaveBeenCalledWith(deviceId, 'maker:subscription-accounts', [query]);
     else expect(sessionAccount).toHaveBeenCalledWith(query);
+  });
+
+  // An unreadable directory must not inherit the active task's private account.
+  it('keeps the task account out of an unreadable model-source scope', async () => {
+    const { view } = mount(null, async () => bound, false);
+    await act(async () => {});
+    expect(view.container.textContent).not.toMatch(/b@example|80%/);
   });
 
   // Protocol fallback: no pool / the default account answer `legacy`; older hosts reject the action.

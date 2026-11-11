@@ -224,7 +224,7 @@ export function useModelPickerAccount(providerId: string, deviceId?: string | nu
     providerId,
     target === undefined ? preview.deviceId : target,
   );
-  const display = sessionAccountDisplay(session, t);
+  const display = preview.enabled ? sessionAccountDisplay(session, t) : null;
   if (display) {
     return {
       ...(display.identity ? { identity: display.identity } : {}),
