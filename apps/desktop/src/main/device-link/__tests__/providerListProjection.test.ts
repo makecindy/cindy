@@ -477,6 +477,24 @@ describe('projectInvokeResultForTunnel — maker:provider:list 投影', () => {
     expect(providers[0].routing).toEqual({ codex: {} });
   });
 
+  // PR #9941 review, unit: the enterprise artwork set by the host must survive the
+  // tunnel for current controllers; legacy controllers and non-organization sources never get it.
+  it('企业专属图标只透传给当前控制端，且只认企业来源', () => {
+    const enterprise = {
+      ...xdProviderWithFullRouting(),
+      id: 'byok-1b2c3d4e',
+      source: 'organization',
+      logoKind: 'openai-spectrum',
+      routing: { codex: { upstream: 'https://gateway.example.invalid/v1' } },
+    };
+    const forged = { ...enterprise, id: 'custom-provider', source: 'user' };
+
+    const current = projectForCurrentController({ providers: [enterprise, forged] }).providers;
+    expect(current[0].logoKind).toBe('openai-spectrum');
+    expect(current[1]).not.toHaveProperty('logoKind');
+    expect(project({ providers: [enterprise] }).providers[0]).not.toHaveProperty('logoKind');
+  });
+
   it('混合品牌 routing 不产生 logoKind,也不透传伪造值', () => {
     const { providers } = project({
       providers: [

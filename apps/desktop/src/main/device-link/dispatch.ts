@@ -1127,9 +1127,13 @@ function projectInvokeResultForTunnel(
     if (typeof p.remoteInvocationEnabled === 'boolean') rest.remoteInvocationEnabled = p.remoteInvocationEnabled;
     // 「运行于」是这台电脑自己的偏好，不给其他电脑。
     delete rest.runLocation;
-    // Only the host's narrow Cindy AI identity override may supersede brand inference.
+    // Only narrow host overrides may supersede brand inference: Cindy AI's identity glyph and
+    // the enterprise artwork set by the main process (organizationProviderLogo.ts). Cross-account
+    // share projection removes organization artwork again after this point.
     const logoKind = p.id === 'xd' && p.logoKind === 'xd'
       ? 'xd'
+      : p.source === 'organization' && p.logoKind === 'openai-spectrum'
+      ? 'openai-spectrum'
       : typeof p.id === 'string'
         ? resolveProviderLogoKind(p.id, p.routing as ProviderLogoRouting | undefined)
         : null;
