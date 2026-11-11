@@ -745,6 +745,19 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
   async function prepareReportDelivery(state: WorkerState, delivery: ReportDelivery): Promise<void> {
     const previous = state.delivery;
     const superseded = new Set(previous?.inputClientIds.filter(id => !delivery.inputClientIds.includes(id)));
+    // A new explicit message may replace an unknown send, but its own rejection
+    // cannot prove that older send was rejected. Retain only overlapping debt;
+    // exclusive old inputs are intentionally retired by the new assignment.
+    const retained: ReportDelivery[] = [];
+    for (let cursor = previous; cursor; cursor = cursor.previous) {
+      const inputClientIds = cursor.inputClientIds.filter(id => delivery.inputClientIds.includes(id));
+      if (inputClientIds.length) {
+        const { previous: _previous, ...receipt } = cursor;
+        retained.push({ ...receipt, inputClientIds });
+      }
+    }
+    for (let i = retained.length - 2; i >= 0; i--) retained[i].previous = retained[i + 1];
+    if (retained.length) delivery.previous = retained[0];
     const write = state.persistence.catch(() => undefined).then(async () => {
       if (!current(state)) throw new Error('remote worker owner changed');
       const pending = state.awaiting;
@@ -797,9 +810,9 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
         await reconcileReportDelivery(state);
         if (!current(state) || state.delivery !== delivery) return result;
         // Only a definite no-acceptance result permits the existing automatic retry.
-        state.delivery = undefined;
+        state.delivery = delivery.previous;
         try { await persist(state); }
-        catch (error) { if (!state.delivery) state.delivery = delivery; throw error; }
+        catch (error) { if (state.delivery === delivery.previous) state.delivery = delivery; throw error; }
       }
       else await reconcileReportDelivery(state);
       return result;

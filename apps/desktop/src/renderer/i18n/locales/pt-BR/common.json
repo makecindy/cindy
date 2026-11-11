@@ -9460,6 +9460,9 @@
     }
   },
   "quotaCard": {
+    "codexRefreshFailed": "Não foi possível atualizar a cota do ChatGPT. Tente consultar novamente; as outras informações de uso são mantidas.",
+    "retryQuota": "Consultar a Cota Novamente",
+    "retryingQuota": "Consultando a cota…",
     "usageCritical": "Uso alto",
     "usageWarning": "Uso elevado",
     "usageTitle": "Detalhes de uso",
@@ -14231,6 +14234,7 @@
       "botSentNamed": "Enviado pelo colega \"{{name}}\"",
       "orcaFromLead": "Mensagem do Lead",
       "orcaFromWorker": "Mensagem do Worker",
+      "orcaFromWorkerBatch": "Relatório do sistema: {{count}} resultados de Worker",
       "orcaFromWorkerNamed": "Mensagem do Worker \"{{role}}\"",
       "hookChannelFrom": "De {{channel}}",
       "deviceSentMobileNamed": "Enviado do celular \"{{name}}\"",
@@ -20130,6 +20134,10 @@
     "openDirectoryFailed": "Não foi possível abrir a pasta da conta. Ela pode ter sido movida ou excluída.",
     "loginAgain": "Entrar novamente",
     "login": "Entrar",
+    "quotaRecoverIn": "Disponível em {{duration}}",
+    "quotaExhausted": "Cota esgotada",
+    "quotaFiveHourRemaining": "Cota de 5 horas restante: {{percent}}%",
+    "quotaFiveHourExhausted": "Cota de 5 horas esgotada",
     "quotaAverage": "Média restante {{percent}}%",
     "quotaUpdating": "Cota aguardando atualização",
     "quotaResetSoon": "Redefinição em breve",

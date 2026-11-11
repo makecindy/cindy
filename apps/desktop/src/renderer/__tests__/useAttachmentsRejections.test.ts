@@ -10,6 +10,7 @@
  * 对标 Codex Desktop 去掉大小 / 数量 / 类型校验后,rejection 的触发源收敛为
  * "文件本身不可用"(fileEmpty / readFailed);这里用空文件触发。
  */
+import { useLayoutEffect } from 'react';
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -79,6 +80,35 @@ afterEach(() => {
 });
 
 describe('useAttachments inline rejections', () => {
+  it('does not restore sent files from a pending draft mirror', async () => {
+    const key = 'draft-mirror-send';
+    clearDraft(key);
+    Object.assign(window.electronAPI, {
+      cacheImageFromPath: vi.fn(async () => ({ url: 'cindy-media://blobs/photo.png' })),
+    });
+    let sent = false;
+    const { result, unmount } = renderHook(() => {
+      const attachments = useAttachments(key, key);
+      // PR #8937: send can clear the tray before the selected file's draft effect runs.
+      useLayoutEffect(() => {
+        if (!sent && attachments.attachments.length > 0) {
+          sent = true;
+          attachments.clearFiles();
+        }
+      }, [attachments.attachments, attachments.clearFiles]);
+      return attachments;
+    });
+    await act(async () => {
+      await result.current.addFiles(fileListOf([{ name: 'photo.png', size: 7 }]));
+    });
+    expect(sent).toBe(true);
+    expect(result.current.attachments).toHaveLength(0);
+    expect(getDraft(key)?.attachments ?? []).toHaveLength(0);
+    unmount();
+    expect(getDraft(key)?.attachments ?? []).toHaveLength(0);
+    clearDraft(key);
+  });
+
   it('routes an empty (0-byte) file to rejections, not a toast', async () => {
     const { result } = renderHook(() => useAttachments());
 

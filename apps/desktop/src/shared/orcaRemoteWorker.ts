@@ -16,17 +16,21 @@ export interface OrcaRemoteLead {
   releasedAt?: number;
 }
 
+/** Host-only handoff identity; receipt reconciliation never replays an unknown send. */
+export interface OrcaRemoteReportDelivery {
+  clientId: string;
+  inputClientIds: string[];
+  kind: 'manual' | 'automatic';
+  messageId?: string;
+  /** An explicitly replaced unknown handoff still fences overlapping inputs. */
+  previous?: OrcaRemoteReportDelivery;
+}
+
 /** Lead 侧待回报身份；仅保存消息身份，不重发消息正文。 */
 export interface OrcaRemotePendingReport {
   clientIds: string[];
   baselineMessageId: string | null;
-  /** Host-only handoff identity; receipt reconciliation never replays an unknown send. */
-  delivery?: {
-    clientId: string;
-    inputClientIds: string[];
-    kind: 'manual' | 'automatic';
-    messageId?: string;
-  };
+  delivery?: OrcaRemoteReportDelivery;
 }
 
 const MAX_TEXT = 200;

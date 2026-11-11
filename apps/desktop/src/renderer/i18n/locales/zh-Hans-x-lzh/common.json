@@ -9345,6 +9345,9 @@
     }
   },
   "quotaCard": {
+    "codexRefreshFailed": "ChatGPT 配额更新未成，请重读。其余用量仍存",
+    "retryQuota": "重读配额",
+    "retryingQuota": "正读配额…",
     "usageCritical": "耗用颇高",
     "usageWarning": "耗用偏高",
     "usageTitle": "耗用明细",
@@ -14077,6 +14080,7 @@
       "botSentNamed": "同僚「{{name}}」所遣",
       "orcaFromLead": "Lead 之讯",
       "orcaFromWorker": "Worker 之讯",
+      "orcaFromWorkerBatch": "系统所报 Worker 结果凡 {{count}}",
       "orcaFromWorkerNamed": "Worker「{{role}}」之讯",
       "hookChannelFrom": "自 {{channel}} 来",
       "deviceSentMobileNamed": "自手机「{{name}}」所遣",
@@ -19871,6 +19875,10 @@
     "openDirectoryFailed": "账号目录未能启，或已移或已删。",
     "loginAgain": "重登",
     "login": "登录",
+    "quotaRecoverIn": "{{duration}}后复",
+    "quotaExhausted": "额度已尽",
+    "quotaFiveHourRemaining": "五小时余 {{percent}}%",
+    "quotaFiveHourExhausted": "五小时额度已尽",
     "quotaAverage": "平均余量 {{percent}}%",
     "quotaUpdating": "余量待新",
     "quotaResetSoon": "将重置",

@@ -178,6 +178,12 @@ describe('messageSourceIdEntries', () => {
     ]);
   });
 
+  it('does not attribute an auto-bridge batch to its first Worker', () => {
+    expect(messageSourceIdEntries({ origin: { kind: 'orca', senderLabel: '', senderSessionId: 'w-1', autoBridge: true, autoBridgeBatchCount: 2 } })).toEqual([]);
+    // 单条仍定位发送方 Worker。
+    expect(messageSourceIdEntries({ origin: { kind: 'orca', senderLabel: 'Backend', senderSessionId: 'w-1' } })).toEqual([{ kind: 'session', id: 'w-1' }]);
+  });
+
   it('returns nothing for hook channels, redacted sources and local input', () => {
     expect(messageSourceIdEntries({ origin: { kind: 'scheduler', scheduleId: 'hook:c' } })).toEqual([]);
     expect(messageSourceIdEntries({ origin: { kind: 'scheduler' } })).toEqual([]);

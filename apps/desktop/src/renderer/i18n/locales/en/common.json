@@ -9388,6 +9388,9 @@
     }
   },
   "quotaCard": {
+    "codexRefreshFailed": "ChatGPT quota could not be updated. Retry the read; other usage information is kept.",
+    "retryQuota": "Retry Quota Read",
+    "retryingQuota": "Reading Quota…",
     "usageCritical": "High usage",
     "usageWarning": "Elevated usage",
     "usageTitle": "Usage details",
@@ -14143,6 +14146,7 @@
       "botSentNamed": "Sent by teammate \"{{name}}\"",
       "orcaFromLead": "Message from Lead",
       "orcaFromWorker": "Message from Worker",
+      "orcaFromWorkerBatch": "System report: {{count}} Worker results",
       "orcaFromWorkerNamed": "Message from Worker \"{{role}}\"",
       "hookChannelFrom": "From {{channel}}",
       "deviceSentMobileNamed": "Sent from phone \"{{name}}\"",
@@ -19943,6 +19947,10 @@
     "openDirectoryFailed": "Couldn’t open the account folder. It may have been moved or deleted.",
     "loginAgain": "Sign in again",
     "login": "Sign in",
+    "quotaRecoverIn": "Available in {{duration}}",
+    "quotaExhausted": "Usage limit reached",
+    "quotaFiveHourRemaining": "5-hour remaining {{percent}}%",
+    "quotaFiveHourExhausted": "5-hour usage limit reached",
     "quotaAverage": "Average remaining {{percent}}%",
     "quotaUpdating": "Quota updating",
     "quotaResetSoon": "Resets soon",

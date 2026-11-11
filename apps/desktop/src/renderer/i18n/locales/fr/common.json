@@ -9460,6 +9460,9 @@
     }
   },
   "quotaCard": {
+    "codexRefreshFailed": "Impossible de mettre à jour le quota ChatGPT. Relancez la lecture ; les autres informations d’utilisation sont conservées.",
+    "retryQuota": "Relancer la Lecture du Quota",
+    "retryingQuota": "Lecture du quota…",
     "usageCritical": "Consommation élevée",
     "usageWarning": "Consommation en hausse",
     "usageTitle": "Détail de la consommation",
@@ -14231,6 +14234,7 @@
       "botSentNamed": "Envoyé par le coéquipier « {{name}} »",
       "orcaFromLead": "Message du Lead",
       "orcaFromWorker": "Message du Worker",
+      "orcaFromWorkerBatch": "Rapport système : {{count}} résultats de Worker",
       "orcaFromWorkerNamed": "Message du Worker « {{role}} »",
       "hookChannelFrom": "Depuis {{channel}}",
       "deviceSentMobileNamed": "Envoyé depuis le téléphone « {{name}} »",
@@ -20130,6 +20134,10 @@
     "openDirectoryFailed": "Impossible d’ouvrir le dossier du compte. Il a peut-être été déplacé ou supprimé.",
     "loginAgain": "Se reconnecter",
     "login": "Se connecter",
+    "quotaRecoverIn": "Disponible dans {{duration}}",
+    "quotaExhausted": "Quota épuisé",
+    "quotaFiveHourRemaining": "Quota de 5 heures restant : {{percent}}%",
+    "quotaFiveHourExhausted": "Quota de 5 heures épuisé",
     "quotaAverage": "Restant moyen {{percent}} %",
     "quotaUpdating": "Quota en attente de mise à jour",
     "quotaResetSoon": "Réinitialisation proche",

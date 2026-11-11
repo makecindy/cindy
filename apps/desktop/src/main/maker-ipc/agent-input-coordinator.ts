@@ -41,6 +41,7 @@ import { isPiImageInputUnsupportedError } from '../../shared/inputError.js';
 import { isAccountUsageLimitError } from './usageLimitAutoResume.js';
 import type { UsageLimitRecoverySnapshot } from './usageLimitRecoveryStore.js';
 import { createLogger } from '../logger.js';
+import { AUTO_BRIDGE_BATCH_HEADER_RESERVE, AUTO_BRIDGE_BATCH_MAX_CHARS, AUTO_BRIDGE_BATCH_MAX_ITEMS, AUTO_BRIDGE_BATCH_SEPARATOR, autoBridgeReportCount, buildOrcaAutoBridgeBatch, isOrcaAutoBridgeQueueItem, sameAutoBridgeDispatchOptions } from './orcaAutoBridgeBatch.js';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, readAutoReviewUserText } from './autoReviewUserIntent.js';
 import type { createMessage as createDbMessage } from '../localDb/ipc/messages.js';
 import { REPLY_QUOTE_SOURCE_CONTENT } from './chatReplyQuoteNote.js';
@@ -619,7 +620,7 @@ export interface AgentInputCoordinatorDeps {
    * host 用它释放按 clientId 暂存的 accepted 副作用(如 orca 排队消息的回调表),
    * 否则被丢弃项的暂存条目会永久泄漏。
    */
-  onDiscardedQueuedMessage?: (sessionId: string, item: AgentInputQueuedMessage) => void;
+  onDiscardedQueuedMessage?: (sessionId: string, item: AgentInputQueuedMessage, opts?: { mergedInto: string }) => void;
   /**
    * 排队项派发那一刻，追加在发给模型的 wire 消息末尾的宿主说明；返回 null 不追加。
    * `pendingQueue` 是该项取出后仍在等待的队列。说明不写回队列项（不进排队正文与落库正文）。
@@ -2509,7 +2510,7 @@ export class AgentInputCoordinator {
     // In particular, preserve ACK-uncertain items and their protective pause.
     // Do not infer non-delivery from the live turn ending during the request.
     if (!this.hasPendingQueueItem(sessionId, item.clientId)) return 'not-attempted';
-    if (item.orcaReportDelivery && item.durableDelivery) {
+    if ((item.orcaReportDelivery || item.mergedDeliveryClientIds?.length) && item.durableDelivery) {
       if (!this.deps.awaitQueuePersistence) throw new Error('Durable input is unavailable');
       await this.deps.awaitQueuePersistence(sessionId);
       if (this.states.get(sessionId) !== state || state.generation !== generation
@@ -2528,7 +2529,7 @@ export class AgentInputCoordinator {
     const clientId = item.clientId;
     return (
       !this.isQueueRestored(sessionId) ||
-      Boolean(item.orcaReportDelivery && state.orcaReportsStopped) ||
+      Boolean(item.origin?.kind === 'orca' && (item.orcaReportDelivery || item.mergedDeliveryClientIds?.length) && state.orcaReportsStopped) ||
       !this.deps.isTurnRunning(sessionId) ||
       state.queuePaused || state.queueAbortPending || state.abortBoundaryToken !== null ||
       state.queueInteractionLocks.length > 0 ||
@@ -2823,7 +2824,7 @@ export class AgentInputCoordinator {
       }
     };
     try {
-      if (item.orcaReportDelivery && item.durableDelivery) {
+      if ((item.orcaReportDelivery || item.mergedDeliveryClientIds?.length) && item.durableDelivery) {
         if (!this.deps.awaitQueuePersistence) throw new Error('Durable input is unavailable');
         await this.deps.awaitQueuePersistence(sessionId);
       }
@@ -3918,6 +3919,9 @@ export class AgentInputCoordinator {
     // An edited/merged row is no longer the original automatic report. Its
     // normal queue delivery remains available, but restart must await the user.
     delete replacement.orcaReportDelivery;
+    if (current.durableDelivery) replacement.durableDelivery = current.durableDelivery;
+    const deliveryIds = [...new Set([...(current.mergedDeliveryClientIds ?? []), ...(replacement.mergedDeliveryClientIds ?? [])])];
+    if (deliveryIds.length) replacement.mergedDeliveryClientIds = deliveryIds;
     if (current.clientId === replacement.clientId) {
       if (this.restoredQueueItems.has(current)) this.restoredQueueItems.add(replacement);
       // Editing content cannot erase or forge the host's stable retry lineage.
@@ -3977,6 +3981,15 @@ export class AgentInputCoordinator {
       targets: readonly AgentInputQueuedMessage[],
     ) => AgentInputQueuedMessage | null,
   ): { merged: boolean; projection: AgentInputProjection } {
+    return this.mergeQueuedMessages(sessionId, clientIds, buildReplacement, false);
+  }
+
+  private mergeQueuedMessages(
+    sessionId: string,
+    clientIds: readonly string[],
+    buildReplacement: (targets: readonly AgentInputQueuedMessage[]) => AgentInputQueuedMessage | null,
+    automaticReports: boolean,
+  ): { merged: boolean; projection: AgentInputProjection } {
     const state = this.getState(sessionId);
     if (clientIds.length < 2 || new Set(clientIds).size !== clientIds.length) {
       return { merged: false, projection: this.getProjection(sessionId) };
@@ -4008,10 +4021,26 @@ export class AgentInputCoordinator {
     if (survivor.hostAcceptedAtMs === undefined) delete replacement.hostAcceptedAtMs;
     else replacement.hostAcceptedAtMs = survivor.hostAcceptedAtMs;
 
+    if (automaticReports) {
+      if (presentTargets.some(item => this.restoredQueueItems.has(item))) this.restoredQueueItems.add(replacement);
+      if (presentTargets.every(item => this.restoredOrcaReports.has(item))) {
+        this.restoredOrcaReports.add(replacement);
+      }
+      replacement.retrySourceClientId = survivor.retrySourceClientId;
+    }
+
     const removed = presentTargets.slice(1);
+    const mergedDeliveryIds = [...new Set(presentTargets.flatMap(item => [
+      ...(item.mergedDeliveryClientIds ?? []),
+      ...(item !== survivor && item.durableDelivery ? [item.clientId] : []),
+    ]))];
+    if (mergedDeliveryIds.length) replacement.mergedDeliveryClientIds = [...new Set([
+      ...(replacement.mergedDeliveryClientIds ?? []), ...mergedDeliveryIds,
+    ])].filter(id => id !== replacement.clientId);
+    if (mergedDeliveryIds.length) replacement.durableDelivery = true;
     state.pendingQueue = [
       ...state.pendingQueue.slice(0, firstIndex),
-      this.preserveRestoredQueueProvenance(survivor, replacement),
+      automaticReports ? replacement : this.preserveRestoredQueueProvenance(survivor, replacement),
       ...state.pendingQueue.slice(firstIndex + presentTargets.length),
     ];
     const removedIds = new Set(removed.map((item) => item.clientId));
@@ -4021,7 +4050,9 @@ export class AgentInputCoordinator {
     state.queueEditLocks = state.queueEditLocks.filter((id) => !removedIds.has(id));
     for (const item of removed) {
       this.removePendingCompactWaitClientId(state, item.clientId);
-      this.deps.onDiscardedQueuedMessage?.(sessionId, item);
+      if (replacement.mergedDeliveryClientIds?.length) {
+        this.deps.onDiscardedQueuedMessage?.(sessionId, item, { mergedInto: replacement.clientId });
+      } else this.deps.onDiscardedQueuedMessage?.(sessionId, item);
     }
     this.emit(sessionId);
     this.scheduleDrain(sessionId, 'merge-queued-messages');
@@ -4785,7 +4816,7 @@ export class AgentInputCoordinator {
     // Only trusted durable reports need a pre-ACK steer receipt. Ordinary
     // composer steers keep their existing lifetime and recovery behavior.
     const steeringReports = state.directSteeringItems.filter(item =>
-      item.orcaReportDelivery && item.durableDelivery
+      (item.orcaReportDelivery || item.mergedDeliveryClientIds?.length) && item.durableDelivery
       && !queued.some(queuedItem => queuedItem.clientId === item.clientId));
     return [...queued, ...steeringReports]
       .filter((item) => item.origin?.kind !== 'scheduler')
@@ -4886,6 +4917,7 @@ export class AgentInputCoordinator {
     delete projected[HOST_ONLY_AGENT_PREFIX];
     delete projected.hostAcceptedAtMs;
     delete projected.orcaReportDelivery;
+    delete projected.mergedDeliveryClientIds;
     delete projected.autoReviewUserText;
     delete projected.botTaskCoordination;
     delete projected.fromDeviceLinkClient;
@@ -5237,7 +5269,8 @@ export class AgentInputCoordinator {
     if (this.restoreAttempted.has(sessionId) && !this.restoredQueueSessions.has(sessionId))
       return 'queue-restore-failed';
     if (state.pendingQueue.length === 0) return 'queue-empty';
-    if (state.pendingQueue[0].orcaReportDelivery && state.orcaReportsStopped) return 'orca-report-stopped';
+    if (state.pendingQueue[0].origin?.kind === 'orca' && (state.pendingQueue[0].orcaReportDelivery
+      || state.pendingQueue[0].mergedDeliveryClientIds?.length) && state.orcaReportsStopped) return 'orca-report-stopped';
     if (state.queuePaused && !(state.queuePausedByRestore && (this.restoredUsageLimitRetryItems.has(state.pendingQueue[0])
       || this.restoredOrcaReports.has(state.pendingQueue[0]))))
       return state.queuePausedByRestore ? 'queue-paused-by-restore' : 'queue-paused';
@@ -5252,6 +5285,40 @@ export class AgentInputCoordinator {
     if (this.getDrainableCompact(sessionId, state)) return 'compact-first';
     if (state.queueEditLocks.includes(head.clientId)) return 'edit-lock';
     return null;
+  }
+
+  /** Lead drain 前只合并队首连续的系统兜底回报；失败/异常来源保留原条目逐条派发。 */
+  private coalesceAutoBridgeHead(
+    sessionId: string,
+    state: SessionInputState,
+    head: AgentInputQueuedMessage,
+  ): AgentInputQueuedMessage {
+    if (!isOrcaAutoBridgeQueueItem(head)) return head;
+    const targets = [head];
+    let batchReports = autoBridgeReportCount(head);
+    // 预估最终正文长度：计入批次头与分隔符，避免包装把字符预算撑破。
+    let projectedChars = AUTO_BRIDGE_BATCH_HEADER_RESERVE + head.text.length;
+    for (const item of state.pendingQueue.slice(1)) {
+      if (!isOrcaAutoBridgeQueueItem(item) || !sameAutoBridgeDispatchOptions(head, item)) break;
+      // Each restored row must independently cross its restore-only pause.
+      // A valid head cannot grant an archived/reassigned tail automatic delivery.
+      if (state.queuePaused && state.queuePausedByRestore && !this.restoredOrcaReports.has(item)) break;
+      // 上限双闸：按真实报告数累计（已合批项按其 count，而非队列行数）+ 含包装的字符预算；超出的留到下一轮 drain。队首必发，不在此拦截。
+      if (batchReports + autoBridgeReportCount(item) > AUTO_BRIDGE_BATCH_MAX_ITEMS) break;
+      if (projectedChars + AUTO_BRIDGE_BATCH_SEPARATOR.length + item.text.length > AUTO_BRIDGE_BATCH_MAX_CHARS) break;
+      targets.push(item);
+      batchReports += autoBridgeReportCount(item);
+      projectedChars += AUTO_BRIDGE_BATCH_SEPARATOR.length + item.text.length;
+    }
+    if (targets.length < 2) return head;
+    if (targets.some((item) => state.queueEditLocks.includes(item.clientId))) return head;
+    const result = this.mergeQueuedMessages(
+      sessionId,
+      targets.map((item) => item.clientId),
+      buildOrcaAutoBridgeBatch,
+      true,
+    );
+    return result.merged ? state.pendingQueue[0] ?? head : head;
   }
 
   private getDrainableHead(
@@ -5335,8 +5402,8 @@ export class AgentInputCoordinator {
       await this.dispatchCompact(sessionId, compact, reason);
       return;
     }
-    const head = this.getDrainableHead(sessionId, state);
-    if (!head) {
+    const drainHead = this.getDrainableHead(sessionId, state);
+    if (!drainHead) {
       const hasRunnableWork =
         state.pendingQueue.length > 0 ||
         state.pendingCompacts.some((item) => item.waitForClientIds.length === 0);
@@ -5382,6 +5449,7 @@ export class AgentInputCoordinator {
       this.scheduleExternalTurnRetryIfNeeded(sessionId, state, `drain-blocked:${reason}`);
       return;
     }
+    const head = this.coalesceAutoBridgeHead(sessionId, state, drainHead);
     state.staleLiveIdleSinceMs = null;
     state.pendingQueue = state.pendingQueue.slice(1);
     this.removePendingCompactWaitClientId(state, head.clientId);
@@ -5496,12 +5564,13 @@ export class AgentInputCoordinator {
         referenceContexts,
       );
       const makerUserMessage = buildMakerUserMessage(head, referenceContexts);
-      if (head.orcaReportDelivery) {
+      if (head.orcaReportDelivery || head.mergedDeliveryClientIds?.length) {
         // A crash after allocation may leave a committed grant without a user
         // row. Persist the uncertain attempt before entering the startup path;
         // only a proven safe rejection below can re-arm automatic delivery.
-        head.orcaReportDelivery.recoveryBlocked = true;
+        if (head.orcaReportDelivery) head.orcaReportDelivery.recoveryBlocked = true;
         this.maybePersistQueueSnapshot(sessionId);
+        if (head.mergedDeliveryClientIds?.length && !this.deps.awaitQueuePersistence) throw new Error('Durable input is unavailable');
         await this.deps.awaitQueuePersistence?.(sessionId);
         if (!this.isActiveTurnCurrent(sessionId, active)) return;
       }

@@ -1066,11 +1066,6 @@ export function getMaker(): Maker {
       reviewOneShot: createMemoryReviewOneShot(),
     });
 
-    // Plugin registry — 先于 agent 构造, 让 createDesktopMcpProviders 拿 registry
-    // 包进每个 MCP provider 的 isEnabled 闭包里。registry 内部读 <userData>/plugin-prefs.json
-    // 和项目 .claude/settings.json, mtime-based 缓存, 只在 session start 时同步检查。
-    const pluginRegistry = createPluginRegistry();
-
     const makerMemoryProviderDeps = {
       runtimeCapabilities: async (context: import('@cindy/mcps').LiziMcpSessionContext, query: AgentCapabilityQuery) => {
         const session = context.sessionId ? _maker?.getSession(context.sessionId) : undefined;
@@ -1114,7 +1109,9 @@ export function getMaker(): Maker {
       getAppVersion: () => app.getVersion(),
       getMakerMemoryManager: () => makerMemoryManager,
       lspPool: getLspPool(),
-      pluginRegistry,
+      // Maker can initialize before login commits its owner. Resolve on every
+      // read so long-lived providers never retain the no-owner/previous owner registry.
+      get pluginRegistry() { return createPluginRegistry(); },
       invokeRemote: remoteInvoke,
       captureSharedTaskCommand: (sessionId: string, assertCurrent: () => void) => captureSharedTaskAgentCommand(sessionId, assertCurrent, {
         ready: waitForSharedTaskRelay, online: isSharedTaskRelayOnline, available: isSharedTaskAvailable,
@@ -1629,7 +1626,7 @@ export function getMaker(): Maker {
             ensureForward: ensureRemoteMcpForward,
             // collab 全局禁用 (Tier 4) 时整个不注入 — bridge 名单不反映
             // 开关 (codex-connector R20 P2, 与 codex daemon 侧同闸门)。
-            isCollabEnabled: () => pluginRegistry.isEnabled('collab'),
+            isCollabEnabled: () => createPluginRegistry().isEnabled('collab'),
             onOptionalInjectionError: (err) => {
               desktopMakerLogger.warn('cc remote MCP injection skipped', {
                 remoteHostId,
@@ -1938,7 +1935,7 @@ export function getMaker(): Maker {
               buildRemoteCodexSessionMcpConfig(ctx.remoteHostId!, instance, {
                 bridgeInstanceId: getActiveCodexBridgeInstanceId(),
                 serverNames: getActiveCodexBridgeServerNames() ?? [],
-                collabEnabled: pluginRegistry.isEnabled('collab'),
+                collabEnabled: createPluginRegistry().isEnabled('collab'),
                 makerMemoryEnabled: _maker?.makerMemory?.isEnabled() ?? false,
                 vendorOptions: session?.vendorOptions,
               }),

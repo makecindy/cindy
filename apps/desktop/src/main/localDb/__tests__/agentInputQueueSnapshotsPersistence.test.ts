@@ -72,6 +72,50 @@ function installDb(
 }
 
 describe('agent input queue snapshot durability boundary', () => {
+  // #9346, db tier: real writer/readers must not retire B before the [A+B]
+  // snapshot owns B's body. Existing tests only cover single delivery IDs.
+  // Two rows and an injected snapshot/alias failure expose both crash windows.
+  it.each(['snapshot', 'alias'] as const)('retains every coalesced report across a failed %s write', async failure => {
+    const sqlite = new Database(':memory:');
+    sqlite.exec(`
+      CREATE TABLE agent_input_queue_snapshots (session_id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at INTEGER);
+      CREATE TABLE messages (id TEXT, session_id TEXT, client_id TEXT, role TEXT, content TEXT,
+        tool_use_id TEXT, agent_meta TEXT, agent_kind TEXT, rewind_at INTEGER, created_at INTEGER, UNIQUE(session_id, client_id));
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, cleared_at INTEGER);
+    `);
+    const sid = `batch-failure-${failure}`;
+    const db = { drizzle: drizzle(sqlite) };
+    mocks.getDbClient.mockReturnValue(db);
+    const a = queued('first', 'a'), b = queued('second', 'b');
+    const batch = { ...a, text: 'first + second', persistedContent: 'first + second', mergedDeliveryClientIds: ['b'],
+      orcaReportDelivery: { workerId: 'w-a', members: [
+        { clientId: 'a', workerId: 'w-a', senderSessionId: 's-a' },
+        { clientId: 'b', workerId: 'w-b', senderSessionId: 's-b' },
+      ] } };
+    try {
+      await saveAgentInputQueueSnapshot(sid, [a, b]);
+      sqlite.exec(failure === 'snapshot'
+        ? `CREATE TRIGGER fail_write BEFORE UPDATE ON agent_input_queue_snapshots BEGIN SELECT RAISE(FAIL, 'snapshot unavailable'); END;`
+        : `CREATE TRIGGER fail_write BEFORE INSERT ON messages BEGIN SELECT RAISE(FAIL, 'alias unavailable'); END;`);
+      await expect(saveAgentInputQueueSnapshot(sid, [batch])).rejects.toThrow('unavailable');
+      expect(sqlite.prepare('SELECT * FROM messages').all()).toEqual([]);
+      // A new owner epoch models a fresh process: the persisted row is the only evidence.
+      mocks.epoch += 1;
+      expect(await loadAgentInputQueueSnapshot(sid)).toEqual(failure === 'snapshot' ? [a, b] : [batch]);
+      expect(await readInputDeliveryReceipts(sid, ['a', 'b'])).toEqual([
+        { clientId: 'a', state: 'pending' }, { clientId: 'b', state: 'pending' },
+      ]);
+      sqlite.exec('DROP TRIGGER fail_write');
+      // Editing revokes automatic recovery, while receipt identities remain owned.
+      const next = failure === 'alias' ? { ...batch, orcaReportDelivery: undefined } : batch;
+      await saveAgentInputQueueSnapshot(sid, [next]);
+      expect(await loadAgentInputQueueSnapshot(sid)).toEqual([JSON.parse(JSON.stringify(next))]);
+      expect(await readInputDeliveryReceipts(sid, ['a', 'b'])).toEqual([
+        { clientId: 'a', state: 'pending' }, { clientId: 'b', state: 'removed' },
+      ]);
+    } finally { sqlite.close(); }
+  });
+
   // #9346, db tier: an empty-queue Stop had no durable representation. Exercise
   // the real writer/readers, discovery, counts and receipts without creating a message.
   it('persists an empty report Stop separately from queued messages and clears it on resume', async () => {

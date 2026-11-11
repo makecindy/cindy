@@ -914,11 +914,13 @@ function parsePendingReport(raw: string | null): OrcaRemotePendingReport | null 
       !value.clientIds.every((id) => typeof id === 'string' && id.length > 0) ||
       !(value.baselineMessageId === null || typeof value.baselineMessageId === 'string')) return null;
     const delivery = value.delivery;
-    if (delivery !== undefined && (!delivery || typeof delivery.clientId !== 'string' || !delivery.clientId ||
-      !Array.isArray(delivery.inputClientIds) || !delivery.inputClientIds.length || delivery.inputClientIds.length > 64 ||
-      !delivery.inputClientIds.every(id => typeof id === 'string' && id.length > 0) ||
-      (delivery.kind !== 'manual' && delivery.kind !== 'automatic') ||
-      (delivery.messageId !== undefined && typeof delivery.messageId !== 'string'))) return null;
+    for (let receipt = delivery; receipt !== undefined; receipt = receipt.previous) {
+      if (!receipt || typeof receipt.clientId !== 'string' || !receipt.clientId ||
+        !Array.isArray(receipt.inputClientIds) || !receipt.inputClientIds.length || receipt.inputClientIds.length > 64 ||
+        !receipt.inputClientIds.every(id => typeof id === 'string' && id.length > 0) ||
+        (receipt.kind !== 'manual' && receipt.kind !== 'automatic') ||
+        (receipt.messageId !== undefined && typeof receipt.messageId !== 'string')) return null;
+    }
     return { clientIds: value.clientIds, baselineMessageId: value.baselineMessageId,
       ...(delivery ? { delivery } : {}) };
   } catch { return null; }

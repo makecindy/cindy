@@ -475,6 +475,32 @@ runtime 已在线的 session 之后才成为 Lead（例如从协同面板开启�
    `imageFiles` / `agentMessageTextWithImages`、`orcaImageAttachments.ts` 与 `register.ts` 的
    `validateImageAttachments`。
 
+1d. **系统兜底回报在 Lead drain 前合批（状态：不变量）**<br>
+   只有 `sendAutoBridgeToLead` 经 dispatcher 盖章 `origin.autoBridge=true` 的 Worker 回报可合批；主动
+   `send_to_lead`、Lead 派单、用户消息、scheduler / 插件 / 会话来源都不得命中。coordinator 在真正 drain 队首前，
+   只把连续且派发配置（model / effort / permissionMode / workingDir / createOpts / vendorOptions）相同的系统兜底回报
+   原子合并为一条：保留首条 `clientId`、`hostAcceptedAtMs`、队列位置与创建时间，移除项走既有 discard settlement；
+   durable 报告合批另保留全部成员的交付 ID、Worker ID 和来源 session 作为宿主私有证据。只有全部目标都具备恢复资格时才继承自动恢复资格；
+   重启逐成员复核现有团队关系，Stop／未知发送结果仍封住整个批次。普通编辑与主动合并不继承该资格。
+   被合并 ID 的取消回执必须在完整批次快照保存成功后才写，持久化等待覆盖两步；两步之间退出时，批次内成员 ID 仍可证明 pending，
+   快照失败时旧的单条报告保持可恢复。该证据不进入消息正文、远端协议或队列投影。
+   Worker 主动合并 durable 报告也走同一回执身份转移与持久化顺序；编辑和主动合并仅撤销自动恢复资格，不能抹掉尚未结清的交付 ID。
+   合并本身一次交换、一次 emit/持久化，随后 drain 取出队首会再投影一次（中间态是“已合批仍在队首”，崩溃恢复按
+   clientId 与已落库行去重，不会二次发送）。发给模型的批次正文以 `[Auto-bridged batch: N worker reports]` 开头，按原顺序
+   保留每条 Worker 的 `[From Orca Worker ...(worker_id)]` 身份前缀、`[Auto-bridged: ...]` 状态与完整正文（供 Lead 路由）；
+   可见/持久化正文剥掉模型向批次头与 `worker_id` 内部标识、保留 role 前缀以区分多 Worker（单条可见正文无 role 行）；
+   共享访客的消息与排队投影都只拿这份可见正文，看不到 worker_id。持久化仍用既有
+   `{orcaSource:'worker',content}` 信封，`origin.autoBridgeBatchCount` 记录该批条数；origin 保留首条 `senderSessionId` 作
+   Host 团队授权证据（`taskActionHost.readOrcaTeam` 承重，仅宿主校验用）。所有展示/投影消费点必须对批次加闸门、不据此归属首个 Worker：
+   `messageSourceIdEntries`（悬停/长按 ID）、`describeHandoffUserSource`（交接摘要）、两端数量型标题与访客脱敏均已按 `autoBridge/autoBridgeBatchCount` 提前返回。不跨用户消息、不重排、不额外等待；
+   构造失败、附件 / 引用、非法计数或配置不一致时保留原条目逐条派发。合批受上限约束（均衡档：最多 8 条、批次正文累计 ≤32000 字符，
+   字符预算为主、条数兜底，见 `AUTO_BRIDGE_BATCH_MAX_ITEMS / AUTO_BRIDGE_BATCH_MAX_CHARS`）：条数按真实报告数累计（已合批项按其 `autoBridgeBatchCount`，而非队列行数），retry/re-flatten 不绕过上限；字符预算按含批次头/分隔符的最终正文预估（builder 再兜底校验最终条数与长度）；加入下一条会超限即停止合批，剩余回报留到
+   下一轮 drain 再合批，以保留轮间 compact 机会；队首必发（哪怕单条超预算也单独派发），不截断任何单条回报。暂停、编辑锁、插话、恢复与重试沿用 coordinator
+   既有守卫。批次界面用数量型标题，不把整批归到首个 Worker，也不提供只跳首个 Worker 的来源链接。Lead prompt 规则 7
+   只声明按批次头一次处理批内各回报，不改变派单 / 静默 / 终态验收边界。实现指针：`orcaAutoBridgeBatch.ts`、
+   `agent-input-coordinator.ts` 的 `coalesceAutoBridgeHead`、`orcaInterAgentDispatcher.ts` 的 `resolveOrigin`；回归见
+   `orcaInterAgentDispatcher.test.ts` 的 auto-bridge queue coalescing 用例。
+
 2. **accepted 才能产生运行副作用（状态：不变量）**<br>
    只有底层 send accepted 后，才能把 worker 标成 `running`、建立 auto-bridge pending 并广播 UI；dispatch 失败必须 rollback 到 accepted 前状态，且 rollback 不得覆盖已有终态。实现指针：`orcaTeamService.ts` 的 `dispatchResolvedWorker` 与 `rollbackAcceptedDispatchState`。
 
@@ -526,6 +552,7 @@ runtime 已在线的 session 之后才成为 Lead（例如从协同面板开启�
    拒绝才恢复可重试状态。该证明只用于宿主持有的报告身份，普通输入沿用既有异常与排队语义。
    同一 Worker 的报告交接串行，派活与持久化仍复用原入口；每次新显式报告使用独立身份。
    新显式报告可原子接管旧的未知交接记录；自动回报只允许经派活回执与历史核实的新输入接管，
+   新显式报告保留重叠输入的旧未知交付链；新报告明确拒绝时恢复该防重放证据，重启后同样成立，不恢复已被新工作替代的旧独有输入。
    不因队列新增输入就重发旧报告。接管在一次写入中替换身份与旧独有输入，失败保留原记录，
    不把旧的未知报告标成成功、不推进它的游标，报告正文仍保留在运行设备的任务历史中。
    恢复队列的报告在真正 accepted 时，使用当前 bridge provider 补建 Lead 回复捕获，

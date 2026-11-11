@@ -800,6 +800,8 @@ import {
   type OrcaIdleReleaseWatcher,
 } from './orcaIdleReleaseWatcher.js';
 import { createOrcaWorkerResumeScheduler } from './orcaWorkerResumeScheduler.js';
+import { readClaudeIdleMinutes } from '../maker-host/claude-idle-release-settings.js';
+import { createClaudeIdleReleaseWatcher, ORDINARY_CLAUDE_TASK_SQL } from './claudeIdleReleaseWatcher.js';
 import {
   createPiIdleReleaseWatcher,
   piIdleReleaseCandidateWhere,
@@ -3290,6 +3292,7 @@ let idleReleaseWatcher: OrcaIdleReleaseWatcher | null = null;
 
 /** 模块级 pi 普通会话 idle watcher；与 Orca watcher 同一生命周期。 */
 let piIdleReleaseWatcher: PiIdleReleaseWatcher | null = null;
+let claudeIdleReleaseWatcher: ReturnType<typeof createClaudeIdleReleaseWatcher> | null = null;
 
 /**
  * 取 Orca collab service, ready 前返 null。registerMakerIpc 执行完成后 holder
@@ -3326,6 +3329,8 @@ function createBridgeWorkerLabel(task: string): string {
 
 /** 停止 idle watcher setInterval (app quit 时调, maker 可能已 shutdown)。 */
 export function stopOrcaIdleWatcher(): void {
+  claudeIdleReleaseWatcher?.stop();
+  claudeIdleReleaseWatcher = null;
   idleReleaseWatcher?.stop();
   idleReleaseWatcher = null;
 }
@@ -16408,6 +16413,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         source: 'worker',
         senderLabel: 'Worker',
         workerId,
+        autoBridge: true,
         meta: {
           source: 'maker-ipc/auto-bridge',
           context: `worker_auto_bridge/${leadSessionId}/${workerId}`,
@@ -16891,6 +16897,39 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     log,
   });
   piIdleReleaseWatcher.start();
+
+  // Ordinary local Claude tasks retain their native resume identity and task
+  // resources. Specialized owners (bots, Orca, Goals, remote agents) stay out.
+  claudeIdleReleaseWatcher?.stop();
+  claudeIdleReleaseWatcher = createClaudeIdleReleaseWatcher({
+    listSessions: () => maker.listActiveSessions(),
+    getSession: (id) => maker.getSession(id),
+    readMinutes: readClaudeIdleMinutes,
+    isOrdinaryTask: async (id, sdkSessionId) => Boolean(
+      await getDbClient().queryOne(ORDINARY_CLAUDE_TASK_SQL, [id, sdkSessionId]),
+    ),
+    hasPendingInput: hasPendingIdleReleaseInput,
+    isHostBusy: (id) => isSessionTurnPendingCompletion(id)
+      || hasPendingAgentInteractionForSession(id)
+      || Boolean(getClaudeSessionBackgroundActivity(id))
+      || inputCoordinator.hasPendingQueuedWork(id)
+      || inputCoordinator.hasQueuedItemWhere(id, () => true, { includeRecovery: true })
+      || inputCoordinator.isAutoResumePending(id)
+      || inputCoordinator.hasQueuedAutoResume(id)
+      || inputCoordinator.getAutoResumeAttemptToken(id) !== null
+      || pendingCredentialSwitchHolder?.has(id) === true,
+    withLock: withSendToSessionLock,
+    // The existing suppression window is sampled by the synchronous status
+    // listener and onClose hook before it yields; no task resources are removed.
+    close: (session, retryFailedClose) => withRehydrateCloseSuppressed(session.id, async () =>
+      await maker.closeSessionIfCurrent(session as Session, 'runtime-refresh',
+        retryFailedClose && session.getStatus() === 'error' ? undefined : { onlyIfIdle: true }) === 'closed',
+    ),
+    now: () => performance.now(),
+    released: (sessionId, idleMs) => log.info('claudeIdleWatcher: released idle runtime', { sessionId, idleMs }),
+    warn: (message) => log.warn(message),
+  });
+  claudeIdleReleaseWatcher.start();
 
   type InternalRuntimeSelectionOptions = {
     source: 'user' | SessionRuntimeMutationSource;
@@ -20881,11 +20920,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     describeQueueBehindDispatch: (_sessionId, item, pendingQueue) =>
       buildOrcaQueueDispatchNote(item, pendingQueue),
     // 队列项未派发即被丢弃(stop/remove/clearSession) → 释放暂存的 accepted 副作用, 防回调表泄漏。
-    onDiscardedQueuedMessage: (sessionId, item) => {
+    onDiscardedQueuedMessage: (sessionId, item, opts) => {
       void settleTaskActionInput(item).catch(() => undefined);
       notePluginTaskLifecycle(service => service.discard(sessionId, item, 'cancelled'));
-      if (item.durableDelivery === true) {
-        void saveCancelledInputDelivery(sessionId, item.clientId).catch((error) => {
+      if (item.durableDelivery === true && !opts?.mergedInto) {
+        const clientIds = new Set([item.clientId, ...(item.mergedDeliveryClientIds ?? [])]);
+        for (const clientId of clientIds) void saveCancelledInputDelivery(sessionId, clientId).catch((error) => {
           log.warn('input delivery cancellation persistence failed', { sessionId, error: String(error) });
         });
       }
@@ -21012,10 +21052,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     canRestoreOrcaReport: async (sessionId, item) => {
       const owner = activeOwnerScopeKey();
       if (!owner || isAppSessionBoundaryPending() || !item.orcaReportDelivery || item.origin?.kind !== 'orca') return false;
-      const worker = (await listWorkersByLead(sessionId)).find(member => member.id === item.orcaReportDelivery!.workerId);
+      const workers = await listWorkersByLead(sessionId);
+      const evidence = item.orcaReportDelivery.members ?? [{ clientId: item.clientId,
+        workerId: item.orcaReportDelivery.workerId, senderSessionId: item.origin.senderSessionId }];
+      if (!Array.isArray(evidence) || evidence.length === 0 || evidence.length > 8
+        || evidence.length !== (item.origin.autoBridgeBatchCount ?? 1)
+        || new Set(evidence.map(member => member?.clientId)).size !== evidence.length
+        || evidence[0]?.clientId !== item.clientId || evidence[0]?.workerId !== item.orcaReportDelivery.workerId
+        || evidence[0]?.senderSessionId !== item.origin.senderSessionId) return false;
       const row = await getSessionRowSnapshotStrict(sessionId);
       return owner === activeOwnerScopeKey() && !isAppSessionBoundaryPending()
-        && !!worker && worker.sessionId === item.origin?.senderSessionId
+        && evidence.every(member => member && typeof member.clientId === 'string' && !!member.clientId
+          && typeof member.senderSessionId === 'string' && !!member.senderSessionId
+          && workers.some(worker => worker.id === member.workerId && worker.sessionId === member.senderSessionId))
         && row?.status === 'active';
     },
     loadClearBoundary: async (sessionId) =>
@@ -21480,10 +21529,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       throwIpcError('INVALID_PARAMS', 'queued.createOpts.agentKind invalid');
     }
     const normalized: AgentInputQueuedMessage = { ...msg };
+    if (normalized.origin?.kind === 'orca') {
+      // 系统兜底合批标记只由 main 的 auto-bridge 入口盖章；wire 自报一律剥掉。
+      const origin = { ...normalized.origin };
+      delete origin.autoBridge;
+      delete origin.autoBridgeBatchCount;
+      normalized.origin = origin;
+    }
     delete normalized.sharedTaskAuthor;
     delete normalized.autoReviewUserText;
     delete normalized.botTaskCoordination;
     delete normalized.orcaReportDelivery;
+    delete normalized.mergedDeliveryClientIds;
     if (normalized.durableDelivery !== true) delete normalized.durableDelivery;
     // Only Main-created welcomes and restored host snapshots may carry this policy.
     delete normalized.toolsDisabled;

@@ -252,8 +252,10 @@ describe('orcaTeamStore', () => {
     // #9346: a restart must retain the Lead receipt identity as well as remote input IDs.
     const handoff = { ...pending, delivery: { clientId: 'lead-report-1', inputClientIds: ['c-1'],
       kind: 'automatic' as const, messageId: 'reply-1' } };
-    await store.saveWorkerRemoteReport('worker-1', handoff);
-    expect(await store.getRemoteWorkerByProxySession('worker-session-1')).toMatchObject({ pendingReport: handoff });
+    const previous = { clientId: 'unknown-report', inputClientIds: ['c-1'], kind: 'manual' as const };
+    const chainedHandoff = { ...handoff, delivery: { ...handoff.delivery, previous } };
+    await store.saveWorkerRemoteReport('worker-1', chainedHandoff);
+    expect(await store.getRemoteWorkerByProxySession('worker-session-1')).toMatchObject({ pendingReport: chainedHandoff });
     await store.saveWorkerRemoteReport('worker-1', null, 'reply-1');
     await store.markWorkerRemoteStopConfirmed('worker-1', 1234);
     expect(await store.getRemoteWorkerByProxySession('worker-session-1')).toMatchObject({ pendingReport: null,

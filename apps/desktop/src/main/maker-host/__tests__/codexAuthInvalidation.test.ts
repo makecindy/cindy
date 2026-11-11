@@ -2598,7 +2598,11 @@ describe('Codex system credential suppression marker', () => {
       JSON.stringify({ tokens: { access_token: 'cindy-f2-token', account_id: 'acct-2' } }),
     );
     const loginFinalizeGate = deferred();
-    const onLoginSuccess = vi.fn(() => loginFinalizeGate.promise);
+    const loginCallbackEntered = deferred();
+    const onLoginSuccess = vi.fn(() => {
+      loginCallbackEntered.resolve();
+      return loginFinalizeGate.promise;
+    });
     const onLogoutSuccess = vi.fn().mockResolvedValue(undefined);
     const broadcast = vi.fn().mockResolvedValue(undefined);
     adapter.setOnLoginSuccess(onLoginSuccess);
@@ -2611,7 +2615,8 @@ describe('Codex system credential suppression marker', () => {
     ).finishSuccessfulCodexLogin.bind(adapter);
     (adapter as unknown as { loginCancellationOpen: boolean }).loginCancellationOpen = true;
     const loginFinalization = finishSuccessfulCodexLogin();
-    await vi.waitFor(() => expect(onLoginSuccess).toHaveBeenCalledOnce());
+    await Promise.race([loginCallbackEntered.promise, loginFinalization]);
+    expect(onLoginSuccess).toHaveBeenCalledOnce();
     fs.writeFileSync(cachePath, JSON.stringify({ models: [{ slug: 'f2-model' }] }));
     const f2Before = fs.readFileSync(localAuth);
 

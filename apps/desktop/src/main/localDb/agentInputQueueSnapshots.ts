@@ -192,7 +192,8 @@ export async function readInputDeliveryReceipts(
     throw new Error('Input delivery snapshot unavailable');
   }
   // Match restoration's per-entry validation without rewriting the durable snapshot.
-  const pending = new Set(raw.filter(isRestorableQueuedMessage).map((item) => item.clientId));
+  const pending = new Set(raw.filter(isRestorableQueuedMessage).flatMap((item) =>
+    [item.clientId, ...(Array.isArray(item.mergedDeliveryClientIds) ? item.mergedDeliveryClientIds.filter(id => typeof id === 'string') : [])]));
   const rows = await owner.client.drizzle.select({
     clientId: messages.clientId, role: messages.role, rewindAt: messages.rewindAt,
     // /clear hides history without deleting rows. Read the boundary with the row
@@ -280,6 +281,17 @@ export function saveAgentInputQueueSnapshot(
           target: agentInputQueueSnapshots.sessionId,
           set: { payload, updatedAt: now },
         });
+      // Coalescing transfers ownership before retiring the removed identities.
+      // If the snapshot write fails, the old individual rows remain resumable.
+      // A crash here still leaves every body and ID in the durable batch; receipt
+      // reads above recognize its members until the terminal aliases are sealed.
+      const mergedIds = new Set(persistableItems.flatMap(item =>
+        Array.isArray(item.mergedDeliveryClientIds) ? item.mergedDeliveryClientIds.filter(id => typeof id === 'string' && id !== item.clientId) : []));
+      for (const clientId of mergedIds) {
+        assertQueueOwner(owner);
+        await db.insert(messages).values({ id: randomUUID(), sessionId, clientId,
+          role: 'message_tombstone', content: 'null', createdAt: now, rewindAt: now }).onConflictDoNothing();
+      }
     } catch (err) {
       log.warn('saveAgentInputQueueSnapshot failed', {
         sessionId,

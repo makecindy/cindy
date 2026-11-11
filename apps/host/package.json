@@ -29,7 +29,7 @@
     "cindy-tools": "workspace:*",
     "better-sqlite3": "^12.9.0",
     "node-machine-id": "^1.1.12",
-    "playwright-core": "1.60.0",
+    "playwright-core": "1.63.0",
     "ws": "^8.18.0",
     "@cindy/anthropic-compat-proxy": "workspace:*"
   }

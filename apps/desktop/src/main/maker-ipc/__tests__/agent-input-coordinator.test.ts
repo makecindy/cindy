@@ -13783,7 +13783,7 @@ describe('Orca report durable recovery', () => {
     await flush();
   });
 
-  it.each(['active', 'ended', 'account-changed'] as const)('revalidates the actual host membership before restoring: %s', async mode => {
+  it.each(['active', 'ended', 'account-changed', 'batch-active', 'batch-member-ended'] as const)('revalidates the actual host membership before restoring: %s', async mode => {
     const source = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8');
     const start = source.indexOf('    canRestoreOrcaReport: async');
     const end = source.indexOf('    loadClearBoundary:', start);
@@ -13794,13 +13794,22 @@ describe('Orca report durable recovery', () => {
         { compilerOptions: { target: ScriptTarget.ES2022 } },
       ).outputText)(() => owner, () => false, async () => {
         if (mode === 'account-changed') owner = 'another';
-        return mode === 'ended' ? [] : [{ id: 'worker-1', sessionId: 'worker-session' }];
+        return mode === 'ended' ? [] : [{ id: 'worker-1', sessionId: 'worker-session' },
+          ...(mode === 'batch-active' ? [{ id: 'worker-2', sessionId: 'worker-session-2' }] : [])];
       }, async () => ({ status: 'active' }));
     const h = createHarness({ canRestoreOrcaReport: validate });
-    h.setLoadQueueSnapshot(async () => [report()]);
+    const item = report();
+    if (mode.startsWith('batch-') && item.origin?.kind === 'orca') {
+      item.origin.autoBridgeBatchCount = 2;
+      item.orcaReportDelivery!.members = [
+        { clientId: item.clientId, workerId: 'worker-1', senderSessionId: 'worker-session' },
+        { clientId: 'report-2', workerId: 'worker-2', senderSessionId: 'worker-session-2' },
+      ];
+    }
+    h.setLoadQueueSnapshot(async () => [item]);
     await h.coordinator.ensureQueueRestored('lead');
     await flush();
-    expect(h.sendToAgent).toHaveBeenCalledTimes(mode === 'active' ? 1 : 0);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(mode === 'active' || mode === 'batch-active' ? 1 : 0);
   });
 
   it('does not inherit automatic restoration through an owner edit', async () => {

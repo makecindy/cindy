@@ -272,7 +272,9 @@ describe('orca remote worker runtime', () => {
 
   // Unknown does not authorize replay, but a new explicit report must have an
   // atomic recovery exit. Disk failure keeps the old intent and its input debt.
-  it.each(['accepted', 'write-failed', 'crash-after-write'] as const)('atomically replaces an unknown report for a new explicit send: %s', async mode => {
+  // A rejected new report must not turn the previous unknown handoff into a
+  // proven rejection. This persistence branch was missing from the crash cases.
+  it.each(['accepted', 'rejected', 'write-failed', 'crash-after-write'] as const)('atomically replaces an unknown report for a new explicit send: %s', async mode => {
     const h = setup({ offline: true });
     const old: OrcaRemotePendingReport = { clientIds: ['a'], baselineMessageId: null,
       delivery: { clientId: 'old-report', inputClientIds: ['a'], kind: 'manual' },
@@ -285,16 +287,20 @@ describe('orca remote worker runtime', () => {
       saved = structuredClone(pending);
       if (mode === 'crash-after-write') throw new Error('process exit after commit');
     });
-    const send = vi.fn(async (id: string) => {
+    const send = vi.fn(async (id: string, onRejected: () => void) => {
       expect(saved).toMatchObject({ clientIds: ['a'], delivery: { clientId: id, inputClientIds: ['a'] } });
       expect(id).not.toBe('old-report');
+      if (mode === 'rejected') { onRejected(); return false; }
       return true;
     });
     const result = h.runtime.runReportDelivery('proxy-1', ['a'], send, Boolean);
-    if (mode === 'accepted') {
+    if (mode === 'accepted' || mode === 'rejected') {
       await result;
       expect(send).toHaveBeenCalledOnce();
-      expect(saved).toBeNull();
+      if (mode === 'accepted') expect(saved).toBeNull();
+      else expect(saved).toMatchObject({ clientIds: ['a'], delivery: {
+        clientId: 'old-report', inputClientIds: ['a'], kind: 'manual',
+      } });
     } else {
       await expect(result).rejects.toThrow(mode === 'write-failed' ? 'disk failure' : 'process exit');
       expect(send).not.toHaveBeenCalled();
@@ -306,6 +312,35 @@ describe('orca remote worker runtime', () => {
       await h.runtime.pollNow();
       expect(h.deps.onTurnEnded).not.toHaveBeenCalled();
     }
+    h.runtime.stop();
+  });
+
+  // #9346, unit: a rejected replacement after restart must retain the prior
+  // unknown ID and only its overlapping debt; the exclusive old input was
+  // already atomically retired by the explicit replacement.
+  it('keeps overlapping unknown handoffs across restart and another explicit rejection', async () => {
+    const h = setup({ offline: true });
+    h.runtime.untrack('proxy-1');
+    let saved: OrcaRemotePendingReport | null = { clientIds: ['a', 'old-only'], baselineMessageId: null,
+      delivery: { clientId: 'old-report', inputClientIds: ['a', 'old-only'], kind: 'manual' } };
+    vi.mocked(h.deps.saveReport).mockImplementation(async (_worker, pending) => { saved = structuredClone(pending); });
+    h.runtime.track({ ...ref, pendingReport: saved });
+    await h.runtime.runReportDelivery('proxy-1', ['a'], async () => false, Boolean);
+    expect(saved).toMatchObject({ clientIds: ['a'], delivery: { clientId: 'report-1', previous: {
+      clientId: 'old-report', inputClientIds: ['a'],
+    } } });
+    h.runtime.untrack('proxy-1');
+    h.runtime.track({ ...ref, pendingReport: saved });
+    await h.runtime.runReportDelivery('proxy-1', ['a'], async (_id, reject) => { reject(); return false; }, Boolean);
+    expect(saved).toMatchObject({ clientIds: ['a'], delivery: { clientId: 'report-1', inputClientIds: ['a'],
+      previous: { clientId: 'old-report', inputClientIds: ['a'] } } });
+    h.state.offline = false;
+    h.state.history = [
+      { id: 'input-a', clientId: 'a', role: 'user', content: 'A' },
+      { id: 'reply-a', role: 'assistant', content: 'Completed A' },
+    ];
+    await h.runtime.pollNow();
+    expect(h.deps.onTurnEnded).not.toHaveBeenCalled();
     h.runtime.stop();
   });
 
