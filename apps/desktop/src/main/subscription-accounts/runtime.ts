@@ -16,6 +16,7 @@ import { providerGroupCodexUsageSnapshot } from '../provider-group/usage.js';
 import { codexLimitBucketKey } from '@cindy/maker-shared/codex-usage-buckets';
 import {
   mergeClaudeSubscriptionUsageSnapshot,
+  mergeClaudeSubscriptionUsageDuringRead,
   parseClaudeSdkRateLimitInfo,
 } from '../../shared/claudeSubscriptionUsage.js';
 import type {
@@ -177,7 +178,7 @@ export function observeSubscriptionAccountUsage(
   });
   // Notifications contain one bucket directly. Merge it before sanitizing, retaining
   // omitted fields and unrelated model buckets instead of treating it as an RPC reply.
-  const codexUsage =
+  let codexUsage =
     codexEvent && ('primary' in codexEvent || 'secondary' in codexEvent)
       ? providerGroupCodexUsageSnapshot({
           appServerBuckets: {
@@ -191,6 +192,19 @@ export function observeSubscriptionAccountUsage(
           webSnapshot: previousCodex?.webSnapshot,
         })
       : previousCodex;
+  if (codexUsage !== previousCodex && codexUsage?.appServerBuckets?.[bucketKey] && codexEvent) {
+    const bucket = codexUsage.appServerBuckets[bucketKey];
+    const previous = previousCodex?.appServerBuckets?.[bucketKey];
+    // Preserve references for fields the event did not observe. This makes the
+    // concurrent delta distinguish a repeated 100% event from an omitted window.
+    codexUsage = { ...codexUsage, appServerBuckets: {
+      ...previousCodex?.appServerBuckets,
+      [bucketKey]: { ...bucket,
+        primary: 'primary' in codexEvent ? bucket.primary : previous?.primary ?? null,
+        secondary: 'secondary' in codexEvent ? bucket.secondary : previous?.secondary ?? null,
+      },
+    } };
+  }
   const usage: Usage =
     provider === 'anthropic'
       ? {
@@ -253,14 +267,42 @@ async function snapshot(
         const latest = state.cache.get(key);
         const eventDuringRead = auth.authenticated && latest?.auth.identity === auth.identity
           && latest?.usage !== current?.usage;
-        // Preserve events received while the endpoint was in flight, including
-        // rejection status and Codex buckets. Do not renew their endpoint TTL.
-        if (eventDuringRead) usage = latest?.usage;
+        // A successful read owns the full snapshot; overlay only concurrent
+        // events, not the old endpoint fields carried along in the event cache.
+        if (eventDuringRead && usage !== latest?.usage) {
+          if (provider === 'anthropic' && latest?.usage?.claudeUsage) {
+            usage = { ...usage, claudeUsage: usage?.claudeUsage ? mergeClaudeSubscriptionUsageDuringRead(
+              current?.usage?.claudeUsage, usage.claudeUsage, latest.usage.claudeUsage,
+            ) : latest.usage.claudeUsage };
+          } else if (provider === 'openai' && latest?.usage?.codexUsage) {
+            const buckets = { ...usage?.codexUsage?.appServerBuckets };
+            for (const [id, bucket] of Object.entries(latest.usage.codexUsage.appServerBuckets ?? {})) {
+              const previous = current?.usage?.codexUsage?.appServerBuckets?.[id];
+              if (bucket === previous) continue;
+              // Omitted event fields still belong to the fresh RPC result.
+              const delta = Object.fromEntries(Object.entries(bucket).filter(([field, value]) => {
+                if (value === previous?.[field as keyof typeof previous]) return false;
+                if (field === 'primary' || field === 'secondary') {
+                  const eventReset = bucket[field]?.resetsAt;
+                  const readReset = buckets[id]?.[field]?.resetsAt;
+                  if (eventReset != null && readReset != null && eventReset < readReset) return false;
+                }
+                return true;
+              }));
+              buckets[id] = { ...buckets[id], ...delta,
+                updatedAt: Math.max(bucket.updatedAt ?? 0, buckets[id]?.updatedAt ?? 0) } as typeof bucket;
+            }
+            usage = { ...usage, codexUsage: providerGroupCodexUsageSnapshot({
+              ...usage?.codexUsage, appServerBuckets: buckets,
+            }) };
+          }
+        }
         result = {
           auth,
           usage,
           at: Date.now(),
-          usageAt: eventDuringRead ? latest?.usageAt : reuseUsage ? current?.usageAt : Date.now(),
+          usageAt: reuseUsage ? current?.usageAt
+            : eventDuringRead && usage === latest?.usage ? latest?.usageAt : Date.now(),
         };
       } catch {
         result = { auth: { authenticated: false }, unavailable: true, at: Date.now() };

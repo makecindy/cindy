@@ -1,6 +1,7 @@
 import { claudeAccountUsageLimit } from '../accountUsageLimit';
 import { describe, expect, it } from 'vitest';
 import { parseClaudeSdkRateLimitInfo, mergeClaudeSubscriptionUsageSnapshot as merge, type ClaudeSubscriptionUsageSnapshot } from '../claudeSubscriptionUsage';
+import { mergeClaudeSubscriptionUsageDuringRead } from '../claudeSubscriptionUsage';
 
 const now = 1_800_000_000_000;
 const reset = now / 1000 + 3600;
@@ -73,5 +74,23 @@ describe('Claude quota percentage authority', () => {
 
   it('does not roll a newer observation back to an older timestamp', () => {
     expect(merge(headers, { ...endpoint, updatedAt: now - 1 })).toEqual(headers);
+  });
+
+  // #9951 P2 / unit: overlapping endpoint reads must retain fresh full data,
+  // applying only concurrent event windows/status without reviving old windows.
+  it('merges concurrent headers without carrying old windows or another account into a read', () => {
+    const latest = merge(endpoint, { ...headers, rateLimitStatus: 'rejected', representativeClaim: 'seven_day' });
+    const read = { ...endpoint, updatedAt: now + 2000,
+      sevenDay: { utilization: 80, resetsAt: reset + 604800, severity: 'normal' } };
+    const result = mergeClaudeSubscriptionUsageDuringRead(endpoint, read, latest);
+    expect(result.sevenDay).toMatchObject(read.sevenDay);
+    expect(result.rateLimitStatus).toBeUndefined();
+    expect(result.scoped).toEqual(read.scoped);
+    expect(mergeClaudeSubscriptionUsageDuringRead(endpoint,
+      { ...endpoint, sevenDay: { ...endpoint.sevenDay!, severity: 'normal' } }, latest).sevenDay?.severity).toBe('normal');
+    expect(mergeClaudeSubscriptionUsageDuringRead(endpoint, { ...read, accountFingerprint: 'new-account' }, latest))
+      .toEqual({ ...read, accountFingerprint: 'new-account' });
+    const next = { ...headers, sevenDay: { utilization: 1, resetsAt: reset + 604800 } };
+    expect(mergeClaudeSubscriptionUsageDuringRead(endpoint, endpoint, next).sevenDay?.utilization).toBe(1);
   });
 });

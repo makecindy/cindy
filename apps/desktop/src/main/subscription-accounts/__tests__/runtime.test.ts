@@ -1166,11 +1166,16 @@ describe('native account assignment on the executing computer', () => {
       const reset = now / 1000 + 86400;
       const initial = provider === 'anthropic'
         ? { claudeUsage: { source: 'oauth-endpoint', updatedAt: now, fiveHour: { utilization: 20, resetsAt: reset } } }
-        : { codexUsage: { appServerBuckets: { codex: { limitId: 'codex', updatedAt: now,
-            primary: { usedPercent: 20, windowMinutes: 300, resetsAt: reset }, secondary: null } }, webSnapshot: null } };
+        : { codexUsage: { appServerBuckets: {
+            codex: { limitId: 'codex', updatedAt: now,
+              primary: { usedPercent: 20, windowMinutes: 300, resetsAt: reset },
+              secondary: { usedPercent: 25, windowMinutes: 10080, resetsAt: reset } },
+            spark: { limitId: 'spark', updatedAt: now,
+              primary: { usedPercent: 15, windowMinutes: 300, resetsAt: reset }, secondary: null },
+          }, webSnapshot: null } };
       h.usage.mockResolvedValue(initial);
       const lease = await acquireSubscriptionAccount(provider, provider === 'anthropic' ? 'claude-sonnet' : 'gpt-6', []);
-      for (const phase of ['auth', 'endpoint', 'failed-endpoint']) {
+      for (const phase of ['auth', 'endpoint', 'failed-endpoint', 'new-window']) {
         now += phase === 'auth' ? 31_000 : 181_000;
         let started!: () => void;
         const reading = new Promise<void>(resolve => { started = resolve; });
@@ -1181,7 +1186,18 @@ describe('native account assignment on the executing computer', () => {
         else h.usage.mockImplementationOnce(async () => {
           started(); await paused;
           if (phase === 'failed-endpoint') throw new Error('endpoint unavailable');
-          return initial;
+          return provider === 'anthropic' ? { claudeUsage: {
+            source: 'oauth-endpoint', updatedAt: now + 1,
+            fiveHour: { utilization: 30, resetsAt: phase === 'new-window' ? reset + 18000 : reset },
+            sevenDay: { utilization: 45, resetsAt: reset },
+            scoped: [{ modelDisplayName: 'Opus', utilization: 60, resetsAt: reset }],
+          } } : { codexUsage: { appServerBuckets: {
+            codex: { limitId: 'codex', updatedAt: now + 1,
+              primary: { usedPercent: 30, windowMinutes: 300, resetsAt: phase === 'new-window' ? reset + 18000 : reset },
+              secondary: { usedPercent: 45, windowMinutes: 10080, resetsAt: reset } },
+            spark: { limitId: 'spark', updatedAt: now + 1,
+              primary: { usedPercent: 60, windowMinutes: 300, resetsAt: reset }, secondary: null },
+          }, webSnapshot: null }, codexCredits: { hasCredits: true, unlimited: false, balance: '8.50' } };
         });
         const view = readSubscriptionPool(provider);
         await reading;
@@ -1190,8 +1206,34 @@ describe('native account assignment on the executing computer', () => {
           : { limitId: 'codex', primary: { usedPercent: 100, windowMinutes: 300, resetsAt: reset } });
         releaseRead!();
         const usage = (await view).accounts[0].usage;
+        if (phase === 'new-window') {
+          if (provider === 'anthropic') {
+            expect(usage?.claude?.fiveHour?.resetsAt).toBe(reset + 18000);
+            expect(usage?.claude?.rateLimitStatus).toBeUndefined();
+          } else expect(usage?.codex?.buckets.codex.primary).toMatchObject({ usedPercent: 30, resetsAt: reset + 18000 });
+          const nextLease = await acquireSubscriptionAccount(provider, provider === 'anthropic' ? 'claude-sonnet' : 'gpt-6', []);
+          expect(nextLease).toBeTruthy();
+          nextLease!.release();
+          continue;
+        }
         if (provider === 'anthropic') expect(usage?.claude?.rateLimitStatus).toBe('rejected');
         else expect(usage?.codex?.buckets.codex.primary?.usedPercent).toBe(100);
+        if (phase === 'endpoint') {
+          // #9951 P2: a concurrent event must not discard successful read fields
+          // or keep the endpoint TTL expired. Prior tests only checked rejection.
+          if (provider === 'anthropic') expect(usage?.claude).toMatchObject({
+            fiveHour: { utilization: 30 }, sevenDay: { utilization: 45 },
+            scoped: [{ modelDisplayName: 'Opus', utilization: 60 }],
+          });
+          else expect(usage?.codex).toMatchObject({
+            buckets: { codex: { secondary: { usedPercent: 45 } }, spark: { primary: { usedPercent: 60 } } },
+            credits: { balance: '8.50' },
+          });
+          const readCount = h.usage.mock.calls.length;
+          now += 31_000;
+          await readSubscriptionPool(provider);
+          expect(h.usage).toHaveBeenCalledTimes(readCount);
+        }
         await expect(acquireSubscriptionAccount(provider, provider === 'anthropic' ? 'claude-sonnet' : 'gpt-6', []))
           .rejects.toThrow('No subscription account is available');
       }

@@ -368,6 +368,38 @@ export function mergeClaudeSubscriptionUsageSnapshot(
   };
 }
 
+/** Combine a successful endpoint read with only headers observed while it waited.
+ * The delta describes this combined observation, so its timestamp is the later
+ * observation time. Reusing the full cache would discard fresh endpoint fields. */
+export function mergeClaudeSubscriptionUsageDuringRead(
+  before: ClaudeSubscriptionUsageSnapshot | null | undefined,
+  read: ClaudeSubscriptionUsageSnapshot,
+  latest: ClaudeSubscriptionUsageSnapshot,
+): ClaudeSubscriptionUsageSnapshot {
+  if (read.accountFingerprint && latest.accountFingerprint && read.accountFingerprint !== latest.accountFingerprint)
+    return read;
+  const oldWindow = (key: 'fiveHour' | 'sevenDay') => {
+    const readReset = read[key]?.resetsAt;
+    const eventReset = latest[key]?.resetsAt;
+    return readReset != null && eventReset != null && eventReset < readReset;
+  };
+  const oldClaim = latest.representativeClaim === 'five_hour' ? oldWindow('fiveHour')
+    : latest.representativeClaim === 'seven_day' ? oldWindow('sevenDay') : false;
+  const deltaWindow = (key: 'fiveHour' | 'sevenDay') => {
+    const window = latest[key];
+    if (!window || window === before?.[key] || oldWindow(key)) return undefined;
+    return { ...window, severity: window.severity !== before?.[key]?.severity ? window.severity : undefined };
+  };
+  return mergeClaudeSubscriptionUsageSnapshot(read, {
+    source: 'unified-headers',
+    updatedAt: Math.max(read.updatedAt ?? 0, latest.updatedAt ?? 0),
+    fiveHour: deltaWindow('fiveHour'),
+    sevenDay: deltaWindow('sevenDay'),
+    rateLimitStatus: oldClaim ? undefined : latest.rateLimitStatus,
+    representativeClaim: oldClaim ? undefined : latest.representativeClaim,
+  });
+}
+
 // ── 告警判定(chip 变红的口径;tooltip 另有 status 分流,见 TodaySpendChip) ───
 
 /**
