@@ -32,7 +32,7 @@ import {
 } from './transform.js';
 import { createXaiModelInputRecoveryRule } from './xai-model-input.js';
 import { createAnthropicEffortCompatibilityRule } from './anthropic-effort-compatibility.js';
-import { listenOnAvailableLoopbackPort } from './test-loopback-server.js';
+import { fetchOverFreshConnection as fetch, listenOnAvailableLoopbackPort } from './test-loopback-server.js';
 import { createThreadStripController } from './thread-strip-controller.js';
 import type { ProxyHandle, RequestTransform } from './types.js';
 

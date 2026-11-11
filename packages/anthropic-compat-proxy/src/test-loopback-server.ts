@@ -1,6 +1,19 @@
 import type { Server } from 'node:http';
+import { Agent, fetch as undiciFetch } from 'undici';
 
 const LOOPBACK_LISTEN_MAX_ATTEMPTS = 32;
+
+// Every proxy binds a random port in 49152-65535, so a test's new proxy can land on
+// the port of one the previous test disposed. A keep-alive pool such as global fetch's
+// would then send the request over the old, closed socket before reading its FIN
+// (Windows CI: `fetch failed`, read ECONNRESET). One connection per request.
+const freshConnections = new Agent({ pipelining: 0 });
+
+/** `fetch` for requests to a test's proxy: never reuses a connection across requests. */
+export const fetchOverFreshConnection = (
+  input: Parameters<typeof undiciFetch>[0],
+  init?: Parameters<typeof undiciFetch>[1],
+): ReturnType<typeof undiciFetch> => undiciFetch(input, { ...init, dispatcher: freshConnections });
 
 function isRetryableListenError(error: unknown): boolean {
   if (!error || typeof error !== 'object' || !('code' in error)) return false;

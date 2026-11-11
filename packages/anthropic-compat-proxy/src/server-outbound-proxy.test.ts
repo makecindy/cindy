@@ -3,7 +3,7 @@ import { createServer as createHttpServer } from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createAnthropicCompatProxy } from './server.js';
-import { listenOnAvailableLoopbackPort } from './test-loopback-server.js';
+import { fetchOverFreshConnection as fetch, listenOnAvailableLoopbackPort } from './test-loopback-server.js';
 import { startSocks5Stub } from './test-socks5-stub.js';
 import type { ProxyHandle } from './types.js';
 

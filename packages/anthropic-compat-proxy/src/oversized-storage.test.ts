@@ -4,6 +4,7 @@ import type { IncomingMessage } from 'node:http';
 import { afterEach, expect, it, vi } from 'vitest';
 import { collectRecoverableBody } from './oversized-attachments.js';
 import { createAnthropicCompatProxy } from './server.js';
+import { fetchOverFreshConnection as fetch } from './test-loopback-server.js';
 
 vi.mock('node:fs/promises', async importOriginal => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();

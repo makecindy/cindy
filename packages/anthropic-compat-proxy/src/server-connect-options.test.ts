@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { listenOnAvailableLoopbackPort } from './test-loopback-server.js';
+import { fetchOverFreshConnection as fetch, listenOnAvailableLoopbackPort } from './test-loopback-server.js';
 import { createEncryptedContentRecoveryRule } from './transform.js';
 import type { ProxyHandle } from './types.js';
 
