@@ -860,6 +860,7 @@
       "assignLocalAria": "许 {{name}} 接外来之新差事",
       "moreAria": "{{name}} 之余者操作",
       "remove": "出组",
+      "removeLocalBlocked": "组所在之机，不可出组",
       "status": {
         "checking": "方察…",
         "idle": "闲",
@@ -2260,6 +2261,7 @@
         "desktopVisibilityHint": "透见 Cindy 后之桌面与窗口，文字控件仍清晰。",
         "desktopBlurLabel": "桌面模糊",
         "desktopBlurHint": "模糊窗后桌面；0 则关闭，值愈大则愈朦胧。系统若不可调，仍用预设之效。",
+        "desktopBlurSwitchHint": "以 Windows 系统之效模糊窗后桌面；须 Windows 11 22H2 或更新之版。",
         "blurLabel": "壁纸朦胧",
         "blurHint": "仅朦胧壁纸，0 为阖。动态壁纸启朦胧则增显卡之负。",
         "motionLabel": "展示之式",
@@ -3586,6 +3588,36 @@
           "invalid": "此设不能先览，请察其设或重择卷",
           "skipped": "已略；再纳须重择卷",
           "authorizationPending": "连接已增，请于供方之设中完成授权"
+        },
+        "local": {
+          "title": "自本机应用导入",
+          "note": "只读此机已存 API 配置，不改来源应用。Claude Code 仅读用户级 settings.json（含 CLAUDE_CONFIG_DIR），不读 shell 环境变量、项目或托管设置。",
+          "review": "审阅并导入（{{count}}）",
+          "scanning": "正读取所存配置…",
+          "empty": "未见所存 API 配置。",
+          "failed": "读取未竟，请重试。",
+          "edit": "编辑",
+          "editFailed": "请核地址、协议与密钥，再试。",
+          "editNote": "密钥留空则沿用已读凭据；改地址或协议，须另填密钥。",
+          "name": "显示名称",
+          "baseUrl": "基础 URL",
+          "protocol": "接口协议",
+          "chooseProtocol": "请选择协议",
+          "apiKey": "API 密钥",
+          "keepKey": "留空则沿用已读密钥",
+          "missingUrl": "须填地址",
+          "status": {
+            "missing": "未见配置",
+            "readFailed": "读取不成，请核权限或重试",
+            "invalid": "格式未识，请核验或编辑配置",
+            "limit": "已逾读取上限，此来源未读全",
+            "unsupported": "此配置不可自动导入。不执行命令或 apiKeyHelper，请手动添加 API 配置。",
+            "needsInput": "配置尚待补全",
+            "changed": "来源已变，请重新扫描",
+            "duplicate": "相同连接已存"
+          },
+          "rescan": "重新扫描",
+          "sourceDisabled": "来源应用中已关闭"
         }
       },
       "order": {
@@ -12574,47 +12606,47 @@
         "claude-code": {
           "ask": {
             "label": "预设权柄",
-            "description": "许于工作区内读写；需更高权柄、联网或访问工作区外路径时，再询问君。"
+            "description": "操作须批者，由君裁可。"
           },
           "acceptEdits": {
             "label": "许修改",
-            "description": "自动接受卷之修改请求，以减反复确认；涉更高风险之命令或权柄，仍依底层权柄策略处理。"
+            "description": "编辑文件径许，余事按需请君裁可。"
           },
           "auto": {
             "label": "自审",
-            "description": "许于工作区内读写，并自动审批提权请求；高风险之举或遭拒或须确认。可减打断，然有误判之险。"
+            "description": "操作由 AI 模型裁可，审之或须多候；必要时仍请君确认。"
           },
           "bypassPermissions": {
             "label": "完全访问",
-            "description": "许修改任意卷并运行联网命令，不再确认。风险最高，仅宜可信之差事，慎之。"
+            "description": "常规操作径许，可访工作区外文件、联网执行命令。"
           }
         },
         "codex": {
           "ask": {
             "label": "预设权柄",
-            "description": "许于工作区内读写；需更高权柄、联网或访问工作区外路径时，再询问君。"
+            "description": "操作须批者，由君裁可。"
           },
           "auto": {
             "label": "自审",
-            "description": "于受保护之工作区沙箱内自动运行命令；需越沙箱边界之举交自动审查器判之，高风险之举或遭拒或须确认。"
+            "description": "操作由 AI 模型裁可，审之或须多候；必要时仍请君确认。"
           },
           "bypassPermissions": {
             "label": "完全访问",
-            "description": "许修改任意卷并运行联网命令，不再确认。风险最高，仅宜可信之差事，慎之。"
+            "description": "常规操作径许，可访工作区外文件、联网执行命令。"
           }
         },
         "pi": {
           "ask": {
             "label": "预设权柄",
-            "description": "唯读器具直接运行；写卷、跑命令与 MCP 器具，每次皆询问。"
+            "description": "操作须批者，由君裁可。"
           },
           "auto": {
             "label": "自审",
-            "description": "工作区内写卷与安全命令自动运行；越界之写、危险命令与 MCP 器具仍将询问。"
+            "description": "操作由 AI 模型裁可，审之或须多候；必要时仍请君确认。"
           },
           "bypassPermissions": {
             "label": "完全访问",
-            "description": "许修改任意卷并运行联网命令，不再确认。风险最高，仅宜可信之差事，慎之。"
+            "description": "常规操作径许，可访工作区外文件、联网执行命令。"
           }
         }
       }
@@ -13479,8 +13511,8 @@
       "dismissTitle": "阖往昔未成之示"
     },
     "worktreeRestoreBanner": {
-      "text": "此差事之 worktree 已被收回（目录不存）。",
-      "textPendingSnapshot": "此差事有一份未施之更改快照。",
+      "text": "此差事之 worktree「{{name}}」已被收回（目录不存）。",
+      "textPendingSnapshot": "此差事之 worktree「{{name}}」有一份未施之更改快照。",
       "restoreAction": "复 worktree",
       "applySnapshotAction": "复更改",
       "restoring": "方复…",
@@ -14072,7 +14104,7 @@
       "errors": {
         "noPriorAssistantPreview": "请于 AI 答复之后所问处 rewind（此前无 assistant 之答）",
         "sessionRunning": "候差事止息逾时，请再回退",
-        "noLiveQuery": "Agent 会话未启——请先遣一讯（纵一句\"ok\"亦可）令 SDK 起，再 rewind",
+        "noLiveQuery": "任务未能复启，回退未成。",
         "noPriorAssistantCommit": "请于 AI 答复之后所问处 rewind",
         "commitGeneric": "rewind 未成，请再试",
         "remoteNotSupported": "远方 Claude Code 差事暂不支持 rewind"
@@ -19777,6 +19809,7 @@
   },
   "subscriptionAccounts": {
     "unassigned": "账号待定",
+    "boundUnavailable": "账号已不可用",
     "providerManagedAuth": "Codex 目前供方未提供 ChatGPT 账号资讯。请于新增供方时选「$t(subscriptionAccounts.signIn.anotherAccount)」，另用独立目录",
     "signIn": {
       "checking": "正察本机账号…",
@@ -19804,7 +19837,12 @@
     "openDirectory": "启账号目录",
     "openDirectoryFailed": "账号目录未能启，或已移或已删。",
     "loginAgain": "重登",
-    "login": "登录"
+    "login": "登录",
+    "quotaAverage": "平均余量 {{percent}}%",
+    "quotaUpdating": "余量待新",
+    "quotaResetSoon": "将重置",
+    "quotaAverageHint": "周限额 · 诸账号等权均值",
+    "quotaResetHint": "依今耗速，重置或尚有余：距二十四时以内示黄，六时以内示红。"
   },
   "sessionNotify": {
     "finished": "此务此轮已毕，终答如下：",

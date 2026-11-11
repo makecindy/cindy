@@ -324,6 +324,12 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   调用 `ghost_market_install` 安装选定的缺失插件，用户在「迁移助理」中选择并确认的
   市场插件（[新电脑设置](../product-rules/new-device-setup-migration.md)），或服务端为当前
   owner 下发 `defaultInstall`。安装成功默认启用。
+- **后台更新不降级**：市场按客户端兼容性筛选出的 `currentRelease` 可能比已装版本旧，
+  release ID 不同不代表版本更高。普通市场更新、自定义来源更新、默认下发接管和种子交还
+  商店时，按实际已装 manifest 的 SemVer 比较；候选更旧则保留当前安装与账本，不下载覆盖。
+  同版本修复和显式安装沿用既有流程；非 SemVer 历史版本保留原有判法，不猜测大小。
+  实现与回归见 `main/plugin-market/service.ts`、`__tests__/service.test.ts` 与
+  `__tests__/service-custom-sources.test.ts`（均在 `apps/desktop/src/` 下）。
 - **安装／更新确认**（`shared/ghostInstallConsent.ts` 判据，`main/cindy-brain/ghostInstallConsent.ts`
   两段式实现）：
   - 判据：「权限」与插件详情页权限区同口径，即 `ghostPermissionItems` 中除 Agent 工具外的

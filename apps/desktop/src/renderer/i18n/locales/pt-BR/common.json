@@ -878,6 +878,7 @@
       "assignLocalAria": "Permitir que {{name}} aceite novas tarefas de outros computadores",
       "moreAria": "Mais ações para {{name}}",
       "remove": "Remover do grupo",
+      "removeLocalBlocked": "O computador que hospeda o grupo não pode ser removido",
       "status": {
         "checking": "Verificando…",
         "idle": "Ocioso",
@@ -2328,6 +2329,7 @@
         "desktopVisibilityHint": "Mostra a área de trabalho e as janelas atrás da Cindy. Textos e controles permanecem nítidos.",
         "desktopBlurLabel": "Desfoque da área de trabalho",
         "desktopBlurHint": "Desfoca a área de trabalho atrás da janela. 0 desativa; valores maiores aumentam o desfoque. Sistemas sem ajuste de intensidade usam o efeito padrão.",
+        "desktopBlurSwitchHint": "Desfoca a área de trabalho atrás da janela com o efeito do sistema do Windows. Requer o Windows 11 versão 22H2 ou posterior.",
         "blurLabel": "Desfoque do papel de parede",
         "blurHint": "Desfoque apenas o papel de parede. Defina como 0 para desativar. Desfocar papéis de parede animados aumenta o uso da GPU.",
         "motionLabel": "Exibição",
@@ -3676,6 +3678,36 @@
           "invalid": "Prévia indisponível; verifique a configuração ou selecione o arquivo novamente",
           "skipped": "Ignorado; selecione o arquivo novamente para importar esta entrada",
           "authorizationPending": "Conexão adicionada; conclua a autorização nas configurações do provedor"
+        },
+        "local": {
+          "title": "Importar de aplicativos locais",
+          "note": "Lê as configurações de API salvas neste computador sem alterar os aplicativos de origem. Claude Code: apenas settings.json do usuário, incluindo CLAUDE_CONFIG_DIR. Não lê variáveis do shell nem configurações de projeto ou gerenciadas.",
+          "review": "Revisar e importar ({{count}})",
+          "scanning": "Lendo configurações salvas…",
+          "empty": "Nenhuma configuração de API salva foi encontrada.",
+          "failed": "Não foi possível concluir a leitura. Tente novamente.",
+          "edit": "Editar",
+          "editFailed": "Confira a URL, o protocolo e a chave e tente novamente.",
+          "editNote": "Deixe a chave em branco para manter a credencial lida. Alterar a URL ou o protocolo exige uma nova chave.",
+          "name": "Nome de exibição",
+          "baseUrl": "URL base",
+          "protocol": "Protocolo da API",
+          "chooseProtocol": "Escolha um protocolo",
+          "apiKey": "Chave de API",
+          "keepKey": "Deixe em branco para manter a chave lida",
+          "missingUrl": "URL necessária",
+          "status": {
+            "missing": "Configuração não encontrada",
+            "readFailed": "Não foi possível ler; confira as permissões ou tente novamente",
+            "invalid": "Formato desconhecido; confira ou edite a configuração",
+            "limit": "Limite atingido; esta origem não foi lida por completo",
+            "unsupported": "Esta configuração não pode ser importada automaticamente. Comandos e apiKeyHelper não são executados; adicione a configuração de API manualmente.",
+            "needsInput": "É necessário completar a configuração",
+            "changed": "A origem mudou; faça uma nova busca",
+            "duplicate": "Já existe uma conexão idêntica"
+          },
+          "rescan": "Buscar novamente",
+          "sourceDisabled": "Desativado no aplicativo de origem"
         }
       },
       "order": {
@@ -12720,47 +12752,47 @@
         "claude-code": {
           "ask": {
             "label": "Permissões padrão",
-            "description": "Permite acesso de leitura e gravação dentro do espaço de trabalho e pede confirmação antes de usar permissões superiores, acesso à rede ou caminhos fora do espaço de trabalho."
+            "description": "Você aprova as ações quando necessário."
           },
           "acceptEdits": {
             "label": "Aceitar edições automaticamente",
-            "description": "Aceita automaticamente solicitações de edição de arquivos para reduzir confirmações repetidas. Comandos ou permissões de maior risco ainda seguem a política de permissões subjacente."
+            "description": "Edições de arquivos são permitidas diretamente; você aprova outras ações quando necessário."
           },
           "auto": {
             "label": "Revisão automática",
-            "description": "Permite acesso de leitura e gravação dentro do espaço de trabalho e revisa automaticamente solicitações de elevação de permissões; ações de alto risco ainda podem ser negadas ou exigir confirmação. Isso reduz interrupções, mas pode cometer erros."
+            "description": "Um modelo de IA aprova as ações, o que pode exigir mais espera; você confirma quando necessário."
           },
           "bypassPermissions": {
             "label": "Acesso total",
-            "description": "Permite editar qualquer arquivo e executar comandos com acesso à rede sem outra confirmação. Risco máximo; use apenas para tarefas confiáveis."
+            "description": "Ações rotineiras são permitidas diretamente, incluindo arquivos fora do espaço de trabalho e comandos de rede."
           }
         },
         "codex": {
           "ask": {
             "label": "Permissões padrão",
-            "description": "Permite acesso de leitura e gravação dentro do espaço de trabalho e pede confirmação antes de usar permissões superiores, acesso à rede ou caminhos fora do espaço de trabalho."
+            "description": "Você aprova as ações quando necessário."
           },
           "auto": {
             "label": "Revisão automática",
-            "description": "Executa comandos automaticamente no ambiente isolado protegido do espaço de trabalho. Ações que ultrapassam os limites desse ambiente passam por uma revisão automática; ações de alto risco ainda podem ser negadas ou exigir confirmação."
+            "description": "Um modelo de IA aprova as ações, o que pode exigir mais espera; você confirma quando necessário."
           },
           "bypassPermissions": {
             "label": "Acesso total",
-            "description": "Permite editar qualquer arquivo e executar comandos com acesso à rede sem outra confirmação. Risco máximo; use apenas para tarefas confiáveis."
+            "description": "Ações rotineiras são permitidas diretamente, incluindo arquivos fora do espaço de trabalho e comandos de rede."
           }
         },
         "pi": {
           "ask": {
             "label": "Permissões padrão",
-            "description": "Ferramentas somente leitura são executadas diretamente; gravar arquivos, executar comandos e usar ferramentas MCP exige confirmação a cada vez."
+            "description": "Você aprova as ações quando necessário."
           },
           "auto": {
             "label": "Revisão automática",
-            "description": "Gravações dentro do espaço de trabalho e comandos seguros são executados automaticamente; gravações fora dele, comandos arriscados e ferramentas MCP ainda exigem confirmação."
+            "description": "Um modelo de IA aprova as ações, o que pode exigir mais espera; você confirma quando necessário."
           },
           "bypassPermissions": {
             "label": "Acesso total",
-            "description": "Permite editar qualquer arquivo e executar comandos com acesso à rede sem outra confirmação. Risco máximo; use apenas para tarefas confiáveis."
+            "description": "Ações rotineiras são permitidas diretamente, incluindo arquivos fora do espaço de trabalho e comandos de rede."
           }
         }
       }
@@ -13631,8 +13663,8 @@
       "dismissTitle": "Dispensar aviso de falha anterior"
     },
     "worktreeRestoreBanner": {
-      "text": "O worktree desta Sessão foi removido (diretório ausente).",
-      "textPendingSnapshot": "Esta Sessão tem um snapshot de alterações não aplicado.",
+      "text": "O worktree “{{name}}” desta Sessão foi removido (diretório ausente).",
+      "textPendingSnapshot": "O worktree “{{name}}” desta Sessão tem um snapshot de alterações não aplicado.",
       "restoreAction": "Restaurar worktree",
       "applySnapshotAction": "Aplicar alterações",
       "restoring": "Restaurando…",
@@ -14226,7 +14258,7 @@
       "errors": {
         "noPriorAssistantPreview": "Volte a partir de uma pergunta que venha após uma resposta da IA (esta não tem uma resposta anterior do assistente)",
         "sessionRunning": "A tarefa não parou a tempo — tente voltar novamente",
-        "noLiveQuery": "A sessão está inativa — envie qualquer mensagem primeiro (até mesmo \"ok\") para ativar o SDK antes de voltar",
+        "noLiveQuery": "Não foi possível restaurar o ambiente de execução da tarefa. A reversão não foi concluída.",
         "noPriorAssistantCommit": "Volte a partir de uma pergunta que venha após uma resposta da IA",
         "commitGeneric": "Falha ao voltar. Tente novamente",
         "remoteNotSupported": "As sessões remotas do Claude Code ainda não permitem voltar"
@@ -20036,6 +20068,7 @@
   },
   "subscriptionAccounts": {
     "unassigned": "Conta não atribuída",
+    "boundUnavailable": "Conta indisponível",
     "providerManagedAuth": "O provedor atual do Codex não disponibiliza informações da conta do ChatGPT. Ao adicionar o provedor, selecione “$t(subscriptionAccounts.signIn.anotherAccount)” para usar uma pasta separada.",
     "signIn": {
       "checking": "Verificando a conta local…",
@@ -20063,7 +20096,12 @@
     "openDirectory": "Abrir pasta da conta",
     "openDirectoryFailed": "Não foi possível abrir a pasta da conta. Ela pode ter sido movida ou excluída.",
     "loginAgain": "Entrar novamente",
-    "login": "Entrar"
+    "login": "Entrar",
+    "quotaAverage": "Média restante {{percent}}%",
+    "quotaUpdating": "Cota aguardando atualização",
+    "quotaResetSoon": "Redefinição em breve",
+    "quotaAverageHint": "Cota semanal · Peso igual por conta",
+    "quotaResetHint": "No ritmo atual, pode restar cota na redefinição: amarelo em até 24 horas, vermelho em até 6 horas."
   },
   "sessionNotify": {
     "finished": "Esta tarefa concluiu a rodada. Resposta final:",

@@ -664,6 +664,7 @@ describe('GroupMemberQuota', () => {
       expect(mocks.cardReads.at(-1)).toEqual([undefined, null]);
     }
     mounted.rerender(<GroupMemberQuota id="quota" target={{ kind: 'local', providerId: 'anthropic' }} offline={false} />);
+    await act(async () => {});
     expect(screen.getByTestId('quota-card').textContent).toBe('This computer’s Claude');
     act(() => mocks.status.forEach(listener => listener({ status: 'online' })));
     // Recovery needs a new directory from the now-online relay generation.
@@ -787,6 +788,7 @@ describe('GroupMemberQuota', () => {
     expect(mocks.cardReads.at(-1)).toEqual([undefined, null]);
     mocks.local = [claude('anthropic')];
     mounted.rerender(view());
+    await act(async () => {});
     readable(); // Local account recovery does not wait for the owner's next poll.
   });
 
@@ -794,6 +796,47 @@ describe('GroupMemberQuota', () => {
     await show({ kind: 'device', deviceId: 'mini', providerId: 'anthropic-1a2b' });
     expect(screen.getByTestId('quota-card').textContent).toBe('Mini’s Claude');
     expect(mocks.cardReads.at(-1)).toEqual(['anthropic-1a2b', 'mini']);
+  });
+
+  // Unit regression, 2026-11-11 recording: a cached default card appeared before
+  // the delayed account list, replacing one card with two and making the page jump.
+  // Existing account tests only checked the settled result. Exercise the real
+  // GroupMemberQuota/account hook with a pending reply, both before and after the
+  // loading reveal; no intermediate single-account card may reach the screen.
+  it.each([
+    { kind: 'local' as const, delay: 100 },
+    { kind: 'device' as const, delay: 300 },
+  ])('waits for the $kind account list before revealing cached quota', async ({ kind, delay }) => {
+    vi.useFakeTimers();
+    mocks.byDevice.mini = [claude('anthropic')];
+    mocks.cards['mini:anthropic'] = { title: 'Mini’s Claude' };
+    let finish!: (result: ReturnType<typeof pool>) => void;
+    const command = kind === 'local' ? mocks.poolCommand : mocks.remoteInvoke;
+    command.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    await show(kind === 'local'
+      ? { kind, providerId: 'anthropic' }
+      : { kind, deviceId: 'mini', providerId: 'anthropic' });
+    expect(screen.queryByTestId('quota-card')).toBeNull();
+    expect(screen.queryByText('providerGroup.member.quota.loading')).toBeNull();
+    act(() => vi.advanceTimersByTime(delay));
+    expect(screen.queryByText('providerGroup.member.quota.loading') !== null).toBe(delay >= 200);
+    expect(screen.queryByTestId('quota-card')).toBeNull();
+    await act(async () => finish(pool([
+      poolAccount('default', { identity: 'first@example.com', usage: claudeUsage(90) }),
+      poolAccount('work', { identity: 'second@example.com', usage: claudeUsage(25) }),
+    ])));
+    expect(screen.getAllByTestId('provider-group-member-account')).toHaveLength(2);
+    expect(screen.queryByText('providerGroup.member.quota.loading')).toBeNull();
+  });
+
+  it('reveals the cached default quota if the first account list does not reply within the grace period', async () => {
+    vi.useFakeTimers();
+    mocks.poolCommand.mockReturnValue(new Promise(() => {}));
+    await show({ kind: 'local', providerId: 'anthropic' });
+    expect(screen.queryByTestId('quota-card')).toBeNull();
+    act(() => vi.advanceTimersByTime(8_000));
+    expect(screen.getByTestId('quota-card').textContent).toBe('This computer’s Claude');
+    expect(screen.queryByText('providerGroup.member.quota.loading')).toBeNull();
   });
 
   it('lists every account on this computer, keeping the live card on the default account', async () => {
@@ -943,6 +986,8 @@ describe('GroupMemberQuota', () => {
     vi.useFakeTimers();
     mocks.cards = {};
     await show({ kind: 'device', deviceId: 'mini', providerId: 'anthropic-1a2b' });
+    expect(screen.queryByText('providerGroup.member.quota.loading')).toBeNull();
+    act(() => vi.advanceTimersByTime(200));
     expect(screen.getByText('providerGroup.member.quota.loading')).toBeTruthy();
     act(() => {
       vi.advanceTimersByTime(8_000);

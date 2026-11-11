@@ -272,6 +272,95 @@ describe('project automation provider reconciliation', () => {
     }
   });
 
+  // PR #9904 review: a save rejected by model validation must not leave the rejected choice in schedules.json.
+  it.each([false, true])('restores the unchanged project file when a save is rejected (update=%s)', async (existing) => {
+    const dir = await fs.mkdtemp(path.join(tmpdir(), 'cindy-project-reject-'));
+    try {
+      const reject = vi.fn(async () => { throw new Error('model unavailable on that computer'); });
+      const loader = new ProjectAutomationLoader({
+        scheduler: { create: reject, update: reject } as unknown as ConstructorParameters<typeof ProjectAutomationLoader>[0]['scheduler'],
+        storage: { list: async () => existing ? [{ ...projectSchedule({ desktop: true, feishu: false }), workingDir: dir }] : [] } as unknown as ConstructorParameters<typeof ProjectAutomationLoader>[0]['storage'],
+        getDb: () => ({}) as unknown as ReturnType<ConstructorParameters<typeof ProjectAutomationLoader>[0]['getDb']>,
+        logger: { warn: vi.fn(), debug: vi.fn() },
+      });
+      const file = path.join(dir, ...PROJECT_AUTOMATION_REL_SEGMENTS);
+      const config = projectConfig({ model: 'remote-model', providerId: 'remote-provider' });
+      await expect(loader.upsertSchedule(dir, config)).rejects.toThrow('model unavailable');
+      await expect(fs.access(file)).rejects.toThrow();
+
+      const before = JSON.stringify({ version: 1, schedules: [projectConfig({ id: 'other' })] });
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      await fs.writeFile(file, before, 'utf8');
+      await expect(loader.upsertSchedule(dir, config)).rejects.toThrow('model unavailable');
+      expect(await fs.readFile(file, 'utf8')).toBe(before);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  // PR #9904 / unit: upsertSchedule must preserve later disk writes when validation rejects.
+  // The previous test only covered immediate failures with no intervening writer.
+  // Matrix: create/update x later save/remove/raw edit/file deletion; the original error
+  // survives and neither rollback nor the read cache may resurrect the earlier snapshot.
+  it.each([false, true].flatMap((existing) =>
+    ['save', 'remove', 'edit', 'delete-file'].map((change) => ({ existing, change }))))(
+    'keeps a later $change after a rejected save (update=$existing)', async ({ existing, change }) => {
+      const dir = await fs.mkdtemp(path.join(tmpdir(), 'cindy-project-late-reject-'));
+      try {
+        const stored: Schedule[] = existing
+          ? [{ ...projectSchedule({ desktop: true, feishu: false }), workingDir: dir }] : [];
+        let entered!: () => void;
+        const validating = new Promise<void>((resolve) => { entered = resolve; });
+        let reject!: (err: Error) => void;
+        const validation = new Promise<Schedule>((_resolve, rejectPromise) => { reject = rejectPromise; });
+        const save = async (input: CreateScheduleInput & { projectConfigId?: string }) => {
+          if (input.projectConfigId === 'daily') {
+            entered();
+            return validation;
+          }
+          const saved = { ...projectSchedule({ desktop: true, feishu: false }), ...input, id: 'other' } as Schedule;
+          stored.push(saved);
+          return saved;
+        };
+        const loader = new ProjectAutomationLoader({
+          scheduler: { create: save, update: (_id: string, input: CreateScheduleInput) => save(input),
+            delete: async (id: string) => { stored.splice(stored.findIndex((s) => s.id === id), 1); },
+          } as unknown as ConstructorParameters<typeof ProjectAutomationLoader>[0]['scheduler'],
+          storage: { list: async () => stored } as unknown as ConstructorParameters<typeof ProjectAutomationLoader>[0]['storage'],
+          getDb: () => ({}) as unknown as ReturnType<ConstructorParameters<typeof ProjectAutomationLoader>[0]['getDb']>,
+          logger: { warn: vi.fn(), debug: vi.fn() },
+        });
+        const file = path.join(dir, ...PROJECT_AUTOMATION_REL_SEGMENTS);
+        if (existing) {
+          await fs.mkdir(path.dirname(file), { recursive: true });
+          await fs.writeFile(file, JSON.stringify({ version: 1, schedules: [projectConfig()] }));
+        }
+        const rejected = expect(loader.upsertSchedule(dir, projectConfig({ model: 'unavailable' })))
+          .rejects.toThrow('model unavailable');
+        await validating;
+        // Cache the pending write too: a skipped restoration must invalidate this read.
+        await loader.loadProjectSchedules(dir);
+        if (change === 'save') await loader.upsertSchedule(dir, projectConfig({ id: 'other' }));
+        else if (change === 'remove') await loader.removeSchedule(dir, 'daily');
+        else if (change === 'edit') await fs.writeFile(file, '{editing in progress');
+        else await fs.rm(file);
+        const latest = change === 'delete-file' ? null : await fs.readFile(file, 'utf8');
+        reject(new Error('model unavailable'));
+        await rejected;
+        if (latest === null) await expect(fs.access(file)).rejects.toThrow();
+        else expect(await fs.readFile(file, 'utf8')).toBe(latest);
+        expect((await fs.readdir(path.dirname(file))).filter((name) => name.includes('.tmp.'))).toEqual([]);
+        expect(await loader.loadProjectSchedules(dir)).toEqual(
+          change === 'edit' || change === 'delete-file' ? null : JSON.parse(latest!).schedules,
+        );
+        if (change === 'save') expect(stored.find((s) => s.projectConfigId === 'other')).toBeDefined();
+        if (change === 'remove') expect(stored).toHaveLength(0);
+      } finally {
+        await fs.rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it('passes an explicit provider through the loader input and detects changes', () => {
     const config = projectConfig({ providerId: 'openai' });
     const input = __testing.scheduleConfigToUpdateInput(config, workingDir);

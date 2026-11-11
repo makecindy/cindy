@@ -860,6 +860,7 @@
       "assignLocalAria": "允许 {{name}} 接收外部新任务",
       "moreAria": "{{name}} 的更多操作",
       "remove": "移出组",
+      "removeLocalBlocked": "组所在的电脑不能移出组",
       "status": {
         "checking": "正在检查…",
         "idle": "空闲",
@@ -2260,6 +2261,7 @@
         "desktopVisibilityHint": "透出 Cindy 后面的桌面与窗口，文字和控件保持清晰。",
         "desktopBlurLabel": "桌面模糊",
         "desktopBlurHint": "模糊窗口后面的桌面，0 为关闭，数值越大越模糊。不支持强度调节的系统使用默认效果。",
+        "desktopBlurSwitchHint": "用 Windows 系统效果模糊窗口后面的桌面。需要 Windows 11 22H2 或更高版本。",
         "blurLabel": "壁纸模糊",
         "blurHint": "仅模糊壁纸，0 为关闭。动态壁纸开启模糊后会增加显卡负载。",
         "motionLabel": "展示方式",
@@ -3586,6 +3588,36 @@
           "invalid": "无法预览此配置，请检查配置或重新选择文件",
           "skipped": "已跳过；再次导入需重新选择文件",
           "authorizationPending": "连接已添加，请在供应商设置中完成授权"
+        },
+        "local": {
+          "title": "从本地应用导入",
+          "note": "只读导入这台电脑已保存的 API 配置，不修改来源应用。Claude Code 仅读取用户级 settings.json（含 CLAUDE_CONFIG_DIR），不读取 shell 环境变量、项目或托管设置。",
+          "review": "查看并导入（{{count}}）",
+          "scanning": "正在读取已保存的配置…",
+          "empty": "没有找到已保存的 API 配置。",
+          "failed": "读取未完成，请重试。",
+          "edit": "编辑",
+          "editFailed": "请检查地址、协议和密钥后重试。",
+          "editNote": "密钥留空会保留已读取的凭据。更改地址或协议后，需填写新密钥。",
+          "name": "显示名称",
+          "baseUrl": "基础 URL",
+          "protocol": "接口协议",
+          "chooseProtocol": "请选择协议",
+          "apiKey": "API 密钥",
+          "keepKey": "留空保留已读取的密钥",
+          "missingUrl": "需要填写地址",
+          "status": {
+            "missing": "未找到配置",
+            "readFailed": "无法读取，请检查权限或重试",
+            "invalid": "格式无法识别，请检查或编辑配置",
+            "limit": "超过读取上限，本来源未完整读取",
+            "unsupported": "此配置无法自动导入。不会执行命令或 apiKeyHelper，请手动添加 API 配置。",
+            "needsInput": "需要补全配置",
+            "changed": "来源已变化，请重新扫描",
+            "duplicate": "已存在相同连接"
+          },
+          "rescan": "重新扫描",
+          "sourceDisabled": "在来源应用中已关闭"
         }
       },
       "order": {
@@ -12574,47 +12606,47 @@
         "claude-code": {
           "ask": {
             "label": "默认权限",
-            "description": "允许在工作区内读写；需要更高权限、联网或访问工作区外路径时再询问。"
+            "description": "操作按需由你审批。"
           },
           "acceptEdits": {
             "label": "允许编辑",
-            "description": "自动接受文件编辑请求，减少反复确认；涉及更高风险的命令或权限仍按底层权限策略处理。"
+            "description": "文件编辑直接允许，其他操作按需由你审批。"
           },
           "auto": {
             "label": "自动审批",
-            "description": "允许在工作区内读写，并自动审批提权请求；高风险操作可能被拒绝或要求确认。能减少打断，但存在误判风险。"
+            "description": "操作由 AI 模型审批，可能需要额外等待；必要时由你确认。"
           },
           "bypassPermissions": {
             "label": "完全访问",
-            "description": "允许修改任意文件并运行联网命令，无需再次确认。风险最高，只适合可信任务。"
+            "description": "常规操作直接允许，可访问工作区外文件和联网执行命令。"
           }
         },
         "codex": {
           "ask": {
             "label": "默认权限",
-            "description": "允许在工作区内读写；需要更高权限、联网或访问工作区外路径时再询问。"
+            "description": "操作按需由你审批。"
           },
           "auto": {
             "label": "自动审批",
-            "description": "在受保护的工作区沙箱内自动执行命令；需要越过沙箱边界的操作交给自动审查器判断，高风险操作可能被拒绝或要求确认。"
+            "description": "操作由 AI 模型审批，可能需要额外等待；必要时由你确认。"
           },
           "bypassPermissions": {
             "label": "完全访问",
-            "description": "允许修改任意文件并运行联网命令，无需再次确认。风险最高，只适合可信任务。"
+            "description": "常规操作直接允许，可访问工作区外文件和联网执行命令。"
           }
         },
         "pi": {
           "ask": {
             "label": "默认权限",
-            "description": "只读工具直接执行；写文件、跑命令和 MCP 工具每次都询问。"
+            "description": "操作按需由你审批。"
           },
           "auto": {
             "label": "自动审批",
-            "description": "工作区内写文件与安全命令自动执行；越界写、危险命令和 MCP 工具仍会询问。"
+            "description": "操作由 AI 模型审批，可能需要额外等待；必要时由你确认。"
           },
           "bypassPermissions": {
             "label": "完全访问",
-            "description": "允许修改任意文件并运行联网命令，无需再次确认。风险最高，只适合可信任务。"
+            "description": "常规操作直接允许，可访问工作区外文件和联网执行命令。"
           }
         }
       }
@@ -13488,8 +13520,8 @@
       "dismissTitle": "关闭历史失败提示"
     },
     "worktreeRestoreBanner": {
-      "text": "该任务的 worktree 已被回收（目录不存在）。",
-      "textPendingSnapshot": "该任务有一份未应用的更改快照。",
+      "text": "该任务的 worktree「{{name}}」已被回收（目录不存在）。",
+      "textPendingSnapshot": "该任务的 worktree「{{name}}」有一份未应用的更改快照。",
       "restoreAction": "恢复 worktree",
       "applySnapshotAction": "恢复更改",
       "restoring": "恢复中…",
@@ -14081,7 +14113,7 @@
       "errors": {
         "noPriorAssistantPreview": "请在 AI 回复之后的提问上 rewind（这条之前没有 assistant 回复）",
         "sessionRunning": "等待任务停止超时，请重新回退",
-        "noLiveQuery": "Agent 会话未激活——请先发送任意一条消息（哪怕一句\"ok\"）让 SDK 起来再 rewind",
+        "noLiveQuery": "未能恢复任务运行环境，回退未完成。",
         "noPriorAssistantCommit": "请在 AI 回复之后的提问上 rewind",
         "commitGeneric": "rewind 失败，请重试",
         "remoteNotSupported": "远端 Claude Code 会话暂不支持 rewind"
@@ -19777,6 +19809,7 @@
   },
   "subscriptionAccounts": {
     "unassigned": "账号待分配",
+    "boundUnavailable": "账号已不可用",
     "providerManagedAuth": "Codex 当前供应商未提供 ChatGPT 账号信息。请在添加供应商时选择「$t(subscriptionAccounts.signIn.anotherAccount)」，使用独立目录",
     "signIn": {
       "checking": "正在检测本机账号…",
@@ -19804,7 +19837,12 @@
     "openDirectory": "打开账号目录",
     "openDirectoryFailed": "无法打开账号目录，它可能已被移动或删除。",
     "loginAgain": "重新登录",
-    "login": "登录"
+    "login": "登录",
+    "quotaAverage": "平均余量 {{percent}}%",
+    "quotaUpdating": "余量待更新",
+    "quotaResetSoon": "即将重置",
+    "quotaAverageHint": "周限额 · 按账号等权平均",
+    "quotaResetHint": "按当前使用速度，重置时可能仍有余量：24 小时内为黄色，6 小时内为红色。"
   },
   "sessionNotify": {
     "finished": "这个任务这一轮做完了，最终答复如下：",

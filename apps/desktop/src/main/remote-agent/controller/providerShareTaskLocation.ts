@@ -59,6 +59,14 @@ export function forgetSharedTaskAuthorization(ownerRoute: string, sessionId: str
   retainedTasks.delete(taskKey(ownerRoute, sessionId));
 }
 
+/** Capture the exact existing grant, without renewing it or keeping a live handle open. */
+export function captureSharedTaskAuthorizationCheck(ownerRoute: string, sessionId: string,
+  agentKind: RemoteAgentKind, model: string, target: string): (() => boolean) | null {
+  const retained = retainedTasks.get(taskKey(ownerRoute, sessionId));
+  return retained?.agentKind === agentKind && retained.model === model && retained.target === target
+    && retained.current() ? retained.current : null;
+}
+
 /** O reports remaining time, so G never compares clocks on different computers. Missing means legacy O. */
 export function sharedTaskLeaseDeadline(value: unknown, requestedAt: number): number | undefined {
   const duration = value && typeof value === 'object' ? (value as { leaseDurationMs?: unknown }).leaseDurationMs : undefined;
