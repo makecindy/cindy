@@ -1,3 +1,4 @@
+import { createRemoteSessionOpener } from '../remoteSessionCreation.js';
 import { captureAgentRequest } from '../forwardedRequest.js';
 import { createRemoteSessionHandoff } from '../../mcp-integrations/sessionHandoffRemote.js';
 import { validateRemoteTaskActionReceipt } from '../remoteTaskActionReceipt.js';
@@ -51,6 +52,55 @@ const request = {
 };
 
 describe('maker:session:handoff (receiving computer)', () => {
+  // Unit: exercise the receiving production handler and opener together. Replay/validation
+  // failures must not create twice, and source authority is checked immediately before commit.
+  it('creates an ordinary destination task once, then uses the existing message queue', async () => {
+    const id = '22222222-2222-4222-8222-222222222222';
+    const rows = new Map<string, Record<string, unknown>>();
+    const insert = vi.fn(async row => { rows.set(row.id, row); });
+    const deps: Parameters<typeof createRemoteSessionOpener>[0] = {
+      captureOwner: () => () => {}, withSessionLock: async (_id, run) => run(),
+      sessionExists: async id => rows.has(id),
+      resolveProject: async () => ({ ok: true, projectDir: '/destination/project' }),
+      validateDirectory: async directory => ({ ok: true, workingDir: directory }),
+      resolveExecution: async () => ({ agentKind: 'codex', model: 'destination-default', fastMode: false }),
+      prepareWorktree: vi.fn(), discardWorktree: vi.fn(), broadcastCreated: vi.fn(),
+      openSessionCommit: insert,
+      // Persistence port only: the opener owns the creation choices and final guard.
+      openSession: (async (input, commit) => {
+        input.onPersistenceStarted?.();
+        const row = { ...input.body, id: input.id };
+        await commit!(row as never, () => {});
+        return { row, value: undefined };
+      }) as Parameters<typeof createRemoteSessionOpener>[0]['openSession'],
+    };
+    const send = vi.fn(async () => ({ ok: true as const, agentKind: 'codex', wakeKind: 'queued' as const,
+      targetTitle: 'Work', targetLastUserSendAt: null }));
+    const handle = createSessionHandoffHandler({ create: createRemoteSessionOpener(deps), send, validate: async () => true });
+    const wire = { ...request, sessionId: id, action: 'create', create: { permissionMode: 'ask' } };
+    expect(await handle('source-device', wire)).toMatchObject({ ok: true, wakeKind: 'created', targetSessionId: id,
+      model: 'destination-default', projectDir: '/destination/project' });
+    expect(rows.get(id)).toMatchObject({ permissionMode: 'ask', agentKind: 'codex', agentDeviceId: null,
+      workingDir: '/destination/project', workspaceKind: 'project' });
+    expect(rows.get(id)).not.toHaveProperty('orcaRemoteLead');
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ targetSessionId: id, forceQueue: true,
+      origin: expect.objectContaining({ senderSessionId: 'source-device::sender-1' }) }));
+    expect(await handle('source-device', wire)).toMatchObject({ ok: false, errorCode: 'DELIVERY_UNKNOWN' });
+    expect(await handle('source-device', { ...wire, taskActionReceipt: 'new-receipt' }))
+      .toMatchObject({ ok: false, errorCode: 'DELIVERY_UNKNOWN' });
+    expect(insert).toHaveBeenCalledOnce(); expect(send).toHaveBeenCalledOnce();
+  });
+
+  it('keeps creation out of unsupported or revoked receivers', async () => {
+    const create = vi.fn(); const send = vi.fn();
+    const wire = { ...request, sessionId: '22222222-2222-4222-8222-222222222222', action: 'create', create: { permissionMode: 'ask' } };
+    expect(await createSessionHandoffHandler({ send, validate: async () => true })('source', wire))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(await createSessionHandoffHandler({ create, send, validate: async () => false })('source', wire))
+      .toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
+    expect(create).not.toHaveBeenCalled(); expect(send).not.toHaveBeenCalled();
+  });
+
   // unit/protocol: a same-account peer receipt must match the exact reserved body.
   it.each([...SUPPORTED_LOCALES, 'legacy'] as const)('retains %s peer-host originals and rejects a changed source before dispatch', async locale => {
     const s = setup();

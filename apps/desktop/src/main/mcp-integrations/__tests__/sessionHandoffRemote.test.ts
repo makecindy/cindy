@@ -6,6 +6,7 @@ import {
   resolveRemoteInvokeTimeoutMs,
   type InvokeResultPayload,
 } from '@cindy/device-link';
+import { creationOperation } from '../../../shared/remoteSessionCreation.js';
 import { createRemoteSessionHandoff } from '../sessionHandoffRemote.js';
 import { releaseRemoteTaskActionReceipt, validateRemoteTaskActionReceipt } from '../../maker-ipc/remoteTaskActionReceipt.js';
 import { captureAgentRequest } from '../../maker-ipc/forwardedRequest.js';
@@ -40,6 +41,33 @@ function setup(outcome: unknown = { ok: true, result: accepted }) {
 }
 
 describe('cross-device send_to_session sender', () => {
+  // Unit/protocol: creation must negotiate before mutation, bind all options to its
+  // receipt and preserve the receipt until the queued first message is consumed.
+  it('negotiates ordinary creation and binds its configuration without retrying', async () => {
+    const create = { permissionMode: 'ask' as const, projectDir: '/remote/project', model: 'selected' };
+    let supported = false;
+    const invoke = vi.fn(async (_device: string, _channel: string, args: unknown[]): Promise<InvokeResultPayload> => {
+      const wire = args[0] as { action?: string; taskActionReceipt: string; create?: unknown };
+      if (wire.action === 'task-action-capability') return { ok: true, result: { taskActionVersion: 1, ordinaryCreateVersion: supported ? 1 : undefined } };
+      issued.push(wire.taskActionReceipt);
+      expect(wire).toMatchObject({ action: 'create', create });
+      return { ok: true, result: { ...accepted, wakeKind: 'created', targetSessionId: 'new-id', model: 'selected', workingDir: '/remote/project' } };
+    });
+    const send = createRemoteSessionHandoff({ invoke, captureAccess: () => () => {} });
+    const run = () => send({ deviceId: 'mbp', sessionId: 'new-id' }, {
+      message: 'hi', sender: async () => ({ sessionId: 'me' }), create: async () => create,
+    });
+    expect(await run()).toMatchObject({ ok: false, errorCode: 'REMOTE_UNSUPPORTED' });
+    expect(invoke).toHaveBeenCalledOnce();
+    supported = true;
+    expect(await run()).toMatchObject({ ok: true, wakeKind: 'created', model: 'selected' });
+    expect(invoke).toHaveBeenCalledTimes(3);
+    const receipt = { receiptId: issued.at(-1)!, sessionId: 'me', targetSessionId: 'new-id', message: 'hi' };
+    expect(await validateRemoteTaskActionReceipt('mbp', { ...receipt, operation: creationOperation(create) })).toBe(true);
+    expect(await validateRemoteTaskActionReceipt('mbp', receipt)).toBe(false);
+    expect(await validateRemoteTaskActionReceipt('mbp', { ...receipt, operation: creationOperation({ ...create, permissionMode: 'bypassPermissions' }) })).toBe(false);
+  });
+
   // 2026-11-05: a newer receiver takes the agent's own text with a checked hand-off; an older one
   // still verifies the quoted envelope, so it keeps receiving exactly what it received before.
   // Unit: real capture and sender against both capability answers.
