@@ -2204,7 +2204,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   function liveTaskCard(view: BotGroupLiveTaskView) {
     return buildBotGroupLiveTaskCard(view, { task: t('bots.groupChat.task.label'), untitled: t('bots.groupChat.task.untitled'),
       states: { running: t('bots.groupChat.task.live.running'), waiting: t('bots.groupChat.task.live.waiting'),
-        finished: t('bots.groupChat.task.live.finished'), failed: t('bots.groupChat.task.live.failed') } });
+        idle: t('bots.groupChat.task.live.idle'), failed: t('bots.groupChat.task.live.failed') } });
   }
   /** Cards follow their task for a week; after that a card keeps what it last said. */
   const TASK_CARD_FOLLOW_MS = 7 * 24 * 60 * 60_000;
@@ -2223,8 +2223,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         const status = await deps.readGroupTaskStatus(card.taskId).catch(() => undefined);
         if (status === undefined) continue;
         if (status === null) { delete cards[messageId]; dirty = true; continue; }
-        // An idle task with no recorded turn end (e.g. after a restart) has finished once it has had time to start.
-        const state = status.state ?? (card.state === 'running' && Date.now() - card.createdAt > 120_000 ? 'finished' : card.state);
+        // A task with no recorded turn end (e.g. after a restart) is idle once it has had time to start.
+        const state = status.state ?? (card.state === 'running' && Date.now() - card.createdAt > 120_000 ? 'idle' : card.state);
         const next: BotGroupLiveTaskView = { taskId: card.taskId, deviceId: card.deviceId, title: status.title || card.title, state,
           requesterName: card.requesterName, botName: card.botName, ...(status.prUrl ?? card.prUrl ? { prUrl: status.prUrl ?? card.prUrl } : {}) };
         if (next.title === card.title && next.state === card.state && next.prUrl === card.prUrl) continue;

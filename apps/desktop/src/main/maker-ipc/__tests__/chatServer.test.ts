@@ -1501,8 +1501,8 @@ describe('Chat Server result delivery and refresh', () => {
   it('posts a task card for a task opened from the group and keeps it in step with the task', async () => {
     const posted: unknown[] = [];
     const edits: Array<{ route: string; body: Record<string, unknown> }> = [];
-    let state: 'running' | 'finished' = 'running';
-    deps.readGroupTaskStatus = vi.fn(async () => ({ title: 'Fix login', state, ...(state === 'finished' ? { prUrl: 'https://github.com/makecindy/cindy/pull/42' } : {}) }));
+    let state: 'running' | 'idle' = 'running';
+    deps.readGroupTaskStatus = vi.fn(async () => ({ title: 'Fix login', state, ...(state === 'idle' ? { prUrl: 'https://github.com/makecindy/cindy/pull/42' } : {}) }));
     fixture.handle.mockImplementation((route, method, body) => {
       if (route === '/executions/claim') { const next = claimed ? null : { ...execution, requester_id: selfId, access_mode: 'owner' }; claimed = true; return { body: { execution: next } }; }
       if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members: [
@@ -1520,10 +1520,10 @@ describe('Chat Server result delivery and refresh', () => {
       data: { taskId: 'task-1', deviceId: null, title: 'Fix login', state: 'running', requesterName: 'Owner', botName: 'Bot (Owner)' } })] })]);
     await vi.advanceTimersByTimeAsync(15_000);
     expect(edits).toHaveLength(0);
-    state = 'finished';
+    state = 'idle';
     await vi.advanceTimersByTimeAsync(15_000);
     expect(edits).toEqual([{ route: `/conversations/${roomId}/messages/70000000-0000-4000-8000-000000000001`, body: expect.objectContaining({ expectedRevision: 1,
-      content: [expect.objectContaining({ data: expect.objectContaining({ state: 'finished', prUrl: 'https://github.com/makecindy/cindy/pull/42' }) })] }) }]);
+      content: [expect.objectContaining({ data: expect.objectContaining({ state: 'idle', prUrl: 'https://github.com/makecindy/cindy/pull/42' }) })] }) }]);
     await vi.advanceTimersByTimeAsync(15_000);
     expect(edits).toHaveLength(1);
   });

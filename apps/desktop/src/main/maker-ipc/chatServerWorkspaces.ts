@@ -31,7 +31,8 @@ export function chatServerWorkspaces(endpoint: string, actorId: string, current:
 const liveTaskCard = z.object({
   roomId: z.string().uuid(), botId: z.string().uuid(), threadRootId: z.string().uuid().nullable(),
   taskId: z.string(), deviceId: z.string().nullable(), title: z.string(), requesterName: z.string(), botName: z.string(),
-  state: z.enum(['running', 'waiting', 'finished', 'failed']), prUrl: z.string().optional(),
+  // Early builds of this card recorded `finished` for the same state.
+  state: z.preprocess(value => value === 'finished' ? 'idle' : value, z.enum(['running', 'waiting', 'idle', 'failed'])), prUrl: z.string().optional(),
   /** The posted message's server revision; the next edit expects it. */
   revision: z.number().int().positive(), createdAt: z.number(),
 });

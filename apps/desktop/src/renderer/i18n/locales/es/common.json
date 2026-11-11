@@ -11239,7 +11239,7 @@
         "live": {
           "running": "En curso",
           "waiting": "Esperando respuesta",
-          "finished": "Terminada",
+          "idle": "Inactivo",
           "failed": "Con error"
         }
       },

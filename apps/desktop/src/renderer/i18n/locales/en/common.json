@@ -11148,7 +11148,7 @@
         "live": {
           "running": "In progress",
           "waiting": "Waiting for a reply",
-          "finished": "Done",
+          "idle": "Idle",
           "failed": "Failed"
         }
       },

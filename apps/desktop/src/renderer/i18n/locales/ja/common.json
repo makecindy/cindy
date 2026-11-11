@@ -11103,7 +11103,7 @@
         "live": {
           "running": "進行中",
           "waiting": "返信待ち",
-          "finished": "完了",
+          "idle": "待機中",
           "failed": "エラー"
         }
       },

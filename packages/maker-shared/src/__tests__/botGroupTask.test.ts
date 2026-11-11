@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { BotCollaborationMeta } from '../botCollaboration';
-import { buildBotGroupTaskCard, parseBotGroupTaskCardView, readBotGroupTaskCard, type BotGroupTaskCardLabels } from '../botGroupTask';
+import { botGroupLiveTaskStateOfPhase, buildBotGroupLiveTaskCard, buildBotGroupTaskCard, parseBotGroupTaskCardView, readBotGroupLiveTaskCard, readBotGroupTaskCard, type BotGroupTaskCardLabels } from '../botGroupTask';
 
 const meta: BotCollaborationMeta = {
   v: 1, role: 'delegation-request', delegationId: 'task-1', fromBotId: 'bot-a', fromBotName: 'LiZi',
@@ -56,5 +56,20 @@ describe('group task card (bot-group-chat.md §10)', () => {
   it('rejects a view whose task anchor is not a delegation request', () => {
     expect(parseBotGroupTaskCardView({ meta: { ...meta, role: 'interjection' }, state: 'completed', title: 't' })).toBeNull();
     expect(parseBotGroupTaskCardView(null)).toBeNull();
+  });
+});
+
+// 2026-11-11 acceptance: a task that ended its turn asking the owner to confirm showed 「已完成」.
+describe('live group task card (revision 2)', () => {
+  it.each([['running', 'running'], ['needs-interaction', 'waiting'], ['completed', 'idle'], ['error', 'failed'], ['idle', undefined]] as const)(
+    'shows a task whose phase is %s as %s, never as done', (phase, state) => {
+      expect(botGroupLiveTaskStateOfPhase(phase)).toBe(state);
+    });
+
+  it('reads a card an early build posted as finished as idle', () => {
+    const card = buildBotGroupLiveTaskCard({ taskId: 'task-1', deviceId: null, title: 'Fix login', state: 'idle', requesterName: 'Ann', botName: 'Cindy' },
+      { task: 'Task', untitled: 'Untitled task', states: { running: 'In progress', waiting: 'Waiting for a reply', idle: 'Idle', failed: 'Failed' } });
+    expect(card.fallback).toBe('[Task] Fix login · Idle');
+    expect(readBotGroupLiveTaskCard({ ...card, data: { ...card.data, state: 'finished' } })?.state).toBe('idle');
   });
 });

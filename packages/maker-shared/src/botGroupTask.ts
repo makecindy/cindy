@@ -112,8 +112,22 @@ export function parseBotGroupTaskCardView(value: unknown): BotGroupTaskCardView 
  * know revision 1 read the `fallback` line.
  */
 export const BOT_GROUP_LIVE_TASK_SCHEMA_REVISION = 2;
-export type BotGroupLiveTaskState = 'running' | 'waiting' | 'finished' | 'failed';
-const LIVE_STATES: readonly BotGroupLiveTaskState[] = ['running', 'waiting', 'finished', 'failed'];
+/**
+ * `idle`: the task's turn ended and it is not running. That is not "done": the task may be waiting
+ * for an answer it asked in text, which the host cannot tell apart. `waiting` is a pending
+ * confirmation or question the host does see.
+ */
+export type BotGroupLiveTaskState = 'running' | 'waiting' | 'idle' | 'failed';
+const LIVE_STATES: readonly BotGroupLiveTaskState[] = ['running', 'waiting', 'idle', 'failed'];
+
+/**
+ * The card state for a task's activity phase on the computer that runs it (`running`,
+ * `needs-interaction`, `completed` = its turn ended, `error`); undefined while it has none.
+ */
+export function botGroupLiveTaskStateOfPhase(phase: string | undefined): BotGroupLiveTaskState | undefined {
+  return phase === 'running' ? 'running' : phase === 'needs-interaction' ? 'waiting'
+    : phase === 'error' ? 'failed' : phase === 'completed' ? 'idle' : undefined;
+}
 
 export interface BotGroupLiveTaskView {
   /** The task's session id on the computer that runs it. */
@@ -166,10 +180,12 @@ export function parseBotGroupLiveTaskView(value: unknown): BotGroupLiveTaskView 
   const data = value as Record<string, unknown>;
   if (typeof data.taskId !== 'string' || !/^[\w-]{1,128}$/.test(data.taskId)) return null;
   if (data.deviceId !== null && (typeof data.deviceId !== 'string' || !/^[\w.:-]{1,128}$/.test(data.deviceId))) return null;
-  if (typeof data.state !== 'string' || !LIVE_STATES.includes(data.state as BotGroupLiveTaskState)) return null;
+  // Early builds of this card said `finished` for the same state.
+  const state = data.state === 'finished' ? 'idle' : data.state;
+  if (typeof state !== 'string' || !LIVE_STATES.includes(state as BotGroupLiveTaskState)) return null;
   if (typeof data.title !== 'string' || typeof data.requesterName !== 'string' || typeof data.botName !== 'string') return null;
   if (data.prUrl !== undefined && (typeof data.prUrl !== 'string' || !PR_URL.test(data.prUrl))) return null;
   return { taskId: data.taskId, deviceId: data.deviceId as string | null, title: clip(data.title, TITLE_MAX),
-    state: data.state as BotGroupLiveTaskState, requesterName: clip(data.requesterName, NAME_MAX), botName: clip(data.botName, NAME_MAX),
+    state: state as BotGroupLiveTaskState, requesterName: clip(data.requesterName, NAME_MAX), botName: clip(data.botName, NAME_MAX),
     ...(data.prUrl ? { prUrl: data.prUrl as string } : {}) };
 }

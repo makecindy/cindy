@@ -704,7 +704,7 @@ import { listRecentWorkdirs } from '../localDb/ipc/recentWorkdirsCore.js';
 import { runGit } from '../git-review/gitRunner.js';
 import { listPrRefs } from '../git-context/prRefsStore.js';
 import { gitExec } from '../worktree/gitExec.js';
-import { BOT_GROUP_CLIENT_ID_PREFIX } from '../../shared/botGroupChat.js';
+import { BOT_GROUP_CLIENT_ID_PREFIX, botGroupLiveTaskStateOfPhase } from '../../shared/botGroupChat.js';
 import { syncBotLanePermission, syncBotLinkedLanePermissions } from './botPermissionSync.js';
 import { ensureBotGroupLaneSession } from '../localDb/ipc/bots.js';
 import { restartBotRuntime } from './botRuntimeRestart.js';
@@ -13757,8 +13757,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const runtime = await tryGetOrcaCollabService()?.getSessionRuntime({ targetSessionId: taskId }).catch(() => undefined);
       const phase = runtime?.ok && typeof runtime.runtime.phase === 'string' ? runtime.runtime.phase : 'idle';
       const pr = (await listPrRefs(taskId).catch(() => [])).find(ref => /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+$/.test(ref.url));
-      const state = phase === 'running' ? 'running' as const : phase === 'needs-interaction' ? 'waiting' as const
-        : phase === 'error' ? 'failed' as const : phase === 'completed' ? 'finished' as const : undefined;
+      const state = botGroupLiveTaskStateOfPhase(phase);
       return { title: row.title, ...(state ? { state } : {}), ...(pr ? { prUrl: pr.url } : {}) };
     },
     // A group's GitHub repository picks this computer's checkout among the registered projects.

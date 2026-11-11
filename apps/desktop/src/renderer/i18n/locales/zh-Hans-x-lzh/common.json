@@ -11103,7 +11103,7 @@
         "live": {
           "running": "方行",
           "waiting": "待复",
-          "finished": "已毕",
+          "idle": "闲",
           "failed": "有误"
         }
       },
