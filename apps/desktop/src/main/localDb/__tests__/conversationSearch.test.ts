@@ -145,6 +145,11 @@ function createSearchDb(): Database.Database {
     CREATE TABLE bot_session_links (
       session_id TEXT PRIMARY KEY, bot_id TEXT NOT NULL, role TEXT NOT NULL
     );
+    CREATE TABLE task_tags (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL, name_customized INTEGER NOT NULL DEFAULT 0,
+      color TEXT NOT NULL, favorite_order INTEGER, sort_order INTEGER, revision INTEGER NOT NULL DEFAULT 1
+    );
+    CREATE TABLE session_task_tags (session_id TEXT NOT NULL, tag_id TEXT NOT NULL);
     CREATE TABLE project_aliases (
       project_key TEXT PRIMARY KEY, alias TEXT NOT NULL, updated_at INTEGER NOT NULL
     );
@@ -463,6 +468,36 @@ it('projects forwarded search hits only with their persisted session origin', as
     }
     expect(db.prepare('SELECT content FROM messages WHERE id = ?').get('forwarded')).toEqual({ content });
     expect(mocks.searchChatHistoryHybrid.mock.calls[0][0].query).toBe('needle');
+  } finally {
+    clearCurrentDbClient(client);
+    db.close();
+  }
+});
+
+// Search dropped labels even though the ordinary task list showed them. Existing
+// fixtures had no tags. Unit: real search + in-memory SQLite, two tagged hits and
+// one untagged hit verify association and display order without touching user data.
+it('returns each search hit with its own ordered task tags', async () => {
+  const db = createSearchDb();
+  const client = makeSearchDbClient(db);
+  setCurrentDbClient(client, 'test-user');
+  mocks.searchChatHistoryHybrid.mockResolvedValue({
+    hits: [], sessions: {}, vectorUsed: false, vectorSkipReason: null,
+    nextOffset: null, hasMore: false, poolSize: 0, poolCapped: false,
+  });
+  try {
+    for (const id of ['a', 'b', 'untagged']) insertSearchSession(db, id, 1000, null);
+    db.exec(`INSERT INTO task_tags (id,name,color,sort_order,name_customized) VALUES
+      ('red','Important','red',1,1), ('blue','Later','blue',0,1);
+      INSERT INTO session_task_tags VALUES ('a','red'),('a','blue'),('b','red');`);
+    const response = await searchConversations({ query: 'needle', semanticMode: 'keyword' });
+    const tags = Object.fromEntries(response.results.map(item => [item.session.id, item.session.tags]));
+    expect(tags.a).toMatchObject([
+      { id: 'blue', name: 'Later', color: 'blue', nameCustomized: true },
+      { id: 'red', name: 'Important', color: 'red', nameCustomized: true },
+    ]);
+    expect(tags.b).toMatchObject([{ id: 'red' }]);
+    expect(tags.untagged).toEqual([]);
   } finally {
     clearCurrentDbClient(client);
     db.close();
