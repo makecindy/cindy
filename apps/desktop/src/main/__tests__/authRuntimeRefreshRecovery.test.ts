@@ -25,6 +25,7 @@ const names = new Set([
   'getRefreshErrorCode',
   'runAuthRefreshWithReplacementRetry',
   'scheduleRefreshRetryAfterTransientFailure',
+  'scheduleRefreshRetry',
 ]);
 const compiled = ts.transpileModule(
   source.statements
@@ -88,6 +89,7 @@ function setup() {
     migrateLocalProviderBindingsAfterCloudCommit: vi.fn(async () => {}),
     notifyRenderer: vi.fn(),
     notifyAuthListeners: vi.fn(),
+    notifyAccessTokenRefreshed: vi.fn(),
   };
   const main = new Function(
     ...Object.keys(deps),
@@ -97,6 +99,7 @@ function setup() {
     let activeAuthRealm = 'global', lastAcceptedRefreshToken = null;
     let persistedRefreshTokenNeedsIdentityCheck = false, foreignDeviceLocalSignOut = false;
     const coldStartAuthInFlight = null, AUTH_REGION = 'global', API_FETCH_TIMEOUT_MS = 15000;
+    const authRefreshOverride = null; // desktop owns auth here; the delegated Host path is not under test
     const RUNTIME_REFRESH_RETRY_MS = 60000, REFRESH_TOKEN_REPLACEMENT_RETRY_LIMIT = 2;
     const RUNTIME_REFRESH_TOKEN_REPLACEMENT_RECHECK_DELAYS_MS = [250, 1000];
     const refreshBackoff = new AuthRefreshBackoff(() => Date.now(), () => 0);
