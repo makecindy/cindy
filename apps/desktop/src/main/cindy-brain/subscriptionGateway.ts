@@ -54,6 +54,7 @@ import {
   type GhostSubscribeTopic,
   type InstalledGhost,
 } from '../../shared/ghost.js';
+import { PLUGIN_MESSAGE_CONTEXT_MAX_CHARS } from '../../shared/pluginMessage.js';
 import { isGhostOwnerScopeUsable, type GhostOwnerScope } from './ghostOwnerScope.js';
 import { getDbClient } from '../localDb/client/current.js';
 import * as localDbSchema from '../localDb/schema.js';
@@ -72,6 +73,7 @@ type HookVerdict = {
   request?: Record<string, unknown>;
   reason?: string;
   text?: string;
+  context?: string;
   html?: string;
   height?: number;
 };
@@ -119,13 +121,14 @@ export function withGhostUserHookModel<T>(model: string | undefined, task: () =>
 /**
  * 用户消息拦截结果(will-user-message,宿主消费):
  * - allow:原样派发;
- * - rewrite:用 text 替换正文后派发,气泡留痕署名;
+ * - rewrite:用 text 替换正文后派发,气泡留痕署名;text 缺省 = 正文不动(只附资料);
+ *   contexts = 各插件附带的资料(装入序),宿主逐段包装后接在正文末尾;
  * - block:丢弃 + 被拦气泡署名。
  */
 export type GhostScreenResult =
   | { action: 'allow' }
   | { action: 'block'; ghostId: string; ghostName: string; reason: string }
-  | { action: 'rewrite'; ghostId: string; ghostName: string; text: string };
+  | { action: 'rewrite'; ghostId: string; ghostName: string; text?: string; contexts?: string[] };
 
 /**
  * AI 回复拦截结果(will-assistant-message,宿主消费):
@@ -441,6 +444,10 @@ export class GhostSubscriptionGateway {
    * 且未熔断的启用意识,**链式变换**:前一个 rewrite 的输出是后一个的输入
    * (currentText 累积)。block 即短路返回;任何异常都不外抛——本方法在发送
    * 热路径上,只能收敛为 allow / 累积 rewrite。
+   *
+   * 附带资料(rewrite 的 context)走旁路,不进链:后面的插件只看到正文,看不到前面
+   * 插件的资料;各段按装入序并存。一条消息的资料合计 ≤PLUGIN_MESSAGE_CONTEXT_MAX_CHARS,
+   * 先到先得,放不下的那段整段丢弃——不截断(截断会把资料切在半句上),正文改写照常生效。
    */
   async screenUserMessage(
     input: { sessionId: string; text: string },
@@ -453,6 +460,8 @@ export class GhostSubscriptionGateway {
     let currentText = input.text;
     let rewritten = false;
     let lastRewriteGhost: InstalledGhost | null = null;
+    const contexts: string[] = [];
+    let contextBudget = PLUGIN_MESSAGE_CONTEXT_MAX_CHARS;
     for (const ghost of this.deps.listGhosts()) {
       if (!ghost.enabled) continue;
       if (!ghost.manifest.subscribe?.hooks?.includes('will-user-message')) continue;
@@ -481,13 +490,29 @@ export class GhostSubscriptionGateway {
           this.deps.log?.info('ghost hook rewrote user message', { ghostId, sessionId: input.sessionId });
         }
       }
+      if (verdict?.action === 'rewrite' && typeof verdict.context === 'string'
+        && verdict.context.trim().length > 0) {
+        if (verdict.context.length <= contextBudget) {
+          contextBudget -= verdict.context.length;
+          contexts.push(verdict.context);
+          lastRewriteGhost = ghost;
+          this.deps.log?.info('ghost hook attached context to user message', {
+            ghostId, sessionId: input.sessionId, chars: verdict.context.length,
+          });
+        } else {
+          this.deps.log?.warn('ghost hook context dropped: over the per-message limit', {
+            ghostId, sessionId: input.sessionId, chars: verdict.context.length, remaining: contextBudget,
+          });
+        }
+      }
     }
-    if (rewritten && lastRewriteGhost) {
+    if ((rewritten || contexts.length > 0) && lastRewriteGhost) {
       return {
         action: 'rewrite',
         ghostId: installedGhostStoragePart(lastRewriteGhost),
         ghostName: lastRewriteGhost.manifest.name,
-        text: currentText,
+        ...(rewritten ? { text: currentText } : {}),
+        ...(contexts.length > 0 ? { contexts } : {}),
       };
     }
     return { action: 'allow' };
@@ -783,13 +808,11 @@ export class GhostSubscriptionGateway {
         ...input,
         ...(resolvedContext.model ? { model: resolvedContext.model } : {}),
       };
-      this.deps.sendToGhost(ghostId, {
-        type: 'event',
-        name: hookName,
-        hookId,
-        ts: this.deps.now(),
-        data,
-      });
+      const ts = this.deps.now();
+      this.deps.sendToGhost(ghostId, hookName === 'will-user-message'
+        // The capability flag lets a plugin tell this host from one that drops `context`.
+        ? { type: 'event', name: hookName, hookId, ts, data, capabilities: { messageContext: true } }
+        : { type: 'event', name: hookName, hookId, ts, data });
       // Assistant hooks run after the turn and may grant a fresh decision
       // window. User hooks stay inside the original end-to-end send deadline.
       if (hookName === 'will-assistant-message' && this.pendingHooks.has(hookId)) armTimeout();
@@ -866,6 +889,7 @@ export class GhostSubscriptionGateway {
       action: p.action,
       ...(typeof p.reason === 'string' ? { reason: p.reason } : {}),
       ...(typeof p.text === 'string' ? { text: p.text } : {}),
+      ...(typeof p.context === 'string' ? { context: p.context } : {}),
       ...(typeof p.html === 'string' ? { html: p.html } : {}),
       ...(typeof p.height === 'number' ? { height: p.height } : {}),
       ...(route ? { route } : {}),

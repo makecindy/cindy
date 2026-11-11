@@ -3,6 +3,7 @@ import { mcpAppModelContext } from '../../mcp-apps/runtime.js';
 import { createInputEnqueueHarness } from './inputEnqueueHarness.js';
 import { FORWARDED_REQUEST_RECEIPT } from '../../../shared/forwardedRequest.js';
 import { BOT_GROUP_CLIENT_ID } from '../../../shared/botGroupChat.js';
+import { buildPluginMessage } from '../../../shared/pluginMessage.js';
 import { authorizeGroupTool, registerGroupToolAuthority } from '../botGroupToolAuthorization.js';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -1949,6 +1950,7 @@ function createHarness(opts?: {
       screenUserMessage
         ? screenUserMessage(sessionId, agentFacingText, item)
         : Promise.resolve({ action: 'allow' }),
+    pluginContextLabel: () => '附带资料',
     onUserMessageBlocked,
     onUserMessageRewritten,
     emitProjection,
@@ -8112,6 +8114,48 @@ describe('AgentInputCoordinator steer transaction', () => {
     );
   });
 
+  // 规则依据:docs/dev-rules/protocol-compatibility/plugin-message-hook-context.md「新一轮与同轮插话
+  // 走同一处理」。steer 不经 drain,漏接会让插话的资料静默丢失。
+  it('attaches hook context to a same-turn steer the same way as to a new turn', async () => {
+    const h = createHarness();
+    h.setAgentKind('codex');
+    const sid = 'steer-ghost-context';
+    const second = stampTrustedDesktopQueuedOrigin(makeItem('q-2', 'second'), false);
+    h.setScreenUserMessage(async (_sid, agentFacingText) =>
+      agentFacingText === 'second'
+        ? { action: 'rewrite', ghostId: 'g-1', ghostName: 'memory', contexts: ['recalled memo'] }
+        : { action: 'allow' },
+    );
+    const expected = buildPluginMessage('second', 'recalled memo', '附带资料');
+
+    h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
+    await flush();
+    h.coordinator.enqueue(sid, second);
+    await flush();
+    expect(await h.coordinator.steer(sid, second, { removeFromQueue: true })).toBe(true);
+    await flush();
+
+    expect(h.steerToAgent).toHaveBeenCalledWith(
+      sid,
+      { type: 'user', content: expected.text },
+      expect.objectContaining({ [AUTO_REVIEW_SOURCE_CONTENT]: 'second' }),
+    );
+    expect(h.onUserMessageRewritten).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ clientId: 'q-2' }),
+      expect.objectContaining({
+        text: expected.text, originalText: 'second', pastedTextRanges: expected.pastedTextRanges,
+      }),
+    );
+    const persisted = mocks.createMessage.mock.calls.find(
+      (call) => (call[1] as { clientId?: string }).clientId === 'q-2',
+    )?.[1] as { content: string; agentMeta: Record<string, unknown> };
+    expect(JSON.parse(persisted.content)).toMatchObject({
+      text: expected.text, pastedTextRanges: expected.pastedTextRanges,
+    });
+    expect(persisted.agentMeta).toMatchObject({ delivery: 'steer', autoReviewUserText: 'second' });
+  });
+
   it('materializes a delivery-uncertain abort into the paused queue after Stop cleared the marker', async () => {
     // review #939 第四轮:Stop/close 赢在 ack 返回前时 marker 已清,此前直接
     // fall through——迟到注入的文本既没落库也没暂停,用户可重发造成双份消费。
@@ -12458,6 +12502,73 @@ describe('AgentInputCoordinator 意识拦截钩(订阅槽①,will-user-message)'
       slashCommandRanges: [],
     });
     expect(h.onUserMessageRewritten.mock.calls[0]?.[1].agentReferences).toBeUndefined();
+  });
+
+  // 附带资料。规则依据:docs/dev-rules/protocol-compatibility/plugin-message-hook-context.md。
+  const persistedContentOf = (clientId: string): Record<string, unknown> => JSON.parse(
+    (mocks.createMessage.mock.calls.find(
+      (call) => (call[1] as { clientId?: string }).clientId === clientId,
+    )?.[1] as { content: string }).content,
+  ) as Record<string, unknown>;
+
+  it('附带资料:正文不动,资料随消息送 agent 并落库成折叠范围,用户自己的长粘贴范围保留', async () => {
+    const h = createHarness();
+    h.setScreenUserMessage(
+      async () =>
+        ({ action: 'rewrite', ghostId: 'g1', ghostName: '记忆', contexts: ['用户偏好:简短回答'] }) as const,
+    );
+    const text = 'pasted body 问题';
+    const userPaste = { start: 0, end: 11, display: 'Pasted text (1 line)' };
+    h.coordinator.enqueue('s1', stampTrustedDesktopQueuedOrigin(makeItem('c1', text, {
+      persistedContent: JSON.stringify({ text, images: [], files: [], pastedTextRanges: [userPaste] }),
+      chatMessage: { clientId: 'c1', role: 'user', content: text, pastedTextRanges: [userPaste] },
+    }), false));
+    await flush();
+
+    // 标签来自宿主依赖,裁决里没有任何字段能改它。
+    const expected = buildPluginMessage(text, '用户偏好:简短回答', '附带资料');
+    const ranges = [userPaste, ...expected.pastedTextRanges!];
+    expect(h.sendToAgent.mock.calls[0][1]).toMatchObject({ content: expected.text });
+    // 自动审核的用户授权来源仍是用户原话,不含插件资料。
+    expect(h.sendToAgent.mock.calls[0][3][AUTO_REVIEW_SOURCE_CONTENT]).toBe(text);
+    expect(persistedContentOf('c1')).toMatchObject({ text: expected.text, pastedTextRanges: ranges });
+    expect(h.onUserMessageRewritten).toHaveBeenCalledWith(
+      's1',
+      expect.objectContaining({ clientId: 'c1' }),
+      { ghostId: 'g1', ghostName: '记忆', text: expected.text, originalText: text, pastedTextRanges: ranges },
+    );
+  });
+
+  it('附带资料:同时改写正文时先换正文再接资料', async () => {
+    const h = createHarness();
+    h.setScreenUserMessage(
+      async () =>
+        ({ action: 'rewrite', ghostId: 'g1', ghostName: '记忆', text: '优化后的问题', contexts: ['资料'] }) as const,
+    );
+    h.coordinator.enqueue('s1', makeItem('c1', '原始问题'));
+    await flush();
+
+    const expected = buildPluginMessage('优化后的问题', '资料', '附带资料');
+    expect(h.sendToAgent.mock.calls[0][1]).toMatchObject({ content: expected.text });
+    expect(persistedContentOf('c1')).toEqual({
+      text: expected.text, images: [], files: [], pastedTextRanges: expected.pastedTextRanges,
+    });
+    expect(h.onUserMessageRewritten.mock.calls[0]?.[2]).toMatchObject({
+      text: expected.text, originalText: '原始问题',
+    });
+  });
+
+  it('附带资料:宿主合成的隐藏指令不附带,原样派发且不广播改写', async () => {
+    const h = createHarness();
+    h.setScreenUserMessage(
+      async () => ({ action: 'rewrite', ghostId: 'g1', ghostName: '记忆', contexts: ['资料'] }) as const,
+    );
+    const hidden = '[UI_ACTION_TRIGGER]Hidden host instruction';
+    h.coordinator.enqueue('s1', makeItem('c1', hidden));
+    await flush();
+
+    expect(h.sendToAgent.mock.calls[0][1]).toMatchObject({ content: hidden });
+    expect(h.onUserMessageRewritten).not.toHaveBeenCalled();
   });
 });
 

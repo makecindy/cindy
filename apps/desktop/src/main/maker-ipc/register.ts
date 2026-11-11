@@ -20694,6 +20694,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         screenGhostUserMessage(sessionId, agentFacingText),
       );
     },
+    // 与 tasks.send 的 context 同一个胶囊标签:只由宿主按界面语言给出。
+    pluginContextLabel: () => t('newChat.pastedText.pluginContextLabel'),
     onUserMessageBlocked: (sessionId, item, verdict) => {
       rollbackAgentIslandUserPrompt(sessionId, item.clientId, 'blocked');
       broadcastGhostMessageBlocked({

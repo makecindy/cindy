@@ -5,6 +5,7 @@ import {
   HOST_ONLY_AGENT_PREFIX,
   ANNOTATED_IMAGE_NOTE,
   ANNOTATED_IMAGE_REGIONS_PREFIX,
+  appendPluginContextToQueuedMessage,
   buildMakerUserMessage,
   getAgentFacingText,
   reconcileSessionRefsForText,
@@ -13,6 +14,7 @@ import {
   updateQueuedMessageContent,
   updateQueuedMessageText,
 } from '../../shared/agentInputQueue.js';
+import { buildPluginMessage } from '../../shared/pluginMessage.js';
 
 function queuedMessage(files: AgentInputQueuedMessage['files']): AgentInputQueuedMessage {
   return {
@@ -408,6 +410,76 @@ describe('agentInputQueue', () => {
     expect(updated.sessionRefs).toBeUndefined();
     expect(updated.trustedSessionReferenceContexts).toBeUndefined();
     expect(updated.sessionReferencesRequireTrustedSnapshot).toBeUndefined();
+  });
+
+  // 消息钩子附带资料。规则依据:docs/dev-rules/protocol-compatibility/plugin-message-hook-context.md。
+  // 此前钩子只能整段改写正文:资料原样摊在气泡里,还会清掉用户自己的长粘贴胶囊(上一条用例)。
+  it('appends hook context as the body tasks.send builds, keeping the user\'s own ranges and references', () => {
+    const entry = queuedMessage(undefined);
+    const userPaste = { start: 0, end: 7, display: 'Pasted text (1 line)' };
+    entry.persistedContent = JSON.stringify({
+      text: entry.text, images: [], files: [], pastedTextRanges: [userPaste], slashCommandRanges: [],
+    });
+    entry.chatMessage.pastedTextRanges = [userPaste];
+    entry.sessionRefs = [{ sessionId: 'session-a' }];
+    const material = 'Recalled: see cindy://session/other-session';
+    const expected = buildPluginMessage(entry.text, material, 'Attached context');
+    const ranges = [userPaste, ...expected.pastedTextRanges!];
+
+    const updated = appendPluginContextToQueuedMessage(entry, [material], 'Attached context');
+
+    expect(buildMakerUserMessage(updated)).toEqual({ type: 'user', content: expected.text });
+    expect(JSON.parse(updated.persistedContent)).toEqual({
+      text: expected.text, images: [], files: [], pastedTextRanges: ranges, slashCommandRanges: [],
+    });
+    expect(updated.chatMessage).toMatchObject({ content: expected.text, pastedTextRanges: ranges });
+    // A task link inside the material must not make the host read another task.
+    expect(updated.sessionRefs).toEqual([{ sessionId: 'session-a' }]);
+  });
+
+  it('stores a plain-text row as the host envelope, and an attachment-only row without leading blank lines', () => {
+    const plain = queuedMessage(undefined);
+    const expected = buildPluginMessage(plain.text, 'memo', 'Attached context');
+    expect(JSON.parse(appendPluginContextToQueuedMessage(plain, ['memo'], 'Attached context').persistedContent))
+      .toEqual({ text: expected.text, images: [], files: [], pastedTextRanges: expected.pastedTextRanges });
+
+    const attachmentOnly = queuedMessage(undefined);
+    attachmentOnly.text = attachmentOnly.persistedContent = attachmentOnly.chatMessage.content = '';
+    const block = buildPluginMessage('', 'memo', 'Attached context').text.trimStart();
+    const updated = appendPluginContextToQueuedMessage(attachmentOnly, ['memo'], 'Attached context');
+    expect(updated.text).toBe(block);
+    expect(updated.chatMessage.pastedTextRanges).toEqual([
+      { start: 0, end: block.length, display: 'Attached context' },
+    ]);
+  });
+
+  it('gives each plugin\'s material its own range in order and never repeats one already in the body', () => {
+    const first = appendPluginContextToQueuedMessage(queuedMessage(undefined), ['one', 'two'], 'Attached context');
+    const firstRanges = first.chatMessage.pastedTextRanges!;
+    expect(firstRanges.map((range) => first.chatMessage.content.slice(range.start, range.end)))
+      .toEqual(['one', 'two'].map((material) => buildPluginMessage('', material, '').text.trimStart()));
+
+    // A retried message is a clone that already carries the earlier material.
+    const retried = appendPluginContextToQueuedMessage(first, ['two', 'three'], 'Attached context');
+    expect(retried.chatMessage.pastedTextRanges).toHaveLength(3);
+    expect(retried.text.split('\ntwo\n')).toHaveLength(2);
+    expect(appendPluginContextToQueuedMessage(retried, ['one'], 'Attached context')).toBe(retried);
+  });
+
+  it.each([
+    ['a hidden host instruction', (entry: AgentInputQueuedMessage) => {
+      entry.text = entry.persistedContent = '[UI_ACTION_TRIGGER]Continue the task.';
+    }],
+    ['an answer to an async question', (entry: AgentInputQueuedMessage) => {
+      entry.clientId = 'question-reply:card-1';
+    }],
+    ['a structured row without text', (entry: AgentInputQueuedMessage) => {
+      entry.persistedContent = JSON.stringify({ orcaSource: 'lead', content: 'Deploy now' });
+    }],
+  ])('leaves %s untouched instead of attaching hook context', (_name, arrange) => {
+    const entry = queuedMessage(undefined);
+    arrange(entry);
+    expect(appendPluginContextToQueuedMessage(entry, ['memo'], 'Attached context')).toBe(entry);
   });
 
   it('drops stale agent-reference offsets from both queued message copies', () => {

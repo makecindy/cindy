@@ -8989,6 +8989,15 @@ export type GhostDidEventData =
 
 export type GhostMessageHookData = { sessionId: string; text: string; model?: string };
 
+/**
+ * will-user-message 事件随带的宿主能力:插件据此判断裁决里的可选字段会不会被采纳。
+ * 旧宿主不带这个字段,也会忽略裁决里不认识的字段——插件不检查就发,资料会被静默丢掉。
+ */
+export interface GhostUserMessageHookCapabilities {
+  /** rewrite 裁决可带 `context`(附带资料)。与 `tasks.capabilities().messageContext` 同名同义。 */
+  messageContext: true;
+}
+
 /** 定时任务执行前(will-schedule-run)交给插件的数据。不含工作目录等本机路径。 */
 export interface GhostScheduleRunPointData {
   scheduleId: string;
@@ -9112,6 +9121,7 @@ export type GhostPipeEventPush =
       hookId: string;
       ts: number;
       data: GhostMessageHookData;
+      capabilities: GhostUserMessageHookCapabilities;
     }
   | {
       type: 'event';
@@ -9205,6 +9215,8 @@ export type GhostPipeEventPush =
  * - 'rewrite':放行**改写后的正文**——`text`(≤GHOST_HOOK_REWRITE_MAX_CHARS,
  *   超长截断)替换即将落库/显示的消息正文;**静默替换**(气泡直接显示改写版,
  *   无标记无弹窗),提示词优化/合规改写走这条——插件详情已如实披露「可改写」;
+ *   will-user-message 的 rewrite 还可带 `context`(附带资料):随这条消息交给 AI,界面折叠成
+ *   「附带资料」胶囊,不进用户原话;只附资料不改正文时省略 `text`;
  * - 'block'(仅 will-user-message):打回不继续,`reason`(≤200 字符)显示在被拦
  *   气泡的主机脚标上;
  * - 'render'(仅 will-assistant-message):自绘结果卡片替换 AI 气泡——`html`
@@ -9228,6 +9240,11 @@ export interface GhostPipeEventVerdict {
   reason?: string;
   /** rewrite 时的新正文(替换消息正文;其它 action 忽略)。 */
   text?: string;
+  /**
+   * will-user-message 的 rewrite 附带的资料(其它钩子与 action 忽略)。一条消息的全部资料合计
+   * ≤PLUGIN_MESSAGE_CONTEXT_MAX_CHARS,放不下的那段整段丢弃,不截断。
+   */
+  context?: string;
   /** render 时的自绘卡片 HTML(主机净化;其它 action 忽略)。 */
   html?: string;
   /** render 时的卡片初始高度估计(主机 clamp;缺省用 card 槽默认)。 */

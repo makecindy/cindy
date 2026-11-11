@@ -1576,7 +1576,8 @@ interface ElectronAPI {
         text: string;
       }) => void,
     ) => () => void;
-    /** 订阅槽①:用户消息被意识钩子改写(renderer 把气泡正文静默换成改写版;v1 无留痕标记)。 */
+    /** 订阅槽①:用户消息被意识钩子改写(renderer 把气泡正文静默换成改写版;v1 无留痕标记)。
+     *  钩子附带了资料时另带 pastedTextRanges(气泡的全部折叠范围)。 */
     onUserMessageRewritten: (
       callback: (payload: {
         sessionId: string;
@@ -1585,6 +1586,7 @@ interface ElectronAPI {
         ghostName: string;
         text: string;
         originalText: string;
+        pastedTextRanges?: Array<{ start: number; end: number; display: string }>;
       }) => void,
     ) => () => void;
     /** 出口钩子(will-assistant-message):AI 回复被润色改写(renderer 气泡静默换文本)。 */

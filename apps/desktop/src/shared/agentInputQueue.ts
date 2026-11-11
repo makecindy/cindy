@@ -15,7 +15,9 @@ import type { OutputLimitDetails } from '@cindy/maker-shared';
 import { stripChatQuoteMarkerLines } from '@cindy/maker-shared/chat-quotes';
 import type { SharedTaskAuthor } from '@cindy/maker-shared';
 import type { MessageSourceDevice, MessageSourcePlugin } from '@cindy/maker-shared/message-source';
+import { isAsyncQuestionReplyClientId } from '@cindy/maker-shared/interaction';
 import { UI_ACTION_TRIGGER_PREFIX } from '@cindy/maker-shared/synthetic-trigger';
+import { appendPluginMessageContexts, pluginContextBlock } from './pluginMessage.js';
 import { MENTION_TOKEN_SPLIT, parseMentionToken } from '@cindy/maker-shared/mention-ref';
 import {
   formatAnnotationRegion,
@@ -763,6 +765,61 @@ export function updateQueuedMessageText(
   else delete updated.sessionRefs;
   delete updated.agentReferences;
   return updated;
+}
+
+/**
+ * 把消息钩子(will-user-message)附带的资料接到排队消息末尾:发给 Agent 的正文、落库
+ * 信封与气泡三处同步追加同一段 `[Plugin-provided reference material …]` 包装,并各自
+ * 登记一段 `pastedTextRanges`,界面据此把资料画成默认折叠的「附带资料」胶囊(与
+ * `tasks.send` 的 `context` 同一呈现)。
+ *
+ * 只在末尾追加,原有偏移不变:用户自己的长粘贴胶囊、引用 chip、斜杠命令范围与会话
+ * 引用全部保留,也不从资料里重新解析会话链接(资料不能让宿主去读别的任务)。
+ *
+ * 以下消息不附带,原样返回同一个对象:宿主合成的隐藏指令(自动继续、任务回执)、异步
+ * 问题的回答(正文是交给引擎的原生回答格式)、落库内容是没有 text 的结构化信封。同一段
+ * 资料已在正文里时(重试克隆的消息)不重复追加。
+ */
+export function appendPluginContextToQueuedMessage(
+  entry: AgentInputQueuedMessage,
+  contexts: readonly string[],
+  label: string,
+): AgentInputQueuedMessage {
+  if (entry.text.startsWith(UI_ACTION_TRIGGER_PREFIX) || isAsyncQuestionReplyClientId(entry.clientId)) {
+    return entry;
+  }
+  const fresh = contexts.filter((context, index) => context.length > 0
+    && contexts.indexOf(context) === index
+    && !entry.text.includes(pluginContextBlock(context)));
+  if (fresh.length === 0) return entry;
+
+  let envelope: Record<string, unknown> | null = null;
+  try {
+    const parsed = JSON.parse(entry.persistedContent) as unknown;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      envelope = parsed as Record<string, unknown>;
+      if (typeof envelope.text !== 'string') return entry;
+    }
+  } catch {
+    // Plain text: wrapped into the host envelope below so the ranges can be stored.
+  }
+  const persisted = envelope
+    ? appendPluginMessageContexts(envelope.text as string, envelope.pastedTextRanges, fresh, label)
+    : appendPluginMessageContexts(entry.persistedContent, undefined, fresh, label);
+  const bubble = appendPluginMessageContexts(
+    entry.chatMessage.content, entry.chatMessage.pastedTextRanges, fresh, label);
+  return {
+    ...entry,
+    text: appendPluginMessageContexts(entry.text, undefined, fresh, label).text,
+    persistedContent: JSON.stringify(envelope
+      ? { ...envelope, text: persisted.text, pastedTextRanges: persisted.pastedTextRanges }
+      : { text: persisted.text, images: [], files: [], pastedTextRanges: persisted.pastedTextRanges }),
+    chatMessage: {
+      ...entry.chatMessage,
+      content: bubble.text,
+      pastedTextRanges: bubble.pastedTextRanges,
+    },
+  };
 }
 
 /**

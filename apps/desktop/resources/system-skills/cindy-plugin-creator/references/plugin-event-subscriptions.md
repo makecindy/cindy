@@ -9,7 +9,9 @@
   一进一出:
   - `will-user-message`(入口):用户消息发给 AI **之前**交到你手上,动作
     allow/block/rewrite——改写不限于"优化提示词":翻译、脱敏、拼接你的知识库
-    上下文、加路由标记,任何文本变换都行;block 则是前置合规/安全审;
+    上下文、加路由标记,任何文本变换都行;block 则是前置合规/安全审;只想给 AI 补参考
+    资料(检索到的记忆、知识库片段)而不动用户原话时,用 rewrite 的 `context`(见下文
+    「附带资料」),别拼进 `text`;
   - `will-assistant-message`(出口):AI 回复完成后交到你手上,动作
     allow/rewrite/**render**——rewrite 同样是任意变换(后置合规改写、双语对照、
     补充署名…),render 则是**基于结果重新绘制呈现**,卡片形态与原文无关
@@ -81,6 +83,8 @@ cindy.onHostMessage(function (msg) {
     // msg.data = { sessionId, text, model? };新 turn 时 model 是本轮已选模型 id,
     // 同轮插话(steer)时是当前运行中 turn 的模型 id。
     // msg.hookId 原样带回。
+    // msg.capabilities = { messageContext: true }:本机 Cindy 支持 rewrite 附带资料;
+    // 旧版 Cindy 没有这个字段,先检查再用(见下文「附带资料」)。
     if (/(内部代号|密钥)/.test(msg.data.text)) {
       // ① block:打回,不继续(reason 展示在被拦气泡上)。
       cindy.send({ type:'event-verdict', hookId: msg.hookId, action:'block', reason:'疑似包含敏感信息' });
@@ -89,6 +93,10 @@ cindy.onHostMessage(function (msg) {
       //    落库/显示/交给 agent 的正文;v1 静默替换(气泡直接显示改写版,无标记)。
       cindy.send({ type:'event-verdict', hookId: msg.hookId, action:'rewrite',
                    text: '请结构化回答:' + msg.data.text.slice(2) });
+    } else if (msg.capabilities && msg.capabilities.messageContext === true && recalled) {
+      // ②' rewrite + context:用户原话不动(省略 text),把 recalled(你检索到的资料,字符串)
+      //    随这条消息交给 AI;气泡里折叠成「附带资料」胶囊,点开才看到原文。
+      cindy.send({ type:'event-verdict', hookId: msg.hookId, action:'rewrite', context: recalled });
     } else {
       // ③ allow:原样继续(纯副作用的钩子也走这条:记完账放行)。
       cindy.send({ type:'event-verdict', hookId: msg.hookId, action:'allow' });
@@ -126,14 +134,46 @@ cindy.onHostMessage(function (msg) {
   但整段必须 3 秒内出裁决;
 - **三种动作**:`allow`(原样继续)/ `block`(打回,reason ≤200 字符,显示在被拦
   气泡)/ `rewrite`(改写正文再继续,`text` ≤16000 字符替换即将落库/显示/交给
-  agent 的正文)。多个钩子插件按装入序串行,**链式变换**(前一个改写的输出是后
+  agent 的正文;入口钩子还可带 `context` 附带资料,见下)。多个钩子插件按装入序串行,**链式变换**(前一个改写的输出是后
   一个的输入),任一 block 即短路;
 - **block 的呈现**:消息发不出去(不落库不起 turn),气泡照常显示,其下渲一条
   **error 红条,内容 = 你返回的 reason 原文**(主机直接显示,不加框不署名——所以
   reason 写成一句完整的话)。用户用消息的编辑铅笔改了重发(改干净了自然通过,
   没改就再次被拦);**没有"强制发送"**,拦截就是发不出去;
 - **rewrite 静默替换**:气泡直接显示改写后的正文(与交给 AI 的一致),**无标记、
-  无弹窗**;空改写 / 改写等于原文一律被忽略;
+  无弹窗**;空改写 / 改写等于原文一律被忽略(同一裁决里的 `context` 不受影响);
+- **附带资料(`will-user-message` 的 rewrite 可带 `context: string`)**:把参考资料随
+  这条用户消息交给 AI,但不进用户原话——与 `tasks.send` / `targets.send` 的 `context`
+  (§4.11.3)同一套处理:主机用固定标记包好接在正文末尾,完整交给 AI 并随消息保存;界面
+  显示成默认折叠的「附带资料」胶囊,点开看原文,重开任务、翻历史、在手机上看都仍是胶囊。
+  - **先检查再用**:只有事件带 `msg.capabilities.messageContext === true` 时主机才认
+    `context`。旧版 Cindy 没有 `msg.capabilities`,还会把不认识的 `context` 直接忽略——
+    不检查就发,资料会被静默丢掉。不支持时自己决定降级(改回拼进 `text`、或这次不附)。
+    这是未发布能力:发布依赖它的插件时把 `minCindyVersion` 写成实际首个支持版本,运行期
+    检查仍要保留(§9);
+  - **与 `will-compose-context`(§4.6.2)的区别**:那个节点只对用户在任务里选了你的任务生效,资料
+    只进模型输入、不在聊天里显示;这里随消息钩子对你能钩到的每条用户消息生效,用户在气泡
+    上看得见附了什么;
+  - **只附资料不改正文**:省略 `text`(或原样回传)。正文一个字不动,用户自己的长粘贴
+    胶囊、引用、附件都保留。`text` 与 `context` 可以同时给:先换正文,再附资料;
+  - **上限**:一条消息的全部资料(所有钩子插件合计)≤32768 字符,按装入序先到先得;放不下
+    的那段**整段丢弃,不截断**(同一裁决里的 `text` 照常生效)。空串或只有空白的 `context`
+    忽略。自己先裁到留有余量;
+  - **多个插件**:资料不进改写链——后面的插件拿到的 `msg.data.text` 仍只是正文(含前面
+    插件的改写),看不到别的插件附带的资料。各插件的资料按装入序各自成一个胶囊并存;
+    任一插件 block,整条消息连同所有资料都不发;
+  - **资料的身份**:它是插件提供的参考资料,不是用户指令、系统指令或新的授权;主机在包装
+    标记里对 AI 说明了这一点。胶囊标签由主机按界面语言给出(「附带资料」),你改不了;资料
+    里的任务链接不会被主机当成引用去读取别的任务;
+  - **不附带的消息**:主机合成的隐藏指令(自动继续等)和对 AI 提问的回答不附带资料(正文
+    改写规则不变)。`will-assistant-message` 的裁决不认 `context`;
+  - **新一轮与插话一致**:启动新 turn 的消息和运行中的插话(steer)同样附带、同样显示;
+  - **重发时注意**:用户编辑重发、或失败后重试的消息,上一次附带的资料已是正文的一部分,
+    会连同包装标记 `[Plugin-provided reference material …]` 出现在 `msg.data.text` 里。
+    主机只替你去掉**完全相同**的重复段;资料每次不同的插件要自己识别,必要时用 `text`
+    把旧段去掉再附新的;
+  - **斜杠命令别附**:以 `/` 开头的消息可能是命令(如 `/pi install …`)。附上资料与改写正文
+    一样会改变它的内容,可能让它不再被当作命令执行;这类消息回 allow;
 - **UI 全主机画**:红条、气泡都由主机绘制,你只提供 reason / text 文本,伪装不了、
   也冒充不了别的插件;
 - **钩子作用于发给 Agent 的用户消息**:即将启动新 turn 的消息和运行中 turn 里的

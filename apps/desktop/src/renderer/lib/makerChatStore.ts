@@ -9925,18 +9925,29 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
   // main 已用改写版落库 + 送 agent;这里把乐观气泡 content 静默换成改写版
   // (无标记,所见即送给 AI 的),保持气泡与 AI 实收一致。乐观气泡(空闲发)
   // 必在;会话忙时排队消息无乐观气泡,找不到就忽略——落库后 messages:created
-  // 会用改写版 content 显示。
+  // 会用改写版 content 显示。钩子附带了资料时 main 另带 pastedTextRanges(气泡的
+  // 全部折叠范围),正文与范围必须一起换,否则资料会以原文展开在气泡里;不带该字段时
+  // 保持原有行为,只换正文。
   bindOptionalIpc(
     window.electronAPI.ghosts?.onUserMessageRewritten,
     window.electronAPI.ghosts,
     (raw: unknown, ownerStamp?: unknown) => {
       if (!isCurrentLocalLiveIngress(ownerStamp)) return;
-      const p = raw as { sessionId?: string; clientId?: string; text?: string } | null;
+      const p = raw as {
+        sessionId?: string;
+        clientId?: string;
+        text?: string;
+        pastedTextRanges?: PastedTextRange[];
+      } | null;
       if (!p?.sessionId || !p.clientId || typeof p.text !== 'string') return;
+      // Built by main for exactly this text; the bubble renderer skips any range that does not fit.
+      const ranges = Array.isArray(p.pastedTextRanges) ? p.pastedTextRanges : null;
       setState(p.sessionId, (s) => ({
         ...s,
         messages: s.messages.map((m) =>
-          m.clientId === p.clientId ? { ...m, content: p.text! } : m,
+          m.clientId === p.clientId
+            ? { ...m, content: p.text!, ...(ranges && { pastedTextRanges: ranges }) }
+            : m,
         ),
       }));
     },

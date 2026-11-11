@@ -1050,6 +1050,29 @@ describe('makerChatStore text delta batching', () => {
     expect(makerChatStore.getSnapshot(SESSION_ID).messages[0]?.ghostReplyPending).toBe(true);
   });
 
+  // 规则依据:docs/dev-rules/protocol-compatibility/plugin-message-hook-context.md。正文与折叠范围
+  // 不一起换,钩子附带的资料会以原文摊在刚发出的气泡里,直到重开任务才折叠。
+  it('swaps collapsed ranges together with the text when a ghost rewrite carries hook context', () => {
+    const owner = { dataOwnerId: 'owner-a', ownerGeneration: 1 };
+    const bubble = () => makerChatStore.getSnapshot(SESSION_ID).messages[0];
+    onGhostMessageBlocked?.(
+      { sessionId: SESSION_ID, clientId: 'ghost-client-2', ghostId: 'ghost-a', ghostName: 'Ghost A', reason: '', text: 'hi' },
+      owner,
+    );
+    const text = 'hi\n\n[material]';
+    const range = { start: 4, end: text.length, display: 'Attached context' };
+
+    onGhostMessageRewritten?.(
+      { sessionId: SESSION_ID, clientId: 'ghost-client-2', text, pastedTextRanges: [range] },
+      owner,
+    );
+    expect(bubble()).toMatchObject({ content: text, pastedTextRanges: [range] });
+
+    // A rewrite without the field is the pre-existing push: only the text changes.
+    onGhostMessageRewritten?.({ sessionId: SESSION_ID, clientId: 'ghost-client-2', text: `${text}!` }, owner);
+    expect(bubble()).toMatchObject({ content: `${text}!`, pastedTextRanges: [range] });
+  });
+
   it('flushes pending text before the next non-delta event', () => {
     emitTextDelta('a');
 

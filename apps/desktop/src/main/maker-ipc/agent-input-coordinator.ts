@@ -77,6 +77,7 @@ import type {
 import {
   HOST_ONLY_AGENT_PREFIX,
   appendNoteToMakerUserMessage,
+  appendPluginContextToQueuedMessage,
   buildMakerUserMessage,
   getAgentInputAttachmentBlockType,
   getAgentFacingText,
@@ -514,6 +515,8 @@ export interface AgentInputCoordinatorDeps {
    * turn)并回调 onUserMessageBlocked;rewrite 用 text 替换正文后照常派发并
    * 回调 onUserMessageRewritten。实现方必须自行收敛异常(fail-open),本
    * 协调器不为它包错误处理。item.bypassGhostHooks 为真时跳过(用户强行放行)。
+   * rewrite 的 text 缺省 = 正文不动;contexts = 插件附带的资料,接在正文末尾随消息交给
+   * Agent,界面折叠成胶囊(新一轮与同轮插话同一处理)。
    */
   screenUserMessage?: (
     sessionId: string,
@@ -522,8 +525,10 @@ export interface AgentInputCoordinatorDeps {
   ) => Promise<
     | { action: 'allow' }
     | { action: 'block'; ghostId: string; ghostName: string; reason: string }
-    | { action: 'rewrite'; ghostId: string; ghostName: string; text: string }
+    | { action: 'rewrite'; ghostId: string; ghostName: string; text?: string; contexts?: readonly string[] }
   >;
+  /** 钩子附带资料的胶囊标签(宿主按界面语言给出,插件不能指定)。 */
+  pluginContextLabel?: () => string;
   /** 拦截命中回调:host 据此广播 renderer 把乐观气泡原地降级为被拦态。 */
   onUserMessageBlocked?: (
     sessionId: string,
@@ -531,11 +536,18 @@ export interface AgentInputCoordinatorDeps {
     verdict: { ghostId: string; ghostName: string; reason: string },
   ) => void;
   /** 改写命中回调:host 据此广播 renderer 把气泡正文换成改写版并留痕署名。
-   *  originalText = 改写前的用户原文(留痕可查)。 */
+   *  originalText = 改写前的用户原文(留痕可查)。附上了资料时 text 是含资料的气泡正文,
+   *  pastedTextRanges 是它的全部折叠范围;没有资料时不带该字段。 */
   onUserMessageRewritten?: (
     sessionId: string,
     item: AgentInputQueuedMessage,
-    info: { ghostId: string; ghostName: string; text: string; originalText: string },
+    info: {
+      ghostId: string;
+      ghostName: string;
+      text: string;
+      originalText: string;
+      pastedTextRanges?: NonNullable<AgentInputQueuedMessage['chatMessage']['pastedTextRanges']>;
+    },
   ) => void;
   /** Awaited after the user message is persisted but before vendor dispatch starts. */
   beforeDispatchUserTurn?: (
@@ -2668,23 +2680,9 @@ export class AgentInputCoordinator {
         return finishSteerRequest(opts?.fallbackToTurn === false ? false : true);
       }
       if (verdict.action === 'rewrite') {
-        // 与 drain 的 rewrite 同构:JSON-aware 只换 text 字段并保留附件信封；
-        // 整体改写后旧 Composer reference offsets 已失效，必须同步清掉。
-        const originalText = item.text;
-        const rewritten = updateQueuedMessageText(item, verdict.text);
-        Object.assign(item, rewritten);
-        if (!rewritten.sessionRefs) delete item.sessionRefs;
-        if (!rewritten.trustedSessionReferenceContexts) delete item.trustedSessionReferenceContexts;
-        if (!rewritten.sessionReferencesRequireTrustedSnapshot) {
-          delete item.sessionReferencesRequireTrustedSnapshot;
-        }
-        delete item.agentReferences;
-        this.deps.onUserMessageRewritten?.(sessionId, item, {
-          ghostId: verdict.ghostId,
-          ghostName: verdict.ghostName,
-          text: verdict.text,
-          originalText,
-        });
+        // 与 drain 的 rewrite 同一处理(applyGhostRewrite)。
+        const info = this.applyGhostRewrite(item, verdict);
+        if (info) this.deps.onUserMessageRewritten?.(sessionId, item, info);
       }
     }
 
@@ -4786,6 +4784,50 @@ export class AgentInputCoordinator {
     return projected;
   }
 
+  /**
+   * 把钩子的 rewrite 裁决原地应用到消息上(drain 与 steer 共用),返回要广播的改写信息;
+   * 什么都没改(只带资料、而这条消息不附带资料)时返回 null。
+   *
+   * 改正文:送 agent 读 item.text、落库读 item.persistedContent。persistedContent 是
+   * stringifyUserContent 的 JSON 信封(可能携带图片/文件引用与引用块)——必须走 JSON-aware 的
+   * updateQueuedMessageText 只换其中 text 字段;整体覆写会把带附件消息的落库内容毁成纯文本。
+   * 整体改写后旧 Composer reference offsets 已失效,同步清掉。
+   *
+   * 附资料:接在末尾,既有偏移仍然有效,正文与引用都不动。胶囊标签只由宿主给,缺省用英文界面
+   * 的同一文案。附上后广播的 text 是含资料的气泡正文,并带上气泡的全部折叠范围。
+   */
+  private applyGhostRewrite(
+    item: AgentInputQueuedMessage,
+    verdict: { ghostId: string; ghostName: string; text?: string; contexts?: readonly string[] },
+  ): Parameters<NonNullable<AgentInputCoordinatorDeps['onUserMessageRewritten']>>[2] | null {
+    const originalText = item.text;
+    if (verdict.text !== undefined) {
+      const rewritten = updateQueuedMessageText(item, verdict.text);
+      Object.assign(item, rewritten);
+      if (!rewritten.sessionRefs) delete item.sessionRefs;
+      if (!rewritten.trustedSessionReferenceContexts) delete item.trustedSessionReferenceContexts;
+      if (!rewritten.sessionReferencesRequireTrustedSnapshot) {
+        delete item.sessionReferencesRequireTrustedSnapshot;
+      }
+      delete item.agentReferences;
+    }
+    const withContext = verdict.contexts?.length
+      ? appendPluginContextToQueuedMessage(
+          item, verdict.contexts, this.deps.pluginContextLabel?.() || 'Attached context')
+      : item;
+    const attached = withContext !== item;
+    if (attached) Object.assign(item, withContext);
+    const text = attached ? item.chatMessage.content : verdict.text;
+    if (text === undefined) return null;
+    return {
+      ghostId: verdict.ghostId,
+      ghostName: verdict.ghostName,
+      text,
+      originalText,
+      ...(attached ? { pastedTextRanges: item.chatMessage.pastedTextRanges ?? [] } : {}),
+    };
+  }
+
   /** Resolve local refs normally, but never reinterpret a controller-owned remote ref. */
   private async resolveReferenceContexts(
     item: AgentInputQueuedMessage,
@@ -5344,29 +5386,12 @@ export class AgentInputCoordinator {
           return;
         }
         if (verdict.action === 'rewrite') {
-          // head 已从 pendingQueue 取出,原地改正文安全:buildMakerUserMessage
-          // 读 head.text(送 agent)、persistUserMessage.content 读
-          // head.persistedContent(落库)。persistedContent 是 stringifyUserContent
-          // 的 JSON 信封(可能携带图片/文件引用与引用块)——必须走 JSON-aware
-          // 的 updateQueuedMessageText 只换其中 text 字段;整体覆写会把带附件
-          // 消息的落库内容毁成纯文本(重开会话后附件 chip / 引用全部丢失)。
-          const originalText = head.text;
-          const rewritten = updateQueuedMessageText(head, verdict.text);
-          Object.assign(head, rewritten);
-          if (!rewritten.sessionRefs) delete head.sessionRefs;
-          if (!rewritten.trustedSessionReferenceContexts)
-            delete head.trustedSessionReferenceContexts;
-          if (!rewritten.sessionReferencesRequireTrustedSnapshot) {
-            delete head.sessionReferencesRequireTrustedSnapshot;
+          // head 已从 pendingQueue 取出,原地改写安全(applyGhostRewrite)。
+          const info = this.applyGhostRewrite(head, verdict);
+          if (info) {
+            revokeTrustedDesktopQueuedOrigin(head);
+            this.deps.onUserMessageRewritten?.(sessionId, head, info);
           }
-          delete head.agentReferences;
-          revokeTrustedDesktopQueuedOrigin(head);
-          this.deps.onUserMessageRewritten?.(sessionId, head, {
-            ghostId: verdict.ghostId,
-            ghostName: verdict.ghostName,
-            text: verdict.text,
-            originalText,
-          });
         }
       }
       if (this.deps.refreshAgentReferencesBeforeDispatch) {

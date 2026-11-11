@@ -3333,7 +3333,9 @@ export function broadcastGhostMessageBlocked(payload: {
 /** 改写通知广播(register.ts 的 onUserMessageRewritten 依赖真身)。
  *  renderer 据此把气泡正文静默换成改写版(v1 无留痕标记,所见即送给 AI 的);
  *  text = 改写后正文,originalText = 用户原文(v1 renderer 不消费,留给
- *  后续留痕迭代,广播协议先带上避免届时改协议)。 */
+ *  后续留痕迭代,广播协议先带上避免届时改协议)。
+ *  钩子附带了资料时 text 含包装后的资料,pastedTextRanges 是气泡的全部折叠范围
+ *  (用户自己的长粘贴 + 资料胶囊);没有资料时不带该字段,renderer 不动原有范围。 */
 export function broadcastGhostMessageRewritten(payload: {
   sessionId: string;
   clientId: string;
@@ -3341,6 +3343,7 @@ export function broadcastGhostMessageRewritten(payload: {
   ghostName: string;
   text: string;
   originalText: string;
+  pastedTextRanges?: Array<{ start: number; end: number; display: string }>;
 }): void {
   broadcastGhostWindowPush(GHOST_MESSAGE_REWRITTEN_CHANNEL, payload);
 }

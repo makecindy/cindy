@@ -940,6 +940,68 @@ describe('will- 拦截', () => {
     expect(await p).toEqual({ action: 'allow' });
   });
 
+  // 附带资料(rewrite 的 context)。规则依据:docs/dev-rules/protocol-compatibility/
+  // plugin-message-hook-context.md。此前「改写等于原文」整条裁决被忽略,插件只能把资料拼进正文。
+  const answer = (
+    gw: GhostSubscriptionGateway,
+    sent: Array<{ payload: unknown }>,
+    index: number,
+    ghostId: string,
+    verdict: Record<string, unknown>,
+  ) => gw.handleVerdict(ghostId, {
+    type: 'event-verdict',
+    hookId: (sent[index].payload as { hookId: string }).hookId,
+    ...verdict,
+  });
+
+  it.each([
+    ['省略 text', { context: '记忆' }, { action: 'rewrite', ghostId: 'h1', ghostName: '意识h1', contexts: ['记忆'] }],
+    ['text 等于原文', { text: '原文', context: '记忆' }, { action: 'rewrite', ghostId: 'h1', ghostName: '意识h1', contexts: ['记忆'] }],
+    ['只有空白的 context', { context: ' \n ' }, { action: 'allow' }],
+  ])('附带资料:正文不改也生效,结果不带 text(%s)', async (_name, verdict, expected) => {
+    const { gw, sent, running } = makeGateway({ listGhosts: () => [HOOK_GHOSTS[0]] });
+    running.add('h1');
+    const p = gw.screenUserMessage({ sessionId: 's1', text: '原文' });
+    // 插件靠事件上的能力标记判断宿主认不认 context;旧宿主没有这个字段。
+    expect(sent[0].payload).toMatchObject({ capabilities: { messageContext: true } });
+    answer(gw, sent, 0, 'h1', { action: 'rewrite', ...verdict });
+    expect(await p).toEqual(expected);
+  });
+
+  it('附带资料:后面的插件只看到正文,各段按装入序并存', async () => {
+    const { gw, sent, running } = makeGateway({ listGhosts: () => HOOK_GHOSTS });
+    running.add('h1').add('h2');
+    const p = gw.screenUserMessage({ sessionId: 's1', text: 'a' });
+    answer(gw, sent, 0, 'h1', { action: 'rewrite', text: 'ab', context: 'h1 的资料' });
+    await vi.waitFor(() => expect(sent).toHaveLength(2));
+    expect((sent[1].payload as { data: unknown }).data).toEqual({ sessionId: 's1', text: 'ab' });
+    answer(gw, sent, 1, 'h2', { action: 'rewrite', context: 'h2 的资料' });
+    expect(await p).toEqual({
+      action: 'rewrite',
+      ghostId: 'h2',
+      ghostName: '意识h2',
+      text: 'ab',
+      contexts: ['h1 的资料', 'h2 的资料'],
+    });
+  });
+
+  it('附带资料:合计超过 32768 的那段整段丢弃不截断,同一裁决的正文改写照常', async () => {
+    const { gw, sent, running } = makeGateway({ listGhosts: () => HOOK_GHOSTS });
+    running.add('h1').add('h2');
+    const first = 'a'.repeat(20_000);
+    const p = gw.screenUserMessage({ sessionId: 's1', text: 'x' });
+    answer(gw, sent, 0, 'h1', { action: 'rewrite', context: first });
+    await vi.waitFor(() => expect(sent).toHaveLength(2));
+    answer(gw, sent, 1, 'h2', { action: 'rewrite', text: 'x2', context: 'b'.repeat(20_000) });
+    expect(await p).toEqual({
+      action: 'rewrite',
+      ghostId: 'h2',
+      ghostName: '意识h2',
+      text: 'x2',
+      contexts: [first],
+    });
+  });
+
   it('超时 fail-open;连续 3 次熔断降级且不再询问', async () => {
     const fused: string[] = [];
     const { gw, sent, running } = makeGateway({
@@ -1233,6 +1295,20 @@ describe('will-assistant-message 出口钩子拦截(screenAssistantMessage)', ()
       hookId: (sent[0].payload as { hookId: string }).hookId,
       action: 'render',
       html: '   ', // 空白 html:忽略
+    });
+    expect(await p).toEqual({ action: 'allow' });
+  });
+
+  it('出口钩子不认附带资料:事件不带能力标记,裁决里的 context 被忽略', async () => {
+    const { gw, sent, running } = makeGateway({ listGhosts: () => [OUT_GHOSTS[0]] });
+    running.add('h1');
+    const p = gw.screenAssistantMessage({ sessionId: 's1', text: '原文' });
+    expect(sent[0].payload).not.toHaveProperty('capabilities');
+    gw.handleVerdict('h1', {
+      type: 'event-verdict',
+      hookId: (sent[0].payload as { hookId: string }).hookId,
+      action: 'rewrite',
+      context: '资料',
     });
     expect(await p).toEqual({ action: 'allow' });
   });
