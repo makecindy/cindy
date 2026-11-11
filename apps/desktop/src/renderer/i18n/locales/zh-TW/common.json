@@ -11703,7 +11703,7 @@
       "remove": "移除",
       "removeAria": "移除 {{platform}}",
       "empty": "新增你已有的機器人，或在下方連接個人微信，{{name}} 就會在那裡回覆。",
-      "externalNote": "Telegram 和飛書/Lark 綁定後只接收主人的私訊。群組依各平台的參與設定接收訊息，工具沿用 {{name}} 的權限。獨立任務共用資料與記憶。",
+      "externalNote": "Telegram 和飛書/Lark 繫結後只接收主人的私訊。群組依各平台的參與設定接收訊息，工具沿用 {{name}} 的權限。獨立任務共用資料與記憶。",
       "sharedMemoryNote": "{{name}} 會把這裡和其它對話裡的資訊一起使用。想隔開記憶，請換一位夥伴。",
       "groups": {
         "title": "群組",
