@@ -1,3 +1,4 @@
+import { saveMcpAppViewState } from './mcpAppViewState.js';
 import { fastModeFromStorage, fastModeToStorage } from '@cindy/maker-shared';
 import { extractToolResultDiagnostics } from '@cindy/maker-shared/tool-result-compaction';
 import { runPluginUsageTransaction } from './pluginUsageTx.js';
@@ -134,6 +135,8 @@ function dispatchTransaction(db: Database.Database, args: unknown): unknown {
       return sessionAgentSwitchFallback(db, txArgs);
     case 'context.rebuild':
       return contextRebuild(db, txArgs);
+    case 'mcpApps.viewState.save':
+      return saveMcpAppViewState(db, txArgs);
     case 'message.insert':
       return messageInsert(db, txArgs);
     case 'message.updateContent':
@@ -1978,11 +1981,13 @@ function messageDelete(
     db.prepare("DELETE FROM messages WHERE role = 'context_rebuild' AND session_id = ?").run(
       sessionId,
     );
+    const deleteState = db.prepare('DELETE FROM mcp_app_view_states WHERE message_id = ?');
     const scrubTarget = db.prepare(
       "UPDATE messages SET role = 'message_tombstone', content = 'null', tool_use_id = NULL, agent_meta = NULL, agent_kind = NULL, rewind_at = ? WHERE id = ? AND session_id = ? AND client_id = ? AND role IN ('user', 'assistant', 'tool_use', 'tool_result', 'ask_user', 'plan_review', 'thinking', 'error') AND rewind_at IS NULL",
     );
     for (const target of targets) {
       const scrubbed = scrubTarget.run(updatedAt, target.id, sessionId, target.clientId);
+      deleteState.run(target.id);
       if (scrubbed.changes !== 1) {
         throw Object.assign(new Error(`Message 删除竞态: ${target.clientId}`), {
           code: 'PRECONDITION_FAILED',
@@ -2208,6 +2213,11 @@ function sessionsSetTerminalStatus(db: Database.Database, args: unknown): Sessio
           RETURNING id AS sessionId, title, working_dir AS workingDir, workspace_kind AS workspaceKind,
             remote_host_id AS remoteHostId, source`).all(now, sessionId) as SessionsSetTerminalStatusResult['deletedSideChats']
       : [];
+    if (status === 'deleted') {
+      const deleteState = db.prepare('DELETE FROM mcp_app_view_states WHERE session_id = ?');
+      deleteState.run(sessionId);
+      for (const child of deletedSideChats) deleteState.run(child.sessionId);
+    }
     for (const child of deletedSideChats) {
       db.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(now, child.sessionId);
     }

@@ -1,3 +1,4 @@
+import { reconcileDeletedTaskViewState } from '../../desktop/src/main/mcp-apps/viewStateStore.js';
 import { createHostCodexRuntime } from './agent/codex-runtime.js';
 import { createAvailabilityPolicy } from '../../desktop/src/main/device-link/providerShareAvailabilityPolicyCore.js';
 import { configureWindowsAtomicRename } from '../../desktop/src/main/windowsAtomicRename.js';
@@ -486,6 +487,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   // installing it here keeps them on the same connection as the host runtime.
   setCurrentDbClient(client, ownerId);
   activeOwner = ownerId;
+  await reconcileDeletedTaskViewState(client, () => activeOwner === ownerId);
   closeStorage = async () => { clearCurrentDbClient(client); await client.dispose(); };
   configureProvisionalSessions(dataDir, { onSwept: sessionId => eventHub.publish({ type: 'session_changed', action: 'delete', sessionId }) });
   await sweepLeftoverProvisionalSessions();
