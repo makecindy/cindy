@@ -866,6 +866,21 @@ describe('translateResponsesRequest', () => {
     expect(out.tool_choice).toEqual({ type: 'function', function: { name: 'clock__exec' } });
   });
 
+  it('drops a non-string inline function description (#9715)', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        {
+          type: 'additional_tools',
+          role: 'developer',
+          tools: [{ type: 'function', name: 'lookup', description: 1, parameters: { type: 'object' } }],
+        },
+        { type: 'message', role: 'user', content: 'hello' },
+      ],
+    }));
+
+    expect(out.tools?.map(tool => (tool as { function: { name: string } }).function.name)).toEqual(['lookup']);
+  });
+
   it('does not let a functions selector borrow another namespace child (#9715)', () => {
     const out = translateResponsesRequest(base({
       input: [

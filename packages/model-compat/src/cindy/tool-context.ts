@@ -222,6 +222,11 @@ export class ChatBridgeToolContext {
     // Malformed declarations arrive through untrusted JSON; skip them instead of throwing a
     // TypeError the handler does not translate into a 400.
     if (typeof source.name !== 'string' || source.name.trim().length === 0) return;
+    // A non-string description would be forwarded as-is, and Chat types it as a string; drop it
+    // rather than let a strict provider reject the whole request.
+    if (source.description !== undefined && typeof source.description !== 'string') {
+      delete (source as { description?: unknown }).description;
+    }
     const identity = responseToolIdentity('function', source.name, namespace);
     const chatName = this.reserveName(namespace ? `${namespace}__${source.name}` : source.name, identity);
     if (this.specsByChatName.has(chatName)) return;
@@ -358,6 +363,9 @@ export class ChatBridgeToolContext {
       // switch on upstream nested-helper normalization, but `clock.exec` still names this tool.
       if (name !== CODE_MODE_EXEC_TOOL_NAME) this.recordCurrentSelector(kind, name, chatName);
       this.recordCurrentSelector(kind, namespace + '.' + name, chatName);
+      // The flattened spelling is what the Chat catalog advertises, so a selector written that
+      // way must also see the collision when a bare declaration owns the same name.
+      this.recordCurrentSelector(kind, `${namespace}__${name}`, chatName);
     }
   }
 
