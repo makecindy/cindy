@@ -5,6 +5,7 @@ import ts from 'typescript';
 import { AcceptedCallbackDispatchCancelled, runAcceptedCallback } from '../acceptedCallbackRunner';
 
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue';
+import type { OrcaStructuredWorkerReport } from '@cindy/orca-workflow';
 import {
   captureOrcaDeliveryBaselines,
   createOrcaTeamService,
@@ -361,7 +362,7 @@ function createDeps(overrides: Partial<OrcaTeamServiceDeps> = {}) {
     getLiveSession: vi.fn(() => null),
     resumeWorkerSession: vi.fn(async () => {}),
     setWorkerLatestReport: vi.fn(async () => {}),
-    updateWorkerStatus: vi.fn(async (workerId, status) => {
+    updateWorkerStatus: vi.fn(async (workerId, status, latestReport?: OrcaStructuredWorkerReport | null) => {
       calls.push(`updateWorkerStatus:${status}`);
       workers = workers.map((worker) =>
         worker.id === workerId
@@ -369,6 +370,8 @@ function createDeps(overrides: Partial<OrcaTeamServiceDeps> = {}) {
               ...worker,
               status,
               idleSince: status === 'running' ? null : worker.idleSince,
+              // 与真实 store 同语义：显式传 third arg 才改回报（含传 null 清空）。
+              ...(latestReport === undefined ? {} : { latestReport }),
             }
           : worker,
       );
@@ -1843,6 +1846,79 @@ describe('OrcaTeamService', () => {
 
     expect(getWorker().status).toBe('idle');
     expect(deps.setWorkerLatestReport).toHaveBeenCalledWith('worker-1', expect.objectContaining({ state: 'waiting' }));
+  });
+
+  // 派活会清空上一轮回报；发送失败回滚必须把它还回去，否则用户看过的结论消失。
+  it('restores the previous report when a dispatch fails after acceptance', async () => {
+    let calls = 0;
+    const { deps, getWorker, service } = createDeps({
+      // 第一轮正常投递，第二轮被接受后发送失败，恰好落在回滚窗口。
+      dispatchWorkerMessage: vi.fn(async (params) => {
+        calls += 1;
+        await params.onAccepted?.();
+        if (calls === 1) {
+          return {
+            ok: true,
+            mode: 'dispatched',
+            clientId: 'first',
+            dispatchOutcome: {
+              kind: 'session-dispatch',
+              source: 'test-source',
+              dispatched: true,
+            },
+            targetTitle: 'Worker',
+            targetLastUserSendAt: null,
+          } satisfies DispatchWorkerMessageResult;
+        }
+        return {
+          ok: false,
+          dispatchOutcome: {
+            kind: 'session-dispatch',
+            source: 'test-source',
+            dispatched: false,
+            reason: 'cancelled-before-dispatch',
+            context: 'rollback-report',
+            message: 'cancelled',
+          },
+        } satisfies DispatchWorkerMessageResult;
+      }),
+    });
+    await service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '第一轮' });
+    await service.captureLocalWorkerReport('worker-session-1')(true, {
+      delivered: true,
+      report: { state: 'blocked', question: '选 A 还是 B' },
+    });
+    await service.handleWorkerTerminalTurn({ sessionId: 'worker-session-1', status: 'done', finalText: '问题' });
+    expect(getWorker().status).toBe('done');
+    expect(getWorker().latestReport).toMatchObject({ state: 'blocked' });
+
+    // 第二轮派活被接受后发送失败：清空回报发生在 accepted，回滚必须恢复上一轮。
+    await service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '第二轮' });
+
+    expect(getWorker().status).toBe('done');
+    expect(getWorker().latestReport).toMatchObject({ state: 'blocked', question: '选 A 还是 B' });
+  });
+
+  // progress 在 await 期间被新派活替换时，不能把旧进度写进新一轮。
+  it('drops a progress report whose assignment was replaced mid-await', async () => {
+    const { deps, service } = createDeps();
+    await service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '第一轮' });
+    let releaseLink!: () => void;
+    const linkGate = new Promise<void>((resolve) => { releaseLink = resolve; });
+    const originalLink = deps.getWorkerLinkBySessionId;
+    deps.getWorkerLinkBySessionId = async (sessionId: string) => {
+      await linkGate;
+      return originalLink(sessionId);
+    };
+    const pending = service.recordWorkerReport('worker-session-1', { state: 'progress', summary: '旧进度' });
+    // 新派活在 await 期间替换旧派活身份（真实路径同样会清空 latest_report）。
+    await service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '第二轮' });
+    releaseLink();
+    await pending;
+
+    expect(deps.setWorkerLatestReport).not.toHaveBeenCalledWith(
+      'worker-1', expect.objectContaining({ summary: '旧进度' }),
+    );
   });
 
   // 晚到的 ready 不能把已经判 error 的轮次洗成 done（真实终态必须被保留）。
