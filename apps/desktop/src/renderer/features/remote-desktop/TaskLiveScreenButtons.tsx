@@ -6,6 +6,7 @@ import type { RemoteLiveScreen } from '@cindy/device-link';
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { Tip } from '@/components/ui/tooltip';
 import { openLiveScreenTab } from '@/features/right-sidebar/lib/openLiveScreenTab';
+import { publishTaskLiveScreens } from './taskLiveScreensStore';
 import type { TaskLiveScreens } from './useTaskLiveScreens';
 import { cn } from '@/lib/utils';
 
@@ -36,6 +37,7 @@ export function useAutoOpenTaskLiveScreens(
 ): void {
   useEffect(() => {
     if (!sessionId || !loaded) return;
+    publishTaskLiveScreens(sessionId, screens);
     let known = opened.get(sessionId);
     if (!known) {
       if (opened.size >= OPENED_TASKS) opened.delete(opened.keys().next().value as string);

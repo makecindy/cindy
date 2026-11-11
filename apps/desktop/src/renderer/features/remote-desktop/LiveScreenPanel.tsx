@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Ellipsis, Minus, Plus } from 'lucide-react';
+import { Camera, ChevronDown, Ellipsis, Minus, Plus } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import {
@@ -10,6 +10,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Tip } from '@/components/ui/tooltip';
+import { toast } from '@/lib/toast';
 import { DesktopViewerController, type ViewerSnapshot } from './viewerController';
 import { createLiveScreenEmbedApi } from './liveScreenEmbedApi';
 import { LIVE_SCREEN_ICONS, liveScreenToolbarButtons } from './liveScreenButtons';
@@ -31,6 +32,9 @@ export interface LiveScreenPanelProps {
   screen: { plugin: string; id: string; name?: string };
   /** The panel is on screen (its tab is selected and the sidebar is open). */
   visible: boolean;
+  /** The task's other devices, offered from the device name; picking one shows it here. */
+  devices?: readonly { plugin: string; id: string; name: string }[];
+  onSelectDevice?(device: { plugin: string; id: string }): void;
 }
 
 /**
@@ -40,7 +44,14 @@ export interface LiveScreenPanelProps {
  * the device itself. The mouse is a finger; a device that takes typing takes
  * it after a click. Nothing else of that computer is shown or controlled.
  */
-export function LiveScreenPanel({ deviceId, deviceName, screen, visible }: LiveScreenPanelProps) {
+export function LiveScreenPanel({
+  deviceId,
+  deviceName,
+  screen,
+  visible,
+  devices,
+  onSelectDevice,
+}: LiveScreenPanelProps) {
   const { t } = useTranslation();
   const bridge = window.electronAPI.liveScreenEmbed;
   const root = useRef<HTMLDivElement>(null);
@@ -117,6 +128,41 @@ export function LiveScreenPanel({ deviceId, deviceName, screen, visible }: LiveS
     else controller.current.retry();
   };
   const press = (id: string) => controller.current?.press(id);
+  // The picture as shown now, to this computer's clipboard (the device itself is not asked).
+  const screenshot = async () => {
+    const video = root.current?.querySelector('video');
+    if (!video?.videoWidth) return;
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      canvas.getContext('2d')?.drawImage(video, 0, 0);
+      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
+      if (!blob) throw new Error('no picture');
+      await window.electronAPI.copyPngToClipboard({ png: await blob.arrayBuffer() });
+      toast.success(t('rightSidebar.browser.screenshotCopied'));
+    } catch {
+      toast.error(t('rightSidebar.browser.screenshotFailed'));
+    }
+  };
+  const others = (devices ?? []).filter(
+    (device) => device.plugin !== screen.plugin || device.id !== screen.id,
+  );
+  const chip = (
+    <>
+      <span
+        aria-hidden
+        className={
+          ready
+            ? 'size-2 shrink-0 rounded-full bg-[var(--status-success)]'
+            : 'size-2 shrink-0 rounded-full bg-[var(--text-tertiary)]'
+        }
+      />
+      <span className="truncate">{name}</span>
+    </>
+  );
+  const chipClass =
+    'flex min-w-0 items-center gap-2 rounded-full border border-[var(--border-default)] px-3 py-1 text-13 text-[var(--text-primary)]';
   const tool = (
     label: string,
     content: React.ReactNode,
@@ -147,26 +193,40 @@ export function LiveScreenPanel({ deviceId, deviceName, screen, visible }: LiveS
   };
   const navigation = NAVIGATION_BUTTONS.map(deviceTool).filter(Boolean);
   const turning = TURN_BUTTONS.map(deviceTool).filter(Boolean);
-  const others = buttons.filter(
+  const menuButtons = buttons.filter(
     (button) => !NAVIGATION_BUTTONS.includes(button.id) && !TURN_BUTTONS.includes(button.id),
   );
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[var(--surface)]">
       <div className="flex shrink-0 items-center gap-2 border-b border-[var(--border-default)] px-2 py-1.5">
-        <span
-          className="flex min-w-0 items-center gap-2 rounded-full border border-[var(--border-default)] px-3 py-1 text-13 text-[var(--text-primary)]"
-          title={name}
-        >
-          <span
-            aria-hidden
-            className={
-              ready
-                ? 'size-2 shrink-0 rounded-full bg-[var(--status-success)]'
-                : 'size-2 shrink-0 rounded-full bg-[var(--text-tertiary)]'
-            }
-          />
-          <span className="truncate">{name}</span>
-        </span>
+        {others.length > 0 && onSelectDevice ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className={`${chipClass} hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]`}
+                title={name}
+              >
+                {chip}
+                <ChevronDown size={14} className="shrink-0 text-[var(--text-secondary)]" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" data-rsb-territory="">
+              {others.map((device) => (
+                <DropdownMenuItem
+                  key={`${device.plugin}|${device.id}`}
+                  onSelect={() => onSelectDevice(device)}
+                >
+                  {device.name}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : (
+          <span className={chipClass} title={name}>
+            {chip}
+          </span>
+        )}
         <div className="flex-1" />
         <div className="remote-viewer-zoom-group" role="group" aria-label={t('remoteDesktop.fit')}>
           {tool(t('remoteDesktop.zoomOut'), <Minus size={16} />, () =>
@@ -185,7 +245,7 @@ export function LiveScreenPanel({ deviceId, deviceName, screen, visible }: LiveS
             controller.current?.zoom('in'),
           )}
         </div>
-        {others.length > 0 && (
+        {menuButtons.length > 0 && (
           <DropdownMenu>
             <Tip text={t('remoteDesktop.keys')} side="bottom">
               <DropdownMenuTrigger asChild>
@@ -201,7 +261,7 @@ export function LiveScreenPanel({ deviceId, deviceName, screen, visible }: LiveS
               </DropdownMenuTrigger>
             </Tip>
             <DropdownMenuContent align="end" data-rsb-territory="">
-              {others.map((button) => {
+              {menuButtons.map((button) => {
                 const Icon = LIVE_SCREEN_ICONS[button.icon];
                 return (
                   <DropdownMenuItem
@@ -271,13 +331,17 @@ export function LiveScreenPanel({ deviceId, deviceName, screen, visible }: LiveS
           </div>
         )}
       </div>
-      {(navigation.length > 0 || turning.length > 0) && (
+      {state?.screen && (
         <div className="flex shrink-0 items-center justify-center gap-2 pb-3">
-          {navigation.length > 0 && (
-            <div className="remote-viewer-toolgroup" role="group" aria-label={name}>
-              {navigation}
-            </div>
-          )}
+          <div className="remote-viewer-toolgroup" role="group" aria-label={name}>
+            {navigation}
+            {tool(
+              t('rightSidebar.browser.screenshot'),
+              <Camera size={16} />,
+              () => void screenshot(),
+              { disabled: !state.ready || ended },
+            )}
+          </div>
           {turning.length > 0 && (
             <div
               className="remote-viewer-toolgroup"

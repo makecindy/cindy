@@ -14,8 +14,10 @@ import type { TFunction } from 'i18next';
 import { LIVE_SCREEN_ID, LIVE_SCREEN_PLUGIN_ID } from '@cindy/device-link';
 
 import { LiveScreenPanel } from '@/features/remote-desktop/LiveScreenPanel';
+import { useKnownTaskLiveScreens } from '@/features/remote-desktop/taskLiveScreensStore';
 import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
 import { deviceDisplayName } from '@/lib/deviceName';
+import { openLiveScreenTab } from '../../lib/openLiveScreenTab';
 import { registerTabKind } from '../../registry';
 import type { TabKindBodyProps, TabKindPlugin } from '../../types';
 
@@ -64,6 +66,7 @@ function LiveScreenBody({
   shellVisible,
 }: TabKindBodyProps<LiveScreenTabState>) {
   const devices = useDeviceLinkDeviceList();
+  const screens = useKnownTaskLiveScreens(ctx.sessionId);
   const deviceId = ctx.deviceLinkDeviceId;
   // 只为已确认在另一台电脑上的任务连接;本机或归属未知的任务不显示任何内容。
   if (ctx.remoteHostId || typeof deviceId !== 'string' || !state.plugin || !state.id) return null;
@@ -75,6 +78,19 @@ function LiveScreenBody({
       deviceName={deviceDisplayName(deviceId, undefined, devices ?? [])}
       screen={{ plugin: state.plugin, id: state.id, name: state.name || undefined }}
       visible={active !== false && shellVisible !== false}
+      devices={screens}
+      onSelectDevice={(device) => {
+        const picked = screens.find(
+          (item) => item.plugin === device.plugin && item.id === device.id,
+        );
+        if (picked)
+          void openLiveScreenTab(ctx.sessionId, {
+            plugin: picked.plugin,
+            id: picked.id,
+            name: picked.name,
+            pluginName: picked.pluginName,
+          }).catch(() => {});
+      }}
     />
   );
 }

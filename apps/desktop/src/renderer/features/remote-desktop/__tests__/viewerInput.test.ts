@@ -921,7 +921,8 @@ it('takes no contacts on a device without touch and returns to desktop input whe
   expect(events()).toContainEqual({ kind: 'button', button: 0, down: true, x: 0.5, y: 0.5 });
 });
 
-// 测试价值：设备画面（模拟器等）在电脑上用鼠标操作——左键即手指、滚轮与右键不发给设备、
+// 测试价值：设备画面（模拟器等）在电脑上用鼠标操作——左键即手指、右键不发给设备、滚轮与触控板
+// 变成两指平移／捏合（与本机模拟器页面一致，而不是被控端会拒收的桌面滚动）、
 // 能打字的设备点一下即可键入。被控端对设备画面拒收桌面指针与滚轮并因此结束会话，
 // 既有用例只覆盖整屏远程桌面的鼠标路径。最小输入：一次 deviceTouch 开关；unit tier。
 it('turns the mouse into a finger on a device screen and keeps desktop-only input away from it', () => {
@@ -941,9 +942,56 @@ it('turns the mouse into a finger on a device screen and keeps desktop-only inpu
   messages.length = 0;
   pointer('pointerdown', 500, 352, 2);
   pointer('pointerup', 500, 352, 2);
-  stage.dispatchEvent(new WheelEvent('wheel', { deltaY: 120, bubbles: true, cancelable: true }));
-  vi.advanceTimersByTime(100);
   expect(events()).toEqual([]);
+  // A wheel or trackpad scrolls with two synthesized fingers that follow the
+  // content (never a desktop scroll, which the host refuses) and lift after a pause.
+  const wheel = (init: WheelEventInit) =>
+    stage.dispatchEvent(
+      new WheelEvent('wheel', {
+        clientX: 500,
+        clientY: 352,
+        bubbles: true,
+        cancelable: true,
+        ...init,
+      }),
+    );
+  wheel({ deltaY: 60 });
+  wheel({ deltaY: 60 });
+  vi.advanceTimersByTime(200);
+  const pan = events();
+  expect(pan.map((event) => event.kind)).toEqual(['touch', 'touch', 'touch']);
+  const phases = (event: Record<string, unknown>) =>
+    (event.touches as { id: number; x: number; y: number; phase: string }[]).map((t) => t.phase);
+  expect(pan.map(phases)).toEqual([
+    ['began', 'began'],
+    ['moved', 'moved'],
+    ['ended', 'ended'],
+  ]);
+  const at = (event: Record<string, unknown>) =>
+    (event.touches as { x: number; y: number }[]).map((t) => [+t.x.toFixed(3), +t.y.toFixed(3)]);
+  // The pair sits a fifth of the shorter side (0.12 of this 1000×600 picture) each side of the pointer.
+  expect(at(pan[0])).toEqual([
+    [0.62, 0.5],
+    [0.38, 0.5],
+  ]);
+  expect(at(pan[1])).toEqual([
+    [0.62, 0.3],
+    [0.38, 0.3],
+  ]);
+  // A trackpad pinch arrives as Ctrl+wheel: the two fingers move apart or together.
+  messages.length = 0;
+  wheel({ deltaY: -100, ctrlKey: true });
+  vi.advanceTimersByTime(200);
+  const pinch = events();
+  expect(pinch.map(phases)).toEqual([
+    ['began', 'began'],
+    ['moved', 'moved'],
+    ['ended', 'ended'],
+  ]);
+  const apart = at(pinch[1]);
+  expect(apart[0][0]).toBeGreaterThan(0.62);
+  expect(apart[1][0]).toBeLessThan(0.38);
+  expect(apart[0][0] - 0.5).toBeCloseTo(0.5 - apart[1][0], 3);
   // A device with a keyboard takes typing after a click on it.
   viewer.receive({ type: 'deviceTouch', enabled: true, maxTouches: 5, keyboard: true });
   pointer('pointerdown');

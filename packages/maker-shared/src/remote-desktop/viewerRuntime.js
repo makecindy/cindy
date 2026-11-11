@@ -168,6 +168,12 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     // Desktop only: a click on a device that takes typing focuses the keyboard.
     deviceKeyboard = false;
   const deviceContacts = new Map();
+  // Desktop only: a wheel or trackpad over a device screen is a pair of
+  // synthesized fingers (one on a single-touch device) that pans, or pinches
+  // with Ctrl held, which is how a trackpad pinch arrives. A wheel has no
+  // "finger up", so the fingers lift after a short pause.
+  const WHEEL_TOUCH_IDLE_MS = 120;
+  let wheelTouch = null;
   const mouseButtons = find("mouse-buttons"),
     wheel = find("mouse-wheel"),
     wheelGrip = find("mouse-wheel-grip");
@@ -1034,6 +1040,8 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
   cleanups.push(() => clearInterval(inputTimer));
   function release() {
     deviceContacts.clear();
+    if (wheelTouch) clearTimeout(wheelTouch.timer);
+    wheelTouch = null;
     nativeTouchpad = null;
     stopEdgePan();
     desktopPan = null;
@@ -1167,6 +1175,72 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
   function onlyMoves(event) {
     return event.touches.every((t) => t.phase === "moved" || t.phase === "stationary");
   }
+  function wheelTouches(phase) {
+    const g = wheelTouch;
+    const clamp01 = (v) => Math.max(0, Math.min(1, v));
+    return g.fingers.map((f, id) => ({ id, x: clamp01(f.x), y: clamp01(f.y), phase }));
+  }
+  function endWheelTouch() {
+    if (!wheelTouch) return;
+    clearTimeout(wheelTouch.timer);
+    const touches = wheelTouches("ended");
+    wheelTouch = null;
+    queue({ kind: "touch", touches });
+    flush();
+  }
+  function deviceWheelInput(e) {
+    // A finger already on the device owns it; the wheel waits.
+    if (!control || deviceTouchMax < 1 || deviceContacts.size) return;
+    const local = desktopPoint(e);
+    if (!wheelTouch && !insideDesktop(local)) return;
+    const r = layout();
+    const factor = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? r.height : 1;
+    const pair = deviceTouchMax >= 2;
+    const kind = e.ctrlKey && pair ? "pinch" : "pan";
+    if (!wheelTouch || wheelTouch.kind !== kind) {
+      endWheelTouch();
+      const c = point(local);
+      // About a fifth of the shorter side apart, each side of the pointer.
+      const spread = pair ? (0.2 * Math.min(dw, dh)) / dw : 0;
+      wheelTouch = {
+        kind,
+        cx: c.x,
+        spread,
+        scale: 1,
+        fingers: pair
+          ? [
+              { x: c.x + spread, y: c.y },
+              { x: c.x - spread, y: c.y },
+            ]
+          : [{ x: c.x, y: c.y }],
+        timer: null,
+      };
+      queue({ kind: "touch", touches: wheelTouches("began") });
+    }
+    const g = wheelTouch;
+    if (kind === "pinch") {
+      const most = Math.min(6, Math.max(g.cx, 1 - g.cx) / g.spread);
+      g.scale = Math.max(0.25, Math.min(most, g.scale * Math.exp((-e.deltaY * factor) / 200)));
+      g.fingers[0].x = g.cx + g.spread * g.scale;
+      g.fingers[1].x = g.cx - g.spread * g.scale;
+    } else {
+      // The fingers stay on the device together; travel past an edge is spent.
+      const xs = g.fingers.map((f) => f.x);
+      const dx = Math.max(
+        -Math.min(...xs),
+        Math.min(1 - Math.max(...xs), (-e.deltaX * factor) / r.width),
+      );
+      const y = g.fingers[0].y;
+      const dy = Math.max(-y, Math.min(1 - y, (-e.deltaY * factor) / r.height));
+      for (const f of g.fingers) {
+        f.x += dx;
+        f.y += dy;
+      }
+    }
+    queue({ kind: "touch", touches: wheelTouches("moved") });
+    clearTimeout(g.timer);
+    g.timer = setTimeout(endWheelTouch, WHEEL_TOUCH_IDLE_MS);
+  }
   /** Device touch: every contact goes to the device; nothing pans or zooms the picture. */
   function deviceTouchInput(e) {
     e.preventDefault();
@@ -1178,6 +1252,8 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       // A mouse touches the device with its primary button only.
       if (config.desktop && e.button !== 0) return;
       if (contact || deviceContacts.size >= deviceTouchMax || !insideDesktop(local)) return;
+      // A real finger replaces the wheel's synthesized ones.
+      endWheelTouch();
       if (config.desktop) showKeyboard(deviceKeyboard);
       if (!e.nativeInput) stage.setPointerCapture(e.pointerId);
       let id = 0;
@@ -1650,8 +1726,14 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       "wheel",
       (e) => {
         e.preventDefault();
-        // A device screen has no wheel; its host refuses desktop scrolling.
-        if (!control || deviceTouch) {
+        // A device screen has no wheel (its host refuses desktop scrolling):
+        // the wheel moves synthesized fingers on it instead.
+        if (deviceTouch) {
+          wheelRestX = wheelRestY = 0;
+          deviceWheelInput(e);
+          return;
+        }
+        if (!control) {
           wheelRestX = wheelRestY = 0;
           return;
         }
