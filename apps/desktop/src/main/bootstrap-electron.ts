@@ -1934,6 +1934,7 @@ import {
   keepRecentSessionCcDebugSync,
   createLogger,
   getLogDir,
+  maskPath,
   setCcDebugTailingEnabled,
   type LogLevel,
 } from './logger.js';
@@ -3808,7 +3809,9 @@ const linuxTray = createLinuxTrayController<Menu>({
       ? path.join(process.resourcesPath, 'icon.png')
       : path.join(__dirname, '../../resources/icon.png');
     const icon = nativeImage.createFromPath(iconPath);
-    if (icon.isEmpty()) throw new Error(`tray icon is empty: ${iconPath}`);
+    // 未打包 checkout / 用户自选安装目录时 iconPath 带用户目录结构;该错误会经
+    // `linux-tray`(精确放行)进入上传,按 logger.ts 对 resourcesPath 的约定先遮蔽。
+    if (icon.isEmpty()) throw new Error(`tray icon is empty: ${maskPath(iconPath)}`);
     // Keep the source resolution: Linux panels choose their own icon size/scale.
     return new Tray(icon);
   },
@@ -3831,7 +3834,8 @@ function ensureWindowsTray(): boolean {
       ? path.join(process.resourcesPath, 'icon.png')
       : path.join(__dirname, '../../resources/icon.png');
     const icon = nativeImage.createFromPath(iconPath);
-    if (icon.isEmpty()) throw new Error(`tray icon is empty: ${iconPath}`);
+    // 同 linuxTray 的 createTray:`windows-tray` 也是放行 scope,路径同样要先遮蔽。
+    if (icon.isEmpty()) throw new Error(`tray icon is empty: ${maskPath(iconPath)}`);
     tray = new Tray(icon.resize({ width: 16, height: 16 }));
     tray.setToolTip(BRAND_NAME);
     tray.on('click', () => focusMainWindow());

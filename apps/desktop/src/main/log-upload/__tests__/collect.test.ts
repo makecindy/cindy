@@ -142,7 +142,7 @@ it('keeps linux-tray failure diagnostics through actual collection, drops its ch
     [path.join(logDir, `main-${dayKey(NOW)}.log`)]: [
       SENTINEL,
       mainLine(NOW - 1_000, 'ERROR', 'linux-tray',
-        'Linux tray operation failed {"error":"tray icon is empty: /usr/lib/cindy/resources/icon.png"}'),
+        'Linux tray operation failed {"error":"tray icon is empty: .../resources/icon.png"}'),
       mainLine(NOW - 1_000, 'ERROR', 'linux-tray:menu', 'PRIVATE_MENU_PAYLOAD'),
       mainLine(NOW - 1_000, 'ERROR', 'some-future-scope', 'PRIVATE_UNKNOWN_PAYLOAD'),
     ].join('\n'),
