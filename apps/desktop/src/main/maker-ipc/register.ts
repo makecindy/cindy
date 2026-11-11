@@ -1,6 +1,12 @@
 import { createSchedulerQueueBridge, type SchedulerQueueBridge, type SchedulerQueuedPromptRequest, type SchedulerEnqueueResult } from './schedulerQueueBridge.js';
 import { markCindyOfficialSkills } from '../maker-host/managed-skills.js';
 import { registerRuntimeSettingsSection } from '../app-settings/runtime.js';
+import { createTaskRuntimePlugins } from './runtimePlugins.js';
+import { RuntimePluginControlError } from '../cindy-brain/runtimeControl.js';
+import { readRuntimePluginSettings, writeRuntimePluginSettings } from '../maker-host/runtime-plugin-settings.js';
+import { parseRuntimePluginSettings } from '../../shared/pluginRuntime.js';
+import { resolveGhostControlPointPlugin, getGhostRuntimePluginControl, composeGhostRuntimeContext, ghostTaskSystemPrompt, isPluginModelRouteAvailableNow } from '../cindy-brain/index.js';
+import { assembleSystemPromptSections, TASK_SYSTEM_PROMPT } from '@cindy/maker-core';
 import { z as settingsSchema } from 'zod';
 import { registerPreferenceControlIpc } from '../app-settings/preferences.js';
 import { configureModelSettingsActions } from '../app-settings/models.js';
@@ -791,6 +797,8 @@ import {
   type OrcaIdleReleaseWatcher,
 } from './orcaIdleReleaseWatcher.js';
 import { createOrcaWorkerResumeScheduler } from './orcaWorkerResumeScheduler.js';
+import { readClaudeIdleMinutes } from '../maker-host/claude-idle-release-settings.js';
+import { createClaudeIdleReleaseWatcher, ORDINARY_CLAUDE_TASK_SQL } from './claudeIdleReleaseWatcher.js';
 import {
   createPiIdleReleaseWatcher,
   piIdleReleaseCandidateWhere,
@@ -3261,6 +3269,7 @@ let idleReleaseWatcher: OrcaIdleReleaseWatcher | null = null;
 
 /** 模块级 pi 普通会话 idle watcher；与 Orca watcher 同一生命周期。 */
 let piIdleReleaseWatcher: PiIdleReleaseWatcher | null = null;
+let claudeIdleReleaseWatcher: ReturnType<typeof createClaudeIdleReleaseWatcher> | null = null;
 
 /**
  * 取 Orca collab service, ready 前返 null。registerMakerIpc 执行完成后 holder
@@ -3297,6 +3306,8 @@ function createBridgeWorkerLabel(task: string): string {
 
 /** 停止 idle watcher setInterval (app quit 时调, maker 可能已 shutdown)。 */
 export function stopOrcaIdleWatcher(): void {
+  claudeIdleReleaseWatcher?.stop();
+  claudeIdleReleaseWatcher = null;
   idleReleaseWatcher?.stop();
   idleReleaseWatcher = null;
 }
@@ -5115,6 +5126,8 @@ export async function prepareUnhealthySessionForSend(sessionId: string): Promise
   await contextOverflowRolloverHolder?.prepareUnhealthySession(sessionId);
 }
 
+let runtimePluginBudgetClearer: ((sessionId: string) => void) | undefined;
+
 /** Later successful model/provider picks supersede an earlier cross-engine intent. */
 export function cancelPendingAgentSwitchForSession(sessionId: string): void {
   cancelPendingAgentSwitchHolder?.(sessionId);
@@ -6105,6 +6118,10 @@ const sessionBindings = createSessionBindingLifecycle<WiredSession, WiredSession
     return { closeReason, closedDirectAbortBoundary, preserveAutoResumeIntent };
   },
   cleanupClosedSession: (session: WiredSession, context) => {
+    if ((context.closeReason === 'requested' || context.closeReason === 'unexpected')
+      && !context.preserveAutoResumeIntent && !rehydrateCloseSuppression.isSuppressed(session.id)) {
+      runtimePluginBudgetClearer?.(session.id);
+    }
     // Normal terminal events already release this input. A close without one
     // must retire the exact group execution before its identity is discarded.
     const inputId = agentInputCoordinatorHolder?.getActiveInputClientId(session.id) ?? null;
@@ -9215,6 +9232,42 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return context;
   }
 
+  const appliedTaskPrompts = new WeakMap<Awaited<ReturnType<typeof maker.createSession>>, string>();
+  const readTaskPrompt = (sessionId: string, agentKind: AgentKind, agentDeviceId?: string | null) =>
+    ghostTaskSystemPrompt(sessionId, agentKind === 'claude-code' ? 'cc' : agentKind, !(agentKind === 'pi' && agentDeviceId));
+  const createSessionWithRuntimePlugins = (o: CreateOpts, signal?: AbortSignal) => {
+    if (o.id && maker.getSession(o.id)) return maker.createSession(o, signal);
+    const taskPrompt = o.id ? readTaskPrompt(o.id, o.agentKind, o.agentDeviceId) : '';
+    if (!taskPrompt) return maker.createSession(o, signal);
+    const runtimeOpts = { ...o,
+      ...(o.agentKind === 'pi' ? { [TASK_SYSTEM_PROMPT]: taskPrompt } : {
+        userPrompt: assembleSystemPromptSections(o.userPrompt?.trim() ?? '', [{ name: 'task', order: 0, text: taskPrompt }]),
+      }),
+    };
+    return maker.createSession(runtimeOpts, signal).then(session => {
+      appliedTaskPrompts.set(session, taskPrompt);
+      return session;
+    });
+  };
+  const prepareTaskPromptForSend = (sessionId: string): Promise<void> | undefined => {
+    const live = maker.getSession(sessionId);
+    if (!live) {
+      if (!readRuntimePluginSettings(sessionId)?.['system-prompt']?.length) return undefined;
+      return readSessionRuntimeProfiles(sessionId).then(profiles => {
+        if (!profiles) throw new RuntimePluginControlError('block', '', true, 'task-unavailable');
+        readTaskPrompt(sessionId, profiles.effective.agentKind, profiles.effective.agentDeviceId);
+      });
+    }
+    if (live.isTurnRunning() || (appliedTaskPrompts.get(live) ?? '') === readTaskPrompt(sessionId, live.agentKind, live.agentDeviceId)) return undefined;
+    return withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId, 'agent-switch'));
+  };
+  const assertTaskPromptCurrent = (sessionId: string) => {
+    const live = maker.getSession(sessionId);
+    if (live && (appliedTaskPrompts.get(live) ?? '') !== readTaskPrompt(sessionId, live.agentKind, live.agentDeviceId)) {
+      throw new RuntimePluginControlError('block', '', true, 'prompt-selection-changed');
+    }
+  };
+
   async function bootstrapSession(o: CreateOpts, assertAccess?: () => void, nativeHistoryResume = false): Promise<{
     session: Awaited<ReturnType<typeof maker.createSession>>;
     didInjectOrcaInstructions: boolean;
@@ -9364,8 +9417,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         delete vendorOptions._cindyRequireNativeResume;
         if (nativeHistoryResume || nativeRelocation?.nativeId) vendorOptions._cindyRequireNativeResume = true;
         o.vendorOptions = vendorOptions;
-        session = await maker.createSession(o, creationSignal);
-        try { assertAccess?.(); } catch (error) {
+        session = await createSessionWithRuntimePlugins(o, creationSignal);
+        try { assertAccess?.(); assertTaskPromptCurrent(session.id); } catch (error) {
           const cancelledSession = session;
           session = undefined;
           await maker.closeSessionIfCurrent(cancelledSession, 'requested');
@@ -9380,6 +9433,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         nativeRelocation = undefined;
       } catch (error) {
         assertAccess?.();
+        if (error instanceof RuntimePluginControlError) throw error;
         // Native ownership is unresolved, not a route/resume failure. Do not
         // relocate history or try another provider while the old handle lives.
         if (error instanceof SessionCreationCleanupPendingError) throw error;
@@ -16817,6 +16871,39 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
   piIdleReleaseWatcher.start();
 
+  // Ordinary local Claude tasks retain their native resume identity and task
+  // resources. Specialized owners (bots, Orca, Goals, remote agents) stay out.
+  claudeIdleReleaseWatcher?.stop();
+  claudeIdleReleaseWatcher = createClaudeIdleReleaseWatcher({
+    listSessions: () => maker.listActiveSessions(),
+    getSession: (id) => maker.getSession(id),
+    readMinutes: readClaudeIdleMinutes,
+    isOrdinaryTask: async (id, sdkSessionId) => Boolean(
+      await getDbClient().queryOne(ORDINARY_CLAUDE_TASK_SQL, [id, sdkSessionId]),
+    ),
+    hasPendingInput: hasPendingIdleReleaseInput,
+    isHostBusy: (id) => isSessionTurnPendingCompletion(id)
+      || hasPendingAgentInteractionForSession(id)
+      || Boolean(getClaudeSessionBackgroundActivity(id))
+      || inputCoordinator.hasPendingQueuedWork(id)
+      || inputCoordinator.hasQueuedItemWhere(id, () => true, { includeRecovery: true })
+      || inputCoordinator.isAutoResumePending(id)
+      || inputCoordinator.hasQueuedAutoResume(id)
+      || inputCoordinator.getAutoResumeAttemptToken(id) !== null
+      || pendingCredentialSwitchHolder?.has(id) === true,
+    withLock: withSendToSessionLock,
+    // The existing suppression window is sampled by the synchronous status
+    // listener and onClose hook before it yields; no task resources are removed.
+    close: (session, retryFailedClose) => withRehydrateCloseSuppressed(session.id, async () =>
+      await maker.closeSessionIfCurrent(session as Session, 'runtime-refresh',
+        retryFailedClose && session.getStatus() === 'error' ? undefined : { onlyIfIdle: true }) === 'closed',
+    ),
+    now: () => performance.now(),
+    released: (sessionId, idleMs) => log.info('claudeIdleWatcher: released idle runtime', { sessionId, idleMs }),
+    warn: (message) => log.warn(message),
+  });
+  claudeIdleReleaseWatcher.start();
+
   type InternalRuntimeSelectionOptions = {
     source: 'user' | SessionRuntimeMutationSource;
     /** Host-owned pending choice triggered by a guest send; never supplied by IPC. */
@@ -18421,11 +18508,75 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   pluginTargetReviewReady = true;
 
+  const runtimePluginControl = getGhostRuntimePluginControl();
+  runtimePluginBudgetClearer = runtimePluginControl.forgetSession;
+  const taskRuntimePlugins = createTaskRuntimePlugins({
+    control: runtimePluginControl, readSettings: readRuntimePluginSettings,
+    requestSupported: sessionId => !maker.getSession(sessionId)?.remoteHostId,
+    readRoute: async sessionId => {
+      const profiles = await readSessionRuntimeProfiles(sessionId);
+      if (!profiles) throw new Error('Task runtime unavailable');
+      const route = profiles.pendingMutation?.profile ?? profiles.effective;
+      return { agentKind: route.agentKind === 'claude-code' ? 'cc' : route.agentKind,
+        model: route.model, providerId: route.providerId ?? 'xd',
+        ...(route.agentDeviceId ? { agentDeviceId: route.agentDeviceId } : {}),
+        ...(route.effort ? { effort: route.effort } : {}), fastMode: route.fastMode };
+    },
+    routeAvailable: route => isPluginModelRouteAvailableNow({ ...route, effort: route.effort ?? '', fastMode: route.fastMode ?? false }),
+    applyRoute: async (sessionId, route, assertCurrent) => {
+      const current = await sessionControlService.getSessionRuntime({ targetSessionId: sessionId });
+      if (!current.ok) throw new Error('Task runtime unavailable');
+      const targetAgent = route.agentKind === 'cc' ? 'claude-code' : route.agentKind;
+      const effective = current.runtime.pendingMutation?.profile ?? current.runtime.effectiveProfile;
+      const location = route.agentDeviceId ?? null;
+      const selectHarness = targetAgent !== effective.agentKind || location !== (effective.agentDeviceId ?? null);
+      const result = await sessionControlService.setSessionRuntime({ targetSessionId: sessionId,
+        expectedGeneration: current.runtime.runtimeGeneration,
+        beforeMutation: async () => assertCurrent(),
+        patch: { ...(selectHarness ? { harness: targetAgent, agentDeviceId: location } : {}),
+          model: route.model, providerId: route.providerId,
+          ...(route.effort !== undefined ? { effort: route.effort as Effort } : {}),
+          ...(route.fastMode !== undefined ? { fastMode: route.fastMode } : {}),
+        } });
+      if (!result.ok) throw new Error(result.errorCode);
+    },
+    changed: (sessionId, pluginId, phase) => log.info('runtime plugin changed model request', { sessionId, pluginId, phase }),
+  });
+  ipcMain.handle('maker:runtime-plugins', async (event, sessionId: unknown, value: unknown) => {
+    assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
+    const owner = captureDataOwnerBroadcastScope();
+    if (typeof sessionId !== 'string' || !sessionId || !await maker.getSessionMeta(sessionId)) {
+      throwIpcError('NOT_FOUND', 'Task not found');
+    }
+    if (!isDataOwnerBroadcastScopeCurrent(owner)) throwIpcError('PRECONDITION_FAILED', 'Account changed');
+    if (value === undefined) return readRuntimePluginSettings(sessionId) ?? {};
+    await assertReviewSettingsUnlocked(sessionId);
+    const settings = parseRuntimePluginSettings(value);
+    if (!settings) throwIpcError('INVALID_PARAMS', 'Invalid runtime plugin settings');
+    for (const [point, targets] of Object.entries(settings)) {
+      for (const target of targets ?? []) resolveGhostControlPointPlugin(point as Parameters<typeof resolveGhostControlPointPlugin>[0], target.pluginId);
+    }
+    if (!isDataOwnerBroadcastScopeCurrent(owner)) throwIpcError('PRECONDITION_FAILED', 'Account changed');
+    await writeRuntimePluginSettings(sessionId, settings);
+    return readRuntimePluginSettings(sessionId) ?? {};
+  });
+
   const {
     sendToAgentAccepted: sendToAgentAcceptedUnlocked,
     prewarmSession: prewarmSessionRuntime,
     hydrateActiveOrcaSession,
   } = createMakerSendTransaction({
+    prepareRuntimePrompt: prepareTaskPromptForSend,
+    composeRuntimeContext: composeGhostRuntimeContext,
+    prepareRuntimeTurn: (sessionId, message, signal) => {
+      const prepared = taskRuntimePlugins.prepare(sessionId, message, signal);
+      return prepared?.then(options => ({ options })).catch(error => ({ failure: {
+        accepted: false as const,
+        reason: error instanceof RuntimePluginControlError && error.action === 'skip' ? 'PLUGIN_TURN_SKIPPED' as const : 'PLUGIN_TURN_BLOCKED' as const,
+        outcome: createHostSendFailure(error instanceof RuntimePluginControlError && error.action === 'skip' ? 'PLUGIN_TURN_SKIPPED' : 'PLUGIN_TURN_BLOCKED',
+          'The selected runtime plugin stopped this reply.'),
+      } }));
+    },
     prepareExternalInput: (sessionId) => takeOverLocalAgentVisibleSession(sessionId, true),
     restoreArchivedSessionForSend,
     prepareProductTurn: (sessionId) => {
@@ -18597,6 +18748,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }).catch((error) => log.warn('turn model attribution failed', { sessionId, error }));
     },
     assertBeforeVendorDispatch: (sessionId, sendOpts) => {
+      assertTaskPromptCurrent(sessionId);
       const remote = isDeviceLinkInvoke();
       assertRemoteInputClearNotInFlight(sessionId, remote);
       const precondition = readRemoteInputClearBoundaryPrecondition(sendOpts);

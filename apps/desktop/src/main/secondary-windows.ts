@@ -39,6 +39,7 @@ import type { WindowsBackdropMaterial } from './vibrancyConfig.js';
 import { installSelectionContextMenu } from './selection-context-menu.js';
 import { applyAppearanceToWindow, installWindowZoomRestoration } from './appearance-settings-ipc.js';
 import { installWindowFullscreenStateBroadcast } from './mainWindowFullscreenStartup.js';
+import { installWindowsTransparentTitleBar } from './windowsTransparentTitleBar.js';
 import { resolveAppThemeIsDark } from './resolved-app-theme.js';
 import { readWindowThemeSnapshot } from './window-theme-mode-store.js';
 
@@ -175,6 +176,7 @@ export function openSessionInNewWindow(
     },
   });
   markAppContentWindow(win);
+  installWindowsTransparentTitleBar(win);
   applyAppearanceToWindow(win);
   win.webContents.on('did-finish-load', () => {
     if (win.isDestroyed()) return;

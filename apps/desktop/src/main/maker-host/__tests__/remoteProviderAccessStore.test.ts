@@ -9,9 +9,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'remote-provider-access-test-'));
+const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'remote-provider-access-test-'));
+let tmpDir = fixtureRoot;
 
 vi.mock('../../ownerContext.js', () => ({ ownerScopedPath: (name: string) => path.join(tmpDir, name) }));
 vi.mock('../../device-link/providerShareAvailabilityPolicy.js', () => ({
@@ -24,7 +25,12 @@ vi.mock('../logger-adapter.js', () => ({
 
 const store = await import('../remote-provider-access-store.js');
 
-afterAll(async () => { await fs.promises.rm(tmpDir, { recursive: true, force: true }); });
+beforeEach(() => {
+  // PR #9837 Windows CI: overwriting the previous case's file can keep the same
+  // mtime and reuse its cached settings. Give each migration scenario its own path.
+  tmpDir = fs.mkdtempSync(path.join(fixtureRoot, 'case-'));
+});
+afterAll(async () => { await fs.promises.rm(fixtureRoot, { recursive: true, force: true }); });
 
 describe('remote provider access default', () => {
   it('opens every provider to own computers once, except ones closed to pause an existing share', async () => {
