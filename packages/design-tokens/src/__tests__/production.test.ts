@@ -176,8 +176,9 @@ describe("DS-8 production source", () => {
       ts.forEachChild(node, visit);
     };
     visit(source);
-    // The approved provenance marks add eight roles; all prior IDs remain governed.
-    expect(new Set(ids).size).toBe(584);
+    // The approved provenance marks add eight roles; the unused shadow-chip-raised
+    // was removed by the 2026-11-11 maintainer ruling (A-14). All other IDs remain governed.
+    expect(new Set(ids).size).toBe(583);
     expect(
       [
         ...Object.keys(bindings.defaults),

@@ -1425,13 +1425,15 @@ body.resizing-pane [data-ghost-webview] {
   color: #c9d1d9;
   font-weight: bold;
 }
+/* Diff rows use the shared diff tokens (DESIGN.md §2), not github-dark's
+ * paler #aff5b4 / #ffdcd7, so hljs diffs match DiffView and ```diff blocks. */
 .dark .hljs-addition {
-  color: #aff5b4;
-  background-color: #033a16;
+  color: var(--diff-add-fg);
+  background-color: var(--diff-add-bg);
 }
 .dark .hljs-deletion {
-  color: #ffdcd7;
-  background-color: #67060c;
+  color: var(--diff-del-fg);
+  background-color: var(--diff-del-bg);
 }
 
 /* Diff full-row fill (2026-04-21) — highlight.js wraps each `+`/`-` line in

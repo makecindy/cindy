@@ -6417,9 +6417,9 @@ function CCAgentSessionContent({
                       <div className="flex min-w-0 items-center gap-1.5">
                         <AlertCircle
                           size={12}
-                          className="shrink-0 text-red-500 dark:text-red-400"
+                          className="shrink-0 text-[var(--error-fg)]"
                         />
-                        <span className="block min-w-0 truncate text-12 font-medium leading-none text-red-500 dark:text-red-400">
+                        <span className="block min-w-0 truncate text-12 font-medium leading-none text-[var(--error-fg)]">
                           {t('ccAgent.layout.worktreeFailed', 'Worktree 创建失败')}
                           {' — '}
                           {worktreeCreation.error}
@@ -6433,7 +6433,7 @@ function CCAgentSessionContent({
                           className="shrink-0 rounded p-0.5 transition-colors hover:bg-foreground/10"
                           aria-label={t('common.dismiss', 'Dismiss')}
                         >
-                          <X size={10} className="text-red-500/70 dark:text-red-400/70" />
+                          <X size={10} className="text-[var(--error-fg)]/70" />
                         </button>
                       </div>
                     </Tip>
