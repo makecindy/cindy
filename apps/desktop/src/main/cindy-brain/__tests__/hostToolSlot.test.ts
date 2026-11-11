@@ -100,6 +100,9 @@ describe('plugin Host tool entry', () => {
       return f.result;
     });
     expect(await f.call('archive_sessions')).toBe(f.result);
+    // Captured write/delivery fences outlive the temporary caller context.
+    expect(beforeWrite).not.toThrow();
+    await expect(beforeDelivery!()).resolves.toBeUndefined();
     f.changeOwner();
     expect(beforeWrite).toThrow('TASK_ACTION_AUTHORIZATION_EXPIRED');
     await expect(beforeDelivery!()).rejects.toThrow('TASK_ACTION_AUTHORIZATION_EXPIRED');

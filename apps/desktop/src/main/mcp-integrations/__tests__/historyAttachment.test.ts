@@ -2,13 +2,15 @@ import { describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { historyAttachmentSource, readHistoryAttachment } from '../historyAttachment.js';
 import { readDesktopHistoryAttachment } from '../historyAttachment.desktop.js';
+import type { readRemoteDeviceFile } from '../../device-link/fileAccess.js';
+import { DL_MEDIA_FETCH_CHANNEL } from '@cindy/device-link';
 
 const host = vi.hoisted(() => {
   const queryOne = vi.fn();
   return { db: { queryOne, drizzle: {} }, queryOne, generation: 1, plugin: false,
     bytes: vi.fn(async () => Buffer.from('text')), resolve: vi.fn(async () => ({ absPath: '/fixture/notes.txt', mimeType: 'text/plain' })),
     copy: vi.fn(async () => [{ ref: 'handoff:00000000-0000-4000-8000-000000000000' }]),
-    remoteFile: vi.fn(async () => ({ inlineBase64: Buffer.from('remote').toString('base64'), mimeType: 'text/plain', ossKey: '', size: 6 })),
+    remoteFile: vi.fn(async (..._args: Parameters<typeof readRemoteDeviceFile>) => ({ inlineBase64: Buffer.from('remote').toString('base64'), mimeType: 'text/plain', ossKey: '', size: 6 })),
     ingest: vi.fn(async () => ({ hash: createHash('sha256').update('text').digest('hex') })),
     canRead: vi.fn(async () => true),
     blobInfo: vi.fn(async () => ({ ext: '.png', mimeType: 'image/png', bytes: 4 })),
@@ -156,16 +158,58 @@ describe('history attachment reader', () => {
     expect(host.readChunk).toHaveBeenCalledWith(expect.any(Buffer), 0, 2, 2);
     expect(host.close).toHaveBeenCalledOnce();
   });
-  it('resolves a remote message on its source computer and moves bytes through the existing file channel', async () => {
+  it.each([null, '12'])('resolves a remote message with source byte ceiling %s through the existing file channel', async ceiling => {
     host.plugin = false;
-    const query = vi.fn(async () => ({ ok: true, url: 'xdt-file://attachment?path=remote-private', name: 'notes.txt', originKind: 'user' }));
+    const sourceUrl = 'xdt-file://attachment?path=remote-private' + (ceiling ? `&maxBytes=${ceiling}` : '');
+    const query = vi.fn(async () => ({ ok: true, url: sourceUrl, name: 'notes.txt', originKind: 'user' }));
     const invoke = vi.fn();
     const result = await readDesktopHistoryAttachment({ ...args, session_id: 'device::task' },
       { agentKind: 'codex', workingDir: '', sessionId: 'ordinary' }, { query, invoke });
     expect(query).toHaveBeenCalledWith('device', expect.objectContaining({ session_id: 'task', message_id: 'message' }));
-    expect(host.remoteFile).toHaveBeenCalledWith('device', 'xdt-file://attachment?path=remote-private', invoke, expect.objectContaining({ maxBytes: expect.any(Number) }));
+    expect(host.remoteFile).toHaveBeenCalledWith('device', `xdt-file://attachment?path=remote-private&maxBytes=${ceiling ?? 64 * 1024 * 1024}`,
+      expect.any(Function), expect.objectContaining({ maxBytes: 64 * 1024 * 1024, cacheFirst: false }));
     expect(result).toMatchObject({ ok: true, base64: Buffer.from('re').toString('base64'), size: 6 });
     expect(JSON.stringify(result)).not.toContain('remote-private');
+  });
+
+  // Unit, #9801: reject source metadata before the existing transfer service
+  // proceeds to peer/OSS bytes; the old maxBytes option did not constrain this path.
+  it.each(['xdt-file://attachment?path=remote-private', 'cindy-media://blobs/source.png'])(
+    'rejects oversized metadata before transferring any bytes from %s', async sourceUrl => {
+    host.plugin = false;
+    const transfer = vi.fn();
+    host.remoteFile.mockImplementationOnce(async (device, url, invoke) => {
+      await invoke(device, DL_MEDIA_FETCH_CHANNEL, [{ url, prepareOnly: true }]);
+      transfer();
+      return { inlineBase64: Buffer.from('remote').toString('base64'), mimeType: 'text/plain', ossKey: '', size: 6 };
+    });
+    const result = await readDesktopHistoryAttachment({ ...args, session_id: 'device::task' },
+      { agentKind: 'codex', workingDir: '', sessionId: 'ordinary' }, {
+        query: async () => ({ ok: true, url: sourceUrl, name: 'notes.txt', originKind: 'user' }),
+        invoke: vi.fn(async () => ({ ok: true as const, result: { size: 64 * 1024 * 1024 + 1, ossKey: '', mimeType: 'text/plain', transferRequired: true } })),
+      });
+    expect(result.ok).toBe(false);
+    expect(transfer).not.toHaveBeenCalled();
+    const request = host.remoteFile.mock.calls.at(-1)!;
+    if (sourceUrl.startsWith('xdt-file:'))
+      expect(new URL(request[1]).searchParams.get('maxBytes')).toBe(String(64 * 1024 * 1024));
+    else expect(request[1]).toBe(sourceUrl);
+    expect(request[3]).toMatchObject({ cacheFirst: false });
+  });
+
+  it('rejects malformed source constraints and mismatched transferred bytes before handing them off', async () => {
+    host.plugin = true; host.copy.mockClear(); host.remoteFile.mockClear();
+    const context = { agentKind: 'codex' as const, workingDir: '', hostCaller: {
+      kind: 'plugin' as const, pluginId: 'installed-instance', dataOwnerId: 'owner', ownerGeneration: 1 } };
+    const remote = { query: async () => ({ ok: true, url: 'xdt-file://attachment?path=remote-private&maxBytes=invalid', name: 'notes.txt', originKind: 'user' }), invoke: vi.fn() };
+    expect(await readDesktopHistoryAttachment({ ...args, session_id: 'device::task' }, context, remote))
+      .toMatchObject({ ok: false, errorCode: 'ATTACHMENT_UNAVAILABLE' });
+    expect(host.remoteFile).not.toHaveBeenCalled();
+    host.remoteFile.mockResolvedValueOnce({ inlineBase64: Buffer.from('short').toString('base64'), mimeType: 'text/plain', ossKey: '', size: 6 });
+    expect(await readDesktopHistoryAttachment({ ...args, session_id: 'device::task' }, context,
+      { ...remote, query: async () => ({ ok: true, url: 'cindy-media://blobs/source.txt', name: 'notes.txt', originKind: 'user' }) }))
+      .toMatchObject({ ok: false, errorCode: 'ATTACHMENT_UNAVAILABLE' });
+    expect(host.copy).not.toHaveBeenCalled();
   });
 
   // Unit/old-peer compatibility: valid new-tool input rejected by an old query registry

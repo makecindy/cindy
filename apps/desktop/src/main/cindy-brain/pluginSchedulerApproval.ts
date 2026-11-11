@@ -11,6 +11,7 @@ const approvalScope = new AsyncLocalStorage<{
   schedule?: ScheduleMutationGuard;
   confirmHook?: (hook: PreparedHook) => Promise<void>;
 }>();
+let activeApprovals = 0;
 
 /** Read by the existing scheduler mutation guard; ordinary Agent calls retain no extra guard. */
 export function getApprovedPluginScheduleGuard(): ScheduleMutationGuard | undefined {
@@ -88,14 +89,19 @@ export function withPluginSchedulerApproval(id: string, ports: PluginHostToolPor
       caller = identity;
       const runtime = ports.createRuntime(server, identity);
       if (!runtime) return null;
-      return { ...runtime, call: (tool, args, signal) => approvalScope.run({ schedule: expected,
-        ...(tool === 'schedule_set_pre_run_hook' && noNode() ? { confirmHook: async (hook: PreparedHook) => {
-          getPluginHostToolCaller()?.assertCurrent();
-          if (!await ports.confirm({ pluginId: id, pluginName: ports.getGhost(id)!.manifest.name, server, tool,
-            args: { ...args, hostShell: hook } })) throw Object.assign(new Error('PERMISSION_DENIED'), { code: 'PERMISSION_DENIED' });
-          getPluginHostToolCaller()?.assertCurrent();
-        } } : {}),
-      }, () => runtime.call(tool, args, signal)) };
+      return { ...runtime, call: async (tool, args, signal) => {
+        activeApprovals++;
+        try {
+          return await approvalScope.run({ schedule: expected,
+            ...(tool === 'schedule_set_pre_run_hook' && noNode() ? { confirmHook: async (hook: PreparedHook) => {
+              getPluginHostToolCaller()?.assertCurrent();
+              if (!await ports.confirm({ pluginId: id, pluginName: ports.getGhost(id)!.manifest.name, server, tool,
+                args: { ...args, hostShell: hook } })) throw Object.assign(new Error('PERMISSION_DENIED'), { code: 'PERMISSION_DENIED' });
+              getPluginHostToolCaller()?.assertCurrent();
+            } } : {}),
+          }, () => runtime.call(tool, args, signal));
+        } finally { if (--activeApprovals === 0) approvalScope.disable(); }
+      } };
     },
     policy: (server, tool, args) => inspect(server, tool, args) ? 'prompt-each-time' : ports.policy(server, tool, args),
     confirm: async (input: Confirmation) => {

@@ -14,6 +14,7 @@ export interface PluginHostToolCaller {
 }
 
 const callerScope = new AsyncLocalStorage<PluginHostToolCaller>();
+let activeCallers = 0;
 let providers: readonly LiziMcpProvider[] = [];
 let providerOwner: DataOwnerPushStamp | null = null;
 
@@ -28,13 +29,16 @@ export function getPluginHostToolCaller(): PluginHostToolCaller | undefined {
   return caller;
 }
 
-export function runPluginHostToolCall<T>(caller: PluginHostToolCaller, operation: () => Promise<T>): Promise<T> {
-  return runTaskActionRequest(() => callerScope.run(caller, async () => {
-    caller.assertCurrent();
-    const result = await operation();
-    caller.assertCurrent();
-    return result;
-  }));
+export async function runPluginHostToolCall<T>(caller: PluginHostToolCaller, operation: () => Promise<T>): Promise<T> {
+  activeCallers++;
+  try {
+    return await runTaskActionRequest(() => callerScope.run(caller, async () => {
+      caller.assertCurrent();
+      const result = await operation();
+      caller.assertCurrent();
+      return result;
+    }));
+  } finally { if (--activeCallers === 0) callerScope.disable(); }
 }
 
 /** The common authorizer accepts only the exact invocation admitted by the gateway. */

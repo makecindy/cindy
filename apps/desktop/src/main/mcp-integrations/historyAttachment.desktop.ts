@@ -1,5 +1,6 @@
 import path from 'node:path';
 import type { LiziMcpSessionContext, ReadSessionAttachmentArgs } from '@cindy/mcps';
+import { DL_MEDIA_FETCH_CHANNEL } from '@cindy/device-link';
 import { getDbClient, tryGetDbClient } from '../localDb/client/current.js';
 import { getActiveDataOwnerPushStamp } from '../appSessionState.js';
 import { getPluginHostToolCaller } from './hostToolCaller.js';
@@ -59,13 +60,35 @@ export async function readDesktopHistoryAttachment(args: ReadSessionAttachmentAr
       read: async source => {
         if (isDepositExcludedFileName(source.name)) throw new Error('PERMISSION_DENIED');
         if (device) {
-          const result = await readRemoteDeviceFile(device, source.url, remote.invoke, { maxBytes: GHOST_HANDOFF_MAX_BYTES_PER_FILE });
+          const maximum = GHOST_HANDOFF_MAX_BYTES_PER_FILE;
+          let url = source.url;
+          if (url.startsWith('xdt-file://') || url.startsWith('xdt-audio://')) {
+            const bounded = new URL(url), existing = bounded.searchParams.get('maxBytes');
+            const limit = existing === null ? maximum : Number(existing);
+            if (!Number.isSafeInteger(limit) || limit <= 0) throw new Error('ATTACHMENT_UNAVAILABLE');
+            bounded.searchParams.set('maxBytes', String(Math.min(limit, maximum)));
+            url = bounded.toString();
+          }
+          const assertSize = (value: unknown) => {
+            const metadata = value as { size?: unknown; inlineBase64?: unknown } | null;
+            if (!metadata || typeof metadata.size !== 'number' || !Number.isSafeInteger(metadata.size)
+              || metadata.size < 0 || metadata.size > maximum
+              || (typeof metadata.inlineBase64 === 'string' && metadata.inlineBase64.length > 4 * Math.ceil(maximum / 3)))
+              throw new Error('ATTACHMENT_UNAVAILABLE');
+          };
+          const result = await readRemoteDeviceFile(device, url, async (target, channel, input) => {
+            const response = await remote.invoke(target, channel, input);
+            // Reject source metadata before the shared service starts peer/OSS transfer.
+            if (channel === DL_MEDIA_FETCH_CHANNEL && response.ok) { assertCurrent(); assertSize(response.result); }
+            return response;
+          }, { maxBytes: maximum, maxPeerBytes: maximum, cacheFirst: false });
           try {
             assertCurrent();
+            assertSize(result);
             const bytes = result.inlineBase64 ? Buffer.from(result.inlineBase64, 'base64')
-              : 'path' in result ? await readBoundedFileNoFollow(result.path, GHOST_HANDOFF_MAX_BYTES_PER_FILE)
-              : (await downloadToBuffer(result.ossKey)).bytes;
-            if (!bytes || bytes.byteLength > GHOST_HANDOFF_MAX_BYTES_PER_FILE) throw new Error('ATTACHMENT_UNAVAILABLE');
+              : 'path' in result ? await readBoundedFileNoFollow(result.path, maximum)
+              : (await downloadToBuffer(result.ossKey, maximum)).bytes;
+            if (!bytes || bytes.byteLength > maximum || bytes.byteLength !== result.size) throw new Error('ATTACHMENT_UNAVAILABLE');
             return { bytes, mimeType: result.mimeType };
           } finally { if ('dispose' in result) await result.dispose(); }
         }

@@ -17,7 +17,7 @@ export async function withPluginApprovalReads<T>(operation: () => Promise<T>): P
     scope.active = false;
     scope.values = new WeakMap();
     resource.emitDestroy();
-    if (--activeCalls === 0) tracking.disable();
+    if (--activeCalls === 0) { tracking.disable(); scopes.disable(); }
   }
 }
 

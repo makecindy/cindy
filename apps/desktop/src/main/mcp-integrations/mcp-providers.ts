@@ -566,6 +566,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             remote: createSchedulerRemoteDeps({
               listDevices: deps.historyRemote.listDevices,
               captureAccess: deps.historyRemote.captureAccess,
+              captureInvocationGuard: () => getPluginHostToolCaller()?.assertCurrent,
               invoke: deps.invokeRemote,
             }),
           }
