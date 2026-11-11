@@ -9,6 +9,7 @@ window.bingWallpaperFixture = {
   wallpaperBlur: 8,
   wallpaperMotion: 'static',
   visibility: 0.6,
+  bingImageReady: ctx.data.cached && !ctx.data.decodeFailed,
   bingDecodeFailed: ctx.data.decodeFailed ?? false,
   downloadPending: false,
   downloadFailed: false,

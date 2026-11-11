@@ -41,6 +41,7 @@ export function WallpaperSection() {
     customWallpaperUrl,
     bingWallpaper,
     bingDecodeFailed,
+    bingImageReady,
     playbackFailed,
     downloadPending,
     downloadFailed,
@@ -356,7 +357,7 @@ export function WallpaperSection() {
                   </Button>
                 )}
               </div>
-              {bingWallpaper?.image && !bingDecodeFailed && (
+              {bingWallpaper?.image && bingImageReady && !bingDecodeFailed && (
                 <div className="flex flex-col gap-1">
                   <p className="break-words">{bingWallpaper.image.date.replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3')} · {bingWallpaper.image.title}</p>
                   <p className="break-words">{bingWallpaper.image.copyright}</p>

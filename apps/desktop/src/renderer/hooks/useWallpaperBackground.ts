@@ -157,4 +157,6 @@ export function useWallpaperBackground({
         root.style.removeProperty(name);
     };
   }, []);
+
+  return imageReady;
 }

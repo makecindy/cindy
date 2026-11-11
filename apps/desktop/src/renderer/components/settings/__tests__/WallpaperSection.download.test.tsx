@@ -12,6 +12,7 @@ const state = vi.hoisted(() => ({
   failed: false,
   progress: 0,
   bingDecodeFailed: false,
+  bingImageReady: true,
   retry: vi.fn(),
   select: vi.fn(),
 }));
@@ -21,6 +22,7 @@ vi.mock('@/hooks/useWallpaperSettings', () => ({
     ...DEFAULT_APPEARANCE_SETTINGS,
     wallpaperId: state.id,
     bingDecodeFailed: state.bingDecodeFailed,
+    bingImageReady: state.bingImageReady,
     bingWallpaper: { status: 'ready', image: {
       url: 'cindy-media://client-wallpaper/' + 'a'.repeat(64) + '.webp',
       date: '20261109', title: 'New daily image', copyright: 'New image attribution',
@@ -46,6 +48,7 @@ beforeEach(() => {
   state.failed = false;
   state.progress = 0;
   state.bingDecodeFailed = false;
+  state.bingImageReady = true;
   vi.stubGlobal(
     'ResizeObserver',
     class {
@@ -67,13 +70,17 @@ describe('wallpaper download feedback', () => {
   // existing CDN feedback cases cannot detect attribution for an undisplayed image.
   it('offers decode retry without attributing the retained old background to the new image', () => {
     state.id = 'bing-daily';
-    state.bingDecodeFailed = true;
+    state.bingImageReady = false;
     const { rerender } = render(<WallpaperSection />);
+    expect(screen.queryByText('New image attribution')).toBeNull();
+    state.bingDecodeFailed = true;
+    rerender(<WallpaperSection />);
     expect(screen.getByText('settings.appearance.wallpaper.bingDecodeFailed')).toBeTruthy();
     expect(screen.queryByText('New image attribution')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'settings.appearance.wallpaper.retryDownload' }));
     expect(state.retry).toHaveBeenCalledOnce();
     state.bingDecodeFailed = false;
+    state.bingImageReady = true;
     rerender(<WallpaperSection />);
     expect(screen.getByText('New image attribution')).toBeTruthy();
   });
