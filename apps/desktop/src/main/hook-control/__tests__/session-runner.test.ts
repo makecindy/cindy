@@ -31,6 +31,7 @@ const h = vi.hoisted(() => {
   const calls: string[] = [];
   return {
     calls,
+    prepareUnhealthy: vi.fn(async () => false),
     bridgeHandle: vi.fn(async (_args: unknown) => undefined),
     followPolicy: vi.fn(),
     prepareBot: vi.fn(async (): Promise<string | null> => null),
@@ -161,7 +162,7 @@ vi.mock('../../maker-ipc/register.js', () => ({
   acquirePendingAgentSwitchForImSend: h.acquirePendingAgentSwitch,
   beginTurnChangeSetAtDispatch: h.beginTurnChangeSetAtDispatch,
   prepareBotSessionForImSend: h.prepareBot,
-  prepareUnhealthySessionForSend: vi.fn(async () => undefined),
+  prepareUnhealthySessionForSend: h.prepareUnhealthy,
   wireSessionToIpc: vi.fn(),
   isSessionInTurn: () => false,
   installDesktopInteractionListener: h.installDesktopInteractionListener,
@@ -507,6 +508,7 @@ beforeEach(() => {
   h.acquirePendingAgentSwitch.mockReset();
   h.acquirePendingAgentSwitch.mockResolvedValue(() => {});
   h.calls.length = 0;
+  h.prepareUnhealthy.mockReset().mockResolvedValue(false);
   h.eventCbs.clear();
   h.headlessDuringSend.length = 0;
   h.headlessAfterAccepted.length = 0;
@@ -579,6 +581,16 @@ describe('hook task model selection on next send', () => {
       expect(h.createSessionRow).not.toHaveBeenCalled();
     }
   });
+  // Unit: disabled-account recovery clears the native id after createOpts was
+  // assembled. The hook must carry retained context to a fresh thread, not resume
+  // the old account's id (the earlier tests only covered unchanged cold resumes).
+  it('drops the stale native resume id after pre-send account recovery', async () => {
+    h.prepareUnhealthy.mockResolvedValueOnce(true);
+    const result = await createMakerHookSessionRunner({ log }).run(baseReq({ isNew: false }));
+    expect(result.status, result.errorMessage ?? undefined).toBe('ok');
+    expect(fakeMaker.createSession).toHaveBeenCalledWith(expect.objectContaining({ resumeSessionId: undefined }));
+  });
+
   // Regression #6493: createSession options do not hydrate Claude's bridge.
   // Exercise the production runner + routing transform at provider startup,
   // with no profile switch, both after restart and when clearing old axes (unit).

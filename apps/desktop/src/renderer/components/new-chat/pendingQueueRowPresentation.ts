@@ -1,5 +1,7 @@
 import { isAnsweredAsyncQuestionClientId, isAsyncQuestionReplyClientId } from '@cindy/maker-shared/interaction';
 import { forwardedRequestDisplayText, isHookSchedulerOrigin } from '@cindy/maker-shared/message-source';
+import i18n from '@/i18n';
+import { isOrcaAutoBridgeBatch } from '@/lib/messageAutomationOrigin';
 import { queueItemVisibleSource, queueItemVisibleText } from '@cindy/maker-shared/queue';
 import { UI_ACTION_TRIGGER_PREFIX, type QueuedMessage } from '@/lib/makerChatStore';
 import { stripChatQuoteMarkerLines } from '@/lib/chatQuotes';
@@ -86,7 +88,9 @@ export function getPendingQueueRowPresentation(entry: QueuedMessage): PendingQue
     isScheduler,
     isSession,
     isPlugin,
-    senderLabel: isOrca
+    senderLabel: isOrcaAutoBridgeBatch(origin)
+      ? i18n.getFixedT(i18n.language)('chat.userMessage.orcaFromWorkerBatch', { count: origin.autoBridgeBatchCount })
+      : isOrca
       ? origin.senderLabel
       : isScheduler
         ? origin.scheduleName

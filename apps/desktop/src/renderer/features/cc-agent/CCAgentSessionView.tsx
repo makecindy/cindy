@@ -4232,15 +4232,24 @@ function CCAgentSessionContent({
         session.runtimeBaselineRecoveryPending === true && !session.runtimePending && !agentSwitchIntent &&
         model === session.runtimeEffective?.model && displayAgentKind === session.runtimeEffective.agentKind &&
         (opts.providerId ?? null) === (session.runtimeEffective.providerId ?? null);
-      if (!remoteDeviceId && !recoveringBaseline) {
-        const authVendor = displayAgentKind === 'pi' ? 'pi' : isCodex ? 'codex' : 'cc';
-        const { proceed } = await vendorAuthGate.checkAndConfirm(authVendor, {
-          // 已建会话:suspended 来源计入(停用不打断运行中会话,门禁只看凭证连接态,
-          // PR #744 review 第十七轮)。
-          existingSessionRoute: true,
-        });
-        if (!proceed) return false;
+      const authVendor = displayAgentKind === 'pi' ? 'pi' : isCodex ? 'codex' : 'cc';
+      const passesVendorAuthGate = async () => (await vendorAuthGate.checkAndConfirm(authVendor, {
+        // 已建会话:suspended 来源计入(停用不打断运行中会话,门禁只看凭证连接态,
+        // PR #744 review 第十七轮)。
+        existingSessionRoute: true,
+      })).proceed;
+      // 输入框在点击时就已清空。普通发送把这项检查交给 store 的 beforeEnqueue:
+      // 气泡先上屏,和清空同一帧出现,不再等这次主进程往返;不通过时 store 按
+      // clientId 撤回气泡、返回 false,输入框原样恢复草稿。还没选目录(走目录选择
+      // 续发)、本地插话和内置技能分派不经过 store 的乐观插入,仍在这里先查。
+      // 归档任务也先查,避免认证拒绝后仍留下自动取消归档的副作用。
+      const deferVendorAuthGate = Boolean(session?.workingDir) && !opts?.builtInSkillIntent &&
+        deliveryMode !== 'steer' && session?.status !== 'archived';
+      if (!remoteDeviceId && !recoveringBaseline && !deferVendorAuthGate) {
+        if (!(await passesVendorAuthGate())) return false;
       }
+      const vendorAuthBeforeEnqueue =
+        !remoteDeviceId && !recoveringBaseline && deferVendorAuthGate ? passesVendorAuthGate : undefined;
 
       if (opts?.beforeEnqueue && !(await opts.beforeEnqueue())) return false;
       // Popover open → prevent re-entry
@@ -4346,13 +4355,16 @@ function CCAgentSessionContent({
       let rebalanceClientId: string | undefined;
       // 伙伴私聊引用回复:点发送时的待发引用随这条消息一起落库,送出后从输入框上方撤下。
       const replyQuote = botChatIdentity && !opts?.independent ? getPendingBotReplyQuote(sessionId) : null;
+      const callerBeforeEnqueue = opts?.beforeEnqueue;
       const sendOptions = {
         ...(replyQuote ? { replyQuote } : {}),
-        beforeEnqueue: recordRebalance ? async () => {
-          if (await opts?.beforeEnqueue?.() === false) return false;
-          if (rebalanceClientId) await recordRebalance(rebalanceClientId);
+        // 顺序:供应商检查 → 调用方钩子 → 记录换号选择(只有确定发出才记)。
+        beforeEnqueue: vendorAuthBeforeEnqueue || recordRebalance ? async () => {
+          if (vendorAuthBeforeEnqueue && !(await vendorAuthBeforeEnqueue())) return false;
+          if (callerBeforeEnqueue && !(await callerBeforeEnqueue())) return false;
+          if (recordRebalance && rebalanceClientId) await recordRebalance(rebalanceClientId);
           return true;
-        } : opts?.beforeEnqueue,
+        } : callerBeforeEnqueue,
         onInputCreated: recordRebalance ? (clientId: string) => {
           rebalanceClientId = clientId;
           opts?.onInputCreated?.(clientId);

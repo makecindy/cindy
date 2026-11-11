@@ -14,6 +14,7 @@
 import {
   extractUsageLimitRecoveryHint,
   isBillingDepletionError,
+  isClaudeUsageLimitMessage,
   type UsageLimitRecoveryParseOptions,
 } from '../../shared/usageLimitRecovery.js';
 
@@ -36,7 +37,7 @@ export function classifyTurnUsageLimit(data: unknown): boolean {
   if (d.errorStatus === 429 || d.errorStatus === 529) return true;
   // Codex / 兜底:文本匹配。
   const msg = typeof d.message === 'string' ? d.message : '';
-  return /rate.?limit|usage.?limit|quota|too\s*many\s*requests/i.test(msg);
+  return isClaudeUsageLimitMessage(msg) || /rate.?limit|usage.?limit|quota|too\s*many\s*requests/i.test(msg);
 }
 
 /**

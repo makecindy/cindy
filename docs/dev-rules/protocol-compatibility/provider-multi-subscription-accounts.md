@@ -13,6 +13,11 @@ Codex 所选目录由当前供应商管理认证、无法提供 ChatGPT 账号�
 同账号远控新增 `maker:subscription-accounts`（查看、添加、重连、取消、移出、策略）及
 `maker:subscription-pool:quota`（只读、无账号身份的池配额）。管理请求只接受内置供应商及
 不含路径的账号 id，宿主按当前 owner 推导目录；共享任务访客不能使用。
+该只读通道可选追加第二个参数 `model`（非空字符串，最多 512 字符），查询多账号池是否仍有该模型的明确可用容量，
+返回 `{providerId, model, available: boolean | null}`，不带账号身份或目录。缺省参数仍返回原 `{providerId, pooled, usage}`。
+新组主只接受 providerId/model 精确匹配的布尔回执；旧宿主忽略新参数并回原聚合形状时保留冷却，不能据此清除模型错误冷却。
+查询沿用同账号 owner 校验和在途 owner 栅栏，不增加 channel、allowlist、协议帧或服务端字段。
+官方与自建中转均通过原 invoke 参数透传，无需中转升级；验证覆盖 owner IPC、新旧端回包及共享客户端／自建中转测试与签名互通。
 添加向导使用只读 `preview` 展示未绑定的默认 CLI 登录；`connect` 的 `target` 必填为
 `default` 或 `new`，后者始终创建独立目录。沿用原 channel 和 owner 校验；旧客户端的
 `read` / `add` 行为不变。旧宿主拒绝新 action 时显示重试错误，禁止退回含糊的 `add` 而
@@ -60,3 +65,16 @@ OpenAI 池快照增加可选 `nativeAccountPool` 标记，当前控制端让三�
 原生额度桶；旧控制端仍可读取 `webSnapshot` 的通用桶，不含账号身份。
 官方及自建 relay 均只透传已有 invoke/push 帧，无需服务端协议变更。原生手机目前没有本机
 供应商连接设置页；执行和远控通道复用上述协议，浏览器登录仍在执行电脑完成。
+
+## Claude 百分比来源（2026-11-11）
+
+`ClaudeUsageWindow` 可选追加 `utilizationSource`（`oauth-endpoint` / `unified-headers`），
+记录该窗口百分比的来源；快照级 `source` 仍表示最近一次更新来源。同一有效额度周期内，
+已知端点百分比不被 SDK 事件覆盖；事件仍即时更新限额状态，端点缺失、窗口已失效或新周期
+时可补充百分比。端点后续回包可修正数值，不采用只升不降的最大值策略。
+
+旧快照无字段时沿用快照级来源；旧端忽略新字段，照旧读取百分比与重置时刻。
+不同窗口分别记录来源，避免 5 小时重置影响仍有效的周窗口。
+字段随现有用量快照传递，无新增 channel、能力门或中转行为；官方与自建中转继续透传。
+账号池的运行时事件不更新账号查询的缓存时间，保持已有 30 秒账号检查与 180 秒额度复用周期。
+回归入口：`claudeSubscriptionUsageMerge.test.ts`、`subscription-accounts/__tests__/runtime.test.ts`。

@@ -71,6 +71,11 @@ Agent 新建普通独立任务（`send_to_session` create；伙伴专用的 `sta
 
 ## 现状台账
 
+Cindy 应用更新（2026-11-11）：`list_tools({query:"更新 Cindy"})`（含中英文更新／升级说法）
+可发现 `application.update`，详情列出当前任务实际可用的检查与安装操作。安装仍由本机宿主
+确认并执行；没有安装工具时明确列为缺失，并提示在运行 Cindy 的电脑上使用设置中的
+“检查更新”。步骤与不可用时的处理写在工具说明及回执，不再占用所有任务的 system prompt。
+
 「跨电脑」一列写 Agent 工具的现状，不是用户界面的现状。改动对应能力时把这张表写回去。
 
 | 对象     | 操作                                                       | 本机 | 跨电脑           |
@@ -141,6 +146,12 @@ Worker 工具省略 working_dir 时保持继承 Lead 任务记录目录，不跟
   `list_available_models` 共用 host 实现；模型项的 `id` 对应 `model`，`providers[].id` 对应
   `providerId`）、`create.ts` / `update.ts` 的 `agentDeviceId`；执行见
   `apps/desktop/src/main/scheduler-host/runner.ts`（按那台电脑的已授权目录解析，不回落本机同名来源）。
+- 自动化显式模型保存：桌面表单、Agent 工具、项目配置和跨电脑写入共用 Scheduler 保存前校验，
+  按 `modelAgentDeviceId`（空字符串为自动化所在电脑）或绑定任务的实际电脑检查来源与模型。
+  失败不写入调度数据库，不启动或切换任务；错误说明实际检查位置及模型位置参数。项目编辑器
+  先写文件的路径在拒绝保存后尝试恢复原内容，但只有读回内容仍等于本次写入时才回滚；校验期间
+  后来保存、删除或直接编辑的文件保持原样。此为乐观核对，不是跨进程文件事务。仅改名称、时间等无关
+  字段不读取目录。旧的无 `modelAgentKind` 配置继续跟随任务；SSH 保留原生目录校验路径。
 - 跨电脑定时任务：`packages/lizi-mcps/src/scheduler/_devices.ts`、
   `apps/desktop/src/main/mcp-integrations/schedulerDevices.ts`。
 - 跨电脑新建普通任务：`device` + `apps/desktop/src/main/maker-ipc/remoteSessionCreation.ts`，复用 `openSession` 与普通消息队列；不建立协同或自动回传关系。

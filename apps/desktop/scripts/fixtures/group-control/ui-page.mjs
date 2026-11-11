@@ -669,9 +669,12 @@ export default {
         const bar = document.querySelector(`${row} [data-bot-group-message-actions]`).getBoundingClientRect();
         const bubble = document.querySelector(`${row} [data-testid="bot-group-bubble"]`).getBoundingClientRect();
         const timeline = document.querySelector('[data-testid="bot-group-timeline"]').getBoundingClientRect();
-        return { gap: bar.left - bubble.right, inside: bar.right <= timeline.right };
+        const narrow = document.querySelector(`${row} .chat-bubble-layout`).getBoundingClientRect().width <= 480;
+        return { gap: bar.left - bubble.right, inside: bar.right <= timeline.right, narrow,
+          below: bar.top > bubble.top && bar.left >= bubble.left && bar.right <= bubble.right };
       }, row);
-      assert.ok(geometry.gap >= 0 && geometry.gap <= 32, `toolbar sits beside the bubble (gap ${geometry.gap}px)`);
+      assert.ok(geometry.narrow ? geometry.below : geometry.gap >= 0 && geometry.gap <= 32,
+        `toolbar stays below narrow content or beside wide content: ${JSON.stringify(geometry)}`);
       assert.ok(geometry.inside, 'toolbar stays inside the timeline');
       assert.ok(await toolbar.isVisible());
       // Reactions wider than a short message's text stay over its own bubble and inside the timeline.
@@ -683,12 +686,14 @@ export default {
         const bar = document.querySelector(`${row} [data-bot-group-message-actions]`).getBoundingClientRect();
         const timeline = document.querySelector('[data-testid="bot-group-timeline"]').getBoundingClientRect();
         return { id, left: corner.left - bubble.left, right: corner.right - bubble.right, inside: corner.left >= timeline.left && corner.right <= timeline.right,
+          narrow: document.querySelector(`${row} .chat-bubble-layout`).getBoundingClientRect().width <= 480,
           toolbarTop: bar.top - bubble.top, wrapped: corner.height > reactions.firstElementChild.getBoundingClientRect().height };
       }));
       for (const c of corners) {
         assert.ok(c.inside, `${c.id} reactions stay inside the timeline`);
         assert.ok(c.left >= -12 && c.right <= 12, `${c.id} reactions stay over the bubble (${c.left}, ${c.right})`);
-        assert.ok(Math.abs(c.toolbarTop) <= 1, `${c.id} toolbar aligns with bubble top (${c.toolbarTop}px)`);
+        assert.ok(c.narrow ? c.toolbarTop > 0 : Math.abs(c.toolbarTop) <= 1,
+          `${c.id} toolbar follows the available content width (${c.toolbarTop}px)`);
         if (ui.case === 'bubbles-wrapped') assert.ok(c.wrapped, `${c.id} exercises multiple reaction rows`);
       }
       // r4324819612: the opposite of the long-root case — the entry is wider

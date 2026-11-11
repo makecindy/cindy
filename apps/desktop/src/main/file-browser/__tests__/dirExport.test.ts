@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('electron', () => ({ app: { getPath: () => os.tmpdir() } }));
 vi.mock('../../device-link/index.js', () => ({ remoteInvoke: vi.fn() }));
 vi.mock('../../device-link/filePeer.js', () => ({ tryUploadPeerAttachment: vi.fn() }));
-vi.mock('../../device-link/mediaTransfer.js', () => ({
+vi.mock('../../device-link/mediaTransfer.desktop.js', () => ({
   MAX_MEDIA_BYTES: 2 ** 31,
   removeRemote: vi.fn(),
   uploadLocalFile: vi.fn(),
