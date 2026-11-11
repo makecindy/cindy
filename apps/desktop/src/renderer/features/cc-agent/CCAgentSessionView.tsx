@@ -95,7 +95,7 @@ import {
   SessionSubscriptionAccountProvider,
   sessionSubscriptionPoolProvider,
 } from '@/components/new-chat/SessionSubscriptionAccount';
-import { bindModelGroupSession, useModelGroupSwitchOffer } from '@/features/model-groups/modelGroupsClient';
+import { bindModelGroupSession, isModelGroupSwitchOfferCurrent, useModelGroupSwitchOffer } from '@/features/model-groups/modelGroupsClient';
 import { CindyMakeComposerMask } from '@/components/cindy-make/CindyMakeComposerMask';
 import {
   getCindyMakeTestRecovery,
@@ -2607,6 +2607,8 @@ function CCAgentSessionContent({
     !readOnly && !botChatIdentity && !!error && !remoteDeviceId && !session?.remoteHostId && !session?.agentDeviceId
       && (!!usageLimitWait || usageLimitRecovery?.isAccountUsageLimit === true),
     errorPersistId ?? error,
+    // 用户自己换过模型或来源后，旧提议作废，按现在的任务重新问。
+    `${session?.agentKind ?? ''}\u0000${session?.providerId ?? ''}\u0000${session?.model ?? ''}`,
   );
   const modelGroupSwitch = useMemo(() => {
     if (!modelGroupSwitchOffer || !sessionId) return null;
@@ -2615,7 +2617,7 @@ function CCAgentSessionContent({
       label: t('modelGroups.switchOffer.action', { model: `${offer.modelName} · ${offer.sourceName}` }),
       onSwitch: async () => {
         const pick = sessionModelPickRef.current;
-        if (!pick) return false;
+        if (!pick || !await isModelGroupSwitchOfferCurrent(sessionId, offer)) return false;
         const applied = await pick({ agent: dbToMakerAgentKind(offer.agentKind), providerId: offer.providerId, modelId: offer.model });
         // 记下现在用的是这一个：之后再撞配额，接着提议路线里的下一个。
         if (applied) bindModelGroupSession(sessionId, offer.selection, offer);

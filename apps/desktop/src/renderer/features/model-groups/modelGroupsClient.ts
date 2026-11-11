@@ -6,6 +6,7 @@ import { useEffect, useState, useSyncExternalStore } from 'react';
 import type { TFunction } from 'i18next';
 
 import type { PluginModelRouteNote } from '@/lib/ccAgent.types';
+import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { createLogger } from '@/lib/logger';
 
 import {
@@ -21,23 +22,32 @@ import {
 
 const log = createLogger('model-groups');
 
-let current: ModelGroupsConfig = MODEL_GROUPS_DEFAULTS;
-let loaded = false;
-let loading: Promise<void> | null = null;
+/**
+ * 缓存按账号分开：换账号只重新挂载页面，这个模块还在。上一个账号的配置不给新账号看，
+ * 上一个账号迟到的读取或排队中的保存也不落到新账号上。
+ */
+let cached: { owner: string | null; config: ModelGroupsConfig } | null = null;
+let loading: { owner: string | null; promise: Promise<void> } | null = null;
 const listeners = new Set<() => void>();
 
-function publish(next: ModelGroupsConfig): void {
-  current = next;
-  loaded = true;
+const ownerNow = (): string | null => getDataOwnerGeneration().dataOwnerId;
+const currentConfig = (): ModelGroupsConfig => (cached && cached.owner === ownerNow() ? cached.config : MODEL_GROUPS_DEFAULTS);
+
+function publish(owner: string | null, next: ModelGroupsConfig): void {
+  if (owner !== ownerNow()) return;
+  cached = { owner, config: next };
   for (const listener of listeners) listener();
 }
 
 export function refreshModelGroups(): Promise<void> {
-  loading ??= window.electronAPI.modelGroups.get()
-    .then(publish)
+  const owner = ownerNow();
+  if (loading?.owner === owner) return loading.promise;
+  const promise = window.electronAPI.modelGroups.get()
+    .then((next) => publish(owner, next))
     .catch((err: unknown) => log.warn('model groups unavailable', err))
-    .finally(() => { loading = null; });
-  return loading;
+    .finally(() => { if (loading?.promise === promise) loading = null; });
+  loading = { owner, promise };
+  return promise;
 }
 
 let saving: Promise<unknown> = Promise.resolve();
@@ -47,9 +57,11 @@ let saving: Promise<unknown> = Promise.resolve();
  * 后一次不会用旧的一份把前一次盖掉。
  */
 export function saveModelGroups(change: (latest: ModelGroupsConfig) => ModelGroupsConfig): Promise<ModelGroupsConfig> {
+  const owner = ownerNow();
   const run = saving.then(async () => {
-    const saved = await window.electronAPI.modelGroups.set(change(current));
-    publish(saved);
+    if (owner !== ownerNow() || cached?.owner !== owner) throw new Error('model groups are not loaded for this account');
+    const saved = await window.electronAPI.modelGroups.set(change(cached.config));
+    publish(owner, saved);
     return saved;
   });
   saving = run.catch(() => undefined);
@@ -60,10 +72,10 @@ export function saveModelGroups(change: (latest: ModelGroupsConfig) => ModelGrou
 export function useModelGroups(enabled = true): { config: ModelGroupsConfig; loaded: boolean } {
   const config = useSyncExternalStore(
     (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
-    () => current,
+    currentConfig,
   );
   useEffect(() => { if (enabled) void refreshModelGroups(); }, [enabled]);
-  return { config: enabled ? config : MODEL_GROUPS_DEFAULTS, loaded };
+  return { config: enabled ? config : MODEL_GROUPS_DEFAULTS, loaded: cached?.owner === ownerNow() };
 }
 
 export async function resolveModelGroup(
@@ -97,12 +109,17 @@ export function bindModelGroupSession(
 }
 
 /**
- * 撞配额横幅出现时问一次：这个任务的路线里还有没有别的来源能接着用。只在横幅挂上、换了任务或换了一个错误时问，
- * 不轮询；enabled 变假(横幅消失)即清空。
+ * 撞配额横幅出现时问一次：这个任务的路线里还有没有别的来源能接着用。只在横幅挂上、换了任务、换了一个错误，
+ * 或任务现在用的模型变了(用户自己换过模型，旧提议作废)时问，不轮询；enabled 变假(横幅消失)即清空。
  */
-export function useModelGroupSwitchOffer(sessionId: string | null | undefined, enabled: boolean, errorKey: string | null): ModelGroupSwitchOffer | null {
+export function useModelGroupSwitchOffer(
+  sessionId: string | null | undefined,
+  enabled: boolean,
+  errorKey: string | null,
+  modelKey: string,
+): ModelGroupSwitchOffer | null {
   const [offer, setOffer] = useState<{ key: string; value: ModelGroupSwitchOffer } | null>(null);
-  const key = enabled && sessionId ? `${sessionId}\u0000${errorKey ?? ''}` : null;
+  const key = enabled && sessionId ? `${sessionId}\u0000${errorKey ?? ''}\u0000${modelKey}` : null;
   useEffect(() => {
     if (!key || !sessionId) return;
     let cancelled = false;
@@ -112,6 +129,18 @@ export function useModelGroupSwitchOffer(sessionId: string | null | undefined, e
     return () => { cancelled = true; };
   }, [key, sessionId]);
   return offer && offer.key === key ? offer.value : null;
+}
+
+/** 点「换来源」那一刻再核对一次：任务仍在这条路线上、下一个来源仍是提议的那个，才动手。 */
+export async function isModelGroupSwitchOfferCurrent(sessionId: string, offer: ModelGroupSwitchOffer): Promise<boolean> {
+  try {
+    const latest = await window.electronAPI.modelGroups.switchOffer({ sessionId });
+    return !!latest && latest.agentKind === offer.agentKind && latest.providerId === offer.providerId && latest.model === offer.model
+      && latest.selection.type === offer.selection.type && latest.selection.id === offer.selection.id;
+  } catch (err) {
+    log.warn('model group switch offer recheck failed', err);
+    return false;
+  }
 }
 
 function formatReset(ms: number, locale: string): string {

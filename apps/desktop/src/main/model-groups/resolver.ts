@@ -4,6 +4,7 @@
  */
 import { isByokProviderId, type AgentKind, type CatalogModel, type ProviderView } from '@cindy/model-providers';
 
+import { claudeModelFamily, scopedWindowBelongsToFamily } from '@cindy/maker-shared/subscription-usage';
 import { modelImageInputDefault } from '../../shared/modelImageInputOverride.js';
 import { getModelPriceQuote } from '../../shared/modelPriceQuote.js';
 import { USD_TO_CNY_FIXED_RATE, type ModelPricingCatalog } from '../../shared/regionalMoney.js';
@@ -59,6 +60,17 @@ function listedPrice(view: ProviderView | undefined, agent: AgentKind, model: Ca
   return quote.currency === 'CNY' ? effective / USD_TO_CNY_FIXED_RATE : effective;
 }
 
+/**
+ * 只对某个模型生效的配额窗口是否管这个候选。与用量 chip 同一口径(scopedWindowBelongsToFamily)：
+ * 按模型 id 归家族，不看用户改过的显示名；额度总览这一层只留了窗口的显示名，所以窗口一侧按显示名归类。
+ * 认不出家族的模型退回按名字包含判断。
+ */
+function scopedWindowApplies(scopedTo: string, modelId: string, modelName: string): boolean {
+  const family = claudeModelFamily(modelId) ?? claudeModelFamily(modelName);
+  if (family) return scopedWindowBelongsToFamily({ modelId: null, modelDisplayName: scopedTo } as Parameters<typeof scopedWindowBelongsToFamily>[0], family);
+  return modelName.toLowerCase().includes(scopedTo.toLowerCase());
+}
+
 export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
   /** 「轮流」上一次选中的候选；只在内存里，重启后从第一个开始。 */
   const lastPicked = new Map<string, string>();
@@ -79,7 +91,7 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
       const modelName = model?.name ?? candidate.model;
       const windows = quota.get(candidate.providerId)
         // 只对某个模型生效的窗口，只在候选就是那个模型时参与。
-        ?.filter((window) => !window.scopedTo || modelName.toLowerCase().includes(window.scopedTo.toLowerCase()))
+        ?.filter((window) => !window.scopedTo || scopedWindowApplies(window.scopedTo, candidate.model, modelName))
         .map(({ usedPercent, resetAtMs, windowMs }) => ({ usedPercent, resetAtMs, windowMs }));
       return {
         available: installed.get(agent) === true

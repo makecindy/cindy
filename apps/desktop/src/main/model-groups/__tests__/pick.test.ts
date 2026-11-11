@@ -155,6 +155,35 @@ describe('createModelGroupResolver', () => {
     expect(unsupported.outcome === 'routed' && 'effort' in unsupported.route).toBe(false);
   });
 
+  // PR #9974 review：分模型周配额的窗口按模型家族归属，不看用户改过的显示名，也不要求显示名包含整个窗口标签。
+  it.each([
+    ['Claude Fable', 'claude-fable-5', '我的主力', 'b'],
+    ['Fable 5', 'claude-fable-5', 'Fable', 'b'],
+    ['Opus', 'claude-fable-5', 'Fable 5', 'a'],
+  ] as const)('applies a model-scoped window %s to model %s named %s', async (label, modelId, modelName, picked) => {
+    const claude = (id: string) => ({
+      id, name: id, source: 'user', connected: true, agents: ['codex'], routing: { codex: { enabled: true } },
+      models: { codex: [{ id: modelId, name: modelName, mode: 'chat', efforts: [] }] },
+    }) as unknown as ProviderView;
+    const groups: ModelGroupsConfig = {
+      routes: [{ id: 'r1', name: 'R', strategy: 'order', candidates: [
+        { agentKind: 'codex', providerId: 'a', model: modelId }, { agentKind: 'codex', providerId: 'b', model: modelId },
+      ] }],
+      modes: [],
+    };
+    const resolver = createModelGroupResolver({
+      config: () => groups,
+      views: async () => [claude('a'), claude('b')],
+      agents: () => ['codex'],
+      harnessInstalled: async () => true,
+      // a 的总周配额还有余量，但这个标签的分模型周配额已满。
+      quotaWindows: async () => new Map([['a', [week(10, 100), { ...week(100, 100), scopedTo: label }]], ['b', [week(10, 100)]]]),
+      scope: () => 'owner',
+      now: () => NOW,
+    });
+    expect(await resolver.resolve({ selection: { type: 'route', id: 'r1' } })).toMatchObject({ outcome: 'routed', route: { providerId: picked } });
+  });
+
   it('reports a deleted selection as missing so the task keeps the user\'s own model', async () => {
     expect((await make().resolve({ selection: { type: 'route', id: 'gone' } })).outcome).toBe('missing');
   });
