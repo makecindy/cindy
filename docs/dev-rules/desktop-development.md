@@ -454,8 +454,8 @@ Linux 主窗口创建时注册 Electron Tray，提供显示主窗口、打开日
 
 关闭主窗口仍保留 Linux 原有的「最小化／退出」选择，不迁移用户已有偏好。
 Wayland 会话的主窗口「最小化」及关闭时的「最小化」选择统一隐藏到 Linux 托盘：
-xdg-shell 协议没有客户端发起的最小化请求，Wayland 合成器（Hyprland/Omarchy、
-GNOME、KDE 等）普遍不响应 Electron 的 toplevel 最小化。会话判定以
+xdg-shell 的 `set_minimized` 只是向合成器发出的建议请求，协议不保证任何效果，
+Wayland 合成器（Hyprland/Omarchy、GNOME、KDE 等）普遍忽略它。会话判定以
 `XDG_SESSION_TYPE` 与 `WAYLAND_DISPLAY` 为主，session 变量被 wrapper／service
 剥掉时按桌面身份（Hyprland）兜底；显式 `x11` 会话与副窗口仍使用原生最小化。
 策略与回归见 `main/mainWindowCloseBehavior.ts`、`main/__tests__/mainWindowCloseBehavior.test.ts`。
