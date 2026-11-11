@@ -1,6 +1,8 @@
 import { ghostCardSessionLinkId } from '@cindy/maker-shared/ghost-card-form';
 import { isSafeGhostRelativePath as isSafePluginUiPath, getPluginToolUi, validateWithStoredMcpApps, parseGhostMcpApps } from '@cindy/plugin-protocol';
 import { pluginHasToolUi, pluginToolVisible, pluginUiDomains, pluginUiPermissionsExpand } from '@cindy/plugin-protocol';
+import { getPluginHostUi, hostUiApprovalSubjects, type GhostHostUi } from '@cindy/plugin-protocol';
+import { PLUGIN_APPEARANCE_FIELDS } from '@cindy/plugin-protocol/appearance';
 import { parseGhostSecretCheck, type GhostSecretCheckDecl } from '@cindy/plugin-protocol';
 import { parseGhostRoutineEvents, type GhostRoutineEvents } from '@cindy/plugin-protocol';
 import { parseGhostModelsNeeds, type GhostModelsNeeds } from '@cindy/plugin-protocol';
@@ -1947,6 +1949,8 @@ export interface InstalledGhost {
   /** Independent Host consent for cross-task/companion target access. */
   targetCapabilityApproved?: true;
   uiCapabilityApproved?: true;
+  /** Exact Host UI permission projections shown by a supporting confirmation UI. */
+  approvedHostUi?: string[];
   /** Read-only remote management projection; never persisted as approval. */
   uiPromptSuppressed?: true;
   delegationCapabilityApproved?: true;
@@ -2228,6 +2232,45 @@ export function ghostPermissionProjectionKey(item: GhostPermissionItem): string 
   return JSON.stringify(ghostPermissionProjectionTuple(item));
 }
 
+export function ghostHostUiPermissionItems(manifest: GhostManifest): GhostPermissionItem[] {
+  const host = getPluginHostUi(manifest);
+  return host ? hostUiApprovalSubjects(host).map(subject => ({
+    key: `ui:host:${subject.key}`, kind: 'panel', labelKey: 'uiHost', detailKey: 'uiHostAccess',
+    detailArgs: { subject: subject.key, access: subject.detail },
+  })) : [];
+}
+
+export function ghostHostUiApprovalTokens(manifest: GhostManifest): string[] {
+  return ghostHostUiPermissionItems(manifest).map(ghostPermissionProjectionKey);
+}
+
+/** Receipt approval is independent of a declaration and of the original page grant. */
+export function getApprovedGhostHostUi(ghost: InstalledGhost): GhostHostUi | undefined {
+  if (ghost.approval.state !== 'approved') return;
+  const host = getPluginHostUi(ghost.manifest);
+  if (!host) return;
+  const approved = new Set(ghost.approvedHostUi ?? []);
+  const keys = new Set(ghostHostUiPermissionItems(ghost.manifest)
+    .filter(item => approved.has(ghostPermissionProjectionKey(item))).map(item => item.key));
+  if (!keys.size) return;
+  const has = (kind: string, id: string) => keys.has(`ui:host:${kind}:${id}`);
+  return {
+    views: (host.views ?? []).filter(view => has('view', view.id)),
+    contributions: (host.contributions ?? []).filter(item => has('contribution', item.id) && (!item.view || has('view', item.view))),
+    commands: (host.commands ?? []).filter(command => has('command', command.id) && (!command.view || has('view', command.view))),
+    capabilities: (host.capabilities ?? []).filter(capability => has('capability', capability)),
+    ...(host.appearance || host.capabilities?.includes('appearance') ? { appearance: {
+      fields: (host.appearance?.fields ?? PLUGIN_APPEARANCE_FIELDS).filter(field => has('appearance', field)),
+      resources: (host.appearance?.resources ?? []).filter(resource => has('appearance-resource', resource.id)),
+    } } : {}),
+  };
+}
+
+export function ghostHostUiNeedsApproval(ghost: InstalledGhost): boolean {
+  const approved = new Set(ghost.approvedHostUi ?? []);
+  return ghostHostUiApprovalTokens(ghost.manifest).some(token => !approved.has(token));
+}
+
 export function ghostPermissionProjectionFingerprint(manifest: GhostManifest): string {
   return JSON.stringify(
     ghostPermissionItems(manifest)
@@ -2250,6 +2293,7 @@ export function ghostDeclaresHiddenTasks(manifest: Pick<GhostManifest, 'agent'> 
 
 export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionItem[] {
   const items: GhostPermissionItem[] = [];
+  items.push(...ghostHostUiPermissionItems(manifest));
   if (manifest.systemPrompt?.length) items.push({ key: 'system-prompt', kind: 'subscribe',
     labelKey: 'systemPrompt', detailKey: 'systemPromptDetail', detail: JSON.stringify(manifest.systemPrompt, null, 2) });
   if (pluginHasToolUi(manifest)) items.push({ key: 'ui:pages', kind: 'panel', labelKey: 'mcpUi',
@@ -2948,7 +2992,11 @@ export function diffInstalledGhostPermissionItems(
     // Older Hosts preserved ui without granting page capabilities.
     const previous = {
       ...installed.manifest,
-      mcpApps: installed.uiCapabilityApproved === true ? installed.manifest.mcpApps : undefined,
+      mcpApps: installed.manifest.mcpApps && typeof installed.manifest.mcpApps === 'object'
+        ? { ...installed.manifest.mcpApps as object,
+          ui: installed.uiCapabilityApproved === true ? getPluginToolUi(installed.manifest) : undefined,
+          host: getApprovedGhostHostUi(installed) }
+        : undefined,
       // 同理：声明了但用户从没确认过的控制节点不算旧权限，更新时作为新增项复核。
       subscribe: withoutUnapprovedControlPoints(installed),
       systemPrompt: installed.approvedControlPoints?.includes('system-prompt') ? installed.manifest.systemPrompt : undefined,

@@ -8241,7 +8241,9 @@
         "mcpUi": "Exibir páginas interativas na conversa",
         "mcpUiDomains": "Domínios de rede da página: {{domains}}",
         "mcpAppOnly": "Somente página",
-        "uiPageAccess": "Páginas: {{pages}}; domínios: {{domains}}; ferramentas disponíveis para as páginas: {{tools}}"
+        "uiPageAccess": "Páginas: {{pages}}; domínios: {{domains}}; ferramentas disponíveis para as páginas: {{tools}}",
+        "uiHost": "Fornecer interfaces e ações do host no Cindy",
+        "uiHostAccess": "{{subject}}: {{access}}"
       },
       "connections": {
         "confirmTitle": "Adicionar endereço de conexão",
@@ -14627,6 +14629,14 @@
       "replied": "respondeu",
       "toggle": "Mostrar ou ocultar a resposta de “{{title}}”",
       "openTask": "Abrir tarefa"
+    },
+    "subscriptionAccountError": {
+      "limited": "A conta de assinatura desta tarefa atingiu o limite de uso. Aguarde a redefinição ou escolha outra origem de modelos. A conta não muda automaticamente.",
+      "limitedUntil": "A conta de assinatura desta tarefa atingiu o limite de uso. Redefinição prevista: {{resetAt}}. Aguarde até lá ou escolha outra origem de modelos. A conta não muda automaticamente.",
+      "loginRequired": "A conta de assinatura desta tarefa exige um novo login. Entre novamente no computador que executa a tarefa e tente de novo.",
+      "signingIn": "O login na conta de assinatura desta tarefa está em andamento. Tente de novo quando terminar.",
+      "unavailable": "A conta de assinatura atribuída a esta tarefa não pode ser usada nesta solicitação. Verifique a conta nas configurações do provedor de modelos no computador que executa a tarefa ou escolha outra origem de modelos.",
+      "legacy": "A conta de assinatura atribuída a esta tarefa não está disponível. Verifique o login e o uso no computador que executa a tarefa ou escolha outra origem de modelos. A conta não muda automaticamente."
     }
   },
   "ccAgent": {
@@ -19633,6 +19643,12 @@
       "failed": "Não foi possível salvar. Tente novamente.",
       "restore": "Restaurar padrões"
     }
+  },
+  "pluginUi": {
+    "display": "Exibição",
+    "original": "Original",
+    "menu": "Visualizações e comandos do plugin",
+    "actionFailed": "Não foi possível concluir a ação do plugin. Tente novamente."
   },
   "mcpApps": {
     "sharedTaskReadOnly": "Apenas o proprietário da sessão pode interagir com este cartão.",
