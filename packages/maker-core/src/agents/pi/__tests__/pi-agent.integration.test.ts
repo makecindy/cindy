@@ -2239,6 +2239,9 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
 
   // #9630, integration: catalog inheritance -> models.json -> real Pi HTTP.
   // Existing effort coverage used Gateway Chat, not native Anthropic relays.
+  // Pi 1.5.0 fixes the cached top-level effort at low (upstream #10063), not
+  // high, to respect organization caps. The per-reply markers are authoritative:
+  // medium -> low -> high must preserve history, not rewrite it at the new level.
   it.each([
     ['claude-opus-5', 'relay'],
     ['claude-opus-5-5', 'relay'],
@@ -2272,7 +2275,9 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     try {
       handle = await new PiAgent(deps).startSession({ sessionId: `effort-${source}-${id}`,
         workingDir, model: id, providerId: 'effort-relay', effort: 'medium' });
+      const expectedEfforts: string[] = [];
       for (const effort of ['medium', 'low', 'high'] as const) {
+        expectedEfforts.push(effort);
         await handle.setEffort!(effort);
         const before = seenRequests.length;
         const done = (async () => {
@@ -2285,11 +2290,14 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         expect(new URL(requests[0]!.url, endpoint).pathname).toBe('/v1/messages');
         const body = JSON.parse(requests[0]!.body);
         const messageScoped = source === 'official' || source === 'explicit';
-        expect(body.output_config.effort).toBe(messageScoped ? 'high' : effort);
+        expect(body.output_config.effort).toBe(messageScoped ? 'low' : effort);
         const effortMessages = body.messages.filter((message: { role: string; output_config?: unknown }) =>
           message.role === 'system' && message.output_config);
-        if (messageScoped) expect(effortMessages.at(-1).output_config.effort).toBe(effort);
-        else expect(effortMessages).toEqual([]);
+        if (messageScoped) {
+          expect(effortMessages.map((message: { output_config: { effort: string } }) =>
+            message.output_config.effort)).toEqual(expectedEfforts);
+          expect(body.messages.at(-1)).toMatchObject({ role: 'system', output_config: { effort } });
+        } else expect(effortMessages).toEqual([]);
       }
     } finally {
       await handle?.close();

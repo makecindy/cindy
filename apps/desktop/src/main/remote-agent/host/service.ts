@@ -53,6 +53,7 @@ import { hostedProviderOffersModel } from '../../maker-host/guest-provider-route
 import { isRemoteProviderInvocationAllowed } from '../../maker-host/remote-provider-access-store.js';
 import { createGuestProviderRouteBinder, guestProviderModelIds, resolveGuestProviderId, resolveSharedProviderId } from './providerAccess';
 import { createRemoteAgentHost, type GroupRelayLoad, type HostedStartInput, type RemoteAgentHost, type RunUsageRecord } from './runHost';
+import { reshareKeyForGuest } from './groupRelay.js';
 import { purgeClaudeHostedSessionArtifacts, purgeClaudeHostedTranscripts, purgePiHostedSubagentRuns } from './transcripts';
 import { captureGeneratedImageStorage, generatedImageErrorCode, handleGeneratedImageArtifacts, prepareGeneratedImageTransport } from '../../cindy-media/generatedImageStorage';
 
@@ -1397,7 +1398,7 @@ export function installRemoteAgentHost(options: {
             && member.agentDeviceId === route.executorDeviceId).map((member) => member.key) ?? [route.memberKey]);
           const next = await groupRelay.plan({ kind: route.agentKind as 'claude-code' | 'codex' | 'pi',
             model: route.model, providerId: route.groupProviderId,
-            exclude }).catch(() => null);
+            exclude, reshareKey: reshareKeyForGuest(controller) }).catch(() => null);
           const canMove = next?.kind === 'member' || (next?.kind === 'local'
             && options.getMaker().listAvailableAgents().includes(route.agentKind as 'claude-code' | 'codex' | 'pi'));
           if (!valid() || !next || !canMove || (next.kind === 'member' && exclude.has(next.memberKey))) return {};
