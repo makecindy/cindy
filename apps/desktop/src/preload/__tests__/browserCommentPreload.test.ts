@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   BROWSER_COMMENT_COMMAND_RESULT_CHANNEL,
+  BROWSER_COMMENT_CANCEL_PENDING_CHANNEL,
   BROWSER_COMMENT_ELEMENT_SELECTED_CHANNEL,
   BROWSER_COMMENT_ENTER_MODE_CHANNEL,
   BROWSER_COMMENT_EXIT_MODE_CHANNEL,
@@ -165,6 +166,52 @@ describe('browserCommentPreload command protocol', () => {
     );
     expect(latestOverlayShadow?.querySelector<HTMLElement>('.drag-rect')?.style.display).toBe(
       'none',
+    );
+  });
+
+  // #9639: enter-mode must leave an input surface and visible annotations even
+  // when the page rejects inline stylesheets. jsdom cannot enforce CSP or hit
+  // testing; remove the stylesheet here and check the production DOM/CSSOM path.
+  // Real Chromium geometry, CSP and trusted mouse input are tested separately.
+  it('keeps selection and cancellation usable without an inline stylesheet', async () => {
+    const target = document.createElement('button');
+    target.textContent = 'Save';
+    document.body.appendChild(target);
+    Object.defineProperty(document, 'elementsFromPoint', {
+      configurable: true,
+      value: vi.fn(() => [target]),
+    });
+    await loadPreload();
+    dispatchCommand(BROWSER_COMMENT_ENTER_MODE_CHANNEL, {
+      requestId: 'enter-without-stylesheet', payload: { markerNumber: 1 },
+    });
+    await expectCommandResult('enter-without-stylesheet', true);
+    latestOverlayShadow?.querySelectorAll('style').forEach((style) => style.remove());
+    const blocker = latestOverlayShadow!.querySelector<HTMLElement>('.blocker')!;
+    expect(getComputedStyle(blocker).position).toBe('fixed');
+    expect(getComputedStyle(blocker).pointerEvents).toBe('auto');
+
+    blocker.dispatchEvent(new MouseEvent('click', { clientX: 20, clientY: 30 }));
+    expect(ipcMocks.sendToHost).toHaveBeenCalledWith(
+      BROWSER_COMMENT_ELEMENT_SELECTED_CHANNEL,
+      expect.objectContaining({ kind: 'element', targetLabel: 'Save' }),
+    );
+    const marker = latestOverlayShadow!.querySelector<HTMLElement>('.marker')!;
+    expect(getComputedStyle(marker).position).toBe('absolute');
+    expect(getComputedStyle(marker).width).toBe('22px');
+    dispatchCommand(BROWSER_COMMENT_CANCEL_PENDING_CHANNEL, { requestId: 'cancel-without-stylesheet' });
+    await expectCommandResult('cancel-without-stylesheet', true);
+    expect(marker.isConnected).toBe(false);
+    expect(getComputedStyle(blocker).cursor).toBe('crosshair');
+    blocker.dispatchEvent(new MouseEvent('mousedown', { shiftKey: true, clientX: 20, clientY: 30 }));
+    blocker.dispatchEvent(new MouseEvent('mousemove', { shiftKey: true, clientX: 80, clientY: 90 }));
+    blocker.dispatchEvent(new MouseEvent('mouseup', { shiftKey: true, clientX: 80, clientY: 90 }));
+    const box = latestOverlayShadow!.querySelector<HTMLElement>('.region-box')!;
+    expect(getComputedStyle(box).position).toBe('absolute');
+    expect(getComputedStyle(box).width).toBe('60px');
+    expect(ipcMocks.sendToHost).toHaveBeenCalledWith(
+      BROWSER_COMMENT_ELEMENT_SELECTED_CHANNEL,
+      expect.objectContaining({ kind: 'region', region: { x: 20, y: 30, width: 60, height: 60 } }),
     );
   });
 });
