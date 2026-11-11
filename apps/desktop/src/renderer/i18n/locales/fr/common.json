@@ -2822,7 +2822,7 @@
         "dbSizeWarningDisableLabel": "Ne plus me le rappeler",
         "dbSizeWarningDisableDescription": "Si activé, les rappels d'espace de la base de données sont masqués.",
         "dbAutoCleanupTitle": "Nettoyer automatiquement les tâches supprimées",
-        "dbAutoCleanupDescription": "Au démarrage, les messages et index des tâches supprimées depuis la barre latérale sont récupérés automatiquement. Les tâches archivées ne sont jamais touchées.",
+        "dbAutoCleanupDescription": "Au démarrage, les messages et index des tâches supprimées de la barre latérale sont supprimés afin de libérer de l'espace. Les tâches archivées ne sont jamais touchées.",
         "dbAutoCleanupEnableLabel": "Nettoyage automatique",
         "dbAutoCleanupRetentionLabel": "Conservation",
         "dbAutoCleanupRetentionDays": "{{days}} jours",
