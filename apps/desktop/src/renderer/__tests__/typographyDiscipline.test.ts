@@ -52,7 +52,7 @@ import { describe, expect, it } from 'vitest';
  *     (`leading-[Mpx]`、`leading-[Nrem]`、Tailwind 数字档 `leading-3…10`)同处
  *     一个 class 值区域:字号跟随「外观 → UI 字号」缩放而固定行框不跟随,放大
  *     字号即裁切 / 重叠。判定按 className / cn(...) 的**整块区域**(跨行)与
- *     单行字符串常量,而非同一行 —— 单行比对会漏掉 `cn()` 分行写法。
+ *     单行字符串常量(单 / 双 / 反引号),而非同一行 —— 单行比对会漏掉 `cn()` 分行写法。
  *     修法是改成无单位比例(比例 = 原 px ÷ 默认字号),默认字号下渲染不变。
  *     2026-11 扩展前已存在的 rem / 数字档命中登记在 FIXED_LEADING_DEBT,只减不增。
  *
@@ -725,8 +725,9 @@ function classValueRegions(text: string): Array<{ start: number; end: number }> 
     const open = (m.index ?? 0) + m[0].length - 1;
     regions.push({ start: open, end: matchBalanced(text, open, '(', ')') });
   }
-  // 单行字符串常量:`const ICON_BUTTON = 'text-13 leading-5 …'` 之类的 class 常量。
-  for (const m of text.matchAll(/(['"])(?:(?!\1)[^\\\n]|\\.)*\1/g)) {
+  // 单行字符串常量:`const ICON_BUTTON = 'text-13 leading-5 …'` 之类的 class 常量,
+  // 单引号、双引号与反引号(模板字符串)同样处理。
+  for (const m of text.matchAll(/(['"`])(?:(?!\1)[^\\\n]|\\.)*\1/g)) {
     regions.push({ start: m.index ?? 0, end: (m.index ?? 0) + m[0].length });
   }
   return regions;
@@ -982,6 +983,11 @@ describe('typography discipline (DESIGN.md §3, #1505)', () => {
       // 没挂在 className / cn 上的 class 常量也要判。
       expect(
         findFixedLeadingWithScalingToken("const ROW = 'flex text-13 leading-5 text-[var(--x)]';"),
+      ).toHaveLength(1);
+      // 反引号常量同样要判,无论有没有插值。
+      expect(findFixedLeadingWithScalingToken('const ROW = `text-13 leading-5`;')).toHaveLength(1);
+      expect(
+        findFixedLeadingWithScalingToken('const ROW = `text-13 ${active ? "font-medium" : ""} leading-5`;'),
       ).toHaveLength(1);
       expect(findArbitrarySizes('text-[9px] text-[8px]')).toHaveLength(2);
       // 全单位 / 大小写 / 无整数部分小数(三轮加固)
