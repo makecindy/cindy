@@ -106,7 +106,9 @@
 - **声明**:`"taskView": { "html": "task.html", "remote": true }`,只接受字面量 `true`,且必须
   同时声明 `liveScreen: true`。不声明时,另一台电脑上的任务不显示这个任务页。旧版 Cindy 把
   `remote` 当作未知字段保留,不需要提高 `minCindyVersion`。
-- **页面**:地址除 `session=<任务 ID>` 外多一个 `device=<那台电脑的设备 ID>`。带 `device` 时
+- **页面**:地址除 `session=<任务 ID>` 外多带 `device=<那台电脑的设备 ID>` 与
+  `deviceName=<那台电脑的名字>`(仅供显示;请在页面上标明这是哪台电脑上的设备,让用户看得出
+  不是本机)。带 `device` 时
   任务不在本机:不要读本机设备、不要启动本机环境,只显示那台电脑上的设备。设备出现时宿主
   自动打开页签一次;逻辑页此时调 `cindy.taskView()` 不会打开远程任务的页面。
 - **通道**:逻辑页调 `cindy.liveScreenView(req)`(等价于

@@ -10,7 +10,8 @@
  * `session=<id>` 得知自己所在的任务。
  *
  * 任务在本账号的另一台电脑上时，只有声明了 `taskView.remote` 的插件才显示任务页，
- * 页面多一个查询参数 `device=<那台电脑的设备 ID>`：画面和操作都由插件自己的页面
+ * 页面多带查询参数 `device=<那台电脑的设备 ID>` 与 `deviceName=<那台电脑的名字>`
+ * （供页面标明这是哪台电脑上的设备）：画面和操作都由插件自己的页面
  * 完成（逻辑页经 `cindy.liveScreenView()` 取那台电脑上同一插件的设备画面）。SSH
  * 远程任务没有任务页。
  */
@@ -21,6 +22,7 @@ import type { TFunction } from 'i18next';
 import { GhostPanelError, GhostWebviewBody } from '@/cindy-brain/ghostPanelBody';
 import { useGhostRuntimeState } from '@/cindy-brain/runtimeStates';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
+import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
 import type { InstalledGhost } from '../../../../../shared/ghost';
 import { installedGhostStoragePart } from '../../../../../shared/pluginIdentity';
 import { registerTabKind } from '../../registry';
@@ -54,6 +56,34 @@ function PluginTaskTabPillIcon({ state }: { state: PluginTaskTabState }) {
   return <Puzzle size={13} />;
 }
 
+/**
+ * 任务在另一台电脑上时的任务页：地址多带那台电脑的设备 ID 与名字。名字只供页面标明
+ * 「这是哪台电脑上的设备」；设备列表只在这里读，本机任务的页签不依赖它。
+ */
+function RemotePluginTaskWebview({
+  ghost,
+  html,
+  sessionId,
+  deviceId,
+}: {
+  ghost: InstalledGhost;
+  html: string;
+  sessionId: string;
+  deviceId: string;
+}) {
+  const name = useDeviceLinkDeviceList()?.find((device) => device.deviceId === deviceId)?.name;
+  return (
+    <GhostWebviewBody
+      ghost={ghost}
+      html={html}
+      query={
+        `session=${encodeURIComponent(sessionId)}&device=${encodeURIComponent(deviceId)}` +
+        (name ? `&deviceName=${encodeURIComponent(name.slice(0, 80))}` : '')
+      }
+    />
+  );
+}
+
 function PluginTaskBody({ state, ctx }: TabKindBodyProps<PluginTaskTabState>) {
   const ghost = useInstalledGhostByInstance(state.instanceId);
   const runtimeState = useGhostRuntimeState(state.instanceId);
@@ -68,14 +98,20 @@ function PluginTaskBody({ state, ctx }: TabKindBodyProps<PluginTaskTabState>) {
   }
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      <GhostWebviewBody
-        ghost={ghost}
-        html={ghost.manifest.taskView.html}
-        query={
-          `session=${encodeURIComponent(ctx.sessionId)}` +
-          (remoteDevice ? `&device=${encodeURIComponent(remoteDevice)}` : '')
-        }
-      />
+      {remoteDevice ? (
+        <RemotePluginTaskWebview
+          ghost={ghost}
+          html={ghost.manifest.taskView.html}
+          sessionId={ctx.sessionId}
+          deviceId={remoteDevice}
+        />
+      ) : (
+        <GhostWebviewBody
+          ghost={ghost}
+          html={ghost.manifest.taskView.html}
+          query={`session=${encodeURIComponent(ctx.sessionId)}`}
+        />
+      )}
     </div>
   );
 }
