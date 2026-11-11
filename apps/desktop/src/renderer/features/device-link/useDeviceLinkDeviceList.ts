@@ -492,14 +492,19 @@ function ensureStarted(): void {
       clearRetryTimer();
       retryDelayMs = 0;
       // 服务端限流期限:记住了就让下一次退避让过它;拿到权威目录 = 没有在限流,期限作废。
+      // A **partial** directory (only one hybrid leg answered) is fresh for the
+      // rows it carries but proves no absence: the server may still be limiting
+      // reads, and the missing leg's devices are not gone (Codex review #9360
+      // 「Keep one-leg hybrid results non-authoritative」).
+      const authoritative = result?.stale !== true && result?.partial !== true;
       if (typeof result?.retryAtMs === 'number' && Number.isFinite(result.retryAtMs)) {
         retryDeadlineMs = Math.max(retryDeadlineMs, result.retryAtMs);
-      } else if (result?.stale !== true) {
+      } else if (authoritative) {
         retryDeadlineMs = 0;
       }
       const displayed = setDevices(list, result?.displayBudget
         ? { requestedAt, remainingMs: result.displayBudget.remainingMs } : undefined,
-      result?.stale !== true);
+      authoritative);
       // A source already retired cannot be refreshed into validity by another
       // stale answer. Keep the normal retry cadence instead of a tight loop.
       if (!displayed && !directoryRetireReplayPending) scheduleRetry();

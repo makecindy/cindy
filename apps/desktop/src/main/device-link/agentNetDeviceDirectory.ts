@@ -32,6 +32,41 @@ function isDeadlineAbort(error: unknown): boolean {
   return name === 'AbortError' || name === 'TimeoutError';
 }
 
+/** 仅测试:清掉记住的完整目录,避免上一个用例的并集漏进下一个用例。 */
+export function __resetDeviceDirectoryUnionForTests(): void {
+  lastCompleteDirectory = null;
+}
+
+/**
+ * 上一次**两条腿都读到**的完整目录(按 owner scope 记一份)。
+ *
+ * 只有一条腿读到时,那次回答证明不了另一条腿上的设备已经不在了:配对的设备可以关掉
+ * V2 只走 V1(反过来也一样),把这份「缺席」当成权威就会把那些设备从目录里抹掉
+ * (Codex review #9360「Keep one-leg hybrid results non-authoritative」)。这里留一份
+ * 完整目录,部分目录按它把**身份**并回来 —— 在场状态仍以本次读到的为准,这份并集只
+ * 保证「不因一条腿卡住就少设备」。
+ */
+let lastCompleteDirectory: { scope: string; devices: DeviceView[] } | null = null;
+
+/**
+ * 只有一条腿读到时的目录:**不能证明缺席**。
+ *
+ * 返回的行 = 本次读到的那条腿 + 上一次完整目录里的其余行(身份保留);并标成 `partial`,
+ * 上层据此不把它当成权威目录(不据此剪枝、不据此清掉限流期限,继续追问缺的那条腿)。
+ */
+function partialDirectory(scope: string, devices: DeviceView[]): { devices: DeviceView[]; partial: true } {
+  const remembered = lastCompleteDirectory?.scope === scope ? lastCompleteDirectory.devices : [];
+  if (remembered.length === 0) return { devices, partial: true };
+  const merged = new Map(remembered.map((device) => [device.deviceId, device]));
+  for (const device of devices) {
+    const old = merged.get(device.deviceId);
+    merged.set(device.deviceId, old
+      ? { ...old, ...device, deviceInfo: old.deviceInfo ?? device.deviceInfo }
+      : device);
+  }
+  return { devices: [...merged.values()], partial: true };
+}
+
 /** V1 presence cannot describe a peer that has disconnected V1 to use only V2. */
 export async function readCurrentDeviceDirectory(
   readLegacy: () => Promise<{ devices: DeviceView[] }>,
@@ -42,7 +77,7 @@ export async function readCurrentDeviceDirectory(
    * 物理读(Codex review #9360「Apply the caller deadline to the Agent Net directory read」)。
    */
   signal?: AbortSignal,
-): Promise<{ devices: DeviceView[] }> {
+): Promise<{ devices: DeviceView[]; partial?: boolean }> {
   const scope = activeOwnerScopeKey();
   const assertOwner = () => {
     assertRoute();
@@ -79,9 +114,9 @@ export async function readCurrentDeviceDirectory(
   if (legacy.status === 'rejected' && !legIsTemporary(legacy.reason)) throw legacy.reason;
   if (encrypted.status === 'rejected') {
     if (legacy.status === 'rejected') throw encrypted.reason;
-    return legacy.value;
+    return partialDirectory(scope, legacy.value.devices);
   }
-  if (legacy.status === 'rejected') return encrypted.value;
+  if (legacy.status === 'rejected') return partialDirectory(scope, encrypted.value.devices);
   const devices = new Map(legacy.value.devices.map(device => [device.deviceId, device]));
   for (const device of encrypted.value.devices) {
     const old = devices.get(device.deviceId);
@@ -90,5 +125,8 @@ export async function readCurrentDeviceDirectory(
     if (!device.online && old?.online) continue;
     devices.set(device.deviceId, { ...old, ...device, deviceInfo: old?.deviceInfo ?? device.deviceInfo });
   }
-  return { ...legacy.value, devices: [...devices.values()] };
+  const complete = { ...legacy.value, devices: [...devices.values()] };
+  // 只有两条腿都读到才是**完整**目录:它是下一次部分目录的并集来源。
+  lastCompleteDirectory = { scope, devices: complete.devices };
+  return complete;
 }

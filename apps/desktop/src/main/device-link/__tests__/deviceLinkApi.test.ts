@@ -48,6 +48,7 @@ agentNetRequiresEncryption: () => mocks.onlyEncrypted, agentNetSelectionKey: () 
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => mocks.scope, isAppSessionBoundaryPending: () => false }));
 
 import { deviceLinkApiFetch, officialDeviceLinkApiFetch } from '../deviceLinkApi.desktop';
+import { __resetDeviceDirectoryUnionForTests } from '../agentNetDeviceDirectory';
 import { __resetDirectoryThrottleForTests, recordDirectoryRetryDeadline } from '../directoryThrottle';
 import { setSelfHostedRelaySource } from '../selfHostedRelayRouting';
 import { remoteLocalAgentModels } from '../../local-agent/remoteCatalog.js';
@@ -68,6 +69,7 @@ describe('deviceLinkApiFetch', () => {
     mocks.v2Active = false; mocks.onlyEncrypted = false; mocks.selection = 'route-a';
     mocks.readV2Secrets.mockReset().mockImplementation(() => mocks.hasV2 ? { agentNet: {} } : null);
     mocks.v2Directory.mockReset(); mocks.v2Request.mockReset().mockResolvedValue({});
+    __resetDeviceDirectoryUnionForTests();
   });
   // Lazy V2 discovery is an await boundary even for a legacy-only deployment. The captured route's
   // owner generation must be checked before sending any legacy mutation (unit tier, real API adapter).
@@ -138,11 +140,42 @@ describe('deviceLinkApiFetch', () => {
       opts.signal?.addEventListener('abort', () => reject(opts.signal!.reason), { once: true });
     }));
     const controller = new AbortController();
-    const pending = deviceLinkApiFetch<{ devices: Array<{ deviceId: string }> }>('/api/device-link/devices', { signal: controller.signal });
+    const pending = deviceLinkApiFetch<{ devices: Array<{ deviceId: string }>; partial?: boolean }>('/api/device-link/devices', { signal: controller.signal });
     await vi.waitFor(() => expect(mocks.v2Directory).toHaveBeenCalledTimes(1));
     controller.abort(Object.assign(new Error('设备目录读取超时'), { name: 'TimeoutError' }));
     const result = await pending;
     expect(result.devices.map((device) => device.deviceId)).toEqual(['v2-peer']);
+    // 只有一条腿读到 = **不能证明缺席**:上层据此不把它当权威目录。
+    expect(result.partial).toBe(true);
+  });
+
+  // 一条腿读到时,它的「缺席」证明不了另一条腿上的设备已经不在了(配对的设备可以关掉
+  // V2 只走 V1):把这份缺席当权威会把那些设备从目录里抹掉(Codex review #9360
+  // 「Keep one-leg hybrid results non-authoritative」)。上一次**完整**目录里的行必须
+  // 并回来。
+  // 最小失败输入:先读一次完整目录(旧版腿有 v1-peer、V2 腿有 v2-peer),再让旧版腿挂到
+  // 调用方期限;只答 V2 那条腿。tier:unit(真实 deviceLinkApi + 真实
+  // readCurrentDeviceDirectory,electron net / agent-net 运行时为 fake)。
+  it('keeps the last complete directory when only one leg answers', async () => {
+    mocks.v2Active = true; mocks.onlyEncrypted = false;
+    mocks.v2Directory.mockResolvedValue([{ certificate: { deviceId: 'v2-peer' }, name: 'V2 Peer', online: true }]);
+    mocks.netFetch.mockResolvedValue(new Response(JSON.stringify({
+      devices: [{ deviceId: 'v1-peer', name: 'V1 Peer', online: true }],
+    }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    const complete = await deviceLinkApiFetch<{ devices: Array<{ deviceId: string }>; partial?: boolean }>('/api/device-link/devices');
+    expect(complete.devices.map((device) => device.deviceId).sort()).toEqual(['v1-peer', 'v2-peer']);
+    expect(complete.partial).toBeUndefined();
+    // 第二轮:旧版 REST 腿挂到调用方期限,只有 V2 那条腿答得上来。
+    mocks.netFetch.mockImplementation((_url: string, opts: RequestInit) => new Promise((_resolve, reject) => {
+      opts.signal?.addEventListener('abort', () => reject(opts.signal!.reason), { once: true });
+    }));
+    const controller = new AbortController();
+    const pending = deviceLinkApiFetch<{ devices: Array<{ deviceId: string }>; partial?: boolean }>('/api/device-link/devices', { signal: controller.signal });
+    await vi.waitFor(() => expect(mocks.v2Directory).toHaveBeenCalledTimes(2));
+    controller.abort(Object.assign(new Error('设备目录读取超时'), { name: 'TimeoutError' }));
+    const partial = await pending;
+    expect(partial.partial).toBe(true);
+    expect(partial.devices.map((device) => device.deviceId).sort()).toEqual(['v1-peer', 'v2-peer']);
   });
 
   // /models 复用真实目录读取与 API 路由；旧 caller 直接用 serverApiFetch 会把官方 token 发到自建中转。

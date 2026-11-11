@@ -889,7 +889,7 @@ export function useDeviceLinkRemoteProjects(
       const generation = directoryGeneration;
       return window.electronAPI.deviceLink
         .listDevices()
-        .then(({ devices, stale, retryAtMs }) => {
+        .then(({ devices, stale, partial, retryAtMs }) => {
           if (disposed || generation !== directoryGeneration) return;
           // 服务端限流给了重试期限:记住它,退避要让过那个期限。
           if (typeof retryAtMs === 'number' && Number.isFinite(retryAtMs)) {
@@ -931,7 +931,11 @@ export function useDeviceLinkRemoteProjects(
           // 要收的那些分片(review: codex 指出上一轮的修复因此无效)。
           // A bounded last-known directory cannot prove absence. Keep cached
           // shards until a fresh REST answer or an explicit permission event.
-          if (!stale) {
+          // A **partial** directory (only one hybrid leg answered) cannot prove
+          // absence either: a device that lives only on the other leg would look
+          // gone (Codex review #9360「Keep one-leg hybrid results
+          // non-authoritative」).
+          if (!stale && !partial) {
             const authoritative = new Set(devices.map((d) => d.deviceId));
             for (const deviceId of remoteProjectsStore.getAllDeviceIds()) {
               // SharedTask shards are reconciled against membership, not the own-device directory.
@@ -953,10 +957,11 @@ export function useDeviceLinkRemoteProjects(
             stopDirectoryRetry();
             // 新目录到手 = 服务端没有在限流,期限作废。
             directoryRetryDeadlineMs = 0;
-            // 目录又拿到了:上一轮的权威作废不再成立,退避可以重新开始。
-            directoryInvalidated = false;
-          } else {
-            // 仍然只有旧快照:按退避重读,直到目录恢复。
+          }
+          // 目录又拿到了(哪怕只有一条腿):上一轮的权威作废不再成立,退避可以重新开始。
+          if (!stale) directoryInvalidated = false;
+          if (stale || partial) {
+            // 只有旧快照或只有一条腿:按退避重读,直到目录恢复。
             scheduleDirectoryRetry();
           }
         })

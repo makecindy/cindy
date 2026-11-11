@@ -245,6 +245,11 @@ export function deviceLinkApiBase(): string {
 
 type DeviceDirectoryResponse = {
   devices?: DeviceView[];
+  /**
+   * Only one hybrid discovery leg answered: the rows are fresh but its absence
+   * proves nothing (a device that lives only on the other leg would look gone).
+   */
+  partial?: boolean;
 };
 let controllerDisplayNameRefreshGeneration = 0;
 const controllerDisplayNameFreshness = createControllerDisplayNameFreshnessTracker();
@@ -401,6 +406,10 @@ async function runControllerDisplayNamesFromDirectory(
     ) {
       return;
     }
+    // 只有一条腿读到时,这份目录证明不了缺席:展示名/presence 快照都会把「列表里没有」
+    // 当成「已经不在了」,于是另一条腿上的设备被抹掉(Codex review #9360「Keep one-leg
+    // hybrid results non-authoritative」)。这种回答不落快照,等下一次完整目录。
+    if (result.partial === true) return;
     const cachedNames = readLastKnownDeviceNames();
     applyControllerDisplayNameDirectorySnapshot({
       devices: result.devices ?? [],

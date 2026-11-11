@@ -929,6 +929,31 @@ describe('device-link IPC handlers', () => {
 
   // Unit: relay presence is not the group data-path state. Projection may keep
   // an authenticated path online and control-ready, but must not grant local control.
+  // 只有一条腿读到的目录(混合发现):行是新鲜的,但「缺席」证明不了另一条腿上的设备已经
+  // 不在了(配对的设备可以关掉 V2 只走 V1)。权威动作一概不做:不按缺席剪 presence 视图、
+  // 不把名字当成持久真相(Codex review #9360「Keep one-leg hybrid results
+  // non-authoritative」)。
+  // 最小失败输入:apiFetch 返回 { devices:[...], partial:true }。tier:unit(同一 harness)。
+  it('listDevices: 只有一条腿读到的目录不按权威目录处理', async () => {
+    const device = {
+      deviceId: 'dev-1', name: 'Peer', selfName: 'Host.local', platform: 'darwin', lastSeenAt: null,
+      online: true, busy: false, remoteControlEnabled: true, controlEnabled: true, isSelf: false,
+    };
+    const apiFetch: DeviceLinkIpcDeps['apiFetch'] = async <T>() => ({ devices: [device], partial: true }) as T;
+    const deps = makeDeps({
+      apiFetch,
+      rememberLastKnownDeviceName: vi.fn(async () => true),
+      applyControllerPresenceListSnapshot: vi.fn(),
+    });
+    await expect(handleListDevices(deps)).resolves.toMatchObject({
+      partial: true,
+      devices: [{ deviceId: 'dev-1', name: 'Peer' }],
+    });
+    expect(deps.applyControllerPresenceListSnapshot).not.toHaveBeenCalled();
+    expect(deps.applyControllerDisplayNameListSnapshot).not.toHaveBeenCalled();
+    expect(deps.rememberLastKnownDeviceName).not.toHaveBeenCalled();
+  });
+
   it('listDevices: projects a retained group path as control-ready without granting local control or reviving other devices', async () => {
     const deps = makeDeps({
       apiFetch: vi.fn().mockResolvedValue({ devices: ['executor', 'explicitly-off', 'fresh-off', 'phone', 'other'].map(deviceId => ({

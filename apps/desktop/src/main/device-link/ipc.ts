@@ -440,6 +440,12 @@ type DeviceListResult = {
   /** True only when this is the bounded last-known directory, not a fresh REST answer. */
   stale?: true;
   /**
+   * Only one hybrid leg (V1 REST / V2 encrypted) answered this read. The rows it
+   * carries are fresh, but its absence proves nothing: a device that lives only on
+   * the other leg would look gone. Absence is not an authoritative removal.
+   */
+  partial?: true;
+  /**
    * Local display budget measured from the request start; never a wire
    * authorization. A missing field is an old endpoint (legacy lifecycle);
    * an explicit 0 means the source budget has already ended.
@@ -548,7 +554,7 @@ export function handleListDevices(
         controller.abort(Object.assign(new Error('设备目录读取超时'), { name: 'TimeoutError' }));
       }, DIRECTORY_READ_TIMEOUT_MS);
       issuedSeq = currentDirectoryRetrySequence();
-      return deps.apiFetch<{ devices: DeviceLinkServerDeviceView[] }>(
+      return deps.apiFetch<{ devices: DeviceLinkServerDeviceView[]; partial?: boolean }>(
         '/api/device-link/devices',
         { timeoutMs: DIRECTORY_READ_TIMEOUT_MS, signal: controller.signal },
       ).catch((error: unknown) => {
@@ -601,14 +607,20 @@ export function handleListDevices(
       if (directoryEpoch !== providerDirectoryGeneration()) return handleListDevices(deps);
       let latest = latestDeviceListRequest;
       if (latest && latest.sequence > sequence) return latest.promise;
+      // 只有一条腿读到时,这份目录**证明不了缺席**:另一条腿上的设备(配对后关掉 V2 只走
+      // V1 的,或反过来)会被当成已经不在了。它也不是「服务端没在限流」的证据。
+      // (Codex review #9360「Keep one-leg hybrid results non-authoritative」)
+      const partial = result.partial === true;
+      /** 权威 = 完整且新鲜:只有这样的目录能证明缺席、能清掉限流期限。 */
+      const authoritative = !stale && !partial;
       const isLatestDirectorySnapshot = deps.isLatestControllerDisplayNameDirectoryRefresh(
         directoryRequestSequence,
       );
       let appliedEvidence = new Map<string, { online: boolean; enabled?: boolean }>();
-      if (isLatestDirectorySnapshot && !stale) {
+      if (isLatestDirectorySnapshot && authoritative) {
         deps.applyControllerDisplayNameListSnapshot(result.devices, requestEpoch);
         appliedEvidence = deps.applyControllerPresenceListSnapshot(result.devices, presenceRequestEpoch) ?? appliedEvidence;
-      } else if (!stale) {
+      } else if (!stale && !partial) {
         await deps.waitForNewerControllerDisplayNameDirectoryRefresh(directoryRequestSequence);
         latest = latestDeviceListRequest;
         if (latest && latest.sequence > sequence) return latest.promise;
@@ -616,7 +628,7 @@ export function handleListDevices(
       // 拿到权威目录 = 服务端没有在限流:这一轮那个桶的限流期限作废。按**当前**中转算:
       // 这次响应可能是 401 刷新之后由另一个中转服务的(见上面的 catch 分支)。
       const currentRelay = directoryRelayScope();
-      if (!stale) {
+      if (authoritative) {
         // 只清掉**这次读发起之前**就已记下的期限:在途期间(issuedSeq 之后)另一次 429
         // 记下的期限比这次成功更新,抹掉它会让下一次读直接撞进限流窗口,把窗口越推越远
         // (Codex review #9360「Preserve cooldowns newer than the completing request」)。
@@ -630,8 +642,10 @@ export function handleListDevices(
         deps,
         requestEpoch,
         // A stale snapshot may be shown within its bounded budget, but its names
-        // must not become new persistent truth for later cold starts.
-        !stale && isLatestDirectorySnapshot,
+        // must not become new persistent truth for later cold starts. A partial
+        // directory is not persistent truth either: part of it is the last
+        // complete read's rows.
+        authoritative && isLatestDirectorySnapshot,
         !isLatestDirectorySnapshot,
       );
       return {
@@ -673,6 +687,8 @@ export function handleListDevices(
           return stale ? { ...device, online: false } : device;
         }),
         ...(stale ? { stale: true as const } : {}),
+        // 一条腿读到的目录:行是新鲜的,但缺席不算数 —— 渲染侧据此不剪枝、继续追问。
+        ...(partial ? { partial: true as const } : {}),
         // Never drop an exhausted budget: absent means an old endpoint with no
         // stamp, while zero means this read is already outside its source window.
         displayBudget: { remainingMs: Math.max(0, remainingMs) },
