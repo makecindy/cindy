@@ -13,7 +13,7 @@ const displayName = (name: string) => neutralize(name.replace(/[\p{Cc}\p{Cf}]/gu
 const empty = '[正文/附件为空或不可读；历史内容需要应用 MESSAGE_CONTENT 与频道 ViewChannel、ReadMessageHistory 权限]';
 const line = (m: DiscordHistoryMessage) => `[${displayName(m.author.name)}${m.author.bot ? ' (bot)' : ''}] ${channelHistoryTime(m.timestamp)} id:${m.id} ${neutralize(truncateChannelHistory(m.text || (m.contentUnavailable ? empty : '')))}${m.attachments.map(a => ` [附件: ${displayName(a.name)}]`).join('')}`;
 
-/** The existing owner DB owns the window and acceptance cursor, including after adapter recreation. */
+/** Reuse the owner-scoped history window and acceptance cursor. */
 export function createDiscordContext(im: DiscordIM, connectionKey = 'personal') {
   const cursors = new Map<string, number>();
   let cacheOwner = '';
@@ -24,7 +24,6 @@ export function createDiscordContext(im: DiscordIM, connectionKey = 'personal') 
     // Durable namespaces use the stable owner, while the hot cache also follows the live account generation.
     const owner = activeOwnerScopeKey();
     if (cacheOwner !== owner) { cursors.clear(); cacheOwner = owner; }
-    const key = event.senderId;
     const messages: DiscordHistoryMessage[] = [];
     const notes: string[] = [];
     let pageIncomplete = false;
@@ -38,7 +37,6 @@ export function createDiscordContext(im: DiscordIM, connectionKey = 'personal') 
     }
     let window: GroupContextAssembly | undefined;
     try {
-      // Only this trigger's bounded REST page enters the existing window; no background guild crawl.
       for (const m of messages) {
         tools.assertCurrent();
         await recordGroupWindowEntry({ provider, chatId: event.senderId, threadId: '', messageId: m.id,
@@ -53,7 +51,7 @@ export function createDiscordContext(im: DiscordIM, connectionKey = 'personal') 
         fileNames: event.attachments.map(a => displayName(a.originalName)), sentAt: Date.now() }, DEFAULT_GROUP_WINDOW_RETENTION);
       tools.assertCurrent();
       window = await assembleGroupWindowContext({ provider, chatId: event.senderId, threadId: '', cursors,
-        cursorKey: `${provider}:${key}`, triggerMessageId: nativeId, neutralize, log });
+        cursorKey: `${provider}:${event.senderId}`, triggerMessageId: nativeId, neutralize, log });
       tools.assertCurrent();
       const unread = new Set(window.messageIds);
       messages.splice(0, messages.length, ...messages.filter(m => unread.has(m.id)));

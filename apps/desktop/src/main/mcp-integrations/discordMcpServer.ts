@@ -1,4 +1,4 @@
-/** Host bridge: identity, whitelist and turn leases only. No workflow or arbitrary REST. */
+/** Discord tools over the active bot connection and task scope. */
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -75,7 +75,7 @@ function fileFailureDiagnostic(stage: FileFailureStage, error: unknown) {
 export interface DiscordMcpDeps {
   getSessionContext(): LiziMcpSessionContext;
   /** Must reject companions, public/guest/shared inputs, missing tasks and changed account generations. */
-  personalAccess(context: LiziMcpSessionContext): Promise<{ im: Pick<DiscordIM, 'captureTools' | 'getStatus' | 'getOwnerUserId' | 'getFinalTextDeliveryStatus' | 'botContextId'>; assertCurrent(): void }>;
+  personalAccess(context: LiziMcpSessionContext): Promise<{ im: Pick<DiscordIM, 'captureTools' | 'getStatus' | 'getFinalTextDeliveryStatus' | 'botContextId'>; assertCurrent(): void }>;
   authorizeFile(context: LiziMcpSessionContext, file: string): Promise<boolean>;
 }
 
@@ -137,7 +137,6 @@ export function createDiscordMcpServer(deps: DiscordMcpDeps): McpServer {
       if (name === 'list_channels') return tools.listChannels();
       if (!target) throw new DiscordOperationError('DISCORD_LANE_REQUIRED');
       if ((name === 'edit_message' || name === 'delete_message') && scope && !scope.requesterIsOwner) throw new DiscordOperationError('DISCORD_OWNER_REQUIRED');
-      // Parsing the named schema above is the only source of operation arguments.
       switch (name) {
         case 'list_threads': return tools.listThreads(target, schemas.list_threads.parse(args).before);
         case 'history': { const p = schemas.history.parse(args); return tools.history(target, p); }

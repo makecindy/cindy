@@ -1,4 +1,4 @@
-/** Narrow operations over the already connected bot. Never exposes REST or credentials. */
+/** Lane-scoped operations over the connected bot. */
 import { ChannelType, type Channel, type Client } from 'discord.js';
 import { decodeDiscordLaneUserId, discordLaneOfChannel, discordLaneTargetChannelId, encodeDiscordLaneUserId, type DiscordLane } from './lane.js';
 
@@ -132,11 +132,11 @@ export function createDiscordOperations(deps: {
       assertLane(laneId);
       return { threads: page.threads.filter(t => t.guild_id === lane.guildId && t.parent_id === lane.channelId).map(t => ({ laneId: encodeDiscordLaneUserId({ ...lane, threadId: t.id }), name: t.name })), hasMore: page.has_more, incomplete: true, note: 'Archived public threads; active/joined threads also appear in list_channels.' };
     },
-    async history(laneId: string, options: { before?: string; after?: string; limit?: number } = {}) {
+    async history(laneId: string, options: { before?: string; limit?: number } = {}) {
       const { client, channel } = await target(laneId);
       assertLane(laneId);
       const limit = Math.min(50, Math.max(1, options.limit ?? 50));
-      const query = new URLSearchParams({ limit: String(limit), ...(options.before ? { before: options.before } : {}), ...(options.after ? { after: options.after } : {}) });
+      const query = new URLSearchParams({ limit: String(limit), ...(options.before ? { before: options.before } : {}) });
       const raw = await client.rest.get(`/channels/${channel.id}/messages`, { query }) as unknown[];
       assertLane(laneId);
       return { messages: raw.map(discordHistoryMessage).filter(m => m.channelId === channel.id).sort((a, b) => BigInt(a.id) < BigInt(b.id) ? -1 : 1), incomplete: raw.length >= limit };
@@ -170,10 +170,10 @@ export function createDiscordOperations(deps: {
       const messages = page.messages.flat().map(discordHistoryMessage).filter(m => m.channelId === channel.id && !seen.has(m.id) && !!seen.add(m.id));
       return { messages, totalResults: page.total_results, nextOffset: offset + page.messages.length, incomplete: true };
     },
-    async send(laneId: string, text: string, replyTo?: string, nonce?: string) {
+    async send(laneId: string, text: string, replyTo?: string) {
       const { channel, client } = await target(laneId, 'send');
       assertLane(laneId);
-      const sent = await client.rest.post(`/channels/${channel.id}/messages`, { body: { content: text, allowed_mentions: { parse: [] }, ...(replyTo ? { message_reference: { message_id: replyTo, channel_id: channel.id, fail_if_not_exists: true } } : {}), ...(nonce ? { nonce, enforce_nonce: true } : {}) } }) as { id: string };
+      const sent = await client.rest.post(`/channels/${channel.id}/messages`, { body: { content: text, allowed_mentions: { parse: [] }, ...(replyTo ? { message_reference: { message_id: replyTo, channel_id: channel.id, fail_if_not_exists: true } } : {}) } }) as { id: string };
       assertLane(laneId);
       return { messageId: sent.id, channelId: channel.id };
     },

@@ -121,7 +121,7 @@ export interface IMessageToolScope {
 
 export interface DiscordToolScope {
   channel: 'discord';
-  im: Pick<DiscordIM, 'captureTools' | 'getStatus' | 'getOwnerUserId' | 'getFinalTextDeliveryStatus' | 'botContextId' | 'sendFile'>;
+  im: Pick<DiscordIM, 'captureTools' | 'getStatus' | 'getFinalTextDeliveryStatus' | 'botContextId'>;
   botId: string;
   laneUserId: string;
   chatId: string;

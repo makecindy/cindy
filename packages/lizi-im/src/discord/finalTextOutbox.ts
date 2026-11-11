@@ -12,7 +12,7 @@ export interface DiscordFinalTextStorage {
   /** Non-secret configuration generation; changing authorization cancels old results. */
   authorizationStamp(lane: string): string;
 }
-interface Segment { text: string; state: 'pending' | 'sending' | 'sent' | 'uncertain'; messageId?: string }
+interface Segment { text: string; state: 'pending' | 'sending' | 'sent' | 'uncertain' }
 interface Entry {
   key: string; identity: string; lane: string; createdAt: number; authorization: string;
   state: 'pending' | 'delivered' | 'uncertain' | 'cancelled' | 'expired'; segments: Segment[];
@@ -188,7 +188,7 @@ export class DiscordFinalTextOutbox {
         this.mutate(store, ledger => {
           const current = ledger.entries.find(e => e.key === entry.key)!;
           if (current.state === 'cancelled' || !current.segments[index]) return;
-          current.state = 'pending'; current.segments[index] = { text: '', state: 'sent', messageId };
+          current.state = 'pending'; current.segments[index] = { text: '', state: 'sent' };
           (current.receipts ??= []).push(messageId);
           if (current.segments.every(s => s.state === 'sent')) { current.state = 'delivered'; current.deliveredAt = this.now(); current.segments = []; }
         });
