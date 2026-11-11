@@ -403,8 +403,8 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
   }
 
   /**
-   * Await a close() that needs no poll. Its real I/O gets up to 1 s of real
-   * time before the clock moves, so on the normal path no poll fires inside the
+   * Await a close() that needs no poll. Its real I/O gets up to 500 ms of real
+   * time before each clock move, so on the normal path no poll fires inside the
    * close. The clock moves only when the close itself waits on a timer, such as
    * the config-home removal retry after a Windows file lock; a plain `await`
    * would hang there, because nothing else fires fake timers.
@@ -414,7 +414,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     void promise.then(() => { settled = true; }, () => { settled = true; });
     const realDeadline = performance.now() + 4_000;
     for (;;) {
-      const idleUntil = Math.min(performance.now() + 1_000, realDeadline);
+      const idleUntil = Math.min(performance.now() + 500, realDeadline);
       while (!settled && performance.now() < idleUntil) {
         await new Promise((resolve) => setImmediate(resolve));
       }
