@@ -295,6 +295,106 @@ export function createWindowApiScanner(checker) {
   return { functionBody, guiOf };
 }
 
+const ITERATION_METHODS = new Set(['map', 'flatMap', 'forEach', 'filter']);
+
+/**
+ * Keys of `X` when `decl` is the key of an iteration callback over it:
+ * `Object.entries(X).map(([key, value]) => …)` or `Object.keys(X).map(key => …)`.
+ * The key's own type is just `string`, so only X's declared properties name it.
+ */
+export function callbackEntryKeys(decl, checker) {
+  let parameter;
+  let source;
+  if (ts.isBindingElement(decl) && ts.isArrayBindingPattern(decl.parent)
+    && decl.parent.elements.indexOf(decl) === 0 && ts.isParameter(decl.parent.parent)) {
+    parameter = decl.parent.parent;
+    source = 'entries';
+  } else if (ts.isParameter(decl) && ts.isIdentifier(decl.name)) {
+    parameter = decl;
+    source = 'keys';
+  } else {
+    return null;
+  }
+  const fn = parameter.parent;
+  if (!(ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) || fn.parameters[0] !== parameter) return null;
+  const call = fn.parent;
+  if (!call || !ts.isCallExpression(call) || call.arguments[0] !== fn || !ts.isPropertyAccessExpression(call.expression)) return null;
+  if (!ITERATION_METHODS.has(call.expression.name.text)) return null;
+  const iterated = call.expression.expression;
+  if (!ts.isCallExpression(iterated) || !ts.isPropertyAccessExpression(iterated.expression)) return null;
+  const callee = iterated.expression;
+  if (callee.expression.getText() !== 'Object' || callee.name.text !== source || !iterated.arguments[0]) return null;
+  const names = checker.getPropertiesOfType(checker.getTypeAtLocation(iterated.arguments[0])).map((p) => p.getName());
+  return names.length ? names : null;
+}
+
+/**
+ * Statically known string values of an expression (literal types, constants,
+ * templates, `+` concatenation, enum members, iteration keys). `wrapperArguments`
+ * resolves a parameter through its call sites; without it parameters stay unknown.
+ */
+export function createConstResolver(checker, wrapperArguments = () => null) {
+  const literalStrings = (type) => {
+    if (type.isStringLiteral()) return [type.value];
+    if (type.isUnion() && type.types.every((t) => t.isStringLiteral())) return type.types.map((t) => t.value);
+    return null;
+  };
+
+  const constValues = (expr, depth = 0) => {
+    if (depth > 8 || !expr) return null;
+    if (ts.isStringLiteralLike(expr)) return [expr.text];
+    if (ts.isParenthesizedExpression(expr) || ts.isAsExpression(expr) || ts.isSatisfiesExpression?.(expr) || ts.isTypeAssertionExpression(expr)) {
+      return constValues(expr.expression, depth + 1);
+    }
+    const literal = literalStrings(checker.getTypeAtLocation(expr));
+    if (literal) return literal;
+    if (ts.isTemplateExpression(expr)) {
+      let results = [expr.head.text];
+      for (const span of expr.templateSpans) {
+        const values = constValues(span.expression, depth + 1);
+        if (!values) return null;
+        results = results.flatMap((prefix) => values.map((value) => `${prefix}${value}${span.literal.text}`));
+      }
+      return results;
+    }
+    if (ts.isBinaryExpression(expr) && expr.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+      const left = constValues(expr.left, depth + 1);
+      const right = constValues(expr.right, depth + 1);
+      return left && right ? left.flatMap((l) => right.map((r) => `${l}${r}`)) : null;
+    }
+    if (ts.isIdentifier(expr) || ts.isPropertyAccessExpression(expr) || ts.isElementAccessExpression(expr)) {
+      let symbol = checker.getSymbolAtLocation(ts.isElementAccessExpression(expr) ? expr.argumentExpression : expr);
+      if (ts.isElementAccessExpression(expr)) symbol = undefined;
+      if (symbol && symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
+      const decl = symbol?.valueDeclaration;
+      if (decl && (ts.isVariableDeclaration(decl) || ts.isPropertyAssignment(decl)) && decl.initializer) {
+        return constValues(decl.initializer, depth + 1);
+      }
+      if (decl && ts.isEnumMember(decl)) {
+        const value = checker.getConstantValue(decl);
+        return typeof value === 'string' ? [value] : null;
+      }
+      const keys = decl && callbackEntryKeys(decl, checker);
+      if (keys) return keys;
+      // `handle(name, …)` helpers that build the channel from a parameter.
+      if (decl && ts.isParameter(decl) && ts.isIdentifier(expr) && depth < 4) {
+        const args = wrapperArguments(decl);
+        if (!args || !args.length) return null;
+        const values = [];
+        for (const arg of args) {
+          const resolved = constValues(arg, depth + 1);
+          if (!resolved) return null;
+          values.push(...resolved);
+        }
+        return values;
+      }
+    }
+    return null;
+  };
+
+  return { literalStrings, constValues };
+}
+
 export function collectInventory() {
   const sources = listMainSources();
   const service = createService(sources);
@@ -308,11 +408,7 @@ export function collectInventory() {
     return { file: rel(sf.fileName), line: sf.getLineAndCharacterOfPosition(node.getStart()).line + 1 };
   };
 
-  const literalStrings = (type) => {
-    if (type.isStringLiteral()) return [type.value];
-    if (type.isUnion() && type.types.every((t) => t.isStringLiteral())) return type.types.map((t) => t.value);
-    return null;
-  };
+  const { literalStrings, constValues } = createConstResolver(checker, (parameter) => wrapperArguments(parameter));
 
   const isIpcReceiver = (expr) => {
     const name = checker.typeToString(checker.getTypeAtLocation(expr));
@@ -370,55 +466,6 @@ export function collectInventory() {
     return complete && keys.length ? keys : null;
   };
 
-  const constValues = (expr, depth = 0) => {
-    if (depth > 8 || !expr) return null;
-    if (ts.isStringLiteralLike(expr)) return [expr.text];
-    if (ts.isParenthesizedExpression(expr) || ts.isAsExpression(expr) || ts.isSatisfiesExpression?.(expr) || ts.isTypeAssertionExpression(expr)) {
-      return constValues(expr.expression, depth + 1);
-    }
-    const literal = literalStrings(checker.getTypeAtLocation(expr));
-    if (literal) return literal;
-    if (ts.isTemplateExpression(expr)) {
-      let results = [expr.head.text];
-      for (const span of expr.templateSpans) {
-        const values = constValues(span.expression, depth + 1);
-        if (!values) return null;
-        results = results.flatMap((prefix) => values.map((value) => `${prefix}${value}${span.literal.text}`));
-      }
-      return results;
-    }
-    if (ts.isBinaryExpression(expr) && expr.operatorToken.kind === ts.SyntaxKind.PlusToken) {
-      const left = constValues(expr.left, depth + 1);
-      const right = constValues(expr.right, depth + 1);
-      return left && right ? left.flatMap((l) => right.map((r) => `${l}${r}`)) : null;
-    }
-    if (ts.isIdentifier(expr) || ts.isPropertyAccessExpression(expr) || ts.isElementAccessExpression(expr)) {
-      let symbol = checker.getSymbolAtLocation(ts.isElementAccessExpression(expr) ? expr.argumentExpression : expr);
-      if (ts.isElementAccessExpression(expr)) symbol = undefined;
-      if (symbol && symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
-      const decl = symbol?.valueDeclaration;
-      if (decl && (ts.isVariableDeclaration(decl) || ts.isPropertyAssignment(decl)) && decl.initializer) {
-        return constValues(decl.initializer, depth + 1);
-      }
-      if (decl && ts.isEnumMember(decl)) {
-        const value = checker.getConstantValue(decl);
-        return typeof value === 'string' ? [value] : null;
-      }
-      // `handle(name, …)` helpers that build the channel from a parameter.
-      if (decl && ts.isParameter(decl) && ts.isIdentifier(expr) && depth < 4) {
-        const args = wrapperArguments(decl);
-        if (!args || !args.length) return null;
-        const values = [];
-        for (const arg of args) {
-          const resolved = constValues(arg, depth + 1);
-          if (!resolved) return null;
-          values.push(...resolved);
-        }
-        return values;
-      }
-    }
-    return null;
-  };
 
   /** Call sites of the function that declares `parameter`, with the argument at its index. */
   const wrapperArguments = (parameter) => {
@@ -590,34 +637,78 @@ function enclosingFunctionName(node) {
   return undefined;
 }
 
+/**
+ * Values of every `property: …` assignment in `sf` (optionally only inside
+ * function `within`). A value the resolver cannot name is returned in
+ * `unresolved` instead of being dropped: a silently skipped contract channel
+ * would be reported as window-local while the client actually proxies it.
+ */
+export function collectContractChannels(sf, property, constValues, within) {
+  const values = [];
+  const unresolved = [];
+  const visit = (node) => {
+    if (ts.isPropertyAssignment(node) && ts.isIdentifier(node.name) && node.name.text === property) {
+      const resolved = isContractPassThrough(node.initializer) ? [] : constValues(node.initializer);
+      if (resolved) values.push(...resolved);
+      else unresolved.push({
+        file: rel(sf.fileName),
+        line: sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1,
+        expression: node.initializer.getText(sf).slice(0, 80),
+      });
+    }
+    ts.forEachChild(node, visit);
+  };
+  if (within) {
+    const visitFn = (node) => {
+      if (ts.isFunctionDeclaration(node) && node.name?.text === within) visit(node);
+      else ts.forEachChild(node, visitFn);
+    };
+    visitFn(sf);
+  } else {
+    visit(sf);
+  }
+  return { values, unresolved };
+}
+
+/**
+ * `HOST_CONTRACT_CHANNELS.map((def) => ({ channel: def.desktopChannel, … }))`
+ * re-reads contract entries whose names come from the contract file itself.
+ */
+function isContractPassThrough(expr) {
+  if (!ts.isPropertyAccessExpression(expr) || expr.name.text !== 'desktopChannel' || !ts.isIdentifier(expr.expression)) return false;
+  for (let fn = expr.parent; fn; fn = fn.parent) {
+    if (!ts.isArrowFunction(fn) && !ts.isFunctionExpression(fn)) continue;
+    const parameter = fn.parameters[0];
+    if (!parameter || !ts.isIdentifier(parameter.name) || parameter.name.text !== expr.expression.text) return false;
+    const call = fn.parent;
+    return Boolean(call && ts.isCallExpression(call) && call.arguments[0] === fn
+      && ts.isPropertyAccessExpression(call.expression) && call.expression.name.text === 'map'
+      && call.expression.expression.getText() === 'HOST_CONTRACT_CHANNELS');
+  }
+  return false;
+}
+
+/** Generation stops when any proxied channel name cannot be resolved statically. */
+export function requireResolvedContract(unresolved) {
+  if (!unresolved.length) return;
+  const sites = unresolved.map((entry) => `${entry.file}:${entry.line} ${entry.expression}`).join('\n  ');
+  throw new Error(`host channel contract has ${unresolved.length} channel name(s) the scanner cannot resolve; teach the scanner or write them as literals:\n  ${sites}`);
+}
+
 /** Channels the client proxies to cindy-host, read from the same sources the client uses. */
 function readContract(program, checker, constValues) {
-  const proxied = new Set();
-  const contractFile = program.getSourceFiles().find((sf) => sf.fileName.endsWith('packages/maker-shared/src/hostChannelContract.ts'));
+  const contractFile = program.getSourceFiles().find((sf) => rel(sf.fileName) === 'packages/maker-shared/src/hostChannelContract.ts');
   const delegationFile = program.getSourceFile(path.join(mainRoot, 'host-delegation.ts'));
   const bootstrapFile = program.getSourceFile(path.join(mainRoot, 'bootstrap-electron.ts'));
   if (!contractFile || !delegationFile || !bootstrapFile) throw new Error('host channel contract sources not found');
-  const collectProperty = (sf, property, within) => {
-    const visit = (node) => {
-      if (ts.isPropertyAssignment(node) && ts.isIdentifier(node.name) && node.name.text === property) {
-        for (const value of constValues(node.initializer) ?? []) proxied.add(value);
-      }
-      ts.forEachChild(node, visit);
-    };
-    if (within) {
-      const visitFn = (node) => {
-        if (ts.isFunctionDeclaration(node) && node.name?.text === within) visit(node);
-        else ts.forEachChild(node, visitFn);
-      };
-      visitFn(sf);
-    } else {
-      visit(sf);
-    }
-  };
-  collectProperty(contractFile, 'desktopChannel');
-  collectProperty(delegationFile, 'channel');
-  // Sync channels prefetched from the host at client-mode start.
-  collectProperty(bootstrapFile, 'channel', 'installHostClientMode');
+  const parts = [
+    collectContractChannels(contractFile, 'desktopChannel', constValues),
+    collectContractChannels(delegationFile, 'channel', constValues),
+    // Sync channels prefetched from the host at client-mode start.
+    collectContractChannels(bootstrapFile, 'channel', constValues, 'installHostClientMode'),
+  ];
+  requireResolvedContract(parts.flatMap((part) => part.unresolved));
+  const proxied = new Set(parts.flatMap((part) => part.values));
   proxied.delete('');
   return proxied;
 }
@@ -895,6 +986,7 @@ export function renderMarkdown(summary, { usageSource, clientSource } = {}) {
   push(`已注册 **${windowStatus.registered}**、未注册 **${windowStatus.unregistered}**（今天被拒或无人监听，见下文）、快照无法判断 ${windowStatus.other}。`, '');
   push(`判定依据：${Object.entries(basis).sort().map(([key, count]) => `${key} ${count}`).join('、')}`
     + '（rule = 规则表，dependency = 窗口 API 或同步返回值判定，default = 未登记前缀且没用窗口 API）。', '');
+  push('合同一侧（`hostChannelContract.ts`、`host-delegation.ts`、客户端模式预取）的通道名全部静态解析：解析不出任何一个时脚本直接失败，不会生成本清单。', '');
   if (unresolved.length) {
     push(`未能静态解析通道名的注册点 ${unresolved.length} 处（不计入上表）：`, '');
     for (const entry of unresolved) push(`- \`${fileOnly(entry.file)}\` — ${code(entry.expression)}`);

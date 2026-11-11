@@ -6,7 +6,8 @@ import { fileURLToPath } from 'node:url';
 
 import {
   OWNERSHIP_RULES, SYNC_LOCAL_DOMAINS,
-  createWindowApiScanner, classify, clientBehavior, isHostWork, isWindowClass, moduleGroup, owningFile, rankUsage, summarize,
+  collectContractChannels, createConstResolver, createWindowApiScanner, classify, clientBehavior, isHostWork, isWindowClass,
+  moduleGroup, owningFile, rankUsage, requireResolvedContract, summarize,
 } from '../host-channel-coverage.mjs';
 
 const main = (file) => `apps/desktop/src/main/${file}`;
@@ -197,4 +198,77 @@ test('real git-review open-file chain detects shell in openReviewFile default ar
   } finally {
     for (const [source, name] of names) source.fileName = name;
   }
+});
+
+/** A program over in-memory sources, typed only by its own declarations. */
+function virtualProgram(ts, files) {
+  const options = { noResolve: true, noLib: true, types: [], target: ts.ScriptTarget.ESNext };
+  const host = ts.createCompilerHost(options);
+  const read = host.getSourceFile.bind(host);
+  host.getSourceFile = (name, version) => (name in files
+    ? ts.createSourceFile(name, files[name], version, true)
+    : read(name, version));
+  host.fileExists = name => name in files;
+  host.readFile = name => files[name];
+  return ts.createProgram(Object.keys(files), options, host);
+}
+
+test('real host channel contract resolves every desktopChannel, including Object.entries templates', () => {
+  const root = fileURLToPath(new URL('../../', import.meta.url));
+  const require = createRequire(path.join(root, 'apps/desktop/package.json'));
+  const ts = require('typescript');
+  const file = path.join(root, 'packages/maker-shared/src/hostChannelContract.ts');
+  // The ES library keeps `(['a', 'b'] as const).map(action => …)` typed as the literal union.
+  const program = ts.createProgram([file], { noResolve: true, lib: ['lib.es2022.d.ts'], types: [], target: ts.ScriptTarget.ESNext });
+  const { constValues } = createConstResolver(program.getTypeChecker());
+  const { values, unresolved } = collectContractChannels(program.getSourceFile(file), 'desktopChannel', constValues);
+  assert.deepEqual(unresolved, []);
+  for (const action of ['get-state', 'set-kind', 'set-use-real-profile', 'reset', 'get-health', 'recover',
+    'probe-source-read', 'open-extension-store']) {
+    assert.ok(values.includes(`browser-backend:${action}`), `missing browser-backend:${action}`);
+  }
+  assert.ok(values.includes('local-db:right-sidebar-tabs:ensure-singleton'));
+  assert.ok(values.includes('local-db:subagent-runs:transcript'));
+});
+
+test('an unresolvable contract channel fails generation instead of being dropped', () => {
+  const root = fileURLToPath(new URL('../../', import.meta.url));
+  const ts = createRequire(path.join(root, 'apps/desktop/package.json'))('typescript');
+  const name = path.join(root, 'virtual-contract.ts');
+  const program = virtualProgram(ts, { [name]: [
+    "declare function pick(): string;",
+    "const KEYS = { a: 1, b: 2 } as const;",
+    "export const CHANNELS = [",
+    "  { desktopChannel: 'fixed:one' },",
+    "  ...Object.keys(KEYS).map(key => ({ desktopChannel: `keyed:${key}` })),",
+    "  ...Object.entries(KEYS).map(([key]) => ({ desktopChannel: `entry:${key}` })),",
+    "  { desktopChannel: pick() },",
+    "];",
+  ].join('\n') });
+  const { constValues } = createConstResolver(program.getTypeChecker());
+  const { values, unresolved } = collectContractChannels(program.getSourceFile(name), 'desktopChannel', constValues);
+  assert.deepEqual(values.sort(), ['entry:a', 'entry:b', 'fixed:one', 'keyed:a', 'keyed:b']);
+  assert.deepEqual(unresolved.map(entry => [entry.line, entry.expression]), [[7, 'pick()']]);
+  assert.throws(() => requireResolvedContract(unresolved), /1 channel name\(s\) the scanner cannot resolve[\s\S]*virtual-contract\.ts:7 pick\(\)/);
+  assert.doesNotThrow(() => requireResolvedContract([]));
+});
+
+test('delegation table re-reading contract entries is a pass-through, not an unresolved name', () => {
+  const root = fileURLToPath(new URL('../../', import.meta.url));
+  const ts = createRequire(path.join(root, 'apps/desktop/package.json'))('typescript');
+  const name = path.join(root, 'virtual-delegation.ts');
+  const program = virtualProgram(ts, { [name]: [
+    "declare const HOST_CONTRACT_CHANNELS: readonly { desktopChannel: string }[];",
+    "declare const OTHER: readonly { desktopChannel: string }[];",
+    "export const PROXIED = [",
+    "  ...HOST_CONTRACT_CHANNELS.map((def) => ({ channel: def.desktopChannel })),",
+    "  ...OTHER.map((def) => ({ channel: def.desktopChannel })),",
+    "  { channel: 'maker:send' },",
+    "];",
+  ].join('\n') });
+  const { constValues } = createConstResolver(program.getTypeChecker());
+  const { values, unresolved } = collectContractChannels(program.getSourceFile(name), 'channel', constValues);
+  assert.deepEqual(values, ['maker:send']);
+  // Only the shared contract is a pass-through; any other source must still resolve.
+  assert.deepEqual(unresolved.map(entry => entry.expression), ['def.desktopChannel']);
 });

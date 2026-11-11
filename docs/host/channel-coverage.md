@@ -1,7 +1,7 @@
 # Host 通道覆盖清单（脚本生成）
 
 > 由 `node scripts/host-channel-coverage.mjs` 生成，不要手工修改；行号只在 `--json` 输出里。
-> 生成时的源码提交：`270eea0cab`。归属规则见下方「归属规则」，正本在脚本的 `OWNERSHIP_RULES`。
+> 生成时的源码提交：`291a649254`。归属规则见下方「归属规则」，正本在脚本的 `OWNERSHIP_RULES`。
 
 统计对象是桌面主进程（`apps/desktop/src/main`，不含测试）里所有 `ipcMain.handle/on`
 及其包装函数注册的通道；注册、调用次数和排行均按 `(kind, channel)` 区分。
@@ -15,10 +15,10 @@
 
 | 分类 | 含义 | 通道数 |
 |---|---|---:|
-| contract | 已在 Host 通道合同里，窗口做客户端时转发给 Host | 67（巡检调用 31） |
+| contract | 已在 Host 通道合同里，窗口做客户端时转发给 Host | 75（巡检调用 33） |
 | client | 客户端模式自己的通道（连接状态、重连） | 2（巡检调用 1） |
 | **A** | 必须由后台处理：读写后台持有的数据或运行状态 | 912（巡检调用 130） |
-| **B** | 永久留在窗口：只能在 Electron／图形界面里做 | 361（巡检调用 73） |
+| **B** | 永久留在窗口：只能在 Electron／图形界面里做 | 353（巡检调用 71） |
 | **W** | 窗口本地设置：窗口直接读写同一份 profile，不经 Host | 6（巡检调用 1） |
 | **S** | 同步通道（给 `event.returnValue` 赋值）：不能转发给 Host | 14（巡检调用 11） |
 | 　S·本地 | 同步·本地（窗口读 profile：界面设置与首帧提示） | 8（巡检调用 8） |
@@ -32,9 +32,11 @@
 | 合计 | | 1456 |
 
 **窗口类**（B + W + S·本地 + C-窗口本地）在客户端模式下：
-已注册 **372**、未注册 **12**（今天被拒或无人监听，见下文）、快照无法判断 2。
+已注册 **364**、未注册 **12**（今天被拒或无人监听，见下文）、快照无法判断 2。
 
-判定依据：A:default 110、A:rule 802、B:rule 361、C:dependency 18、C:rule 70、R:rule 6、S:dependency 14、W:rule 6（rule = 规则表，dependency = 窗口 API 或同步返回值判定，default = 未登记前缀且没用窗口 API）。
+判定依据：A:default 110、A:rule 802、B:rule 353、C:dependency 18、C:rule 70、R:rule 6、S:dependency 14、W:rule 6（rule = 规则表，dependency = 窗口 API 或同步返回值判定，default = 未登记前缀且没用窗口 API）。
+
+合同一侧（`hostChannelContract.ts`、`host-delegation.ts`、客户端模式预取）的通道名全部静态解析：解析不出任何一个时脚本直接失败，不会生成本清单。
 
 转发适配器 2 处（把通道原样转给另一个注册表，通道已在调用处计入）：
 `maker-ipc/electronIpcRegistry.ts`、`maker-ipc/register.ts`
@@ -361,7 +363,7 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 
 | 行为 | 通道数 |
 |---|---:|
-| 窗口本地照常处理 | 372 |
+| 窗口本地照常处理 | 364 |
 | 被拒：UNSUPPORTED_CAPABILITY | 11 |
 | 消息无人监听（被丢弃） | 1 |
 | 注册在插件页面的 webContents.ipc 上，主进程快照不覆盖 | 2 |
@@ -440,7 +442,7 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | login-item-ipc | 0 | 0 | 2 | 0 | 0 | 0 | 0 | 2 |
 | maker-host | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 1 |
 | mcp-apps | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 1 |
-| mcp-integrations | 0 | 0 | 9 | 0 | 0 | 0 | 0 | 9 |
+| mcp-integrations | 8 | 0 | 1 | 0 | 0 | 0 | 0 | 9 |
 | menubar | 0 | 0 | 2 | 0 | 0 | 0 | 0 | 2 |
 | notificationService | 0 | 0 | 2 | 0 | 0 | 0 | 0 | 2 |
 | performance-trace | 0 | 0 | 2 | 0 | 0 | 0 | 0 | 2 |
@@ -1682,14 +1684,14 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 
 | 通道 | 类型 | 归属 | 调用次数 | 注册文件 |
 |---|---|---|---:|---|
-| `browser-backend:get-health` | invoke | B（图形能力，由窗口替 Agent 执行（平台 RPC）） | 1 | `mcp-integrations/browser.desktop.ts` |
-| `browser-backend:get-state` | invoke | B（图形能力，由窗口替 Agent 执行（平台 RPC）） | 1 | `mcp-integrations/browser.desktop.ts` |
-| `browser-backend:open-extension-store` | invoke | B（图形能力，由窗口替 Agent 执行（平台 RPC）） | 0 | `mcp-integrations/browser.desktop.ts` |
-| `browser-backend:probe-source-read` | invoke | B（图形能力，由窗口替 Agent 执行（平台 RPC）） | 0 | `mcp-integrations/browser.desktop.ts` |
-| `browser-backend:recover` | invoke | B（图形能力，由窗口替 Agent 执行（平台 RPC）） | 0 | `mcp-integrations/browser.desktop.ts` |
-| `browser-backend:reset` | invoke | B（图形能力，由窗口替 Agent 执行（平台 RPC）） | 0 | `mcp-integrations/browser.desktop.ts` |
-| `browser-backend:set-kind` | invoke | B（图形能力，由窗口替 Agent 执行（平台 RPC）） | 0 | `mcp-integrations/browser.desktop.ts` |
-| `browser-backend:set-use-real-profile` | invoke | B（图形能力，由窗口替 Agent 执行（平台 RPC）） | 0 | `mcp-integrations/browser.desktop.ts` |
+| `browser-backend:get-health` | invoke | contract | 1 | `mcp-integrations/browser.desktop.ts` |
+| `browser-backend:get-state` | invoke | contract | 1 | `mcp-integrations/browser.desktop.ts` |
+| `browser-backend:open-extension-store` | invoke | contract | 0 | `mcp-integrations/browser.desktop.ts` |
+| `browser-backend:probe-source-read` | invoke | contract | 0 | `mcp-integrations/browser.desktop.ts` |
+| `browser-backend:recover` | invoke | contract | 0 | `mcp-integrations/browser.desktop.ts` |
+| `browser-backend:reset` | invoke | contract | 0 | `mcp-integrations/browser.desktop.ts` |
+| `browser-backend:set-kind` | invoke | contract | 0 | `mcp-integrations/browser.desktop.ts` |
+| `browser-backend:set-use-real-profile` | invoke | contract | 0 | `mcp-integrations/browser.desktop.ts` |
 | `rsb-browser-bridge:set-active-session` | invoke | B（图形能力，由窗口替 Agent 执行（平台 RPC）） | 0 | `mcp-integrations/browser.desktop.ts` |
 
 ### menubar
