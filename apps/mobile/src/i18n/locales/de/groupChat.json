@@ -13,7 +13,7 @@
   "organizer": "Organisator",
   "waitingConfirm": "{{name}} wartet auf dein Okay",
   "loadFailedTitle": "Dieser Gruppenchat konnte nicht geladen werden",
-  "loadFailedDescription": "Dieser Gruppenchat kann gerade nicht von deinem Computer gelesen werden. Versuche es erneut oder gehe zurück zu Teammitglieder.",
+  "loadFailedDescription": "Dieser Gruppenchat kann gerade nicht von deinem Computer gelesen werden. Versuche es erneut oder geh zurück zu den Teammitgliedern.",
   "unavailableTitle": "Dieser Gruppenchat ist nicht mehr verfügbar",
   "unavailableDescription": "Er wurde möglicherweise gelöscht. Geh zurück zu den Teammitgliedern, um einen anderen Gruppenchat oder ein Teammitglied zu öffnen.",
   "list": {
@@ -62,7 +62,7 @@
     "placeholderDivision": "Beschreibe, was erledigt werden soll. Der Organisator teilt zuerst die Arbeit auf…",
     "placeholderPlanProposed": "Sag einfach, wenn du die Aufgabenverteilung ändern möchtest…",
     "placeholderPlanWaiting": "Soll {{name}} etwas ändern? Sag es einfach…",
-    "placeholderPlanRunning": "Deine Nachricht geht an {{name}}, der gerade daran arbeitet…",
+    "placeholderPlanRunning": "{{name}} arbeitet gerade daran und erhält deine Nachricht…",
     "send": "Senden"
   },
   "timeline": {
@@ -106,7 +106,7 @@
     "runtimeFailureReason": {
       "unclaimed_timeout": {
         "summary": "{{name}} hat die Verarbeitung nicht innerhalb der Wartezeit begonnen. Diese Anfrage ist beendet.",
-        "advice": "Bitte den Besitzer des Partners zu prüfen, ob Cindy auf dem zugehörigen Computer läuft und eine Netzwerkverbindung besteht.",
+        "advice": "Bitte den Besitzer des Teammitglieds, zu prüfen, ob Cindy auf dem zugehörigen Computer läuft und eine Netzwerkverbindung besteht.",
         "details": "Sobald Cindy und das Netzwerk wieder funktionieren, sende die Nachricht erneut."
       }
     },
@@ -211,9 +211,9 @@
     "stepSkipped": "Übersprungen",
     "skippingTurn": "Wird übersprungen…",
     "queueWaiting": "Wartet auf Fortsetzen",
-    "skipTurnLabel": "Überspringen {{name}}",
+    "skipTurnLabel": "{{name}} überspringen",
     "stepSpoken": "Fertig",
-    "allTurns_one": "Alle {{count}} Teammitglied",
+    "allTurns_one": "{{count}} Teammitglied",
     "allTurns_other": "Alle {{count}} Teammitglieder",
     "foldTurns": "Weniger anzeigen",
     "talkTitle": "Nacheinander zu Wort kommen",
@@ -267,7 +267,7 @@
     "speakingMode": "Sprechreihenfolge",
     "speakingModeAuto": "Automatisch",
     "speakingModeSequential": "Nacheinander",
-    "speakingModeAutoNote": "Ohne Erwähnung oder mit @Alle Teammitglieder denken alle gleichzeitig und antworten nacheinander. Sonst gilt die Reihenfolge der Erwähnungen.",
+    "speakingModeAutoNote": "Ohne Erwähnung oder mit @Alle Teammitglieder denken in der ersten Runde alle gleichzeitig nach und antworten dann nacheinander. Erwähnte Teammitglieder antworten in der Reihenfolge ihrer Erwähnung.",
     "speakingModeSequentialNote": "Jeweils ein Teammitglied spricht und sieht dabei alle vorherigen Antworten.",
     "speakingModeSaveFailed": "Die Sprechreihenfolge konnte nicht gespeichert werden. Versuch es erneut.",
     "setOrganizer": "Zum Organisator machen",
@@ -285,7 +285,7 @@
     "makeAdmin": "Zum Admin machen",
     "removeAdmin": "Adminrolle entfernen",
     "roles": {
-      "owner": "Eigentümer",
+      "owner": "Inhaber",
       "admin": "Admin",
       "member": "Mitglied",
       "guest": "Gast"
@@ -301,11 +301,11 @@
       "all": "Alle Nachrichten",
       "mentions": "Nur Erwähnungen",
       "none": "Aus",
-      "allHint": "Erhalte Benachrichtigungen über Gruppennachrichten und neue Antworten in abonnierten Themen.",
-      "mentionsHint": "Erhalte Benachrichtigungen, wenn du erwähnt wirst, auch bei @alle. Aktualisierungen zur Arbeitsteilung werden weiterhin gemeldet.",
+      "allHint": "Erhalte Benachrichtigungen über Gruppennachrichten und neue Antworten in abonnierten Threads.",
+      "mentionsHint": "Erhalte Benachrichtigungen, wenn du erwähnt wirst, auch bei @alle. Aktualisierungen zur Arbeitsaufteilung werden weiterhin gemeldet.",
       "noneHint": "Deaktiviere alle Systembenachrichtigungen für diese Gruppe. Ungelesene Nachrichten bleiben erhalten.",
       "saving": "Wird gespeichert…",
-      "saveFailed": "Benachrichtigungen konnten nicht gespeichert werden. Versuche es erneut."
+      "saveFailed": "Benachrichtigungseinstellungen konnten nicht gespeichert werden. Versuche es erneut."
     }
   },
   "errors": {
@@ -332,7 +332,7 @@
     "groupDissolved": "Diese Gruppe wurde aufgelöst. Du kannst den verfügbaren Verlauf weiterhin lesen.",
     "lastOwner": "Übertrage die Inhaberschaft oder löse diese Gruppe auf, bevor du sie verlässt.",
     "allBotsMentionDisabled": "Der Gruppeninhaber hat @Alle Teammitglieder noch nicht aktiviert.",
-    "turnAlreadyStarted": "Dieser Teamkollege hat bereits begonnen und kann nicht übersprungen werden",
+    "turnAlreadyStarted": "Dieses Teammitglied hat bereits begonnen und kann nicht übersprungen werden",
     "stopOwnershipUnknown": "Ein Teil der Arbeit konnte nicht gestoppt werden, da nicht überprüft werden konnte, wer sie angefordert hat.",
     "nothingToStop": "Es gibt keine laufende Arbeit zum Stoppen."
   },
@@ -385,12 +385,12 @@
     "expandRoot": "Ursprüngliche Nachricht aufklappen",
     "collapseRoot": "Ursprüngliche Nachricht einklappen",
     "backToGroup": "Zurück zur Gruppe",
-    "remoteUnavailable": "Threads sind auf dem Computer noch nicht verfügbar. Du kannst auf diesem Computer zur Gruppe zurückkehren.",
+    "remoteUnavailable": "Threads sind über eine Computerverbindung noch nicht verfügbar. Du kannst auf diesem Computer zur Gruppe zurückkehren.",
     "unavailableTitle": "Dieser Thread ist nicht verfügbar",
     "rootUnavailable": "Die ursprüngliche Nachricht wurde gelöscht oder ist nicht verfügbar. Antworten sind deaktiviert.",
     "archived": "Diese Gruppe ist archiviert. Du kannst keine Nachrichten senden.",
     "follow": "Folgen",
-    "following": "Gefolgt",
+    "following": "Folge ich",
     "alsoSend": "Auch an Hauptchat senden",
     "sharedOwn": "In einem Thread geantwortet und auch hier gesendet",
     "sharedOther": "Thread-Antwort von {{name}} geteilt",
@@ -415,11 +415,11 @@
     "actions": "Nachrichtenaktionen",
     "copy": "Kopieren",
     "lastMinutes": "Vor {{count}} Min.",
-    "lastHours": "vor {{count}} Std.",
+    "lastHours": "Vor {{count}} Std.",
     "dismiss": "Schließen",
     "selected": "Ausgewählt",
     "select": "Nachricht auswählen",
-    "sidebarOwn": "Du hast eine Antwort aus einem Thema geteilt",
+    "sidebarOwn": "Du hast eine Thread-Antwort geteilt",
     "sidebarOther": "{{name}} hat eine Thread-Antwort geteilt",
     "shareFailed_many": "{{count}} Antworten sind im Thread, konnten aber nicht an den Hauptchat gesendet werden."
   },
@@ -484,7 +484,7 @@
     "attribution": "{{name}} hat für {{owner}} geantwortet",
     "digestNow": "Jetzt zusammenfassen",
     "digestWorking": "Wird zusammengefasst…",
-    "digestSent": "An deinen Teammitglied-Chat gesendet",
+    "digestSent": "An den Chat mit deinem Teammitglied gesendet",
     "digestFailed": "Zusammenfassung fehlgeschlagen. Versuch es erneut.",
     "digestEmpty": "Nichts Neues zum Zusammenfassen",
     "access": {
@@ -520,8 +520,8 @@
     "myTeammates": "Deine Teammitglieder",
     "myTeammatesCaption": "Wähle, wie andere Mitglieder deine Teammitglieder nutzen dürfen.",
     "manage": "Gruppenverwaltung",
-    "manageHintOwner": "Antworten, Koordination, Arbeitsteilung, Archivieren und Auflösen",
-    "manageHintAdmin": "Antworten, Koordination, Arbeitsteilung und Archivieren",
+    "manageHintOwner": "Antworten, Organisator, Arbeitsaufteilung, Archivieren und Auflösen",
+    "manageHintAdmin": "Antworten, Organisator, Arbeitsaufteilung und Archivieren",
     "manageCaption": "Nur der Gruppeninhaber und Admins können diese Seite sehen.",
     "hideHint": "Du bleibst in der Gruppe; sie wird nur aus deiner Liste ausgeblendet",
     "leaveRowHint": "Deine Teammitglieder verlassen die Gruppe mit dir",
@@ -538,7 +538,7 @@
     "accessTools": "Kann Tools und Informationen nutzen",
     "replies": "Antwortverhalten der Teammitglieder",
     "replyModeMentionedNote": "Teammitglieder bleiben still, solange sie niemand mit @ erwähnt.",
-    "work": "Arbeitsteilung",
+    "work": "Arbeitsaufteilung",
     "organizerHint": "Legt fest, wer die einzelnen Schritte übernimmt. Standardmäßig das erste Teammitglied.",
     "ownFolder": "Gruppeneigener Ordner",
     "archive": "Gruppe archivieren",
@@ -608,7 +608,7 @@
     "alreadyMember": "Du bist bereits in dieser Gruppe.",
     "openGroup": "Gruppe öffnen",
     "editLink": "Link bearbeiten",
-    "otherInvitation": "Diese Einladung wurde nicht durch eine andere ersetzt. Öffne ihren ursprünglichen Link erneut, um sie anzusehen.",
+    "otherInvitation": "Die andere Einladung hat diese nicht ersetzt. Um die andere Einladung anzusehen, öffne ihren ursprünglichen Link erneut.",
     "countUnknown": "Mitgliederzahl nicht verfügbar",
     "until": "Gültig bis {{date}}",
     "retryAccept": "Beitritt erneut versuchen",

@@ -15,7 +15,7 @@
   "loadFailedTitle": "Impossible de charger ce groupe",
   "loadFailedDescription": "Impossible de lire cette conversation de groupe depuis votre ordinateur pour le moment. Réessayez, ou revenez à Coéquipiers.",
   "unavailableTitle": "Ce groupe n'est plus disponible",
-  "unavailableDescription": "Elle a peut-être été supprimée. Revenez à Coéquipiers pour ouvrir une autre conversation de groupe ou un autre coéquipier.",
+  "unavailableDescription": "Il a peut-être été supprimé. Revenez à Coéquipiers pour ouvrir une autre conversation de groupe ou un autre coéquipier.",
   "list": {
     "noMessages": "Aucun message",
     "empty": "Aucune conversation de groupe pour l'instant. Touchez + pour réunir quelques coéquipiers.",
@@ -109,7 +109,7 @@
     "runtimeFailureReason": {
       "unclaimed_timeout": {
         "summary": "{{name}} n’a pas commencé le traitement dans le délai d’attente. Cette demande est terminée.",
-        "advice": "Demandez au propriétaire du partenaire de vérifier que Cindy fonctionne et que son ordinateur est connecté au réseau.",
+        "advice": "Demandez au propriétaire du coéquipier de vérifier que Cindy fonctionne et que son ordinateur est connecté au réseau.",
         "details": "Une fois Cindy et le réseau rétablis, renvoyez le message."
       }
     },
@@ -258,7 +258,7 @@
     "minMembers": "Une conversation de groupe nécessite au moins {{min}} coéquipiers",
     "maxMembers": "Jusqu'à {{max}}",
     "noMoreBots": "Aucun autre coéquipier n'est disponible à l'ajout",
-    "nameSaveFailed": "Impossible d'enregistrer le nom du groupe. Votre saisie a été conservée. Veuillez réessayer.",
+    "nameSaveFailed": "Impossible d'enregistrer le nom du groupe. Votre saisie a été conservée. Réessayez.",
     "membersSaveFailed": "Impossible de mettre à jour les membres. Réessayez.",
     "replyMode": "Quand personne n'est @mentionné",
     "replyModeAll": "Tout le monde",
@@ -300,7 +300,7 @@
       "loading": "Chargement des paramètres…",
       "unavailable": "Impossible de charger les paramètres du groupe. Réessayez."
     },
-    "allowMentionAllBots": "Autoriser @tous les coéquipiers",
+    "allowMentionAllBots": "Autoriser @Tous les coéquipiers",
     "allowMentionAllBotsHint": "Seul le propriétaire du groupe peut le modifier. Tous les coéquipiers peuvent répondre : prudence en grand groupe. Sans effet sur l’IA qui répond pour vous.",
     "notifications": {
       "title": "Notifications de messages",
@@ -362,7 +362,7 @@
     "attachmentPreviewOpenOutside": "Ouvrir dans le navigateur",
     "attachmentPreviewClose": "Fermer l'aperçu de la pièce jointe",
     "previewUnavailable": "Aperçu indisponible",
-    "endpointUnavailable": "La configuration du service de conversation de groupe est indisponible. Veuillez réessayer."
+    "endpointUnavailable": "La configuration du service de conversation de groupe est indisponible. Réessayez."
   },
   "lifecycle": {
     "dissolve": "Dissoudre le groupe",
@@ -473,7 +473,7 @@
       "paused": "Vous avez pris le relais de cet échange",
       "off": "Les réponses automatiques sont désactivées",
       "offline": "Réponses en pause · Ordinateur hors ligne",
-      "waiting": "En attente de votre démarrage",
+      "waiting": "En attente de démarrage manuel",
       "unbound": "Aucun coéquipier sélectionné",
       "enabled": "Votre coéquipier est prêt à répondre à votre place."
     },
@@ -542,7 +542,7 @@
     "teammateTag": "Coéquipier",
     "paused": "En pause",
     "accessNone": "Propriétaire uniquement",
-    "accessChat": "Discussion de groupe uniquement",
+    "accessChat": "Conversation de groupe uniquement",
     "accessTools": "Peut utiliser les outils et les informations",
     "replies": "Mode de réponse des coéquipiers",
     "replyModeMentionedNote": "Les coéquipiers restent silencieux, sauf si quelqu’un les @mentionne.",
@@ -616,7 +616,7 @@
     "alreadyMember": "Vous êtes déjà dans ce groupe.",
     "openGroup": "Ouvrir le groupe",
     "editLink": "Modifier le lien",
-    "otherInvitation": "Une autre invitation n'a pas remplacé celle-ci. Pour le visualiser, rouvrez son lien d'origine.",
+    "otherInvitation": "Une autre invitation n'a pas remplacé celle-ci. Pour la consulter, rouvrez son lien d'origine.",
     "countUnknown": "Nombre de membres indisponible",
     "until": "Valable jusqu'au {{date}}",
     "retryAccept": "Réessayer de rejoindre",

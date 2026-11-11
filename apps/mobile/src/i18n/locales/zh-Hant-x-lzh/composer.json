@@ -93,7 +93,7 @@
     "realtimeProtocolUnsupported": "手機版即時聲之輸入暫不支援 {{detail}} ASR 協議。",
     "missingConnectionProvider": "聲之服務暫不可用，請重新登門 {{appName}} 後再試。",
     "realtimeAsrFailed": "即時語音識別未成。",
-    "volcengineAuthUnsupported": "手機版 Volcengine 語音，暫不支 {{auth}} 鑑權。",
+    "volcengineAuthUnsupported": "手機版 Volcengine 語音暫不支援 {{auth}} 鑑權。",
     "volcengineMissingResourceId": "Volcengine ASR 配置缺 resourceId。",
     "sessionExpiredOrForbidden": "{{appName}} 聲之服務之登門已失效或無權柄，請確認登門之狀後再試（狀態碼 {{status}}）。",
     "incomplete": "聲之輸入未畢，請再試。",

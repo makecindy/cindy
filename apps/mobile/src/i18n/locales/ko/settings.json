@@ -204,14 +204,14 @@
   },
   "devServerEnvironment": {
     "title": "서버 환경",
-    "description": "CindyDev가 연결하는 업무 서버에만 영향을 줍니다",
+    "description": "CindyDev가 연결하는 백엔드 서버에만 영향을 줍니다",
     "accessibility": "서버 환경 전환",
     "options": {
       "dev": "Dev",
       "release": "Release"
     },
     "confirmTitle": "{{environment}} 환경으로 전환할까요?",
-    "confirmBody": "전환하면 현재 계정에서 로그아웃되고 App이 다시 시작됩니다.",
+    "confirmBody": "전환하면 현재 계정에서 로그아웃되고 앱이 다시 시작됩니다.",
     "cancel": "취소",
     "switchAction": "전환",
     "switching": "전환 중",

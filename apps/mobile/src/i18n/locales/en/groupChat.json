@@ -142,7 +142,7 @@
         "details": "Send your message again later, or choose another available model."
       },
       "UPSTREAM_OVERLOADED": {
-        "summary": "{{name}} couldn't reply: the model service is temporarily overloaded.",
+        "summary": "{{name}} couldn’t reply: the model service is temporarily overloaded.",
         "advice": "Send your message again later.",
         "details": "Try sending again later, or choose another available model."
       },
@@ -263,7 +263,7 @@
     "minMembers": "A group chat needs at least {{min}} teammates",
     "maxMembers": "Up to {{max}}",
     "noMoreBots": "No other teammates are available to add",
-    "nameSaveFailed": "The group name could not be saved. Your input was kept. Please retry.",
+    "nameSaveFailed": "Couldn’t save the group name. Your input was kept. Try again.",
     "membersSaveFailed": "Couldn’t update members. Try again.",
     "replyMode": "When No One Is @Mentioned",
     "replyModeAll": "Anyone Can Reply",
@@ -278,9 +278,9 @@
     "speakingMode": "Speaking order",
     "speakingModeAuto": "Automatic",
     "speakingModeSequential": "One at a time",
-    "speakingModeAutoNote": "No mentions or @All teammates: think simultaneously on the first pass, then reply one by one. Mentioned teammates reply in mention order.",
+    "speakingModeAutoNote": "When no one is mentioned or you use @all teammates, teammates think at the same time on the first pass, then reply one by one. Mentioned teammates reply in mention order.",
     "speakingModeSequentialNote": "One teammate speaks at a time, and each one sees the replies before it.",
-    "speakingModeSaveFailed": "Couldn't save the speaking order. Try again.",
+    "speakingModeSaveFailed": "Couldn’t save the speaking order. Try again.",
     "setOrganizer": "Make Organizer",
     "setOrganizerNamed": "Make {{name}} the organizer",
     "organizerNote": "The organizer decides who does each step. By default, it’s the first teammate.",
@@ -338,7 +338,7 @@
   },
   "followUp": {
     "next": "Plan · Next step",
-    "failedStep": "Step {{step}} didn't finish"
+    "failedStep": "Step {{step}} didn’t finish"
   },
   "server": {
     "attachmentTooLarge": "Group attachments must be {{size}} MB or smaller. Choose a smaller file.",
@@ -356,7 +356,7 @@
     "attachmentPreviewOpenOutside": "Open in browser",
     "attachmentPreviewClose": "Close attachment preview",
     "previewUnavailable": "Preview unavailable",
-    "endpointUnavailable": "Group chat service configuration is unavailable. Please retry."
+    "endpointUnavailable": "Group chat service configuration is unavailable. Try again."
   },
   "lifecycle": {
     "dissolve": "Dissolve group",
@@ -395,7 +395,7 @@
     "sharedOwn": "Replied in a thread and also sent here",
     "sharedOther": "Shared a thread reply from {{name}}",
     "edited": "Edited",
-    "sourceUnavailable": "The original reply was deleted or isn't available to you.",
+    "sourceUnavailable": "The original reply was deleted or isn’t available to you.",
     "sourceLoading": "Loading the original reply…",
     "showInGroup": "View in main chat",
     "shareToGroup": "Post to main chat",
@@ -406,7 +406,7 @@
     "newRepliesDivider": "New",
     "newReplies_one": "{{count}} new reply",
     "newReplies_other": "{{count}} new replies",
-    "shareFailed": "Your reply is in the thread, but it couldn't be sent to the main chat.",
+    "shareFailed": "Your reply is in the thread, but it couldn’t be sent to the main chat.",
     "followFailed": "Could not update following. Try again.",
     "posting": "Posting to the group…",
     "shareStopped": "Access changed. Posting to the group has stopped.",
@@ -421,7 +421,7 @@
     "select": "Select message",
     "sidebarOwn": "You shared a thread reply",
     "sidebarOther": "{{name}} shared a thread reply",
-    "shareFailed_many": "{{count}} replies are in the thread, but they couldn't be sent to the main chat."
+    "shareFailed_many": "{{count}} replies are in the thread, but they couldn’t be sent to the main chat."
   },
   "mask": {
     "toolAccess": "Tool access",
@@ -448,10 +448,10 @@
     "todos": "Collect my to-dos",
     "digestLabel": "Send me a digest",
     "saving": "Saving…",
-    "saveError": "Couldn't save. Your previous settings still apply. Retry.",
+    "saveError": "Couldn’t save. Your previous settings still apply. Try again.",
     "retry": "Retry",
     "loading": "Loading your settings…",
-    "takeover": "I'll reply",
+    "takeover": "I’ll reply",
     "resume": "Resume AI replies",
     "status": {
       "enabled": "Enabled",
@@ -462,7 +462,7 @@
       "unbound": "Not set"
     },
     "detail": {
-      "paused": "You've taken over this exchange",
+      "paused": "You’ve taken over this exchange",
       "off": "Automatic replies are off",
       "offline": "Replies paused · Computer offline",
       "waiting": "Waiting for you to start",
@@ -479,7 +479,7 @@
       "manual": "Manually"
     },
     "minutes": "{{count}} minutes",
-    "presence": "You're here · Resumes after {{minutes}} min away",
+    "presence": "You’re here · Resumes after {{minutes}} min away",
     "scheduledWait": "Starts at {{time}}",
     "attribution": "{{name}} replied for {{owner}}",
     "digestNow": "Summarize now",
@@ -489,7 +489,7 @@
     "digestEmpty": "Nothing new to summarize",
     "access": {
       "chat": "Group conversation only",
-      "tools": "Owner authorized tools and information",
+      "tools": "Owner-authorized tools and information",
       "authorizeTitle": "Allow this group to use {{name}}’s tools and information?",
       "toolsHint": "Members may use this companion’s existing tools and private information. Results are visible to everyone. Existing approval rules still apply. Revoking stops active requests, but cannot undo completed actions.",
       "confirm": "Confirm"
@@ -497,8 +497,8 @@
   },
   "groupSettings": {
     "tabSettings": "Settings",
-    "youAreOwner": "You're the owner",
-    "youAreAdmin": "You're an admin",
+    "youAreOwner": "You’re the owner",
+    "youAreAdmin": "You’re an admin",
     "inviteEntry": "Invite",
     "inviteFriendsItem": "Invite people",
     "inviteFriendsItemHint": "Get a link to share",
@@ -509,7 +509,7 @@
     "inviteBotsAllIn": "All your teammates are already here",
     "inviteBotsNoMatch": "No teammates match “{{query}}”",
     "inviteBotsAdded": "Added {{name}} to the group",
-    "noTeammates": "You don't have a teammate yet",
+    "noTeammates": "You don’t have a teammate yet",
     "about": "About",
     "edit": "Edit",
     "add": "Add",
@@ -525,7 +525,7 @@
     "manageCaption": "Only the owner and admins can see this page.",
     "hideHint": "Stay in the group, just hide it from your list",
     "leaveRowHint": "Your teammates leave with you",
-    "leaveRowHintAlone": "You'll stop getting messages and lose access to the history",
+    "leaveRowHintAlone": "You’ll stop getting messages and lose access to the history",
     "leaveBlocked": "Transfer ownership before you leave",
     "searchMembers": "Search members",
     "membersNoMatch": "No members match “{{query}}”",
@@ -542,7 +542,7 @@
     "organizerHint": "Decides who does each step. Defaults to the first teammate.",
     "ownFolder": "Group's own folder",
     "archive": "Archive Group",
-    "unarchive": "Unarchive group",
+    "unarchive": "Unarchive Group",
     "archiveHint": "Archiving disables this group for all members, stopping new messages and teammate runs. History is kept. Search for the group to view its history or unarchive it.",
     "unarchiveHint": "Resume messages and companion activity.",
     "archiveRowHint": "Pauses the group for everyone; history is kept",
@@ -581,7 +581,7 @@
     "reusableLink": "No expiration · Reusable by multiple people",
     "singleUseUntil": "Single use · Expires {{date}}",
     "copyFailed": "Could not copy. Select the link and copy it manually.",
-    "changeAvatar": "Change group photo",
+    "changeAvatar": "Change your group photo",
     "resetAvatar": "Use default photo",
     "avatarFailed": "Couldn't change your group photo. Try again.",
     "inviteLinkNote": "Send the link to a friend. They join after confirming.",
@@ -595,7 +595,7 @@
     "yourTeammate": "Your teammate"
   },
   "invitation": {
-    "join": "Join group",
+    "join": "Join Group",
     "joinDescription": "Paste an invitation link or code to continue.",
     "inviteLink": "Invitation link",
     "pasteLink": "Paste invitation link",
