@@ -3,6 +3,16 @@ import type { AgentKind, DiscoveredModel, DiscoveredModelSource, Provider } from
 
 const key = randomBytes(32);
 const sourceEpoch = randomUUID();
+
+/** Background CAS recovery needs display freshness, not Settings write authority. */
+export function stampRecoveredModelSources(models: DiscoveredModel[]): DiscoveredModel[] {
+  const snapshotId = `${sourceEpoch}:${randomUUID()}`;
+  return models.map(model => {
+    const { discoverySnapshotId: _receipt, ...rest } = model;
+    return model.discoveredSource
+      ? { ...rest, discoveredSource: { ...model.discoveredSource, snapshotId } } : rest;
+  });
+}
 const receipts = new Map<string, {
   signature: string;
   agent: AgentKind;

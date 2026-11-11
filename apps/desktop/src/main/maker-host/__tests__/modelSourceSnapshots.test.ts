@@ -48,6 +48,50 @@ const savedGateway = (): CustomProviderConfig => ({
 });
 
 describe('model source automatic revalidation', () => {
+  // #9882, unit: generation repair must not erase server cooldown, whereas
+  // real owner/credential/endpoint changes must not inherit another connection's deadline.
+  it.each(['owner', 'credential', 'endpoint', 'deadline'] as const)('preserves repaired-owner cooldown until %s changes', async change => {
+    const config = savedGateway();
+    let now = 0;
+    let revision = 0;
+    const fetchModels = vi.fn(async () => ({ retryAt: 900_000 }));
+    const revalidate = createModelSourceRevalidator({ fetchModels, save: async () => false, now: () => now,
+      credentialRevision: () => revision, isMutating: () => false });
+    await revalidate([config], 'generation-1', () => true, 'owner-A');
+    now = 300_000;
+    await revalidate([config], 'generation-2', () => true, 'owner-A');
+    expect(fetchModels).toHaveBeenCalledTimes(1);
+    if (change === 'credential') revision++;
+    if (change === 'endpoint') config.runtimes.pi!.baseUrl += '/new';
+    if (change === 'deadline') now = 900_000;
+    await revalidate([config], 'generation-3', () => true, change === 'owner' ? 'owner-B' : 'owner-A');
+    expect(fetchModels).toHaveBeenCalledTimes(2);
+  });
+
+  // #9882, unit: deferred network reads measure real fetch concurrency across
+  // overlapping loads; queued old-owner work must not issue requests after a switch.
+  it.each([false, true])('bounds overlapping reads with queued owner invalidation %s', async invalidate => {
+    const configs = Array.from({ length: 8 }, (_, i) => ({ ...savedGateway(), id: `gateway-${i}` }));
+    const releases: Array<() => void> = [];
+    let active = 0; let peak = 0; let current = true; let released = false;
+    const fetchModels = vi.fn(async () => {
+      active++; peak = Math.max(peak, active);
+      if (!released) await new Promise<void>(resolve => releases.push(resolve));
+      active--; return null;
+    });
+    const revalidate = createModelSourceRevalidator({ fetchModels, save: async () => false, now: () => 0,
+      credentialRevision: () => 0, isMutating: () => false });
+    const first = revalidate(configs, 'scope', () => current);
+    const shared = revalidate(configs, 'scope', () => current);
+    await Promise.resolve(); await Promise.resolve();
+    expect(fetchModels).toHaveBeenCalledTimes(4);
+    current = !invalidate; released = true;
+    releases.splice(0).forEach(release => release());
+    await Promise.all([first, shared]);
+    expect(fetchModels).toHaveBeenCalledTimes(invalidate ? 4 : 8);
+    expect(peak).toBe(4);
+  });
+
   // #9882, unit: production revalidator must retain a server deadline while
   // releasing successful rows; old tests covered only the fixed failure cooldown.
   it('retains the server deadline after a different runtime succeeds', async () => {

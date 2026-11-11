@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { acceptsModelSourceSnapshot, modelSourceRequestSignature } from '../model-source-snapshots.js';
+import { acceptsModelSourceSnapshot, isCurrentModelSource, modelSourceRequestSignature } from '../model-source-snapshots.js';
 
 import {
   buildModelsFetchRequest,
@@ -27,6 +27,23 @@ function fakeResponse(status: number, body: string): Response {
 }
 
 describe('import discovery limits', () => {
+  // #9882, unit: background discovery must not evict a pending Settings receipt
+  // or authorize a Settings commit. 33 recoveries cross the existing receipt cap.
+  it('keeps background freshness separate from Settings receipts', async () => {
+    const request = spec({ requireComplete: true });
+    const fetcher = async () => fakeResponse(200, JSON.stringify({ data: [{ id: 'a/foo', owned_by: 'A', magpie_label: 'Foo · A' }] }));
+    const manual = (await fetchProviderModels(request, fetcher)).models![0];
+    const { url, init } = buildModelsFetchRequest(request);
+    const signature = modelSourceRequestSignature(url, init);
+    for (let i = 0; i < 33; i++) {
+      const model = (await fetchProviderModels({ ...request, sourceRecovery: true }, fetcher)).models![0];
+      expect(isCurrentModelSource(model.discoveredSource)).toBe(true);
+      expect(model.discoverySnapshotId).toBeUndefined();
+      expect(acceptsModelSourceSnapshot(model.id, model.discoveredSource, 'saved', request.agent, signature)).toBe(false);
+    }
+    expect(acceptsModelSourceSnapshot(manual.id, manual.discoveredSource, 'saved', request.agent, signature)).toBe(true);
+  });
+
   // #9882, unit: preserve Retry-After through the real first/paginated fetch
   // failure result; existing HTTP tests asserted only classification.
   it.each(['900', 'Wed, 11 Nov 2026 10:15:00 GMT', 'invalid'])(

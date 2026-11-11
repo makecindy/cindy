@@ -3,6 +3,7 @@ import { isCurrentModelSource, modelSourceRequestSignature } from './model-sourc
 
 const AGENTS = ['claude-code', 'codex', 'pi'] as const;
 const FAILURE_RETRY_MS = 5 * 60_000;
+const MAX_PARALLEL_DISCOVERIES = 4;
 
 interface ModelSourceRevalidationDeps {
   fetchModels(config: CustomProviderConfig, agent: AgentKind, isCurrent: () => boolean): Promise<DiscoveredModel[] | null | { retryAt: number }>;
@@ -16,15 +17,33 @@ interface ModelSourceRevalidationDeps {
  * Concurrent catalog loads share discovery; failed reads retry only on a later
  * load after a cooldown. No timer or credential persistence. */
 export function createModelSourceRevalidator(deps: ModelSourceRevalidationDeps) {
+  // Shared across overlapping loads and owner changes, including pagination.
+  let running = 0;
+  const waiting: Array<() => void> = [];
+  async function discover(work: () => ReturnType<ModelSourceRevalidationDeps['fetchModels']>) {
+    if (running >= MAX_PARALLEL_DISCOVERIES) await new Promise<void>(resolve => waiting.push(resolve));
+    else running++;
+    try { return await work(); } finally {
+      const next = waiting.shift();
+      if (next) next(); else running--;
+    }
+  }
+  // Deadlines contain no model data. Session generation invalidates writes and
+  // in-flight reuse, but not a server cooldown for an unchanged owner/connection.
+  const deadlines = new Map<string, { signature: string; retryAt: number }>();
+  let activeOwner: string | undefined;
   const reads = new Map<string, {
     signature: string;
     retryAt: number;
     promise: Promise<Array<{ agent: AgentKind; models: DiscoveredModel[] | null }>>;
   }>();
   let activeScope: string | undefined;
-  return async (configs: readonly CustomProviderConfig[], scope: string, ownerIsCurrent: () => boolean): Promise<boolean> => {
+  return async (configs: readonly CustomProviderConfig[], scope: string, ownerIsCurrent: () => boolean, ownerKey = scope): Promise<boolean> => {
     if (!ownerIsCurrent()) return false;
+    if (activeOwner !== ownerKey) { deadlines.clear(); activeOwner = ownerKey; }
     if (activeScope !== scope) { reads.clear(); activeScope = scope; }
+    const ids = new Set(configs.map(config => config.id));
+    for (const id of deadlines.keys()) if (!ids.has(id)) deadlines.delete(id);
     const results = await Promise.all(configs.map(async config => {
       const agents = AGENTS.filter(agent => config.runtimes[agent]?.models.some(model =>
         model.discoveredSource && !isCurrentModelSource(model.discoveredSource)));
@@ -41,11 +60,16 @@ export function createModelSourceRevalidator(deps: ModelSourceRevalidationDeps) 
         return runtime && [agent, runtime.baseUrl, runtime.modelsUrl, runtime.wireProtocol, runtime.headersState, runtime.headers];
       });
       const signature = modelSourceRequestSignature(JSON.stringify([scope, revision, config.auth, requests]), {});
+      const deadlineSignature = modelSourceRequestSignature(JSON.stringify([ownerKey, revision, config.auth, requests]), {});
+      const deadline = deadlines.get(config.id);
+      if (deadline && deadline.signature !== deadlineSignature) deadlines.delete(config.id);
+      else if (deadline && deps.now() < deadline.retryAt) return false;
       let read = reads.get(config.id);
       if (!read || read.signature !== signature || deps.now() >= read.retryAt) {
         let retryAt = 0;
         const promise = Promise.all(agents.map(async agent => {
-          const result = await Promise.resolve().then(() => isCurrent() ? deps.fetchModels(config, agent, isCurrent) : null).catch(() => null);
+          const result = await Promise.resolve().then(() => discover(async () =>
+            isCurrent() ? deps.fetchModels(config, agent, isCurrent) : null)).catch(() => null);
           if (result && !Array.isArray(result)) retryAt = Math.max(retryAt, result.retryAt);
           // Retain only source fields for saved IDs, never the full catalog.
           const ids = new Set(config.runtimes[agent]!.models.map(model => model.id));
@@ -57,7 +81,10 @@ export function createModelSourceRevalidator(deps: ModelSourceRevalidationDeps) 
         reads.set(config.id, read);
         const entry = read;
         void promise.then(rows => {
-          if (rows.some(row => row.models === null)) entry.retryAt = Math.max(deps.now() + FAILURE_RETRY_MS, retryAt);
+          if (rows.some(row => row.models === null)) {
+            entry.retryAt = Math.max(deps.now() + FAILURE_RETRY_MS, retryAt);
+            if (isCurrent() && activeOwner === ownerKey) deadlines.set(config.id, { signature: deadlineSignature, retryAt: entry.retryAt });
+          }
         });
       }
       const rows = await read.promise;

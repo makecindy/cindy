@@ -663,7 +663,7 @@ const revalidateModelSources = createModelSourceRevalidator({
       return outboundFetch(url, init);
     };
     if (config.auth?.method === 'oauth') {
-      const result = await fetchSavedOAuthProviderModels(buildUserProvider(config), agent, config.id, isCurrent, guardedFetch, runtime.headers, { requireComplete: true });
+      const result = await fetchSavedOAuthProviderModels(buildUserProvider(config), agent, config.id, isCurrent, guardedFetch, runtime.headers, { requireComplete: true, sourceRecovery: true });
       return result.ok ? result.models ?? null : result.retryAt ? { retryAt: result.retryAt } : null;
     }
     const authMethod = config.auth?.method ?? 'apiKey';
@@ -671,7 +671,7 @@ const revalidateModelSources = createModelSourceRevalidator({
     if (authMethod === 'apiKey' && !apiKey && !Object.keys(runtime.headers ?? {}).length) return null;
     const result = await fetchProviderModels({
       agent, baseUrl: runtime.baseUrl, modelsUrl: runtime.modelsUrl, wireProtocol: runtime.wireProtocol,
-      authMethod, apiKey, headers: runtime.headers, redirect: 'error', allowEmpty: true, requireComplete: true,
+      authMethod, apiKey, headers: runtime.headers, redirect: 'error', allowEmpty: true, requireComplete: true, sourceRecovery: true,
     }, guardedFetch);
     return result.ok ? result.models ?? null : result.retryAt ? { retryAt: result.retryAt } : null;
   },
@@ -688,7 +688,8 @@ async function recoverCustomProviderModelSources(
   };
   // Keep startup/routing responsive. Successful revalidation reloads the latest
   // DB state through the usual catalog path and its existing change broadcast.
-  await revalidateModelSources(configs, JSON.stringify([owner.dataOwnerId, owner.generation]), isCurrent).then(async changed => {
+  await revalidateModelSources(configs, JSON.stringify([owner.dataOwnerId, owner.generation]), isCurrent,
+    JSON.stringify([owner.mode, owner.dataOwnerId])).then(async changed => {
     if (changed && isCurrent()) await refreshCustomProvidersIntoCatalog(isCurrent, { preserveOnFailure: true });
   }).catch(() => {
     log.warn('custom provider model source recovery failed');

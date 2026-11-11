@@ -1,4 +1,4 @@
-import { issueModelSourceSnapshot, modelSourceRequestSignature } from './model-source-snapshots.js';
+import { issueModelSourceSnapshot, modelSourceRequestSignature, stampRecoveredModelSources } from './model-source-snapshots.js';
 import { resolveCopilotAccountUrl } from './copilot-account-url.js';
 import { collectModelDiscoveryPages } from './model-discovery-pages.js';
 import type { DiscoveredModel } from '@cindy/model-providers';
@@ -97,6 +97,8 @@ export interface ProviderModelsFetchSpec {
   responseByteLimit?: number;
   /** Main-only: partial pages must not authorize removal of saved provenance. */
   requireComplete?: boolean;
+  /** Main-only background recovery: freshness stamp without a Settings receipt. */
+  sourceRecovery?: boolean;
 }
 
 /** 结构化结果（查询型返回：renderer 需要 code 渲染分类文案，不走 throwIpcError）。 */
@@ -122,7 +124,7 @@ export async function fetchSavedOAuthProviderModels(
   isCurrent: () => boolean,
   fetchImpl: typeof fetch = outboundFetch,
   headers?: Record<string, string>,
-  options: Pick<ProviderModelsFetchSpec, 'requireComplete'> = {},
+  options: Pick<ProviderModelsFetchSpec, 'requireComplete' | 'sourceRecovery'> = {},
 ): Promise<ProviderModelsFetchResult> {
   const oauth = provider?.auth.oauth;
   const route = provider?.routing[agent];
@@ -420,5 +422,6 @@ export async function fetchProviderModels(
       ...(retryAt ? { retryAt } : {}),
     };
   }
-  return { ok: true, models: issueModelSourceSnapshot(models, spec.agent, modelSourceRequestSignature(url, init)) };
+  return { ok: true, models: spec.sourceRecovery ? stampRecoveredModelSources(models)
+    : issueModelSourceSnapshot(models, spec.agent, modelSourceRequestSignature(url, init)) };
 }
