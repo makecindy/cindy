@@ -3237,6 +3237,27 @@ it('keeps mixed OpenCode protocols and image inputs in the native Pi launch', ()
   expect(providers[0]?.models[3]).toMatchObject({ input: ['text', 'image'] });
 });
 
+// #9863, unit: ID-only Copilot Astra must reach the actual native launch descriptor
+// as Responses. The generic catalog audit below supplies an API and mirrors the source.
+it('launches Copilot Astra with Responses while preserving other model APIs', () => {
+  const { providers } = buildPiNativeProvidersFromConfigs([{
+    id: 'copilot-regression', name: 'Copilot', runtimes: { pi: {
+      baseUrl: 'https://api.individual.githubcopilot.com', wireProtocol: 'openai-chat',
+      models: ['gpt-6-astra', 'gpt-5.5', 'kimi-k3'].map(id => ({ id, name: id })),
+    } },
+  }], () => 'fixture-credential');
+  expect(providers).toHaveLength(1);
+  expect(providers[0].models.map(model => model.api ?? providers[0].api)).toEqual([
+    'openai-responses', 'openai-responses', 'openai-completions',
+  ]);
+  expect(providers[0].models[0].baseUrl ?? providers[0].baseUrl).toBe('https://api.individual.githubcopilot.com');
+  expect(providers[0].models[0]).toMatchObject({
+    thinkingLevelMap: { off: null, minimal: null, low: 'low', xhigh: 'xhigh', max: 'max' },
+    compat: { supportsOpenAIGrammarTools: true },
+  });
+  expect(providers[0].models[0].compat).not.toHaveProperty('supportsReasoningEffort');
+});
+
 it('carries every unambiguous portable catalog model into the Pi descriptor', () => {
   let checked = 0;
   for (const rows of Object.values(PROVIDER_MODEL_CATALOG.providers)) {

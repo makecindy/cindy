@@ -5127,7 +5127,7 @@ export class GhostManager {
         ...(current.state === 'approved' && current.receipt.delegationCapabilityApproved === true &&
           approvedManifest.agent?.tasks === true && approvedManifest.agent.targets === true && approvedManifest.agent.delegation === true ? { delegationCapabilityApproved: true as const } : {}),
         // 随包种子由 Cindy 自己发布，声明的控制节点与免确认工具视为已随版本批准。
-        approvedControlPoints: approvedManifest.subscribe?.hooks ?? [],
+        approvedControlPoints: [...new Set([...(approvedManifest.subscribe?.hooks ?? []), ...declaredGhostControlPoints(approvedManifest)])],
         approvedAutoTools: declaredAutoApproveTools(approvedManifest),
         ...(current.state === 'approved' && current.receipt.observeCapabilityApproved === true &&
           approvedManifest.agent?.observe === true ? { observeCapabilityApproved: true as const } : {}),

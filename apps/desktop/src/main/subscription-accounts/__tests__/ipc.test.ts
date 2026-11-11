@@ -7,10 +7,11 @@ import { homedir } from 'node:os';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SubscriptionPoolConfig } from '../../../shared/subscriptionAccounts.js';
 const h = vi.hoisted(() => ({
-  handlers: new Map<string, (event: unknown, arg: unknown) => Promise<unknown>>(),
+  handlers: new Map<string, (event: unknown, arg: unknown, model?: unknown) => Promise<unknown>>(),
   context: null as null | { sharedTask?: object },
   trusted: true,
   execute: vi.fn(),
+  availability: vi.fn(),
   sessionRead: vi.fn(),
   owner: 'owner-a',
   generation: 1,
@@ -74,6 +75,7 @@ vi.mock('../service.js', () => ({ executeSubscriptionAccountCommand: h.execute }
 vi.mock('../runtime.js', () => ({
   onSubscriptionAccountsChanged: vi.fn(),
   readSubscriptionPoolUsage: vi.fn(async () => undefined),
+  readSubscriptionPoolModelAvailability: h.availability,
   readLegacySubscriptionPoolUsage: vi.fn(async () => undefined),
   readSubscriptionSessionUsage: vi.fn(async () => undefined),
   readSubscriptionSessionAccount: h.sessionRead,
@@ -97,6 +99,7 @@ beforeEach(() => {
   h.remoteAllowed.clear();
   h.remoteModels = null;
   h.execute.mockReset().mockResolvedValue({ accounts: [] });
+  h.availability.mockReset().mockResolvedValue(true);
   h.sessionRead.mockReset().mockResolvedValue({ providerId: 'anthropic', state: 'legacy' });
 });
 
@@ -173,6 +176,26 @@ describe('legacy Codex account upgrade', () => {
   });
 });
 describe('subscription management boundary', () => {
+  // #9833, unit: new optional model query keeps old caller shape and the
+  // owner-only boundary. An aggregate/guest reply cannot authorize recovery.
+  // PR #9837 review: local grants cannot authorize a remote cooldown recovery.
+  it('supports model availability without changing old quota replies or admitting guests', async () => {
+    const quota = h.handlers.get('maker:subscription-pool:quota')!;
+    expect(await quota({}, 'anthropic')).toEqual({ providerId: 'anthropic', pooled: false, usage: null });
+    h.availability.mockImplementation(async (_provider, _model, options) => options?.remote !== true);
+    expect(await quota({}, 'openai', 'gpt-model')).toEqual({ providerId: 'openai', model: 'gpt-model', available: true });
+    h.context = {};
+    expect(await quota({}, 'openai', 'gpt-model')).toEqual({ providerId: 'openai', model: 'gpt-model', available: false });
+    for (const model of ['', ' ', 1, {}, 'x'.repeat(513)])
+      await expect(quota({}, 'anthropic', model)).rejects.toThrow('INVALID_PARAMS');
+    h.context = { sharedTask: {} };
+    await expect(quota({}, 'anthropic', 'sonnet')).rejects.toThrow('PERMISSION_DENIED');
+    h.context = null;
+    h.trusted = false;
+    await expect(quota({}, 'anthropic', 'sonnet')).rejects.toThrow('untrusted');
+    expect(h.availability).toHaveBeenCalledTimes(2);
+  });
+
   // #9517, unit: CLI provider-managed auth must survive the real handler and
   // renderer decoder as actionable copy, not the generic CLI/network failure.
   it('reports provider-managed authentication through the owner IPC error protocol', async () => {

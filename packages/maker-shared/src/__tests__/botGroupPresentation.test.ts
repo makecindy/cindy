@@ -400,4 +400,20 @@ describe('unclaimed talk turn controls', () => {
     expect(botGroupPlanFollowUp(value)?.kind).toBe('continue');
     expect(botGroupPlanFollowUp({ ...value, kind: 'work' })).toBeNull();
   });
+
+  // #9909: a discussion turn that answered NO_REPLY publishes no group message at all, so the
+  // queue card must show it as skipped rather than spoken. Only an explicit `null` means "no
+  // message": a legacy projection omits the field and keeps the plain done state.
+  it('shows a discussion turn that published nothing as skipped', () => {
+    const value = plan({ kind: 'talk', steps: [
+      { position: 0, botId: 'a', botName: 'A', task: '', status: 'done', resultMessageId: null },
+      { position: 1, botId: 'b', botName: 'B', task: '', status: 'done', resultMessageId: '90000000-0000-4000-8000-000000000001' },
+      { position: 2, botId: 'a', botName: 'A', task: '', status: 'done' },
+    ] });
+    expect(botGroupPlanStepState(value, value.steps[0])).toBe('skipped');
+    expect(botGroupPlanStepState(value, value.steps[1])).toBe('done');
+    expect(botGroupPlanStepState(value, value.steps[2])).toBe('done');
+    // A division step hands work over; it is never a spoken turn.
+    expect(botGroupPlanStepState({ ...value, kind: 'work' }, value.steps[0])).toBe('done');
+  });
 });

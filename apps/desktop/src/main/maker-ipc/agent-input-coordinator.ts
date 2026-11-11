@@ -5711,6 +5711,16 @@ export class AgentInputCoordinator {
     // 会重试的分支同理:重试的是**新** turn,旧 error 不会再被接管。
     this.discardDeferredResumableCandidate(sessionId, active);
     const latest = this.getState(sessionId);
+    if (result.kind === 'host-send' && result.code === 'PLUGIN_TURN_SKIPPED') {
+      latest.activeTurn = null;
+      this.notifyRejectedUserTurn(sessionId, item);
+      if (active.persisted) this.notifyUndispatchedUserTurn(sessionId, item, 'cancelled');
+      else this.deps.onDiscardedQueuedMessage?.(sessionId, item);
+      this.emit(sessionId);
+      this.scheduleDrain(sessionId, 'runtime-plugin-skipped');
+      this.deps.onQueueEmptied?.(sessionId);
+      return;
+    }
     if (this.requeuePreservedAutoResumeIfAttemptCurrent(sessionId, latest, active, result)) {
       return;
     }

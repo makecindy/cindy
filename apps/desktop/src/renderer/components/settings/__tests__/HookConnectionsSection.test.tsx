@@ -30,7 +30,7 @@ const dialog = vi.hoisted(() => ({ confirm: vi.fn() }));
 const workspacePrefsEditor = vi.hoisted(() => ({ render: vi.fn() }));
 const toast = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn() }));
 const authUser = vi.hoisted(() => ({
-  current: null as { membershipKind: 'personal' | 'org' } | null,
+  current: null as { membershipKind: 'personal' | 'org'; orgSlug?: string | null; orgName?: string | null } | null,
 }));
 vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => authUser.current }));
 
@@ -592,6 +592,175 @@ describe('HookConnectionsSection binding actions (Telegram / X / Feishu)', () =>
 
     expect(screen.queryByRole('button', { name: X_CARD })).toBeNull();
     expect(screen.queryByRole('button', { name: FEISHU_CARD })).toBeNull();
+  });
+
+  // Store-app requirement: the ordinary link action stays available after binding;
+  // per-row actions carry that account's binding ID, including during another authorization.
+  it('links through the existing action and targets each store account independently', async () => {
+    const first: NonNullable<SlackHookView['feishu']['binding']> = {
+      provider: 'feishu', state: 'confirmed', attemptId: null, bindingId: 'alice-binding',
+      principalId: 'ou_alice', principalName: 'Alice', tenantKey: 'tenant-a', tenantName: 'Feishu Acme', scopeId: 'cli_store', scopeName: 'Cindy',
+      connectUrl: null, bindCode: null, expiresAt: null, reason: null, remediationUrl: null, actions: ['revoke', 'select_device'],
+    };
+    const second = { ...first, bindingId: 'bob-binding', principalId: 'ou_bob', principalName: 'Bob', tenantKey: 'tenant-b', tenantName: 'Feishu Beta' };
+    const hook: SlackHookView = { ...BASE_HOOK, feishu: { ...BASE_HOOK.feishu,
+      enabled: true, available: true, status: 'connected', url: 'wss://feishu.example.test',
+      multiBindAvailable: true, binding: first, bindings: [first, second],
+    } };
+    ipc.get.mockResolvedValue({ hook }); ipc.providerBindStart.mockResolvedValue({ hook });
+    let finishSelection!: (value: { hook: SlackHookView }) => void;
+    ipc.providerBindSelect.mockImplementation(() => new Promise((resolve) => { finishSelection = resolve; }));
+    ipc.providerBindRevoke.mockResolvedValue({ hook });
+    dialog.confirm.mockResolvedValue(true);
+    const entry = resolveSettingsSearchEntry('im-bot', 'imBot.cindy.feishu.workingDevice');
+    render(<SettingsSearchNavigationContext.Provider value={{ entry, activation: 1 }}>
+      <HookConnectionsSection />
+    </SettingsSearchNavigationContext.Provider>);
+    await screen.findByText('Alice'); expect(screen.getByText('Bob')).toBeTruthy();
+    expect(tCalls).toContainEqual({ key: 'settings.remoteControl.hook.feishu.connectionTenant', vars: { tenant: 'Feishu Acme' } });
+    expect(tCalls).toContainEqual({ key: 'settings.remoteControl.hook.feishu.connectionTenant', vars: { tenant: 'Feishu Beta' } });
+    expect(screen.queryByText(/tenant-[ab]/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'settings.remoteControl.hook.feishu.connect' }));
+    await waitFor(() => expect(ipc.providerBindStart).toHaveBeenCalledWith('feishu'));
+    fireEvent.click(screen.getAllByRole('button', { name: 'settings.remoteControl.hook.feishu.setWorkingDevice' })[1]!);
+    await waitFor(() => expect(ipc.providerBindSelect).toHaveBeenCalledWith('feishu', 'bob-binding'));
+    fireEvent.click(screen.getAllByRole('button', { name: 'settings.remoteControl.hook.feishu.unlink' })[0]!);
+    await waitFor(() => expect(ipc.providerBindRevoke).toHaveBeenCalledWith('feishu', 'alice-binding'));
+    await act(async () => finishSelection({ hook }));
+    expect(toast.success).toHaveBeenCalledWith('settings.remoteControl.hook.feishu.workingDeviceSet');
+    fireEvent.click(screen.getAllByRole('button', { name: 'settings.remoteControl.hook.feishu.unlink' })[1]!);
+    await waitFor(() => expect(ipc.providerBindRevoke).toHaveBeenCalledWith('feishu', 'bob-binding'));
+    const listener = ipc.onStatusChanged.mock.calls[0]![0];
+    await act(async () => listener({ ...hook, feishu: { ...hook.feishu, binding: { ...first,
+      state: 'pending', bindingId: null, principalId: null, principalName: null, attemptId: 'new-auth',
+      actions: ['cancel'], expiresAt: Date.now() + 60_000 }, bindings: [first] } }));
+    expect(screen.getByText('Alice')).toBeTruthy(); expect(screen.queryByText('Bob')).toBeNull();
+    expect(screen.getByRole('button', { name: 'settings.remoteControl.hook.feishu.cancel' })).toBeTruthy();
+    await act(async () => listener({ ...hook, feishu: { ...hook.feishu,
+      binding: { ...first, state: 'failed', bindingId: null, principalId: null, attemptId: 'new-auth', reason: 'denied', actions: ['retry'] },
+      bindings: [first] } }));
+    expect(screen.getByText('Alice')).toBeTruthy();
+    expect(screen.getAllByText('settings.remoteControl.hook.feishu.status.failed').length).toBeGreaterThan(0);
+  });
+
+  // Unit / owner request: known current computers hide the switch action, and
+  // server pushes update names/actions without a renderer-side fetch.
+  it('shows the working computer per account and hides selection on this computer', async () => {
+    const first: NonNullable<SlackHookView['feishu']['binding']> = {
+      provider: 'feishu', state: 'confirmed', attemptId: null, bindingId: 'first', principalId: 'alice', principalName: 'Alice',
+      scopeId: 'cli_app', scopeName: 'Cindy', connectUrl: null, bindCode: null, expiresAt: null, reason: null, remediationUrl: null,
+      actions: ['select_device', 'revoke'], workingDevice: { name: 'My Mac', isCurrent: true },
+    };
+    const second = { ...first, bindingId: 'second', principalId: 'bob', principalName: 'Bob', workingDevice: { name: 'Office PC', isCurrent: false } };
+    const hook: SlackHookView = { ...BASE_HOOK, feishu: { ...BASE_HOOK.feishu, enabled: true, available: true, status: 'connected', multiBindAvailable: true,
+      applications: [{ appId: 'cli_app', brand: 'feishu', appType: 'store', botName: 'Cindy', organization: null }], binding: first, bindings: [first, second] } };
+    ipc.get.mockResolvedValue({ hook }); ipc.providerBindSelect.mockResolvedValue({ hook });
+    const entry = resolveSettingsSearchEntry('im-bot', 'imBot.cindy.feishu.workingDevice');
+    render(<SettingsSearchNavigationContext.Provider value={{ entry, activation: 1 }}><HookConnectionsSection /></SettingsSearchNavigationContext.Provider>);
+    await screen.findByText('Alice');
+    const action = 'settings.remoteControl.hook.feishu.setWorkingDevice';
+    expect(screen.getAllByRole('button', { name: action })).toHaveLength(1);
+    expect(screen.getByText('· settings.remoteControl.hook.feishu.workingDeviceThisComputer')).toBeTruthy();
+    expect(tCalls).toContainEqual({ key: 'settings.remoteControl.hook.feishu.workingDeviceLabel', vars: { name: 'Office PC' } });
+    fireEvent.click(screen.getByRole('button', { name: action }));
+    await waitFor(() => expect(ipc.providerBindSelect).toHaveBeenCalledWith('feishu', 'second'));
+    const listener = ipc.onStatusChanged.mock.calls[0]![0];
+    await act(async () => listener({ ...hook, feishu: { ...hook.feishu, bindings: [first, { ...second, workingDevice: { name: 'My Mac', isCurrent: true } }] } }));
+    expect(screen.queryByRole('button', { name: action })).toBeNull();
+    await act(async () => listener({ ...hook, feishu: { ...hook.feishu, available: false, applications: [], bindings: [], binding: null } }));
+    expect(screen.queryByText('settings.remoteControl.hook.feishu.disabledHint')).toBeNull();
+    expect(screen.getByText('settings.remoteControl.hook.feishu.unavailableHint')).toBeTruthy();
+    expect(screen.queryByText('Alice')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'settings.remoteControl.hook.feishu.connect' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'settings.remoteControl.hook.feishu.connectBot' })).toBeNull();
+    expect(ipc.get).toHaveBeenCalledTimes(1);
+  });
+
+  // Two configured bots need distinct authorization/open targets, with one shared editor.
+  it('shows both bot names and sends link/open actions to the chosen application', async () => {
+    authUser.current = { membershipKind: 'org', orgSlug: 'org-acme', orgName: 'Cindy organization' };
+    const account: NonNullable<SlackHookView['feishu']['binding']> = {
+      provider: 'feishu', state: 'confirmed', attemptId: null, bindingId: 'org-binding',
+      principalId: 'org-user', principalName: 'Alice', scopeId: 'cli_org', scopeName: 'Acme bot',
+      connectUrl: null, bindCode: null, expiresAt: null, reason: null, remediationUrl: null, actions: ['revoke', 'select_device'],
+    };
+    const hook: SlackHookView = { ...BASE_HOOK, feishu: { ...BASE_HOOK.feishu,
+      enabled: true, available: true, status: 'connected', multiBindAvailable: true, binding: account, bindings: [account],
+      applications: [
+        { appId: 'cli_store', brand: 'feishu', appType: 'store', botName: 'Cindy Official', organization: 'org-acme' },
+        { appId: 'cli_org', brand: 'feishu', appType: 'self_built', botName: 'Acme bot', organization: 'org-acme', tenantName: 'Feishu Acme' },
+      ],
+    } };
+    ipc.get.mockResolvedValue({ hook }); ipc.providerBindStart.mockResolvedValue({ hook });
+    ipc.openProviderAction.mockResolvedValue(undefined);
+    const entry = resolveSettingsSearchEntry('im-bot', 'imBot.cindy.feishu.workingDevice');
+    render(<SettingsSearchNavigationContext.Provider value={{ entry, activation: 1 }}><HookConnectionsSection /></SettingsSearchNavigationContext.Provider>);
+    await screen.findByText('Cindy Official'); expect(screen.getByText('Acme bot')).toBeTruthy();
+    // Regression / unit: render the real card with the server's organization slug.
+    // Existing fixtures used display names here and missed the internal ID leak.
+    expect(screen.getByText('settings.remoteControl.hook.feishu.appType.self_built · Feishu Acme')).toBeTruthy();
+    expect(screen.queryByText(/org-acme/)).toBeNull();
+    expect(screen.queryByText(/Cindy organization/)).toBeNull();
+    expect(screen.queryByText('cli_store')).toBeNull();
+    expect(within(screen.getByRole('group', { name: 'Cindy Official' })).getByRole('status').textContent).toBe('settings.remoteControl.hook.feishu.status.none');
+    expect(tCalls).toContainEqual({ key: 'settings.remoteControl.hook.feishu.linkedBotsSummary', vars: { bots: 1, accounts: 1 } });
+    expect(screen.getAllByRole('button', { name: 'settings.remoteControl.hook.feishu.connectBot' })).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'settings.remoteControl.hook.feishu.connectBot' }));
+    await waitFor(() => expect(ipc.providerBindStart).toHaveBeenCalledWith('feishu', 'cli_store'));
+    fireEvent.click(screen.getAllByRole('button', { name: 'settings.remoteControl.hook.feishu.openBot' })[1]!);
+    await waitFor(() => expect(ipc.openProviderAction).toHaveBeenCalledWith('feishu', 'provider', 'cli_org'));
+    const listener = ipc.onStatusChanged.mock.calls[0]![0];
+    await act(async () => listener({ ...hook, feishu: { ...hook.feishu, binding: {
+      ...account, scopeId: 'cli_store', state: 'pending', bindingId: null, attemptId: 'store-append',
+      actions: ['cancel'], bindCode: 'TEST-CODE', expiresAt: Date.now() + 60_000 } } }));
+    expect(screen.getAllByRole('button', { name: 'settings.remoteControl.hook.feishu.openBot' })).toHaveLength(2);
+    expect(within(screen.getByRole('group', { name: 'Cindy Official' })).getByRole('status').textContent).toBe('settings.remoteControl.hook.authorizing');
+    await act(async () => listener({ ...hook, feishu: { ...hook.feishu, binding: {
+      ...account, scopeId: 'cli_store', state: 'failed', bindingId: null, reason: 'denied', actions: ['retry'] } } }));
+    expect(within(screen.getByRole('group', { name: 'Cindy Official' })).getByRole('status').textContent).toBe('settings.remoteControl.hook.feishu.status.failed');
+    expect(screen.getByText('Alice')).toBeTruthy();
+    const storeAccount = { ...account, scopeId: 'cli_store', bindingId: 'store-account', principalId: 'store-user', principalName: 'Bob' };
+    const linked = { ...hook, feishu: { ...hook.feishu, binding: storeAccount, bindings: [account, storeAccount] } };
+    await act(async () => listener(linked));
+    const addAccount = within(screen.getByRole('group', { name: 'Cindy Official' })).getByRole('button', { name: 'settings.remoteControl.hook.feishu.linkAnotherAccount' });
+    fireEvent.click(addAccount);
+    expect(ipc.providerBindStart).toHaveBeenLastCalledWith('feishu', 'cli_store');
+    expect(tCalls).toContainEqual({ key: 'settings.remoteControl.hook.feishu.linkedBotsSummary', vars: { bots: 2, accounts: 2 } });
+    await act(async () => listener({ ...linked, feishu: { ...linked.feishu, multiBindAvailable: false } }));
+    expect(screen.queryByRole('button', { name: 'settings.remoteControl.hook.feishu.linkAnotherAccount' })).toBeNull();
+    await act(async () => listener({ ...hook, feishu: { ...hook.feishu, status: 'error', lastError: 'TLS connection failed' } }));
+    expect(screen.getByText('TLS connection failed')).toBeTruthy();
+    await act(async () => listener({ ...hook, feishu: { ...hook.feishu, applications: hook.feishu.applications!.map((app) => ({ ...app, tenantName: null })) } }));
+    expect(screen.getByText('settings.remoteControl.hook.feishu.appType.self_built')).toBeTruthy();
+    expect(screen.queryByText(/org-acme/)).toBeNull();
+    expect(screen.queryByText(/Cindy organization/)).toBeNull();
+  });
+
+  // Production UI / unit: the server allowlist is the only bot chooser source.
+  // Gap: old coverage had two bots with one already linked; this starts with two
+  // unlinked enterprise bots and no published store bot, then exposes the store.
+  it('offers only allowed bots and keeps every first-link action scoped to its bot', async () => {
+    const apps = [
+      { appId: 'cli_org_a', brand: 'feishu' as const, appType: 'self_built' as const, botName: 'Acme bot', organization: 'Acme' },
+      { appId: 'cli_org_b', brand: 'feishu' as const, appType: 'self_built' as const, botName: 'Beta bot', organization: 'Beta' },
+    ];
+    const hook: SlackHookView = { ...BASE_HOOK, feishu: { ...BASE_HOOK.feishu, enabled: true, available: true,
+      status: 'connected', applications: apps, binding: null, bindings: [], multiBindAvailable: true } };
+    ipc.get.mockResolvedValue({ hook }); ipc.providerBindStart.mockResolvedValue({ hook });
+    const entry = resolveSettingsSearchEntry('im-bot', 'imBot.cindy.feishu.workingDevice');
+    render(<SettingsSearchNavigationContext.Provider value={{ entry, activation: 1 }}><HookConnectionsSection /></SettingsSearchNavigationContext.Provider>);
+    await screen.findByText('settings.remoteControl.hook.feishu.chooseBot');
+    expect(screen.queryByText('Cindy Official')).toBeNull();
+    expect(screen.getAllByRole('button', { name: 'settings.remoteControl.hook.feishu.connectBot' })).toHaveLength(2);
+    expect(ipc.providerBindStart).not.toHaveBeenCalled();
+    fireEvent.click(within(screen.getByRole('group', { name: 'Beta bot' })).getByRole('button', { name: 'settings.remoteControl.hook.feishu.connectBot' }));
+    await waitFor(() => expect(ipc.providerBindStart).toHaveBeenCalledWith('feishu', 'cli_org_b'));
+    const listener = ipc.onStatusChanged.mock.calls[0]![0];
+    await act(async () => listener({ ...hook, feishu: { ...hook.feishu, applications: [
+      ...apps, { appId: 'cli_store', brand: 'feishu', appType: 'store', botName: 'Cindy Official', organization: null },
+    ] } }));
+    expect(screen.getByRole('group', { name: 'Cindy Official' })).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: 'settings.remoteControl.hook.feishu.connectBot' })).toHaveLength(3);
   });
 
   it.each(['success', 'failure', 'old-server', 'unlink'] as const)('offers a concise working-computer action with a confirmed result: %s', async (outcome) => {
