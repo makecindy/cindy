@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import path from 'node:path';
+import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 
 import {
-  classify, clientBehavior, isHostWork, isWindowClass, moduleGroup, owningFile, rankUsage, summarize,
+  createWindowApiScanner, classify, clientBehavior, isHostWork, isWindowClass, moduleGroup, owningFile, rankUsage, summarize,
 } from '../host-channel-coverage.mjs';
 
 const main = (file) => `apps/desktop/src/main/${file}`;
@@ -84,7 +87,7 @@ test('Host work is A plus backend and two-phase C, ranked by real calls', () => 
   };
   const entry = (count, missing = 0, unsupported = 0) => ({ kind: 'invoke', count, handled: count - missing - unsupported, missing, unsupported });
   const channels = {
-    'local-db:sessions:list': entry(9), 'read-file-bytes': entry(8), 'layout:get': entry(6),
+    'local-db:sessions:list': entry(9), 'read-file-bytes': entry(8), 'layout:get': { ...entry(6), kind: 'event' },
     'maker:schedule:list': entry(2, 0, 2), 'terminal:write': entry(5),
   };
   const embedded = summarize(inventory, { mode: 'embedded', channels });
@@ -113,4 +116,58 @@ test('reports what a window-class channel does in client mode from the two handl
   assert.equal(clientBehavior(row('lazy:thing'), client, embedded), 'not-registered-either');
   assert.equal(clientBehavior(row('ghost-page:pick-model', 'invoke', { perWebContents: true }), client, embedded), 'per-webcontents');
   assert.equal(clientBehavior(row('clipboard:copy-text'), null, embedded), 'unknown');
+});
+
+// Value: production analyzer output, PR #10047 Greptile P2 regressions.
+// Existing tests had neither a same-name invoke/event pair nor default parameters.
+// Minimal inputs: two typed report entries; the real git-review open-file handler.
+// Tier: runner (source analysis is this tool's production behavior).
+test('keeps same-name invoke and event calls separate in totals and ranking', () => {
+  const channel = 'ghosts:workdir-prefs';
+  const inventory = { registrations: [
+    { channel, kind: 'invoke', file: main('cindy-brain/index.ts'), line: 1, gui: [] },
+    { channel, kind: 'event', sync: true, file: main('cindy-brain/index.ts'), line: 2, gui: [] },
+  ], unresolved: [], contract: new Set() };
+  const entry = (kind, count) => ({ kind, count, handled: count, missing: 0, unsupported: 0 });
+  const usage = { version: 2, mode: 'embedded', channels: {
+    [`invoke:${channel}`]: entry('invoke', 2), [`event:${channel}`]: entry('event', 7),
+  } };
+  const summary = summarize(inventory, usage);
+  assert.deepEqual(summary.rows.map(r => [r.kind, r.used]), [['event', 7], ['invoke', 2]]);
+  assert.deepEqual(summary.ranking.map(r => [r.kind, r.channel, r.count]), [['invoke', channel, 2]]);
+  assert.equal(summary.usedTotals.A, 1);
+  assert.equal(summary.usedTotals.S, 1);
+  assert.equal(summary.usedTotals.calls, 9);
+  const client = summarize(inventory, { ...usage, mode: 'client', channels: {
+    [`invoke:${channel}`]: { ...entry('invoke', 5), handled: 3, unsupported: 2 },
+    [`event:${channel}`]: { ...entry('event', 7), handled: 0, missing: 7 },
+  } });
+  assert.deepEqual(client.ranking.map(r => [r.kind, r.count]), [['invoke', 2]]);
+  assert.equal(client.usedTotals.calls, 9);
+  const legacy = summarize(inventory, { mode: 'embedded', channels: { [channel]: entry('event', 7) } });
+  assert.equal(legacy.hostWork.used, 0);
+  assert.equal(legacy.rows.find(r => r.kind === 'event').used, 7);
+});
+
+test('real git-review open-file chain detects shell in openReviewFile default argument', () => {
+  const root = fileURLToPath(new URL('../../', import.meta.url));
+  const desktop = path.join(root, 'apps/desktop');
+  const require = createRequire(path.join(desktop, 'package.json'));
+  const ts = require('typescript');
+  const file = path.join(desktop, 'src/main/git-review/ipc.ts');
+  const program = ts.createProgram([file, require.resolve('electron/electron.d.ts')], {
+    noResolve: true, noLib: true, types: [], target: ts.ScriptTarget.ESNext,
+  });
+  const sf = program.getSourceFile(file);
+  let handler;
+  const visit = node => {
+    if (ts.isCallExpression(node) && node.arguments[0]?.getText(sf) === 'GIT_REVIEW_INVOKE.OPEN_FILE') handler = node.arguments[1];
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  assert.ok(handler, 'real IPC registration must be found');
+  const scanner = createWindowApiScanner(program.getTypeChecker());
+  const gui = [...scanner.guiOf(handler, 0)];
+  assert.ok(gui.includes('shell'), `expected shell, got ${gui}`);
+  assert.equal(classify({ channel: 'git-review:open-file', file: main('git-review/ipc.ts'), gui }, contract).sub, 'two-phase');
 });

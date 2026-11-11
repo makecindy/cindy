@@ -327,8 +327,8 @@ describe('claimProxiedChannels and unsupported fallbacks', () => {
 
     expect(logged).toEqual(['maker:remote-ssh:connect']);
     expect(usage.report().channels).toEqual({
-      'maker:remote-ssh:connect': { kind: 'invoke', count: 2, handled: 0, missing: 0, unsupported: 2 },
-      'skillhub:list': { kind: 'invoke', count: 1, handled: 0, missing: 1, unsupported: 0 },
+      'invoke:maker:remote-ssh:connect': { kind: 'invoke', count: 2, handled: 0, missing: 0, unsupported: 2 },
+      'invoke:skillhub:list': { kind: 'invoke', count: 1, handled: 0, missing: 1, unsupported: 0 },
     });
   });
 

@@ -23,6 +23,8 @@ export interface IpcChannelUsageEntry {
 }
 
 export interface IpcChannelUsageReport {
+  /** v2 keys channels by `${kind}:${channel}` to keep invoke/event distinct. */
+  version: 2;
   source: string;
   mode: 'client' | 'embedded';
   startedAt: string;
@@ -74,6 +76,7 @@ export function createIpcChannelUsage(options: IpcChannelUsageOptions): IpcChann
   let timer: ReturnType<typeof setTimeout> | null = null;
 
   const report = (): IpcChannelUsageReport => ({
+    version: 2,
     source: `desktop ${options.mode} mode`,
     mode: options.mode,
     startedAt,
@@ -100,10 +103,11 @@ export function createIpcChannelUsage(options: IpcChannelUsageOptions): IpcChann
 
   return {
     record(channel, kind, outcome) {
-      let entry = channels.get(channel);
+      const key = `${kind}:${channel}`;
+      let entry = channels.get(key);
       if (!entry) {
         entry = { kind, count: 0, handled: 0, missing: 0, unsupported: 0 };
-        channels.set(channel, entry);
+        channels.set(key, entry);
       }
       const firstUnserved = outcome !== 'handled' && entry.missing + entry.unsupported === 0;
       entry.count += 1;
@@ -120,7 +124,8 @@ export function createIpcChannelUsage(options: IpcChannelUsageOptions): IpcChann
       return [...channels]
         .filter(([, entry]) => entry.missing + entry.unsupported > 0)
         .sort(([a, x], [b, y]) => (y.missing + y.unsupported) - (x.missing + x.unsupported) || a.localeCompare(b))
-        .slice(0, limit);
+        .slice(0, limit)
+        .map(([key, entry]) => [key.slice(entry.kind.length + 1), { ...entry }]);
     },
     flush,
   };

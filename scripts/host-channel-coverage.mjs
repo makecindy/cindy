@@ -236,6 +236,62 @@ const REGISTER_METHODS = new Map([
   ['once', 'event'],
 ]);
 
+/** Window API dependency scan shared by inventory and focused source-analysis tests. */
+export function createWindowApiScanner(checker) {
+  const isDesktopSource = (sf) => sf && !sf.isDeclarationFile && sf.fileName.startsWith(path.join(desktopRoot, 'src') + path.sep);
+  const electronExport = (node) => {
+    let symbol = checker.getSymbolAtLocation(node);
+    if (symbol && symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
+    const decl = symbol?.declarations?.[0];
+    return decl && /node_modules\/electron\/electron\.d\.ts$/.test(decl.getSourceFile().fileName) ? symbol.getName() : null;
+  };
+  const functionBody = (node) => {
+    if (!node) return null;
+    if (ts.isFunctionLike(node) && node.body) return node;
+    let symbol = checker.getSymbolAtLocation(node);
+    if (symbol && symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
+    const decl = symbol?.valueDeclaration;
+    if (!decl || !isDesktopSource(decl.getSourceFile()) || GUI_SKIP_MODULES.test(decl.getSourceFile().fileName)) return null;
+    if (ts.isFunctionLike(decl) && decl.body) return decl;
+    const init = (ts.isVariableDeclaration(decl) || ts.isPropertyAssignment(decl)) ? decl.initializer : undefined;
+    return init && ts.isFunctionLike(init) && init.body ? init : null;
+  };
+  const guiMemo = [new Map(), new Map(), new Map()];
+  const guiOf = (fn, depth) => {
+    const memo = guiMemo[depth];
+    if (memo.has(fn)) return memo.get(fn);
+    const found = new Set();
+    memo.set(fn, found);
+    const visitBody = (node) => {
+      // A called function's nested callbacks are wiring that may run later (e.g. an
+      // `openExternal` dependency), not part of this call; the handler's own are.
+      if (depth > 0 && node !== fn.body && ts.isFunctionLike(node)) return;
+      if (ts.isIdentifier(node)) {
+        const name = GUI_EXPORTS.has(node.text) ? electronExport(node) : null;
+        if (name && GUI_EXPORTS.has(name)) found.add(name);
+      } else if (ts.isPropertyAccessExpression(node)) {
+        const owner = node.expression;
+        if (ts.isIdentifier(owner) && GUI_MEMBERS[owner.text]?.has(node.name.text) && electronExport(owner)) {
+          found.add(`${owner.text}.${node.name.text}`);
+        }
+      } else if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'BrowserWindow' && electronExport(node.expression)) {
+        found.add('new BrowserWindow');
+      } else if (ts.isCallExpression(node) && depth < 2) {
+        const callee = ts.isPropertyAccessExpression(node.expression) ? node.expression.name : node.expression;
+        const target = functionBody(callee);
+        if (target && target !== fn) for (const name of guiOf(target, depth + 1)) found.add(name);
+      }
+      ts.forEachChild(node, visitBody);
+    };
+    // Defaults run as part of the call, just like the body. Nested callback
+    // declarations retain the same bounded scan policy as callbacks in the body.
+    for (const parameter of fn.parameters) if (parameter.initializer) visitBody(parameter.initializer);
+    visitBody(fn.body);
+    return found;
+  };
+  return { functionBody, guiOf };
+}
+
 export function collectInventory() {
   const sources = listMainSources();
   const service = createService(sources);
@@ -424,53 +480,7 @@ export function collectInventory() {
   const adapters = [];
 
   // --- Window-only Electron API use by a handler (dependency check) ---
-  const isDesktopSource = (sf) => sf && !sf.isDeclarationFile && sf.fileName.startsWith(path.join(desktopRoot, 'src') + path.sep);
-  const electronExport = (node) => {
-    let symbol = checker.getSymbolAtLocation(node);
-    if (symbol && symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
-    const decl = symbol?.declarations?.[0];
-    return decl && /node_modules\/electron\/electron\.d\.ts$/.test(decl.getSourceFile().fileName) ? symbol.getName() : null;
-  };
-  const functionBody = (node) => {
-    if (!node) return null;
-    if (ts.isFunctionLike(node) && node.body) return node;
-    let symbol = checker.getSymbolAtLocation(node);
-    if (symbol && symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
-    const decl = symbol?.valueDeclaration;
-    if (!decl || !isDesktopSource(decl.getSourceFile()) || GUI_SKIP_MODULES.test(decl.getSourceFile().fileName)) return null;
-    if (ts.isFunctionLike(decl) && decl.body) return decl;
-    const init = (ts.isVariableDeclaration(decl) || ts.isPropertyAssignment(decl)) ? decl.initializer : undefined;
-    return init && ts.isFunctionLike(init) && init.body ? init : null;
-  };
-  const guiMemo = new Map();
-  const guiOf = (fn, depth) => {
-    if (guiMemo.has(fn)) return guiMemo.get(fn);
-    const found = new Set();
-    guiMemo.set(fn, found);
-    const visitBody = (node) => {
-      // A called function's nested callbacks are wiring that may run later (e.g. an
-      // `openExternal` dependency), not part of this call; the handler's own are.
-      if (depth > 0 && node !== fn.body && ts.isFunctionLike(node)) return;
-      if (ts.isIdentifier(node)) {
-        const name = GUI_EXPORTS.has(node.text) ? electronExport(node) : null;
-        if (name && GUI_EXPORTS.has(name)) found.add(name);
-      } else if (ts.isPropertyAccessExpression(node)) {
-        const owner = node.expression;
-        if (ts.isIdentifier(owner) && GUI_MEMBERS[owner.text]?.has(node.name.text) && electronExport(owner)) {
-          found.add(`${owner.text}.${node.name.text}`);
-        }
-      } else if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'BrowserWindow' && electronExport(node.expression)) {
-        found.add('new BrowserWindow');
-      } else if (ts.isCallExpression(node) && depth < 2) {
-        const callee = ts.isPropertyAccessExpression(node.expression) ? node.expression.name : node.expression;
-        const target = functionBody(callee);
-        if (target && target !== fn) for (const name of guiOf(target, depth + 1)) found.add(name);
-      }
-      ts.forEachChild(node, visitBody);
-    };
-    visitBody(fn.body);
-    return found;
-  };
+  const { functionBody, guiOf } = createWindowApiScanner(checker);
   /** True when a handler answers synchronously (assigns `<event>.returnValue`). */
   const syncMemo = new Map();
   const assignsReturnValue = (fn) => {
@@ -684,6 +694,8 @@ export function isWindowClass(row) {
 /** Location for the doc: file only, so the doc does not go stale with every edit (lines stay in --json). */
 const fileOnly = (site) => site.replace(MAIN_PREFIX, '').replace(/:\d+$/, '');
 
+const channelKey = (kind, channel) => `${kind}:${channel}`;
+
 const unservedCount = (entry) => entry.missing + entry.unsupported;
 
 /**
@@ -696,25 +708,30 @@ export function usageCounts(usage) {
   if (!usage) return counts;
   for (const [channel, entry] of Object.entries(usage.channels ?? {})) {
     const count = usage.mode === 'client' ? unservedCount(entry) : entry.count;
-    if (count > 0) counts.set(channel, count);
+    // Old reports keyed only by channel; entry.kind is the only recorded kind.
+    const key = usage.version === 2 ? channel : channelKey(entry.kind, channel);
+    if (count > 0) counts.set(key, count);
   }
   return counts;
 }
 
 /** Channels matching `filter` ranked by real calls; channels outside the inventory count as Host work. */
 export function rankUsage(rows, usage, filter = isHostWork) {
-  const byChannel = new Map(rows.map((row) => [row.channel, row]));
+  const byChannel = new Map(rows.map((row) => [channelKey(row.kind, row.channel), row]));
   return [...usageCounts(usage)]
-    .map(([channel, count]) => {
-      const row = byChannel.get(channel);
+    .map(([key, count]) => {
+      const row = byChannel.get(key);
+      const split = key.indexOf(':');
+      const kind = key.slice(0, split);
+      const channel = key.slice(split + 1);
       return {
-        channel, count, category: row?.category ?? 'unregistered', sub: row?.sub,
+        kind, channel, count, category: row?.category ?? 'unregistered', sub: row?.sub,
         group: row?.group ?? '-', reason: row?.reason ?? '不在静态清单里', row,
       };
     })
     .filter((entry) => (entry.row ? filter(entry.row) : filter === isHostWork))
     .map(({ row: _row, ...entry }) => entry)
-    .sort((a, b) => b.count - a.count || a.channel.localeCompare(b.channel));
+    .sort((a, b) => b.count - a.count || a.channel.localeCompare(b.channel) || a.kind.localeCompare(b.kind));
 }
 
 /**
@@ -771,7 +788,7 @@ export function summarize({ registrations, unresolved, adapters = [], contract }
     row.sites = [...new Set(row.sites)];
     Object.assign(row, classify(row, contract));
   }
-  const rows = [...channels.values()].sort((a, b) => a.group.localeCompare(b.group) || a.channel.localeCompare(b.channel));
+  const rows = [...channels.values()].sort((a, b) => a.group.localeCompare(b.group) || a.channel.localeCompare(b.channel) || a.kind.localeCompare(b.kind));
   const totals = Object.fromEntries(CATEGORIES.map((category) => [category, 0]));
   const subs = Object.fromEntries(SUBS.map((key) => [key, 0]));
   const basis = {};
@@ -790,15 +807,15 @@ export function summarize({ registrations, unresolved, adapters = [], contract }
   }
   const counts = usageCounts(usage);
   for (const row of rows) {
-    row.used = counts.get(row.channel) ?? 0;
+    row.used = counts.get(channelKey(row.kind, row.channel)) ?? 0;
     if (isWindowClass(row)) row.clientBehavior = clientBehavior(row, clientUsage, usage);
   }
   let usedTotals = null;
   if (usage) {
-    const byChannel = new Map(rows.map((row) => [row.channel, row]));
+    const byChannel = new Map(rows.map((row) => [channelKey(row.kind, row.channel), row]));
     usedTotals = { total: 0, calls: 0, unregistered: 0, ...Object.fromEntries([...CATEGORIES, ...SUBS].map((c) => [c, 0])) };
-    for (const [channel, count] of counts) {
-      const row = byChannel.get(channel);
+    for (const [key, count] of counts) {
+      const row = byChannel.get(key);
       usedTotals.total += 1;
       usedTotals.calls += count;
       if (!row) { usedTotals.unregistered += 1; continue; }
@@ -851,7 +868,8 @@ export function renderMarkdown(summary, { usageSource, clientSource } = {}) {
   push('> 由 `node scripts/host-channel-coverage.mjs` 生成，不要手工修改；行号只在 `--json` 输出里。');
   push(`> 生成时的源码提交：\`${gitHead()}\`。归属规则见下方「归属规则」，正本在脚本的 \`OWNERSHIP_RULES\`。`, '');
   push('统计对象是桌面主进程（`apps/desktop/src/main`，不含测试）里所有 `ipcMain.handle/on`');
-  push('及其包装函数注册的通道；同名通道按 invoke / event 各计一次。', '');
+  push('及其包装函数注册的通道；注册、调用次数和排行均按 `(kind, channel)` 区分。', '');
+  push('计数报告 v2 分别保存同名 invoke / event。旧报告按记录的 `kind` 归类；若旧采样已混算，无法事后拆分，需重新采样。', '');
 
   push('## 总口径', '');
   push(`**真正要 Host 做的 = A + C-后台 + C-两段式 = ${hostWork.A} + ${hostWork.cBackend} + ${hostWork.cTwoPhase} = ${hostWork.total}**`
@@ -893,7 +911,7 @@ export function renderMarkdown(summary, { usageSource, clientSource } = {}) {
   push('1. B 规则直接定类。');
   push(`2. 处理函数给 \`event.returnValue\` 赋值的同步通道判 S：命中 W 规则、领域为${[...SYNC_LOCAL_DOMAINS].join('、')}或未登记前缀的为 S·本地，其余为 S·镜像。`);
   push('3. W、R、C 规则直接定类（C 规则带细分）。');
-  push('4. A 规则只标领域；处理函数及其调用的两层桌面源码函数（不含被调函数里的嵌套回调）若用到下面的窗口 API，改判 C-两段式。');
+  push('4. A 规则只标领域；处理函数及其调用的两层桌面源码函数（含参数默认值，不含被调函数里的嵌套回调）若用到下面的窗口 API，改判 C-两段式。');
   push('5. 没有命中任何规则：用到窗口 API 判 C-两段式，否则判 A（默认）。', '');
   push('| 归属 | 原因 | 通道名 | 注册模块 |', '|---|---|---|---|');
   for (const rule of OWNERSHIP_RULES) {
@@ -909,16 +927,16 @@ export function renderMarkdown(summary, { usageSource, clientSource } = {}) {
   if (ranking) {
     push('## 要 Host 做的：实际调用排行', '');
     push(`来源：${usageSource ?? '调用计数报告'}。范围是 A + C-后台 + C-两段式；这次共调用 ${usedTotals.total} 个通道（${usedTotals.calls} 次）。`, '');
-    push('| # | 通道 | 调用次数 | 归属 | 领域／原因 | 模块 |', '|---:|---|---:|---|---|---|');
+    push('| # | 通道 | 类型 | 调用次数 | 归属 | 领域／原因 | 模块 |', '|---:|---|---|---:|---|---|---|');
     ranking.forEach((entry, index) => {
       const owner = entry.sub ? SUB_LABELS[`${entry.category}:${entry.sub}`] : entry.category;
-      push(`| ${index + 1} | ${code(entry.channel)} | ${entry.count} | ${owner} | ${entry.reason} | ${entry.group} |`);
+      push(`| ${index + 1} | ${code(entry.channel)} | ${entry.kind} | ${entry.count} | ${owner} | ${entry.reason} | ${entry.group} |`);
     });
     push('');
   }
 
   const listSection = (title, filter, note) => {
-    const selected = rows.filter(filter).sort((a, b) => b.used - a.used || a.channel.localeCompare(b.channel));
+    const selected = rows.filter(filter).sort((a, b) => b.used - a.used || a.channel.localeCompare(b.channel) || a.kind.localeCompare(b.kind));
     push(`## ${title}（${selected.length}）`, '');
     if (note) push(note, '');
     push('| 通道 | 类型 | 归属 | 原因 | 调用次数 | 注册文件 |', '|---|---|---|---|---:|---|');
@@ -945,7 +963,7 @@ export function renderMarkdown(summary, { usageSource, clientSource } = {}) {
   push('| 行为 | 通道数 |', '|---|---:|');
   for (const [key, text] of Object.entries(CLIENT_BEHAVIOR_LABELS)) if (behaviorCounts[key]) push(`| ${text} | ${behaviorCounts[key]} |`);
   push('');
-  const rejected = windowRows.filter((row) => REJECTED.has(row.clientBehavior)).sort((a, b) => b.used - a.used || a.channel.localeCompare(b.channel));
+  const rejected = windowRows.filter((row) => REJECTED.has(row.clientBehavior)).sort((a, b) => b.used - a.used || a.channel.localeCompare(b.channel) || a.kind.localeCompare(b.kind));
   if (rejected.length) {
     push(`### 窗口类但客户端模式下未注册（${rejected.length}，尚未实现）`, '');
     push('| 通道 | 类型 | 归属 | 客户端模式下 | 调用次数 | 注册文件 |', '|---|---|---|---|---:|---|');

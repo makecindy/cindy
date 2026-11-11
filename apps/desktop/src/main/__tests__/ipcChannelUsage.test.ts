@@ -34,7 +34,7 @@ describe('IPC channel usage', () => {
     usage.record('b', 'invoke', 'missing');
     usage.record('c', 'event', 'handled');
 
-    expect(usage.report().channels['maker:a']).toEqual({ kind: 'invoke', count: 2, handled: 0, missing: 0, unsupported: 2 });
+    expect(usage.report().channels['invoke:maker:a']).toEqual({ kind: 'invoke', count: 2, handled: 0, missing: 0, unsupported: 2 });
     expect(usage.topUnserved(5).map(([channel]) => channel)).toEqual(['maker:a', 'b']);
     // One log line per unserved channel, not per call.
     expect(lines).toEqual(['[ipc-usage] no handler for invoke maker:a (unsupported)', '[ipc-usage] no handler for invoke b (missing)']);
@@ -50,7 +50,7 @@ describe('IPC channel usage', () => {
 
     const report = JSON.parse(fs.readFileSync(file, 'utf8'));
     expect(report.mode).toBe('embedded');
-    expect(report.channels).toEqual({ x: { kind: 'invoke', count: 1, handled: 1, missing: 0, unsupported: 0 } });
+    expect(report.channels).toEqual({ 'invoke:x': { kind: 'invoke', count: 1, handled: 1, missing: 0, unsupported: 0 } });
     expect(fs.readdirSync(path.dirname(file))).toEqual(['usage.json']);
   });
 
@@ -80,10 +80,28 @@ describe('IPC channel usage', () => {
 
     expect(heard).toEqual([1]);
     expect(usage.report().channels).toEqual({
-      known: { kind: 'invoke', count: 1, handled: 1, missing: 0, unsupported: 0 },
-      absent: { kind: 'invoke', count: 1, handled: 0, missing: 1, unsupported: 0 },
-      listened: { kind: 'event', count: 1, handled: 1, missing: 0, unsupported: 0 },
-      nobody: { kind: 'event', count: 1, handled: 0, missing: 1, unsupported: 0 },
+      'invoke:known': { kind: 'invoke', count: 1, handled: 1, missing: 0, unsupported: 0 },
+      'invoke:absent': { kind: 'invoke', count: 1, handled: 0, missing: 1, unsupported: 0 },
+      'event:listened': { kind: 'event', count: 1, handled: 1, missing: 0, unsupported: 0 },
+      'event:nobody': { kind: 'event', count: 1, handled: 0, missing: 1, unsupported: 0 },
     });
   });
+});
+
+// PR #10047 P2: a sync event and an invoke can share the same channel name.
+// Production entry: createIpcChannelUsage; result: distinct counts persisted in JSON.
+// Existing coverage only used unique names. Minimal input: one call of each kind.
+// Tier: unit; no Electron, network, or real timers required.
+it('preserves both kinds for the same channel through report JSON and unserved ranking', () => {
+  const usage = createIpcChannelUsage({ mode: 'client' });
+  usage.record('ghosts:workdir-prefs', 'invoke', 'unsupported');
+  usage.record('ghosts:workdir-prefs', 'event', 'missing');
+  usage.record('ghosts:workdir-prefs', 'event', 'missing');
+  const report = JSON.parse(JSON.stringify(usage.report()));
+  expect(report.version).toBe(2);
+  expect(report.channels['invoke:ghosts:workdir-prefs'].count).toBe(1);
+  expect(report.channels['event:ghosts:workdir-prefs'].count).toBe(2);
+  expect(usage.topUnserved(5).map(([channel, entry]) => [channel, entry.kind, entry.count])).toEqual([
+    ['ghosts:workdir-prefs', 'event', 2], ['ghosts:workdir-prefs', 'invoke', 1],
+  ]);
 });
