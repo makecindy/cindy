@@ -16,15 +16,17 @@ import {
 import { isSharedTaskPeer } from '@cindy/device-link';
 import { useNavigate } from 'react-router-dom';
 import { buildLocalSkillPathRoute } from '@/features/skillhub/lib/localRoutes';
-import { Folder, MessageSquarePlus, Mic, X } from 'lucide-react';
+import { Folder, MessageSquarePlus, Mic, TriangleAlert, X } from 'lucide-react';
 import { useStableTranslation as useTranslation } from '@/hooks/useStableTranslation';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
 import { CINDY_MAKE_ENABLED } from '@cindy/maker-shared/cindy-make-feature';
+import { requiresFullAccessConfirmation } from '@cindy/maker-shared/permission-mode';
 import { isAnnotationBurnInError } from '@/lib/annotationBurnIn';
 import { AttachmentRejectionStrip, ThumbnailStrip } from './ComposerAttachments';
 import { ComposerCard, COMPOSER_CONTENT_CLASS } from './ComposerCard';
 import { ComposerFolderTransfers, useComposerFolderTransfers } from './ComposerFolderTransfers';
 import type { PendingFolder } from '@/hooks/useAttachments';
+import { FullAccessConfirmContent } from './FullAccessConfirmContent';
 import { useEditor, EditorContent } from '@tiptap/react';
 import Document from '@tiptap/extension-document';
 import Paragraph from '@tiptap/extension-paragraph';
@@ -2085,7 +2087,9 @@ export function ChatInput({
   const activePermissionModeRef = useRef(activePermissionMode);
   activePermissionModeRef.current = activePermissionMode;
   // handlePermissionModeChange 定义在 useEditor 之后, ref 桥接 (同 dispatchSendRef)。
-  const handlePermissionModeChangeRef = useRef<(mode: PermissionMode) => void | Promise<void>>(
+  const handlePermissionModeChangeRef = useRef<
+    (mode: PermissionMode, options?: { confirmFullAccess?: boolean }) => void | Promise<void>
+  >(
     () => {},
   );
 
@@ -2792,7 +2796,8 @@ export function ChatInput({
           );
           if (!next) return false;
           event.preventDefault();
-          void handlePermissionModeChangeRef.current(next);
+          // 快捷键轮切没有列表说明可看: 升级到完全访问时仍先确认。
+          void handlePermissionModeChangeRef.current(next, { confirmFullAccess: true });
           return true;
         }
 
@@ -9099,8 +9104,27 @@ export function ChatInput({
   }, [navigate, activeProviderId, activeModel, currentModelAgentKind]);
 
   const handlePermissionModeChange = useCallback(
-    async (newMode: PermissionMode) => {
+    async (newMode: PermissionMode, options?: { confirmFullAccess?: boolean }) => {
       if (settingsLocked) return;
+      // 列表里直接选择完全访问不再确认; 只有快捷键轮切(options.confirmFullAccess)保留确认。
+      const previousMode = activePermissionModeRef.current;
+      if (options?.confirmFullAccess && requiresFullAccessConfirmation(previousMode, newMode)) {
+        const confirmed = await confirmDialog({
+          title: t('newChat.chatInput.fullAccessConfirmation.title'),
+          description: t('newChat.chatInput.fullAccessConfirmation.description'),
+          // 逐类权限清单(文件 / 终端命令 / 网络)+ 高风险操作仍确认的脚注。
+          content: <FullAccessConfirmContent />,
+          // 高风险授权:开场朗读必须覆盖清单全文,SR 用户听全权限再确认。
+          describeContent: true,
+          // 带清单的确认框放宽到 440(§4:普通确认 400,富内容可适度放宽)。
+          maxWidth: 440,
+          confirmText: t('newChat.chatInput.fullAccessConfirmation.confirm'),
+          cancelText: t('newChat.chatInput.fullAccessConfirmation.cancel'),
+          // 警示三角跟随按钮文字颜色,不引入新语义色;高风险升级的视觉提醒。
+          confirmIcon: <TriangleAlert size={14} />,
+        });
+        if (!confirmed) return;
+      }
       try {
         if (sessionId) {
           if (getSessionDeviceId(sessionId)) {
@@ -9118,7 +9142,7 @@ export function ChatInput({
         toast.error(t('newChat.chatInput.permissionSwitchFailed'));
       }
     },
-    [sessionId, onPermissionModeDidChange, t, settingsLocked],
+    [sessionId, onPermissionModeDidChange, t, confirmDialog, settingsLocked],
   );
   useEffect(() => {
     handlePermissionModeChangeRef.current = handlePermissionModeChange;

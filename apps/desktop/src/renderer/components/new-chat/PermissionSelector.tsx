@@ -410,6 +410,8 @@ export function PermissionSelector({
             isFieldTrigger
               ? 'w-[var(--radix-popover-trigger-width)]'
               : 'w-[300px] max-w-[calc(100vw-16px)]',
+            // 多行说明会让菜单变高: 高度受可用空间限制, 超出时内部滚动。
+            'max-h-[var(--radix-popover-content-available-height)] overflow-y-auto',
             'rounded-[12px] p-2',
             'bg-[var(--model-dropdown-bg)]',
             'border border-[var(--model-dropdown-border)]',
