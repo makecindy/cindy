@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { legacyCodexAccountCanRun, setLegacyCodexAccountPaused } from './legacyAccountAccess.js';
 import { getCodexHome } from '../maker-host/codex-home-path.js';
 import { mkdir } from 'node:fs/promises';
 import { type AuthState, type NativeSubscriptionAccount } from '@cindy/maker-core';
@@ -519,6 +518,9 @@ export async function acquireSubscriptionAccount(
   const state = currentRuntime();
   const binding = keys.map((key) => readAccountBinding(key, provider)).find(Boolean);
   const snapshots = await Promise.all(pool.accounts.map((a) => snapshot(state, provider, a.id)));
+  // Remote access stores also wire share lifecycle dependencies. Load them only
+  // for actual OpenAI selection, not while unrelated catalogs initialize.
+  const legacyAccess = provider === 'openai' ? await import('./legacyAccountAccess.js') : null;
   assertOwner(state);
   // Settings may change while the official CLI is answering.
   const latest = readPool(provider);
@@ -541,9 +543,9 @@ export async function acquireSubscriptionAccount(
       paused: control ? false : a.paused,
       key: a.id,
       usable: !loggingIn && info?.auth.authenticated === true && (control || !usage.limited)
-        && (control || !imported || legacyCodexAccountCanRun(imported, model, {
+        && (control || !imported || legacyAccess?.legacyCodexAccountCanRun(imported, model, {
           remote: options.remote === true, newRoute: !binding && !options.resuming,
-        })),
+        }) === true),
       running: state.running.get(keyOf(provider, a.id))?.size ?? 0,
       urgency: usage.urgency,
       fiveHourTight: usage.fiveHourTight,
@@ -583,7 +585,7 @@ export async function acquireSubscriptionAccount(
     if (selected === 'default' && !defaultAccountBound(provider))
       throw new Error('Subscription account was disconnected');
     const imported = provider === 'openai' ? readLegacyCodexProviderId(selected) : undefined;
-    if (options.remote && imported && !legacyCodexAccountCanRun(imported, model, { remote: true, newRoute: false }))
+    if (options.remote && imported && !legacyAccess?.legacyCodexAccountCanRun(imported, model, { remote: true, newRoute: false }))
       throw new Error('Subscription account remote access was revoked');
   };
   return {
@@ -686,7 +688,11 @@ export async function runSubscriptionAccountCommand(
     }));
     assertOwner(state);
     const imported = provider === 'openai' && command.accountId ? readLegacyCodexProviderId(command.accountId) : undefined;
-    if (imported && command.paused !== undefined) setLegacyCodexAccountPaused(imported, command.paused);
+    if (imported && command.paused !== undefined) {
+      const { setLegacyCodexAccountPaused } = await import('./legacyAccountAccess.js');
+      assertOwner(state);
+      setLegacyCodexAccountPaused(imported, command.paused);
+    }
   } else if (command.action === 'remove') {
     if (command.accountId === 'default')
       throw new Error('The default CLI account cannot be removed');

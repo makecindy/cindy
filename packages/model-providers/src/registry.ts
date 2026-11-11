@@ -225,14 +225,13 @@ export function providersForAgent(views: ProviderView[], agent: AgentKind): Prov
 export function connectedProvidersForAgent(
   views: ProviderView[],
   agent: AgentKind,
-  opts: { includeSuspended?: boolean; includeAliases?: boolean } = {},
+  opts: { includeSuspended?: boolean } = {},
 ): ProviderView[] {
   // 两道正交的剔除:runtime 级 disabled(目录 routing 声明,上游 #526)与用户的
   // 供应商级停用(suspended,model-disable-store)—— 任一命中都不可路由。
   return views.filter(
     (p) =>
       p.connected &&
-      (!p.subscriptionPoolAlias || opts.includeAliases === true || opts.includeSuspended === true) &&
       (opts.includeSuspended === true || !p.suspended) &&
       hasEnabledAgentRuntime(p, agent),
   );

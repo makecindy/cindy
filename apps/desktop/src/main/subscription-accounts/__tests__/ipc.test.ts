@@ -18,6 +18,7 @@ const h = vi.hoisted(() => ({
   beforeWrite: undefined as (() => void) | undefined,
   access: { disabledModels: {}, disabledProviders: {} } as { disabledModels: Record<string, true>; disabledProviders: Record<string, true> },
   remoteAllowed: new Set<string>(),
+  remoteModels: null as string[] | null,
 }));
 vi.mock('electron', () => ({
   ipcMain: {
@@ -65,6 +66,9 @@ vi.mock('../../maker-host/model-disable-store.js', () => ({
 vi.mock('../../maker-host/remote-provider-access-store.js', () => ({
   isRemoteProviderInvocationAllowed: (id: string) => h.remoteAllowed.has(id),
 }));
+vi.mock('../../device-link/remoteModelAccess.js', () => ({
+  remoteModelAccess: { allows: (_id: string, model: string) => !!model && (h.remoteModels === null || h.remoteModels.includes(model)) },
+}));
 vi.mock('../service.js', () => ({ executeSubscriptionAccountCommand: h.execute }));
 vi.mock('../runtime.js', () => ({
   onSubscriptionAccountsChanged: vi.fn(),
@@ -89,6 +93,7 @@ beforeEach(() => {
   h.beforeWrite = undefined;
   h.access = { disabledModels: {}, disabledProviders: {} };
   h.remoteAllowed.clear();
+  h.remoteModels = null;
   h.execute.mockReset().mockResolvedValue({ accounts: [] });
 });
 
@@ -99,11 +104,23 @@ describe('legacy Codex account upgrade', () => {
     expect(legacyCodexAccountCanRun('openai-a', 'gpt-model', { remote: false, newRoute: false })).toBe(true);
     expect(legacyCodexAccountCanRun('openai-a', undefined, { remote: true, newRoute: false })).toBe(false);
     h.remoteAllowed.add('openai-a');
-    expect(legacyCodexAccountCanRun('openai-a', undefined, { remote: true, newRoute: true })).toBe(true);
+    expect(legacyCodexAccountCanRun('openai-a', 'other-model', { remote: true, newRoute: true })).toBe(true);
     h.access.disabledProviders['openai-a'] = true;
     expect(legacyCodexAccountCanRun('openai-a', undefined, { remote: false, newRoute: true })).toBe(false);
     setLegacyCodexAccountPaused('openai-a', false);
     expect(legacyCodexAccountCanRun('openai-a', undefined, { remote: false, newRoute: true })).toBe(true);
+  });
+
+  // PR #9900, standard: a provider switch alone must not bypass the imported
+  // connection's per-model remote grant, including revalidation of an existing route.
+  it('keeps remote model exclusions when an imported account joins the pool', () => {
+    h.remoteAllowed.add('openai-a');
+    h.remoteModels = ['model-b'];
+    for (const newRoute of [true, false]) {
+      expect(legacyCodexAccountCanRun('openai-a', 'model-a', { remote: true, newRoute })).toBe(false);
+      expect(legacyCodexAccountCanRun('openai-a', 'model-b', { remote: true, newRoute })).toBe(true);
+    }
+    expect(legacyCodexAccountCanRun('openai-a', 'model-a', { remote: false, newRoute: true })).toBe(true);
   });
 
   it('leaves excess and invalid connections unmapped instead of hiding accounts it cannot import', async () => {

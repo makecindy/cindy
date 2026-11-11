@@ -1,6 +1,7 @@
 import { isModelDisabled, isProviderDisabled } from '@cindy/model-providers';
 import { readModelDisableOverrides, setProviderDisabled } from '../maker-host/model-disable-store.js';
 import { isRemoteProviderInvocationAllowed } from '../maker-host/remote-provider-access-store.js';
+import { remoteModelAccess } from '../device-link/remoteModelAccess.js';
 
 export function setLegacyCodexAccountPaused(providerId: string, paused: boolean): void {
   setProviderDisabled(providerId, paused);
@@ -12,7 +13,8 @@ export function legacyCodexAccountCanRun(
   model: string | undefined,
   options: { remote: boolean; newRoute: boolean },
 ): boolean {
-  if (options.remote && !isRemoteProviderInvocationAllowed(providerId)) return false;
+  if (options.remote && (!isRemoteProviderInvocationAllowed(providerId)
+    || !remoteModelAccess.allows(providerId, model ?? ''))) return false;
   if (!options.newRoute) return true;
   const access = readModelDisableOverrides();
   if (isProviderDisabled(access, providerId)) return false;

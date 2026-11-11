@@ -291,7 +291,7 @@ export function resolveModelInvocation(
     // 「真实提供」必须含 per-provider 可见性:同一模型在 B 可见、在 A 被用户隐藏时,
     // 显式点名 A 不能只靠「已连接 + 目录含该模型」就放行 —— 那会绕过 isVisible 的
     // 来源级契约,路由到用户明确排除的来源(codex review)。
-    const rail = connectedProvidersForAgent([...ctx.providers], agentKind, { includeAliases: !!requestedProvider });
+    const rail = connectedProvidersForAgent([...ctx.providers], agentKind);
     // 「真实提供」还必须含 mode 准入(issue #882 第 3 点,2026-07 review 第 18 轮):
     // providerOffersModel 只看 id 是否存在,不看 mode——同一 id 在这个来源下若是
     // 非聊天类型的具体条目,无人值守派发会把请求发进 image/audio/embedding 端点。

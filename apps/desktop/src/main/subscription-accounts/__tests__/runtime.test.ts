@@ -130,7 +130,7 @@ describe('tasks using imported Codex connections', () => {
       legacyCodexAccounts: { 'openai-old': 'imported' },
     };
     const close = vi.fn(async () => {});
-    const start = vi.fn(async (_options: StartSessionOptions) => ({ id: 'native-old', close } as unknown as AgentSessionHandle));
+    const start = vi.fn<BaseAgent['startSession']>(async () => ({ id: 'native-old', close } as unknown as AgentSessionHandle));
     const agent = withSubscriptionAccounts({ kind, startSession: start } as unknown as BaseAgent);
     const handle = await agent.startSession({ providerId: 'openai-old', sessionId: 'old-task', resumeSessionId: 'native-old' } as StartSessionOptions);
     expect(start.mock.calls[0][0][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir).toBe('openai/imported');
@@ -147,7 +147,7 @@ describe('tasks using imported Codex connections', () => {
       strategy: 'round', accounts: [account('default'), account('imported')],
       legacyCodexAccounts: { 'openai-old': 'imported' },
     };
-    const fork = vi.fn(async (_options: ForkSdkSessionOptions) => ({ newSdkSessionId: 'forked' }));
+    const fork = vi.fn<(options: ForkSdkSessionOptions) => Promise<{ newSdkSessionId: string }>>(async () => ({ newSdkSessionId: 'forked' }));
     const agent = withSubscriptionAccounts({ kind: 'codex', forkSdkSession: fork } as unknown as BaseAgent);
     await agent.forkSdkSession({ providerId: 'openai-old', sourceSdkSessionId: 'old-native' } as ForkSdkSessionOptions);
     expect(fork.mock.calls[0][0][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir).toBe('openai/imported');
@@ -169,6 +169,11 @@ describe('tasks using imported Codex connections', () => {
     const local = await acquireSubscriptionAccount('openai', 'gpt-model', []);
     expect(local?.account.configDir).toBe('openai/imported');
     local?.release();
+    h.accountAllowed.mockReturnValue(true);
+    const remote = await acquireSubscriptionAccount('openai', 'gpt-model', [], false, { remote: true });
+    h.accountAllowed.mockImplementation((_provider, _model, options) => !options.remote);
+    await expect(remote!.account.readState()).rejects.toThrow('remote access was revoked');
+    remote?.release();
   });
 
   it('pins an explicit old connection without task keys and does not persist a denied assignment', async () => {
@@ -176,7 +181,7 @@ describe('tasks using imported Codex connections', () => {
       strategy: 'least', accounts: [account('default'), account('imported')],
       legacyCodexAccounts: { 'openai-old': 'imported' },
     };
-    const start = vi.fn(async (_options: StartSessionOptions) => ({ id: 'native-keys', close: async () => {} } as unknown as AgentSessionHandle));
+    const start = vi.fn<BaseAgent['startSession']>(async () => ({ id: 'native-keys', close: async () => {} } as unknown as AgentSessionHandle));
     const agent = withSubscriptionAccounts({ kind: 'codex', startSession: start } as unknown as BaseAgent);
     const handle = await agent.startSession({ providerId: 'openai-old' } as StartSessionOptions);
     expect(start.mock.calls[0][0][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir).toBe('openai/imported');

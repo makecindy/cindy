@@ -122,6 +122,7 @@ import {
   type ProviderLogoRouting,
 } from '@cindy/model-providers/branding';
 import { isModelVisible } from '@cindy/model-providers/sections';
+import { remoteInvocationModels, type ProviderView } from '@cindy/model-providers';
 import type { app } from 'electron';
 import type { remoteDesktop, requestRemoteDesktop } from '../remote-desktop';
 import type { remoteCredentialHost } from '../remote-desktop/credentialHost';
@@ -1120,10 +1121,6 @@ function projectInvokeResultForTunnel(
     : {};
   const providers = (r.providers as Record<string, unknown>[]).map((p) => {
     const rest = { ...p };
-    // Keep an individually offered old route selectable when the whole pool is not offered.
-    if (p.subscriptionPoolAlias && !(r.providers as Record<string, unknown>[])
-      .some(provider => provider.id === 'openai' && provider.remoteInvocationEnabled === true))
-      delete rest.subscriptionPoolAlias;
     // 「允许被远程调用」只是标记、不裁剪目录：远程控制与手机仍要看到全部供应商，
     // 只有远程 Agent 的选择入口按它筛选。只放行布尔值。
     delete rest.remoteInvocationEnabled;
@@ -1168,6 +1165,17 @@ function projectInvokeResultForTunnel(
     rest.routing = projectRoutingForDisplay(p.routing);
     return rest;
   });
+  // A pool's remote switch does not imply the same per-model grant. Compare the
+  // projected, authorized models before hiding any individually offered source.
+  const pool = providers.find(provider => provider.id === 'openai' && provider.remoteInvocationEnabled === true);
+  const poolModels = pool ? remoteInvocationModels(pool as unknown as ProviderView).models : undefined;
+  for (const provider of providers) {
+    if (!provider.subscriptionPoolAlias) continue;
+    const models = remoteInvocationModels(provider as unknown as ProviderView).models;
+    const covered = poolModels && Object.entries(models ?? {}).every(([agent, rows]) =>
+      (rows ?? []).every(model => poolModels[agent as keyof typeof poolModels]?.some(candidate => candidate.id === model.id)));
+    if (!covered) delete provider.subscriptionPoolAlias;
+  }
   // New hosts advertise the optional directory budget. Consumers deduct their
   // own read time once; an existing shorter upstream remainder wins. Older
   // controllers ignore this additive field.
