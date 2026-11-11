@@ -15,6 +15,7 @@ import {
   HALFWIDTH_PUNCT_LOCALES,
   FULL_WIDTH_PUNCT,
   findCaseMismatch,
+  findEnglishCopyIssues,
   findHalfWidthPunct,
   hasAsciiEllipsis,
   makeExemptChecker,
@@ -183,6 +184,18 @@ test('标点规则的 locale 适用范围有数据依据', () => {
 test('hasAsciiEllipsis: 识别三点省略号', () => {
   assert.equal(hasAsciiEllipsis('加载中...'), true);
   assert.equal(hasAsciiEllipsis('加载中…'), false);
+});
+
+// DESIGN.md §11 B-14(2026-11-11):英文写法守卫只拦正文里的违规。插值名、URL 与带宾语
+// 的按钮若被误报,存量 baseline 之外的新文案就无从下手,门禁会被绕开。
+test('findEnglishCopyIssues: 命中正文违规,不误伤插值、近形词与带宾语的按钮', () => {
+  const rules = (text) => findEnglishCopyIssues(text).map((issue) => issue.rule);
+  assert.deepEqual(rules('Operation failed. Please try again later.'), ['en-please']);
+  assert.deepEqual(rules('Pushed successfully'), ['en-successfully']);
+  assert.deepEqual(rules('Installed "{{name}}"'), ['en-straight-quote']);
+  assert.deepEqual(rules('OK'), ['en-bare-action']);
+  assert.deepEqual(rules('{{please}} pleased https://x.test/?q="a" Installed “{{name}}”'), []);
+  assert.deepEqual(rules('Submit issue'), []);
 });
 
 // ---------------------------------------------------------------------------

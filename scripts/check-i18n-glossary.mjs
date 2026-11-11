@@ -8,18 +8,20 @@
  *
  * 校验对象:i18n/glossary.json 里登记的术语,对照 desktop + mobile 全部 locale JSON。
  *
- * 三类规则:
+ * 四类规则:
  *  1. forbidden —— 术语在某语言下的禁用译法(如 Agent 在 zh-CN 禁「代理」)。
  *  2. case-form —— 保留英文的术语必须统一大小写形态(如 Worker 不写 worker)。
  *  3. punctuation —— 两条规则适用范围不同:半角标点(汉字后禁 , : ; ! ?)对 zh-CN /
  *     zh-TW 生效——日文 UI 惯例本就用半角冒号,实测 ja 半角 124:78 才是主流;省略号
  *     (… 而非三个半角点)覆盖 en / zh-CN / zh-TW / ja / ko。
+ *  4. english-copy —— 只查 en:Please、successfully、直引号、无宾动词按钮
+ *     (DESIGN.md §11.1 / §11.2,口径见 shared/glossary-rules.mjs 的 findEnglishCopyIssues)。
  *
  * 分级:
  *  - status=decided 的术语违规 → **阻断**(exit 1)。
  *  - status=proposed 的术语违规 → 只告警。proposed 用于承载「已知不一致但尚未拍板」的
  *    术语,让清单可见、可讨论,而不是靠脚本单方面替产品做裁决。
- *  - 标点规则视同 decided。
+ *  - 标点规则与英文写法规则视同 decided。
  *
  * 存量:i18n/glossary-baseline.json 冻结首次引入时的既有违规,只告警不阻断。baseline
  * **只减不增**——已修复却仍留在 baseline 的条目会报错,强制随手清理。新增违规一律阻断。
@@ -51,6 +53,7 @@ import {
   HALFWIDTH_PUNCT_LOCALES,
   caseStandardFor,
   findCaseMismatch,
+  findEnglishCopyIssues,
   findHalfWidthPunct,
   hasAsciiEllipsis,
   normalizeForPunctuation,
@@ -396,6 +399,31 @@ for (const locale of locales) {
   }
 }
 
+// --- 规则 4:英文写法(DESIGN.md §11.1 / §11.2,只查 en) ---
+// 2026-11-11 维护者裁决 B-14:保留规则,先修高频文案,只拦新增。引入时的存量冻结在
+// baseline 里,按页迁移时修一条摘一条;规则口径见 shared/glossary-rules.mjs。
+const EN_COPY_HINTS = {
+  'en-please': '英文不写 "Please"(DESIGN.md §11.1),直接说明要做什么',
+  'en-successfully': '结果文案说明改变了什么,不写 "successfully"(DESIGN.md §11.1)',
+  'en-straight-quote': '英文正文用弯引号 “ ”,不用直引号 "(DESIGN.md §11.2)',
+  'en-bare-action': '按钮要写清对什么做什么,不用无宾动词 Confirm / OK / Submit(DESIGN.md §11.1)',
+};
+for (const [key, value] of corpus.get(glossary.sourceLocale) ?? []) {
+  for (const issue of findEnglishCopyIssues(value)) {
+    violations.push(
+      makeViolation({
+        locale: glossary.sourceLocale,
+        key,
+        rule: issue.rule,
+        detail: issue.detail,
+        severity: 'error',
+        text: value,
+        hint: `${EN_COPY_HINTS[issue.rule]}\n      当前: ${truncate(value, 100)}`,
+      }),
+    );
+  }
+}
+
 violations.sort((a, b) => a.fingerprint.localeCompare(b.fingerprint));
 
 // ---------------------------------------------------------------------------
@@ -431,9 +459,9 @@ if (UPDATE_BASELINE) {
   const kept = blockingAll.map((v) => v.fingerprint).sort();
   const payload = {
     _comment:
-      '存量违规冻结清单(仅 status=decided 的术语与标点规则)。只减不增:修好一条就从这里' +
-      '删一条,新增违规一律阻断 CI。剪枝: node scripts/check-i18n-glossary.mjs --update-baseline' +
-      '(该命令拒绝登记新违规,新增条目必须手动编辑本文件)',
+      '存量违规冻结清单(仅 status=decided 的术语、标点规则与英文写法规则)。只减不增:修好一条就从这里' +
+      '删一条,新增违规一律阻断 CI。剪枝(只删已修好的、拒绝登记新违规): node scripts/check-i18n-glossary.mjs' +
+      ' --update-baseline —— 确需新冻结一批存量时必须手动编辑本文件,让新增条目出现在 diff 里被 review 看到。',
     _generatedFrom: `glossary.json version ${glossary.version}`,
     entries: kept,
   };

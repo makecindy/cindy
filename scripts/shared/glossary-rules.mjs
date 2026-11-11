@@ -427,3 +427,35 @@ export function findHalfWidthPunct(text) {
 export function hasAsciiEllipsis(text) {
   return ASCII_ELLIPSIS.test(text);
 }
+
+/**
+ * 英文文案的写法规则(DESIGN.md §11.1 / §11.2),只对 en 生效——这些规则「不可跨语言
+ * 套用」,中文的「请」是正常礼貌用语,明文豁免。
+ *
+ * 只收能机检、几乎没有误报的几条:
+ *  - en-please:写 "Please"(界面不乞求)。
+ *  - en-successfully:用 "successfully" 当结果填充词。少数句子里它承载真实语义
+ *    (`the last successfully loaded hosts`),这类留在 baseline;新文案换个说法即可。
+ *  - en-straight-quote:正文里的直双引号(应为 “ ”)。插值、URL、文件名先剥离;
+ *    格式字面量(JSON 字段值、非法字符清单)属于合理存量,留在 baseline。
+ *  - en-bare-action:整条文案只有一个无宾动词 Confirm / OK / Submit——按钮必须说明对什么做什么。
+ *
+ * 「默认附加 Try again」是否有依据无法机检,不在这里拦。
+ * 返回 [{ rule, detail }],detail 带命中次数,口径与其余规则的指纹一致。
+ */
+const EN_PLEASE = /(?<![A-Za-z])please(?![A-Za-z])/gi;
+const EN_SUCCESSFULLY = /(?<![A-Za-z])successfully(?![A-Za-z])/gi;
+const EN_BARE_ACTION = /^(?:confirm|ok|okay|submit)$/i;
+
+export function findEnglishCopyIssues(text) {
+  const prose = stripNonProse(text);
+  const issues = [];
+  const please = prose.match(EN_PLEASE)?.length ?? 0;
+  if (please > 0) issues.push({ rule: 'en-please', detail: `please×${please}` });
+  const successfully = prose.match(EN_SUCCESSFULLY)?.length ?? 0;
+  if (successfully > 0) issues.push({ rule: 'en-successfully', detail: `successfully×${successfully}` });
+  const quotes = prose.match(/"/g)?.length ?? 0;
+  if (quotes > 0) issues.push({ rule: 'en-straight-quote', detail: `"×${quotes}` });
+  if (EN_BARE_ACTION.test(text.trim())) issues.push({ rule: 'en-bare-action', detail: text.trim() });
+  return issues;
+}

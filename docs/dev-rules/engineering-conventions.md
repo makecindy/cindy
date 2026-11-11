@@ -271,7 +271,9 @@ PR 门禁必须在 Windows 上用多个并行分片（当前为 4 个）完整�
   各组内按 id）。
 - **两级状态**：`decided` 违反即阻断 CI；`proposed` 只告警，用于承载「已知不一致但
   尚未拍板」的术语——让清单可见可讨论，而不是靠脚本替产品做裁决。
-- **三类规则**：禁用译法、保留英文术语的大小写形态、zh-CN 半角标点与三语省略号。
+- **四类规则**：禁用译法、保留英文术语的大小写形态、zh-CN 半角标点与三语省略号，
+  以及只查 en 的写法规则（DESIGN.md §11.1 / §11.2：不写 Please、不用 successfully、
+  正文不用直引号、按钮不用无宾的 Confirm / OK / Submit）。
   标点规则的适用范围由现状数据定，不靠直觉——例如日文 UI 惯例本就用半角冒号，
   ja 不套用中文的全角规则。
 - **存量**：`i18n/glossary-baseline.json` 冻结引入时的既有违规，**只减不增**；修好一条
@@ -283,7 +285,7 @@ PR 门禁必须在 Windows 上用多个并行分片（当前为 4 个）完整�
   - `pnpm check:i18n` 校验 key 结构——缺 key、孤儿 key、跨 locale 类型冲突报错阻断；
     空值与“与默认语言完全相同”只发警告。跨语言常驻表 `crossLocaleStrings.generated.json`
     与各 locale 不一致时同样阻断，按提示运行 `node scripts/i18n-cross-locale.mjs` 重新生成。
-  - `pnpm check:i18n-glossary` 校验译文术语与标点，并检查 `GLOSSARY.md` 是否与术语表同步。
+  - `pnpm check:i18n-glossary` 校验译文术语、标点与英文写法，并检查 `GLOSSARY.md` 是否与术语表同步。
   - 两者互补：前者管「key 齐不齐」，后者管「词译得一不一致」，谁也替代不了谁。改
     i18n 后两个都要跑（CI 已强制）。
 - **影子 catalog**：有几批不走 i18next 的手写多语 catalog，根脚本只扫 locale JSON、扫不到
