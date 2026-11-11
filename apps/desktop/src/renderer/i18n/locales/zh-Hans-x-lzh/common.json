@@ -1,4 +1,12 @@
 {
+  "runtimePlugins": {
+    "save": "存之",
+    "promptUnsupported": "此 Pi 所在之处不支持系统提示词片段。",
+    "title": "差事法器",
+    "description": "为此差事择法器，改动自下条消息生效。",
+    "unsupported": "逐次请求前处置仅本机 Pi 可用，此差事引擎不支持。",
+    "failed": "设置未能读取或保存，请重开此页再试。"
+  },
   "sharedTaskRecovery": {
     "title": "无法在原电脑上恢复任务",
     "description": "可以选择其他电脑或供应商，通过上下文交接继续。原消息保留，但切换不会迁移原电脑上的完整运行状态。",
@@ -3794,6 +3802,10 @@
           "openaiImagesHint": "以此连接之地址与 API Key 呼 /images/generations 与 /images/edits。启之，则此连接为供方唯一之图连接。所缺模型可手增 ID，再于模型详情中宣其图之能。",
           "xaiVideos": "用 xAI 兼容影界面",
           "xaiVideosHint": "以此连接之地址与 API Key 递交、查找影之差事。启之，则此连接为供方唯一之影连接。所缺模型可手增 ID，再于模型详情中宣其影之能。",
+          "minimaxVideos": "用 MiniMax 兼容影界面",
+          "minimaxVideosHint": "以此连接之地址与 API Key 递交、查找 MiniMax 影之差事（如 MiniMax-H3）。每供方仅可用一种影界面。所缺模型可手增 ID，再于模型详情中宣其影之能。",
+          "openaiVideos": "用 OpenAI 兼容影界面（/v1/videos）",
+          "openaiVideosHint": "以此连接之地址与 API Key，循 tu-zi 等诸中转所用之 POST /v1/videos 式递交、查找影之差事，MiniMax-H3 等模型亦可由此用之。每供方仅可用一种影界面。所缺模型可手增 ID，再于模型详情中宣其影之能。",
           "runtimeSupportsImageGeneration": "支持图之生成与编辑",
           "runtimeSupportsImageGenerationHelpLabel": "详图之生成与编辑支持",
           "runtimeSupportsImageGenerationConditionTitle": "适用之条",
@@ -6620,8 +6632,27 @@
             "copied": "关联码已录",
             "hint": "或于飞书中将关联码私遣予 Cindy 机器人"
           },
+          "linkedAccounts": "已系账号：{{count}}",
+          "connectionTenant": "所属企业：{{tenant}}",
           "setWorkingDevice": "设为工作电脑",
-          "workingDeviceSet": "已设为工作电脑"
+          "workingDeviceSet": "已设为工作电脑",
+          "appType": {
+            "self_built": "组织自建应用",
+            "store": "商店应用"
+          },
+          "linkedBotsSummary": "已联机器人 {{bots}} · 飞书账号 {{accounts}}",
+          "chooseBot": "择机器人以联，可并用多者。",
+          "connectBot": "联此机器人",
+          "linkAnotherAccount": "另联飞书账号",
+          "botFallback": "Cindy 机器人",
+          "bridgeTitle": "飞书机器人",
+          "bridgeDescription": "机器人惟转飞书之讯于 Cindy。各飞书账号之讯，交其工作电脑处理；差事依机器人与飞书账号各立。",
+          "settingsTitle": "工作目录与模型",
+          "settingsDescription": "属尔之 Cindy 账号与此台电脑，不随机器人或飞书账号而易：诸飞书机器人共用一份。工作目录清单亦与他渠道共用。",
+          "workingDeviceLabel": "工作电脑：{{name}}",
+          "workingDeviceThisComputer": "本机",
+          "workingDeviceUnknown": "工作电脑尚未同步",
+          "workingDeviceUnnamed": "未命名电脑"
         }
       },
       "summary": {
@@ -8087,8 +8118,18 @@
         "subscribeRoutineRunDetail": "凡于「预检」择之之例行差事，每番触发必先询之。其可见差事之指令与触发事件之内容，可令此番略过或止之，不能代君准允。",
         "subscribeScheduleRun": "可于君所择之自动化运行前行检",
         "subscribeScheduleRunDetail": "凡于「预检」择之之自动化，运行前必先询之。其可见此自动化之名与指令，可令此番略过或止之，不能代君准允。",
+        "systemPrompt": "可为所选差事补系统提示词",
+        "systemPromptDetail": "下列静文唯入所选差事，置 Cindy 固定提示词之后；次序与引擎之域依包中所载。改动自下条消息生效，有误依差事所设处置。",
+        "subscribeComposeContext": "可于所选差事答前补资料",
+        "subscribeComposeContextDetail": "唯所选差事交其当前消息。所返为参阅之材，不入系统提示词，不作主人授权；有误依差事所设处置。",
+        "subscribeSearchMemory": "可为所选差事供记忆",
+        "subscribeSearchMemoryDetail": "于既有 memory_search 合入全文，署法器之名。须先启记忆检索；唯交所选差事之查询，法器失误则留 Cindy 原果。",
+        "subscribeStartTurn": "可于所选差事每次回复前择模型",
+        "subscribeStartTurnDetail": "仅在差事选用此法器时，彼可阅本条消息，择已连之模型、思之深浅及 Fast。出错依差事所设处理，不得代君批准操作。",
+        "subscribeModelRequest": "可处理所选差事之每次模型请求",
+        "subscribeModelRequestDetail": "仅在差事选用此法器时，彼可阅并调整模型请求之内容、模型及参数。现仅支持本机 Pi；出错依差事所设处理，不含连接凭证。",
         "subscribeStartTask": "可为新差事择模型",
-        "subscribeStartTaskDetail": "新任务择其所供之模型时，彼阅首条消息，于汝已连之模型中择一。唯择一次，任务中途不易模型。"
+        "subscribeStartTaskDetail": "新任务择其所供之模型时，彼阅首条消息，于汝已连之模型中择一。此节唯于首条消息发出前行一次。"
       },
       "connections": {
         "confirmTitle": "增连接地址",
