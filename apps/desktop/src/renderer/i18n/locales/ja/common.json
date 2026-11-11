@@ -14827,7 +14827,11 @@
         "running": "実行中",
         "needsAttention": "操作待ち",
         "done": "完了 — クリックして確認",
-        "error": "エラー — クリックして確認"
+        "error": "エラー — クリックして確認",
+        "runningText": "実行中",
+        "awaitingText": "入力待ち",
+        "errorText": "失敗",
+        "doneText": "完了"
       },
       "scheduleBinding": {
         "label": "自動化タスクと連携中",
@@ -15101,6 +15105,14 @@
         "priority": "優先度",
         "activity": "最近のアクティビティ",
         "created": "作成日時"
+      },
+      "filterSessionStatusHeading": "セッション状態",
+      "filterSessionStatus": {
+        "all": "すべて",
+        "running": "実行中",
+        "awaiting": "入力待ち",
+        "error": "失敗",
+        "done": "完了"
       }
     },
     "rename": {

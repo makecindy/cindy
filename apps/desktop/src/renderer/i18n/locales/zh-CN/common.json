@@ -14763,6 +14763,13 @@
         "30d": "30 天",
         "all": "全部"
       },
+      "filterSessionStatus": {
+        "all": "全部",
+        "running": "运行中",
+        "awaiting": "等待输入",
+        "error": "执行失败",
+        "done": "已完成"
+      },
       "filterSortBy": {
         "created": "创建时间",
         "activity": "最近活动",
@@ -14776,6 +14783,7 @@
       "filterStatusHeading": "状态",
       "filterAgentHeading": "Harness",
       "filterLastActivityHeading": "最近活跃",
+      "filterSessionStatusHeading": "会话状态",
       "filterGroupByHeading": "分组",
       "filterSortByHeading": "排序",
       "filterTaskSortHeading": "任务排序",
@@ -14825,9 +14833,13 @@
       "hasPausedQueue": "有暂停未发送的消息",
       "status": {
         "running": "运行中",
+        "runningText": "运行中",
         "needsAttention": "等待你处理",
+        "awaitingText": "等待输入",
         "done": "已完成 — 点击查看",
-        "error": "任务出错 — 点击查看"
+        "doneText": "已完成",
+        "error": "任务出错 — 点击查看",
+        "errorText": "失败"
       },
       "scheduleBinding": {
         "label": "已绑定自动化",

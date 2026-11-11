@@ -15033,7 +15033,11 @@
         "running": "Em execução",
         "needsAttention": "Aguardando sua resposta",
         "done": "Concluída — clique para ver",
-        "error": "Falhou — clique para ver"
+        "error": "Falhou — clique para ver",
+        "runningText": "Executando",
+        "awaitingText": "Aguardando",
+        "errorText": "Falha",
+        "doneText": "Concluído"
       },
       "scheduleBinding": {
         "label": "Vinculada à automação",
@@ -15313,6 +15317,14 @@
         "priority": "Prioridade",
         "activity": "Atividade recente",
         "created": "Data de criação"
+      },
+      "filterSessionStatusHeading": "Status da sessão",
+      "filterSessionStatus": {
+        "all": "Todos",
+        "running": "Em execução",
+        "awaiting": "Aguardando entrada",
+        "error": "Falha",
+        "done": "Concluído"
       }
     },
     "rename": {

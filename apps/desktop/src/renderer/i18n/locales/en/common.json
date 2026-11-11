@@ -14829,6 +14829,13 @@
         "30d": "30d",
         "all": "All"
       },
+      "filterSessionStatus": {
+        "all": "All",
+        "running": "Running",
+        "awaiting": "Awaiting Input",
+        "error": "Failed",
+        "done": "Completed"
+      },
       "filterSortBy": {
         "created": "Creation Time",
         "activity": "Recent Activity",
@@ -14842,6 +14849,7 @@
       "filterStatusHeading": "Status",
       "filterAgentHeading": "Harness",
       "filterLastActivityHeading": "Last activity",
+      "filterSessionStatusHeading": "Session Status",
       "filterGroupByHeading": "Group by",
       "filterSortByHeading": "Sort by",
       "filterTaskSortHeading": "Session sort",
@@ -14891,9 +14899,13 @@
       "hasPausedQueue": "Paused unsent messages",
       "status": {
         "running": "Running",
+        "runningText": "Running",
         "needsAttention": "Awaiting your input",
+        "awaitingText": "Awaiting",
         "done": "Completed — click to view",
-        "error": "Failed — click to view"
+        "doneText": "Done",
+        "error": "Failed — click to view",
+        "errorText": "Failed"
       },
       "scheduleBinding": {
         "label": "Bound to automation",

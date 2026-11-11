@@ -49,6 +49,11 @@ import {
   SlidersHorizontal,
   Wallet,
   Users,
+  Activity,
+  CheckCircle2,
+  CircleAlert,
+  CircleX,
+  PlayCircle,
   type LucideIcon,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -85,6 +90,7 @@ import { getRemoteProjectMachineIdentity } from '../lib/remoteProjectIdentity';
 import type {
   FilterLastActivity,
   FilterProjectOrder,
+  FilterSessionStatus,
   FilterSortBy,
   FilterStatus,
   FilterVendor,
@@ -115,6 +121,14 @@ const STATUS_OPTIONS: ReadonlyArray<Option<FilterStatus>> = [
   { value: 'active', labelKey: 'ccAgent.sidebar.taskStatus.active', Icon: CircleDot },
   { value: 'archived', labelKey: 'ccAgent.sidebar.taskStatus.archived', Icon: Archive },
   { value: 'all', labelKey: 'ccAgent.sidebar.taskStatus.all', Icon: Layers },
+];
+
+const SESSION_STATUS_OPTIONS: ReadonlyArray<Option<FilterSessionStatus>> = [
+  { value: 'all', labelKey: 'ccAgent.sidebar.filterSessionStatus.all', Icon: Layers },
+  { value: 'running', labelKey: 'ccAgent.sidebar.filterSessionStatus.running', Icon: PlayCircle },
+  { value: 'awaiting', labelKey: 'ccAgent.sidebar.filterSessionStatus.awaiting', Icon: CircleAlert },
+  { value: 'error', labelKey: 'ccAgent.sidebar.filterSessionStatus.error', Icon: CircleX },
+  { value: 'done', labelKey: 'ccAgent.sidebar.filterSessionStatus.done', Icon: CheckCircle2 },
 ];
 
 const VENDOR_OPTIONS: ReadonlyArray<Option<FilterVendor>> = [
@@ -391,6 +405,7 @@ export function SidebarFilterPopover({
   const isContextMode = contextMenuPos !== undefined;
   const {
     status,
+    sessionStatus,
     projects,
     projectsAsSet,
     creators,
@@ -413,6 +428,7 @@ export function SidebarFilterPopover({
     resetContentFilters,
     setVendor,
     setLastActivity,
+    setSessionStatus,
     setGroupBy,
     setGroupDialogue,
     setGroupDevice,
@@ -427,6 +443,7 @@ export function SidebarFilterPopover({
   const { mode: mainViewMode, setMode: setMainViewMode } = useSidebarMainViewMode();
 
   const statusValue = optionLabel(STATUS_OPTIONS, status, t);
+  const sessionStatusValue = optionLabel(SESSION_STATUS_OPTIONS, sessionStatus, t);
   const vendorValue = optionLabel(VENDOR_OPTIONS, vendor, t);
   const lastActivityValue = optionLabel(LAST_ACTIVITY_OPTIONS, lastActivity, t);
   const groupByValue =
@@ -536,7 +553,11 @@ export function SidebarFilterPopover({
 
   // 一级「筛选」行摘要：偏离默认的维度数。
   const activeFilterCount =
-    (projects !== 'all' ? 1 : 0) + (vendor !== 'all' ? 1 : 0) + (lastActivity !== 'all' ? 1 : 0) + (creators !== 'all' ? 1 : 0);
+    (projects !== 'all' ? 1 : 0) +
+    (vendor !== 'all' ? 1 : 0) +
+    (lastActivity !== 'all' ? 1 : 0) +
+    (creators !== 'all' ? 1 : 0) +
+    (sessionStatus !== 'all' ? 1 : 0);
   const filterSummary =
     activeFilterCount > 0
       ? t('ccAgent.sidebar.filterSummaryActive', { count: activeFilterCount })
@@ -869,6 +890,22 @@ export function SidebarFilterPopover({
                       selected={lastActivity === option.value}
                       Icon={option.Icon}
                       onSelect={() => setLastActivity(option.value)}
+                    />
+                  ))}
+                </MenuSubRow>
+
+                <MenuSubRow
+                  label={t('ccAgent.sidebar.filterSessionStatusHeading')}
+                  value={sessionStatusValue}
+                  Icon={Activity}
+                >
+                  {SESSION_STATUS_OPTIONS.map((option) => (
+                    <SelectMenuItem
+                      key={option.value}
+                      label={t(option.labelKey)}
+                      selected={sessionStatus === option.value}
+                      Icon={option.Icon}
+                      onSelect={() => setSessionStatus(option.value)}
                     />
                   ))}
                 </MenuSubRow>

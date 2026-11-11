@@ -1625,10 +1625,35 @@ function ExpandedView({
   const taskCreatorIndex = useTaskCreatorIndex();
   const activityFilteredSessions = useMemo(() => {
     const cutoff = cutoffForLastActivity(filter.lastActivity);
-    if (cutoff === null && filter.creators === 'all') return sidebarSessions;
-    return sidebarSessions.filter((s) => (cutoff === null || sessionActivityMs(s) >= cutoff)
-      && matchesTaskCreators(s, filter.creators, taskCreatorIndex));
-  }, [sidebarSessions, filter.lastActivity, filter.creators, taskCreatorIndex]);
+    const sessionStatusFilter = filter.sessionStatus;
+    if (cutoff === null && filter.creators === 'all' && sessionStatusFilter === 'all') return sidebarSessions;
+    return sidebarSessions.filter((s) => {
+      if (cutoff !== null && sessionActivityMs(s) < cutoff) return false;
+      if (!matchesTaskCreators(s, filter.creators, taskCreatorIndex)) return false;
+      if (sessionStatusFilter === 'all') return true;
+      if (sessionStatusFilter === 'running') return displayRunningSessionIds.has(s.id);
+      if (sessionStatusFilter === 'awaiting') {
+        return sidebarNotifications.has(s.id) && attentionKinds.get(s.id) === 'awaiting';
+      }
+      if (sessionStatusFilter === 'error') {
+        return urgentSet.has(s.id) || (sidebarNotifications.has(s.id) && attentionKinds.get(s.id) === 'error');
+      }
+      if (sessionStatusFilter === 'done') {
+        return sidebarNotifications.has(s.id) && attentionKinds.get(s.id) === 'done';
+      }
+      return true;
+    });
+  }, [
+    sidebarSessions,
+    filter.lastActivity,
+    filter.creators,
+    filter.sessionStatus,
+    taskCreatorIndex,
+    displayRunningSessionIds,
+    sidebarNotifications,
+    attentionKinds,
+    urgentSet,
+  ]);
   const activityFilteredPersistentLocalProjects = useMemo(
     () =>
       filterPersistentLocalProjectsByLastActivity(

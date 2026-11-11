@@ -14827,7 +14827,11 @@
         "running": "方行",
         "needsAttention": "候君處置",
         "done": "已畢 — 點而覽之",
-        "error": "差事有謬 — 點而覽之"
+        "error": "差事有謬 — 點而覽之",
+        "runningText": "方行",
+        "awaitingText": "待答",
+        "errorText": "未成",
+        "doneText": "已畢"
       },
       "scheduleBinding": {
         "label": "已繫自運",
@@ -15101,6 +15105,14 @@
         "priority": "緩急",
         "activity": "近動",
         "created": "立時"
+      },
+      "filterSessionStatusHeading": "言談狀態",
+      "filterSessionStatus": {
+        "all": "皆是",
+        "running": "方行",
+        "awaiting": "待答",
+        "error": "未成",
+        "done": "已畢"
       }
     },
     "rename": {

@@ -899,6 +899,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
             <SidebarRightStatusIndicator
               kind={rightStatusKind}
               isActive={isActive}
+              showLabel
               className="absolute right-2.5 bottom-2"
             />
           )}

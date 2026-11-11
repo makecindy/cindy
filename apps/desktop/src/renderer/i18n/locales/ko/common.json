@@ -14827,7 +14827,11 @@
         "running": "실행 중",
         "needsAttention": "사용자 조작 대기",
         "done": "완료 — 클릭하여 확인",
-        "error": "오류 — 클릭하여 확인"
+        "error": "오류 — 클릭하여 확인",
+        "runningText": "실행 중",
+        "awaitingText": "입력 대기",
+        "errorText": "실패",
+        "doneText": "완료"
       },
       "scheduleBinding": {
         "label": "자동화 작업에 연결됨",
@@ -15101,6 +15105,14 @@
         "priority": "우선순위",
         "activity": "최근 활동",
         "created": "생성 시간"
+      },
+      "filterSessionStatusHeading": "세션 상태",
+      "filterSessionStatus": {
+        "all": "전체",
+        "running": "실행 중",
+        "awaiting": "입력 대기 중",
+        "error": "실패",
+        "done": "완료"
       }
     },
     "rename": {

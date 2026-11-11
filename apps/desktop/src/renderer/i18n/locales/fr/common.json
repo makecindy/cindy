@@ -15033,7 +15033,11 @@
         "running": "En cours d'exécution",
         "needsAttention": "En attente de votre saisie",
         "done": "Terminée : cliquez pour voir",
-        "error": "Échec : cliquez pour voir"
+        "error": "Échec : cliquez pour voir",
+        "runningText": "En cours",
+        "awaitingText": "En attente",
+        "errorText": "Échec",
+        "doneText": "Terminé"
       },
       "scheduleBinding": {
         "label": "Liée à une automatisation",
@@ -15313,6 +15317,14 @@
         "priority": "Priorité",
         "activity": "Activité récente",
         "created": "Date de création"
+      },
+      "filterSessionStatusHeading": "Statut de la session",
+      "filterSessionStatus": {
+        "all": "Tout",
+        "running": "En cours",
+        "awaiting": "En attente de saisie",
+        "error": "Échec",
+        "done": "Terminé"
       }
     },
     "rename": {
