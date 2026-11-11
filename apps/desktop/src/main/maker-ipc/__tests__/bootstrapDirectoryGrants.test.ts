@@ -254,10 +254,10 @@ describe('bootstrap directory-grant wiring', () => {
     const bootstrap = registerSource.slice(bootstrapStart, bootstrapEnd);
 
     // Cross-file permission invariant: private bootstrap must persist narrowed
-    // grants before creation. Prompt assembly may change the options variable;
-    // neither that name nor a missing creation call can satisfy this contract.
+    // grants before the shared task-prompt creation entry. Neither a changed
+    // options variable nor a missing creation call can satisfy this contract.
     const prepareGrants = bootstrap.indexOf('await prepareDirectoryGrantsForBootstrap(');
-    const createRuntime = bootstrap.indexOf('await maker.createSession(');
+    const createRuntime = bootstrap.indexOf('await createSessionWithRuntimePlugins(');
     expect(prepareGrants).toBeGreaterThanOrEqual(0);
     expect(createRuntime).toBeGreaterThanOrEqual(0);
     expect(prepareGrants).toBeLessThan(createRuntime);

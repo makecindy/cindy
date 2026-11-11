@@ -1,6 +1,6 @@
 import { PI_CACHE_RECOVERY_SOURCE } from './cache-recovery-source.js';
 import { PI_NATIVE_PROVIDER_ADAPTER_SOURCE } from './native-provider-adapter-source.js';
-import { MAX_JSONL_BUFFER_CHARS } from './transport.js';
+import { MAX_JSONL_BUFFER_CHARS } from './rpc-limits.js';
 /**
  * cindy-bridge —— 写进 pi agentHome/extensions/ 的扩展源码(字符串常量)。
  *

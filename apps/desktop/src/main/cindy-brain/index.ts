@@ -3157,7 +3157,7 @@ export function composeGhostRuntimeContext(sessionId: string, text: string, sign
   return runtimeContextProviders().compose(sessionId, text, signal);
 }
 export const ghostTaskSystemPrompt = createStaticPromptProvider({ readSettings: readRuntimePluginSettings,
-  find: id => findInstalledGhostByInstanceId(availableGhosts(), id) ?? undefined });
+  find: id => findGhostNotificationTarget(id) ?? undefined });
 export function searchGhostRuntimeMemories(query: string,
   opts: { type?: 'user' | 'feedback' | 'project' | 'reference'; limit?: number },
   context?: { sessionId?: string }) {

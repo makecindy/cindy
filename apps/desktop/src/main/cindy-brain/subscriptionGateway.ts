@@ -586,7 +586,13 @@ export class GhostSubscriptionGateway {
     const ownerScope = this.captureOwnerScope();
     if (!this.ownerScopeUsable(ownerScope)) return { action: 'allow' };
     const spec = GHOST_CONTROL_POINTS[point];
-    const ghost = findInstalledGhostByInstanceId(this.deps.listGhosts(), target.pluginId);
+    const runtimePoint = isRuntimePluginPoint(point);
+    // Reuse the fresh exact-instance authorization lookup; per-request runtime
+    // control must not rescan unrelated installs. Legacy points keep their path.
+    const findTarget = () => runtimePoint && this.deps.findGhostForDelivery
+      ? this.deps.findGhostForDelivery(target.pluginId)
+      : findInstalledGhostByInstanceId(this.deps.listGhosts(), target.pluginId);
+    const ghost = findTarget();
     const failed = (ghostId: string, ghostName: string, why: string): GhostRuntimeControlPointResult => {
       this.deps.log?.warn('control point unanswered', { ghostId, point, onFailure: target.onFailure, why });
       if (target.onFailure === 'allow') return { action: 'allow' };
@@ -601,9 +607,8 @@ export class GhostSubscriptionGateway {
     const verdict = e.pointFused ? null : await this.askControlPoint(ghost, e, point, data, spec.timeoutMs, ownerScope);
     if (!this.ownerScopeUsable(ownerScope)) return { action: 'allow' };
     if (verdict === null) return failed(ghostId, ghost.manifest.name, e.pointFused ? 'fused' : 'unanswered');
-    const runtimePoint = isRuntimePluginPoint(point);
     if (runtimePoint) {
-      const current = findInstalledGhostByInstanceId(this.deps.listGhosts(), ghostId);
+      const current = findTarget();
       if (!current || !ghostControlPointActive(current, point)
         || ghostInstallApprovalToken(current.approval) !== controlApproval) {
         return failed(ghostId, ghost.manifest.name, 'changed');

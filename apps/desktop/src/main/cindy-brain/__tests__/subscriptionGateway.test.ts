@@ -1818,8 +1818,11 @@ describe('control points', () => {
   // task's failure policy. Unit: real gateway, in-memory transport, fake timers.
   it('routes only the selected runtime plugin and retains request preferences', async () => {
     const runtimePoint = 'will-start-turn' as const;
+    const ghosts = ['r1', 'r2'].map(id => ({ ...ghost(id, { hooks: [runtimePoint] }), approvedControlPoints: [runtimePoint] }));
+    const listGhosts = vi.fn(() => ghosts);
+    const findGhostForDelivery = vi.fn((id: string) => ghosts.find(item => installedGhostStoragePart(item) === id) ?? null);
     const { gw, sent, running } = makeGateway({
-      listGhosts: () => ['r1', 'r2'].map(id => ({ ...ghost(id, { hooks: [runtimePoint] }), approvedControlPoints: [runtimePoint] })),
+      listGhosts, findGhostForDelivery,
     });
     running.add('r1');
     running.add('r2');
@@ -1830,6 +1833,10 @@ describe('control points', () => {
     gw.handleVerdict('r2', { type: 'event-verdict', hookId: (sent[0].payload as { hookId: string }).hookId, action: 'route', route });
     gw.handleVerdict('r1', { type: 'event-verdict', hookId: (sent[0].payload as { hookId: string }).hookId, action: 'route', route });
     expect(await response).toMatchObject({ action: 'route', ghostId: 'r1', route });
+    // Performance contract: check fresh target approval before and after the
+    // ask without scanning unrelated installations on every model request.
+    expect(listGhosts).not.toHaveBeenCalled();
+    expect(findGhostForDelivery.mock.calls).toEqual([['r1'], ['r1']]);
   });
 
   it('processes a request only at the model-request point and follows failure policy for invalid routes', async () => {
