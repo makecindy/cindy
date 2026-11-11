@@ -11,6 +11,7 @@ import {
   redactSensitiveText,
   redactSensitiveTextDeep,
   parseAgentErrorCode,
+  localizeSubscriptionAccountError,
 } from './errorRedaction.js';
 
 describe('explicit Codex history recovery offer', () => {
@@ -368,5 +369,26 @@ describe('agent error envelopes shared by desktop and mobile', () => {
     expect(parseAgentErrorCode('[REMOTE_FUTURE]')).toEqual({ code: 'REMOTE_FUTURE', fallback: '[REMOTE_FUTURE]' });
     expect(parseAgentErrorCode('[CUSTOM_ERROR] diagnostic')).toBeNull();
     expect(parseAgentErrorCode('prose containing [REMOTE_FUTURE] diagnostic')).toBeNull();
+  });
+});
+
+// Unit regression: startup envelopes previously fell back to "reply failed".
+// The public presenter must preserve cause and trusted time across IPC wrappers.
+describe('subscription account startup guidance', () => {
+  const t = (key: string, options?: { resetAt: string }) => key + (options ? ` ${options.resetAt}` : '');
+  it.each(['', 'LAZY_CREATE_FAILED: ', "Error invoking remote method 'send': Error: [IPC_ERROR] LAZY_CREATE_FAILED: "])(
+    'keeps the limit and reset time through %s', prefix => {
+      const text = localizeSubscriptionAccountError(`${prefix}[SUBSCRIPTION_ACCOUNT_LIMITED] diagnostic\nresetAtMs=1900000000000`, t, 'zh-CN');
+      expect(text).toContain('chat.subscriptionAccountError.limitedUntil');
+      expect(text).toContain(new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(1900000000000)));
+    });
+  it.each(['', '\nresetAtMs=NaN', '\nresetAtMs=-1', '\nresetAtMs=9999999999999999'])(
+    'does not invent a reset time for %s', metadata => {
+      expect(localizeSubscriptionAccountError(`[SUBSCRIPTION_ACCOUNT_LIMITED] diagnostic${metadata}`, t)).toBe('chat.subscriptionAccountError.limited');
+    });
+  it('keeps old ambiguous failures cause-neutral and rejects unrelated messages', () => {
+    expect(localizeSubscriptionAccountError('LAZY_CREATE_FAILED: The task subscription account requires login or quota reset', t)).toBe('chat.subscriptionAccountError.legacy');
+    expect(localizeSubscriptionAccountError('An upstream diagnostic mentions quota reset', t)).toBeNull();
+    expect(localizeSubscriptionAccountError('[REMOTE_FUTURE] quota reset', t)).toBeNull();
   });
 });

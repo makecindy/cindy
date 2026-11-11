@@ -60,3 +60,15 @@ OpenAI 池快照增加可选 `nativeAccountPool` 标记，当前控制端让三�
 原生额度桶；旧控制端仍可读取 `webSnapshot` 的通用桶，不含账号身份。
 官方及自建 relay 均只透传已有 invoke/push 帧，无需服务端协议变更。原生手机目前没有本机
 供应商连接设置页；执行和远控通道复用上述协议，浏览器登录仍在执行电脑完成。
+
+## 已绑定任务启动失败的提示
+
+启动准入仍使用原账号绑定与原用量判据，不改变选号、重试或自动等待。
+错误文本增加 `SUBSCRIPTION_ACCOUNT_LIMITED`、`SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED`、
+`SUBSCRIPTION_ACCOUNT_SIGNING_IN`、`SUBSCRIPTION_ACCOUNT_UNAVAILABLE` 方括号标记。
+受限错误仅在该账号、该模型的既有判据给出可靠未来重置时间时追加一行
+`resetAtMs=<unix 毫秒>`；不附账号身份、目录或凭证。
+Desktop 的实时横幅、历史错误卡和 Mobile 共用 `maker-shared/error-redaction` 的展示解析，
+按查看端语言与时区显示时间。未知时间不推算，旧的 login-or-quota 文本只显示中性的账号状态检查提示。
+旧控制端仍显示通用错误及原始详情，新控制端兼容旧宿主。沿用错误字符串，无新 channel、
+能力协商或 relay 行为；官方及自建中转保持透传，不需要服务端发布。
