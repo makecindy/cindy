@@ -1,4 +1,5 @@
 import { needsSubscriptionAccountHandoff } from '../subscription-accounts/runtime.js';
+import { prepareSubscriptionAccountForSend } from '../subscription-accounts/prepareSend.js';
 import { createSchedulerQueueBridge, type SchedulerQueueBridge, type SchedulerQueuedPromptRequest, type SchedulerEnqueueResult } from './schedulerQueueBridge.js';
 import { markCindyOfficialSkills } from '../maker-host/managed-skills.js';
 import { registerRuntimeSettingsSection } from '../app-settings/runtime.js';
@@ -5123,8 +5124,22 @@ export async function acquirePendingAgentSwitchForDirectSend(
 }
 
 /** 直发路径在 createSession / 重读 live session 之前关掉不健康原生会话。 */
-export async function prepareUnhealthySessionForSend(sessionId: string): Promise<void> {
-  await contextOverflowRolloverHolder?.prepareUnhealthySession(sessionId);
+export async function prepareUnhealthySessionForSend(sessionId: string): Promise<boolean> {
+  const switched = await prepareSubscriptionAccountForSend(sessionId, {
+    readSession: getSessionRowSnapshotStrict,
+    isRunning: (id) => {
+      const live = getMaker().getSession(id);
+      return isSessionInTurn(id) || !!live?.isTurnRunning() || (live?.listBackgroundTasks().length ?? 0) > 0;
+    },
+    rebuild: async (id, assertCurrent) => {
+      const recovery = contextOverflowRolloverHolder;
+      if (!recovery) throw new Error('Subscription account recovery is not ready');
+      await recovery.prepareNativeSessionRecovery(id, 'retain-route', assertCurrent,
+        agentInputCoordinatorHolder?.getInputAbortSignal(id));
+      agentInputCoordinatorHolder?.cancelUsageLimitWait(id);
+    },
+  });
+  return switched || (await contextOverflowRolloverHolder?.prepareUnhealthySession(sessionId) ?? false);
 }
 
 let runtimePluginBudgetClearer: ((sessionId: string) => void) | undefined;
@@ -12267,7 +12282,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         resolvedSelection = await applyScheduledProfile(sessionId, selection, signal);
       }
       stage = 'direct-send:prepareUnhealthySession';
-      await contextOverflowRolloverHolder?.prepareUnhealthySession(sessionId);
+      await prepareUnhealthySessionForSend(sessionId);
       // The caller retains the lease through runtime refresh and Session.send.
       stage = 'direct-send:caller-dispatch';
       return { release, selection: resolvedSelection };
@@ -13100,7 +13115,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       };
 
       lockStage = 'prepare-unhealthy-session';
-      await contextOverflowRolloverHolder?.prepareUnhealthySession(targetSessionId);
+      if (await prepareUnhealthySessionForSend(targetSessionId)) {
+        // Pre-send account/context recovery retired the native thread. Do not pass
+        // the metadata captured before recovery back to lazy bootstrap.
+        meta.sdkSessionId = undefined;
+      }
       let live = maker.getSession(targetSessionId);
       if (live?.agentKind === 'pi' && live.getStatus() === 'error') {
         // A failed Pi close deliberately remains in Maker.activeSessions so the
@@ -15586,7 +15605,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     hasSendToSessionLock: (sessionId) => sendToSessionLocks.has(sessionId),
     withSendToSessionLock,
     prepareUnhealthySession: (sessionId) =>
-      contextOverflowRolloverHolder?.prepareUnhealthySession(sessionId) ?? Promise.resolve(false),
+      prepareUnhealthySessionForSend(sessionId),
     hydrateOrcaSessionIfNeeded: async (sessionId, meta) => {
       // 目标必是 Orca Lead/Worker；已装载时不读库、不建 createOpts。
       if (isOrcaMcpHydrated(sessionId) || !maker.getSession(sessionId)) return;
@@ -16388,6 +16407,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         source: 'worker',
         senderLabel: 'Worker',
         workerId,
+        autoBridge: true,
         meta: {
           source: 'maker-ipc/auto-bridge',
           context: `worker_auto_bridge/${leadSessionId}/${workerId}`,
@@ -18871,7 +18891,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       });
     },
     prepareUnhealthySession: (sessionId) =>
-      contextOverflowRolloverHolder?.prepareUnhealthySession(sessionId) ?? Promise.resolve(false),
+      prepareUnhealthySessionForSend(sessionId),
     workdirDiagnostics: workdirLog,
     log,
   });
@@ -21479,6 +21499,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       throwIpcError('INVALID_PARAMS', 'queued.createOpts.agentKind invalid');
     }
     const normalized: AgentInputQueuedMessage = { ...msg };
+    if (normalized.origin?.kind === 'orca') {
+      // 系统兜底合批标记只由 main 的 auto-bridge 入口盖章；wire 自报一律剥掉。
+      const origin = { ...normalized.origin };
+      delete origin.autoBridge;
+      delete origin.autoBridgeBatchCount;
+      normalized.origin = origin;
+    }
     delete normalized.sharedTaskAuthor;
     delete normalized.autoReviewUserText;
     delete normalized.botTaskCoordination;

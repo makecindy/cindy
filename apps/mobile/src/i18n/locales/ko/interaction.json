@@ -193,6 +193,7 @@
     "fromLead": "Lead에서 온 메시지",
     "fromWorkerNamed": "Worker 「{{role}}」에서 온 메시지",
     "fromWorker": "Worker에서 온 메시지",
+    "fromWorkerBatch": "시스템이 반환한 Worker 결과 {{count}}개",
     "emptyMessageBody": "(빈 메시지)"
   },
   "contextSheet": {
