@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { listMessagesForAgentHandoff } from '../../../desktop/src/main/localDb/agentHandoffHistory.ts';
 import { createSessionOptionsReconciler } from '../../../desktop/src/main/maker-ipc/sessionOptionsReconciler.ts';
 import { createMakerSendTransaction, prepareDirectoryGrantsForBootstrap } from '../../../desktop/src/main/maker-ipc/makerSendTransaction.ts';
 import { createSessionStderrOptions, isSessionRunningError } from '../../../desktop/src/main/maker-ipc/sessionRequest.ts';
@@ -13,29 +14,10 @@ import { isTerminalTurnErrorEvent } from '../../../desktop/src/main/maker-ipc/se
 import { setSessionProvider, clearSessionProvider } from '../../../desktop/src/main/maker-host/session-provider-store.ts';
 import { applyQueuedSessionSettings, rememberLiveSessionSettings } from './session-settings.mjs';
 import { MCP_APP_MESSAGE_GUARD } from '../../../desktop/src/main/mcp-apps/message.ts';
-import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT } from '@cindy/maker-core';
-import { AUTO_REVIEW_DELEGATED_CONTINUATION, restoreAutoReviewUserIntent } from '../../../desktop/src/main/maker-ipc/autoReviewUserIntent.ts';
 
 const makerKind = kind => kind === 'cc' ? 'claude-code' : kind;
 const dbKind = kind => kind === 'claude-code' ? 'cc' : kind;
 const errorText = error => error instanceof Error ? error.message : String(error);
-
-/** Authorization inputs the coordinator derives for one send or steer, kept
- * out of the model-facing body. Dropping them makes maker-core fall back to the
- * expanded text, so quoted pages or plugin resources would count as the user's
- * own words in Auto mode. Text an MCP App sends is page content: it is a
- * delegated continuation, and since Host keeps no authored-text history to
- * restore from, it grants nothing (fail closed). */
-export function autoReviewAuthorizationOptions(opts) {
-  const delegated = opts[AUTO_REVIEW_DELEGATED_CONTINUATION] === true
-    || typeof opts[MCP_APP_MESSAGE_GUARD] === 'function';
-  const intent = opts[AUTO_REVIEW_USER_INTENT] ?? (delegated ? restoreAutoReviewUserIntent([]) : undefined);
-  return {
-    ...(opts[AUTO_REVIEW_SOURCE_CONTENT] !== undefined ? { [AUTO_REVIEW_SOURCE_CONTENT]: opts[AUTO_REVIEW_SOURCE_CONTENT] } : {}),
-    ...(intent !== undefined ? { [AUTO_REVIEW_USER_INTENT]: intent } : {}),
-    ...(delegated ? { [AUTO_REVIEW_DELEGATED_CONTINUATION]: true } : {}),
-  };
-}
 
 /**
  * Node platform adapter for one maker-core turn. Queue order, recovery and
@@ -130,6 +112,17 @@ export function createTurnExecutor(deps) {
     return row;
   }
 
+  async function readAutoReviewHistory(id) {
+    deps.assertCurrent();
+    await historyFor(id).drain();
+    deps.assertCurrent();
+    const rows = await (deps.readAuthorizationHistory
+      ? deps.readAuthorizationHistory(id)
+      : listMessagesForAgentHandoff(id, null, undefined, 'authorization'));
+    deps.assertCurrent();
+    return rows;
+  }
+
   // A runtime refresh occurs inside an active send transaction. It must never
   // settle that input, delete its turn, or clear its persisted reply state.
   async function closeRuntime(id, onlyIfCurrent = false) {
@@ -156,6 +149,7 @@ export function createTurnExecutor(deps) {
     // A server's OS language is not the remote user's interface preference.
     getResolvedMainLocale: deps.getResolvedMainLocale ?? (() => null),
     getMainClassicalStyle: deps.getMainClassicalStyle ?? (() => DEFAULT_CLASSICAL_REPLY_STYLE),
+    readAutoReviewHistory,
     readMcpAppModelContext: deps.readMcpAppModelContext ?? (async () => ({ text: '', async assertCurrent() {}, consume() {} })),
     getSession: id => deps.getMaker().getSession(id),
     closeSession: id => closeRuntime(id),
@@ -267,8 +261,6 @@ export function createTurnExecutor(deps) {
     readHostDeviceIdentity: deps.readHostDeviceIdentity,
     planRepeatableWireNotes: (id, notes, options) => wireNotes.plan(id, notes, options),
     log,
-    // No readAutoReviewHistory: App, delegated and scheduled input cannot regain
-    // authority from prior user messages. Historical authorization is a separate checkpoint.
   });
 
   async function send(sessionId, message, createOpts, sendOpts) {
@@ -342,6 +334,7 @@ export function createTurnExecutor(deps) {
   return {
     send,
     readExecutionSession,
+    readAutoReviewHistory,
     async restoreSession(id, options, assertCurrent) {
       deps.assertCurrent(); await assertCurrent();
       await readExecutionSession(id);

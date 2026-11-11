@@ -498,9 +498,9 @@ withAccountFreeOwnerCommit：主线 notify=false 只发 pending，分支补发�
 - 除 `i18n.desktop` 外，`mcp-apps/runtime → sandboxProtocol → electron` 也是实际运行期
   依赖。必须把 App 上下文读取交给启动器，不能只改语言 import 后声称可在 Node 使用。
 - Host gateway 已持有独立 `createMcpAppsRuntime`，使用 `pluginGateway.modelContext`，不再建
-  registry。此上下文仍是外部应用数据，不等于用户授权。首批不注入 `readAutoReviewHistory`，
-  MCP App、调度和带委托标记的回合均按空历史恢复；普通输入只认本条亲写文本。
-  因此自动化无人值守时可能比桌面更早等待确认；接上历史不是默认补全，而是另行讨论的权限变更。
+  registry。此上下文仍是外部应用数据，不等于用户授权。用户已确认授权规则对齐桌面，
+  现注入 `readAutoReviewHistory`：普通输入、调度、委托与 MCP App 回合沿用桌面的历史意图恢复。
+  只读取当前任务有效边界内的用户回执；外部上下文和自动触发文本本身不构成授权。
 - `main.ts` 尚未构造 `createSchedulerHost`；现有 `schedulerQueue()` 与 scheduler e2e
   只是队列桥和隔离服务验证，不能称正式 Host 自动化已启动。
 
@@ -521,7 +521,7 @@ withAccountFreeOwnerCommit：主线 notify=false 只发 pending，分支补发�
 | `closeSessionIfCurrent` | 必需 | 真实实现 | 复用 runtime-refresh 关闭语义和 rehydrate 抑制，不能当作任务终止。 |
 | `preflightBotRuntimeResources` | 必需 | 暂不支持 | 先按持久任务来源判定伙伴任务；不得用空函数放行。 |
 | `getSessionMeta` | 必需 | 真实实现 | 现有 Maker.getSessionMeta。 |
-| `readAutoReviewHistory` | 可选 | 不适用 | 首批刻意不注入：App/委托/调度为空历史，普通回合仅本条亲写文本；不是待补的默认回退。 |
+| `readAutoReviewHistory` | 可选 | 真实实现 | 用户已确认与桌面对齐；先排空 Host 持久写队列，再调用共享历史读取（authorization 投影），保留 clear/rewind/子任务边界。 |
 | `readScheduledPermissions` | 可选 | 真实实现 | 读当前持久 permissionMode / planModeEnabled，不沿用队列过期值。 |
 | `assertScheduledDispatchRoute` | 可选 | 真实实现 | 核对最终本机路由；非本机/供应商组执行明确拒绝，不静默改成本机。 |
 | `ensureRemoteReadyForSessionStart` | 必需 | 暂不支持 | 非空 remoteHostId 不能直接本机执行；入口准入和恢复快照都须核对。 |
@@ -568,7 +568,7 @@ withAccountFreeOwnerCommit：主线 notify=false 只发 pending，分支补发�
 | `peekPendingHandoff` | 可选 | 真实实现 | 同一 agentHandoff 注册表，失败不消费。 |
 | `consumePendingHandoff` | 可选 | 真实实现 | 只在已受理后消费。 |
 | `peekWorkingDirectoryRecoveryNote` | 可选 | 真实实现 | 读取工作目录恢复服务本轮说明。 |
-| `readWorkingDirectoryRecoveryCreateOpts` | 必需 | 真实实现 | 保留当前输入的选择，只从 owner DB 修复 cwd 和同引擎 resume 身份；完整启动偏好仍待后续共用。 |
+| `readWorkingDirectoryRecoveryCreateOpts` | 必需 | 真实实现 | 从当前 owner 的任务行恢复 cwd、最新配置与同引擎 resume 身份；完整启动偏好仍待后续共用。 |
 | `consumeWorkingDirectoryRecoveryNote` | 可选 | 真实实现 | 只在受理后消费对应说明。 |
 | `peekPlanReconcileNote` | 可选 | 真实实现 | 复用计划对账服务，不能把缺端口当作无计划。 |
 | `consumeSealedPlanReconcileNote` | 可选 | 真实实现 | 沿用计划对账的一次性消费语义。 |
@@ -590,7 +590,7 @@ withAccountFreeOwnerCommit：主线 notify=false 只发 pending，分支补发�
    Node 真实加载成功只能证明依赖可用，不能证明 Host 已使用该事务。
 2. **发送前置与接线**：先搬 `buildCreateOptsWithStderr`、`isSessionRunningError`、
    `readSessionSource`，加入可选的启动前持久钩子；Host 准入、runtime-only 关闭、turn 绑定
-   就绪后切换发送。任务设置现已按本节末尾的新合同对齐桌面；历史授权恢复另作独立提交。
+   就绪后切换发送。任务设置与历史授权已按本节末尾的新合同分别提交，对齐桌面。
 3. **插话与媒体/历史服务**：`steerToAgentAccepted` 单独提交，只搬原函数体和依赖；
    从 `normalizeAttachments.ts`、`localDb/ipc/messages.ts`、`localDb/ipc/sessions.ts`
    抽取实际依赖 Electron 的最小边界，再接附件物化、清空回退、Pi 条目与归档恢复。
@@ -630,10 +630,11 @@ withAccountFreeOwnerCommit：主线 notify=false 只发 pending，分支补发�
   不可当作本次接线的证据。正式 Cindy 未重启、正式 profile 未使用。
 
 
-### 发送接线检查点（2026-11-11，待独立复核）
+### 发送接线检查点（2026-11-11，b75adc4b38 已独立复核）
 
 Host 发送已调用 `createMakerSendTransaction`，不再自行拼发送的权限、设备与来源说明。
 插话仍待抽为共用工厂；本检查点只修正原 Host 插话对 Session 返回值的错误判断。
+以下是该提交当时的合同；其中输入设置优先与不恢复历史授权，已由后续两个检查点取代。
 
 - 运行时刷新只关闭旧 Session，不清当前 turn/历史；新建和复用 Session 都重新绑定事件。
   目录或项目资源漂移后，新回复能落库、旧 Session 终态不释放新队列。
@@ -687,3 +688,36 @@ Host 通过当前账号的任务准入读取接线，执行前也应用于现有
 
 Host 全部 199 项、两端类型检查、测试规范及文档合同检查通过。
 历史授权恢复尚未在本提交接入，作为下一独立提交实施和审阅。
+
+### 历史授权对齐桌面（2026-11-11）
+
+用户确认两端采用相同授权规则。本检查点独立于任务设置提交：Host 普通发送、调度、
+委托输入及 MCP App 消息，均通过桌面发送事务恢复历史用户意图；插话调用同一个
+`restoreAutoReviewSteerIntent`。这是有意改变 Host 先前不使用历史的边界，不改变桌面规则。
+App 页面内容、调度提示词和其他外部文本仍不是用户原话；已有拒绝或限制也参与恢复。
+
+- `listMessagesForAgentHandoff` 原函数移到 Node 可加载的 `localDb/agentHandoffHistory.ts`，
+  原 IPC 模块保留导出。查询与解析函数体逐字不变，clear、rewind、侧任务、授权回执的
+  时间排序与过滤保持原行为；没有改数据库结构或迁移。
+- 读取前排空本任务的 Host 历史持久队列，读取前后核对账号边界；插话异步恢复后及
+  provider 启动前核对取消信号、Session 身份与回合 generation，避免送入已替换的回合。
+- 原 App「一律空授权」断言按新合同改为「恢复历史用户请求及限制，页面文字不授权」；
+  来源、委托标记与用户行落库断言继续保留。新增用例覆盖普通、调度、插话、持久队列
+  未排空和委托历史读取失败；并入既有 `input-queue.test.mjs`，未增加测试文件或基线。
+
+测试价值：生产入口为 Host 输入队列与共享发送/插话意图恢复；依据是用户确认的桌面
+一致性合同。此前只验证空历史，不能发现授权恢复遗漏及落盘时序问题。最小输入是历史
+「允许部署、禁止删除」加当前「继续」或 App「删除全部」；以受控历史 IO 和模型边界
+验证最终授权内容、阻止派发及等待落盘的可观察行为，tier 为 unit。桌面原有 SQLite
+用例继续验证历史查询的真实边界，不另写一套查询测试。
+
+验证记录（本机 `/tmp/cindy-history-parity-*.log`）：
+
+- Host 全部 204 项通过（4.65 秒），类型检查通过；新授权合同先红后绿，输入队列 66 项通过。
+- 桌面 `messagesListCursor`、`makerSendTransaction`、`autoReviewUserIntent` 共 427 项通过；
+  桌面类型检查通过，未修改这些测试断言。
+- 隔离 profile 的真实 Host HTTP、队列、SQLite 和原生 Codex：发送、回复与 UUID 落库、
+  插话、运行时重开、停止通过；网关/自定义供应商及运行中 key 轮换用例通过。
+  上游为本机模拟服务，凭证是测试值；不等于真实账号/模型验证，运行时重开不是进程重启。
+- 真实账号、真实模型、打包运行、Windows 与移动端仍未验收。本批未推送或发布；
+  完整插话工厂、媒体/清空/归档服务、完整启动与正式调度器装配仍是后续工作。

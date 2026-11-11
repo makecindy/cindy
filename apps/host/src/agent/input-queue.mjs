@@ -1,7 +1,9 @@
+import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, AUTO_REVIEW_DELEGATED_CONTINUATION } from '@cindy/maker-core';
+import { restoreAutoReviewSteerIntent } from '../../../desktop/src/main/maker-ipc/autoReviewUserIntent.ts';
 import { AgentInputCoordinator } from '../../../desktop/src/main/maker-ipc/agent-input-coordinator.ts';
 import { isDeviceLinkInvoke, isMobileControllerInvoke, readDeviceLinkInvokeSourceDevice } from '../../../desktop/src/main/device-link/invoke-context.ts';
 import { stampTrustedDeviceLinkQueuedOrigin, stampTrustedDesktopQueuedOrigin } from '../../../desktop/src/main/maker-ipc/queuedInputOrigin.ts';
-import { createTurnExecutor, autoReviewAuthorizationOptions } from './turn-executor.mjs';
+import { createTurnExecutor } from './turn-executor.mjs';
 import { createAppMessageSender } from '../../../desktop/src/main/mcp-apps/messageSender.ts';
 import { MCP_APP_MESSAGE_GUARD } from '../../../desktop/src/main/mcp-apps/message.ts';
 import { randomUUID } from 'node:crypto';
@@ -160,12 +162,28 @@ export function createInputQueue(deps) {
         assertCurrent(); opts.signal?.throwIfAborted();
         const session = deps.getMaker().getSession(id);
         if (!session) throw new Error('NO_ACTIVE_TURN');
+        const generation = session.getTurnGeneration();
+        const authorization = { ...opts, [AUTO_REVIEW_DELEGATED_CONTINUATION]:
+          opts[AUTO_REVIEW_DELEGATED_CONTINUATION] === true || typeof opts[MCP_APP_MESSAGE_GUARD] === 'function' ? true : undefined };
+        const intent = await restoreAutoReviewSteerIntent(
+          typeof message === 'string' ? message : message.content,
+          authorization, () => executor.readAutoReviewHistory(id));
+        const assertTurnCurrent = () => {
+          assertCurrent(); opts.signal?.throwIfAborted();
+          if (deps.getMaker().getSession(id) !== session || session.getTurnGeneration() !== generation) {
+            throw new Error('[STALE_TURN] Session changed turns while restoring authorization');
+          }
+        };
+        assertTurnCurrent();
         // Session.steer resolves void on acceptance; rejection is an exception.
-        await session.steer(message, { ...autoReviewAuthorizationOptions(opts), signal: opts.signal,
+        await session.steer(message, {
+          [AUTO_REVIEW_SOURCE_CONTENT]: opts[AUTO_REVIEW_SOURCE_CONTENT],
+          [AUTO_REVIEW_DELEGATED_CONTINUATION]: authorization[AUTO_REVIEW_DELEGATED_CONTINUATION],
+          [AUTO_REVIEW_USER_INTENT]: intent, signal: opts.signal,
           beforeProviderStart: async () => {
             await opts[MCP_APP_MESSAGE_GUARD]?.();
             await opts.beforeProviderStart?.();
-            assertCurrent(); opts.signal?.throwIfAborted();
+            assertTurnCurrent();
           },
         });
       },
