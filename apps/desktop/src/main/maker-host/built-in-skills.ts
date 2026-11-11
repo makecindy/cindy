@@ -24,8 +24,15 @@ const MANIFEST_FILE = '.cindy-system-skills.json';
 const VERSIONS_DIRECTORY = '.versions';
 const ACTIVE_BUNDLE_LINK = '.active';
 const BUILT_IN_SKILL_MUTATION_WAIT_MS = 5_000;
-/** Increment whenever shipped built-in Skill bytes change between releases. */
-export const BUILT_IN_SKILLS_BUNDLE_VERSION = 109;
+/**
+ * Legacy version floor. Never lower it; raise it when merging older branches
+ * whose reachable legacy versions would otherwise exceed the computed version.
+ * The bundle version adds the records shipped in `<bundled root>/_versions/`,
+ * see readBuiltInSkillsBundleVersion.
+ */
+export const BUILT_IN_SKILLS_BUNDLE_VERSION_BASE = 108;
+/** Directory beside the bundled Skills holding one record file per bundle change. */
+export const BUILT_IN_SKILLS_VERSION_RECORDS_DIRECTORY = '_versions';
 const PLUGIN_CREATOR_FIRST_BUNDLE_VERSION = 13;
 
 export interface BuiltInSkillDescriptor {
@@ -1033,6 +1040,35 @@ async function projectBuiltInSkillLinksUnlocked(
 }
 
 /**
+ * Bundle version of the Skills shipped at `bundledRoot`: the base plus one per
+ * `*.md` record in its `_versions/` directory. A change to shipped Skill bytes
+ * adds a new record file instead of editing a shared number, so two changes
+ * never touch the same line and a merge of both is automatically newer than
+ * either. `pnpm check:built-in-skills` keeps the count from going backwards
+ * and from being reused for different bytes.
+ *
+ * A missing or empty directory is an incomplete package, not version zero:
+ * guessing low would make this build treat its own Skills as older than the
+ * installed ones and silently keep stale bytes.
+ */
+export async function readBuiltInSkillsBundleVersion(bundledRoot: string): Promise<number> {
+  const recordsRoot = path.join(bundledRoot, BUILT_IN_SKILLS_VERSION_RECORDS_DIRECTORY);
+  let entries: fs.Dirent[];
+  try {
+    entries = await fsp.readdir(recordsRoot, { withFileTypes: true });
+  } catch (error) {
+    throw new Error(
+      `built-in Skill version records are missing at ${recordsRoot}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  const records = entries.filter((entry) => entry.isFile() && entry.name.endsWith('.md')).length;
+  if (records < 1) {
+    throw new Error(`built-in Skill version records are empty at ${recordsRoot}`);
+  }
+  return BUILT_IN_SKILLS_BUNDLE_VERSION_BASE + records;
+}
+
+/**
  * Materialize Cindy-owned Skill bytes, keep every managed Agent projection on
  * the stable active path, then publish the whole bundle through one pointer.
  * The immutable old bundle remains available throughout the transaction.
@@ -1046,7 +1082,7 @@ export async function prepareBuiltInSkills(
   const warnings: string[] = [];
   let changed = false;
   let projectionSafe = false;
-  const bundleVersion = options.bundleVersion ?? BUILT_IN_SKILLS_BUNDLE_VERSION;
+  const bundleVersion = options.bundleVersion ?? await readBuiltInSkillsBundleVersion(options.bundledRoot);
   if (!Number.isSafeInteger(bundleVersion) || bundleVersion < 1) {
     throw new Error(`invalid built-in Skill bundle version: ${bundleVersion}`);
   }

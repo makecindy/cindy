@@ -9405,6 +9405,9 @@
     }
   },
   "quotaCard": {
+    "codexRefreshFailed": "Das ChatGPT-Kontingent konnte nicht aktualisiert werden. Erneut abrufen; die anderen Nutzungsinformationen bleiben erhalten.",
+    "retryQuota": "Kontingent Erneut Abrufen",
+    "retryingQuota": "Kontingent wird abgerufen…",
     "usageCritical": "Hohe Nutzung",
     "usageWarning": "Erhöhte Nutzung",
     "usageTitle": "Nutzungsdetails",

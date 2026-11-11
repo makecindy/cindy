@@ -9477,6 +9477,9 @@
     }
   },
   "quotaCard": {
+    "codexRefreshFailed": "Não foi possível atualizar a quota do ChatGPT. Tente consultá-la novamente; as restantes informações de utilização são mantidas.",
+    "retryQuota": "Voltar a Consultar a Quota",
+    "retryingQuota": "A consultar a quota…",
     "usageCritical": "Utilização elevada",
     "usageWarning": "Utilização acima do normal",
     "usageTitle": "Detalhes de utilização",
