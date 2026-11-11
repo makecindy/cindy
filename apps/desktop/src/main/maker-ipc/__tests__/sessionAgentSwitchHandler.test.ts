@@ -111,6 +111,32 @@ describe('same-harness native relocation', () => {
     expect(row.sdkSessionId).toBe('source-native');
   });
 
+  // A target that cannot take the task (full, unreachable, model not offered) is not a
+  // history problem: a summary would fail the same way and discard the native context,
+  // so the task stays put and nobody is asked (provider-groups.md §6.2).
+  it.each([
+    '[REMOTE_AGENT_BUSY] [DEVICE_LIMIT] remote task limit for this device reached',
+    '[REMOTE_AGENT_DEVICE_UNREACHABLE] the other computer is offline',
+    '[REMOTE_AGENT_MODEL_UNAVAILABLE] model is not offered',
+  ])('stays on the source without asking when the target cannot take the task: %s', async message => {
+    let row = makeRow({ workingDir: '/project', sdkSessionId: 'source-native', agentDeviceId: null });
+    const original = { ...row };
+    const { deps } = makeDeps({
+      getSessionRow: vi.fn(async () => ({ ...row })),
+      relocateNativeHistory: vi.fn(async () => 'transferred'),
+      applyAgentSwitchToDb: vi.fn(async (_id, patch) => { row = { ...row, ...patch, providerId: patch.providerId ?? null }; }),
+      getLiveSession: () => ({ isTurnRunning: () => false, sdkSessionId: row.sdkSessionId ?? undefined }),
+      bootstrapSwitchedSession: vi.fn(async () => { throw new Error(message); }),
+    });
+    await expect(performSessionAgentSwitch(deps, { ...validParams, targetAgentKind: 'claude-code', agentDeviceId: 'mini',
+      applyNow: true, skipBootstrap: true, providerGroupSwitchReason: 'quota-rebalance' })).rejects.toThrow(message);
+    expect(deps.bootstrapSwitchedSession).toHaveBeenCalledOnce();
+    expect(deps.confirmNativeHistoryFallback).not.toHaveBeenCalled();
+    expect(deps.insertBoundaryMessage).not.toHaveBeenCalled();
+    expect(deps.setPendingHandoff).not.toHaveBeenCalled();
+    expect(row).toEqual(original);
+  });
+
   it.each([false, true])('publishes an automatic native switch without asking, or a confirmed summary (%s)', async resumeFails => {
     let row = makeRow({ workingDir: '/project', sdkSessionId: 'source-native' });
     const { deps } = makeDeps({

@@ -868,6 +868,7 @@
       "assignLocalAria": "{{name}} erlauben, neue Aufgaben von anderen Computern anzunehmen",
       "moreAria": "Weitere Aktionen für {{name}}",
       "remove": "Aus Gruppe entfernen",
+      "removeLocalBlocked": "Der Computer, der die Gruppe hostet, kann nicht entfernt werden",
       "status": {
         "checking": "Wird geprüft…",
         "idle": "Inaktiv",
@@ -2290,6 +2291,7 @@
         "desktopVisibilityHint": "Zeigt den Desktop und Fenster hinter Cindy. Text und Bedienelemente bleiben klar.",
         "desktopBlurLabel": "Desktop-Unschärfe",
         "desktopBlurHint": "Verwischt den Desktop hinter dem Fenster. 0 schaltet den Effekt aus, höhere Werte verstärken ihn. Systeme ohne einstellbare Stärke verwenden ihren Standardeffekt.",
+        "desktopBlurSwitchHint": "Verwischt den Desktop hinter dem Fenster mit dem Windows-Systemeffekt. Erfordert Windows 11 Version 22H2 oder neuer.",
         "blurLabel": "Unschärfe des Hintergrundbilds",
         "blurHint": "Nur das Hintergrundbild weichzeichnen. Zum Deaktivieren auf 0 setzen. Das Weichzeichnen animierter Hintergrundbilder erhöht die GPU-Auslastung.",
         "motionLabel": "Anzeige",
@@ -3627,6 +3629,36 @@
           "invalid": "Vorschau nicht verfügbar; Konfiguration prüfen oder Datei erneut auswählen",
           "skipped": "Übersprungen; Datei erneut auswählen, um diesen Eintrag zu importieren",
           "authorizationPending": "Verbindung hinzugefügt; schließe die Autorisierung in den Anbietereinstellungen ab"
+        },
+        "local": {
+          "title": "Aus lokalen Apps importieren",
+          "note": "Gespeicherte API-Konfigurationen auf diesem Computer lesen, ohne die Quell-Apps zu ändern. Claude Code: nur die settings.json des Benutzers, auch unter CLAUDE_CONFIG_DIR. Shell-Variablen sowie Projekt- und verwaltete Einstellungen werden nicht gelesen.",
+          "review": "Prüfen und importieren ({{count}})",
+          "scanning": "Gespeicherte Konfigurationen werden gelesen…",
+          "empty": "Keine gespeicherten API-Konfigurationen gefunden.",
+          "failed": "Lesen nicht abgeschlossen. Bitte erneut versuchen.",
+          "edit": "Bearbeiten",
+          "editFailed": "URL, Protokoll und Schlüssel prüfen und erneut versuchen.",
+          "editNote": "Ein leeres Schlüsselfeld behält die gelesenen Zugangsdaten bei. Eine geänderte URL oder ein anderes Protokoll erfordert einen neuen Schlüssel.",
+          "name": "Anzeigename",
+          "baseUrl": "Basis-URL",
+          "protocol": "API-Protokoll",
+          "chooseProtocol": "Protokoll auswählen",
+          "apiKey": "API-Schlüssel",
+          "keepKey": "Leer lassen, um den gelesenen Schlüssel zu behalten",
+          "missingUrl": "URL erforderlich",
+          "status": {
+            "missing": "Keine Konfiguration gefunden",
+            "readFailed": "Lesen nicht möglich; Berechtigungen prüfen oder erneut versuchen",
+            "invalid": "Unbekanntes Format; Konfiguration prüfen oder bearbeiten",
+            "limit": "Leselimit erreicht; diese Quelle wurde nicht vollständig gelesen",
+            "unsupported": "Diese Konfiguration kann nicht automatisch importiert werden. Befehle und apiKeyHelper werden nicht ausgeführt; fügen Sie die API-Konfiguration manuell hinzu.",
+            "needsInput": "Konfiguration muss ergänzt werden",
+            "changed": "Quelle geändert; erneut suchen",
+            "duplicate": "Eine identische Verbindung ist bereits vorhanden"
+          },
+          "rescan": "Erneut suchen",
+          "sourceDisabled": "In der Quell-App deaktiviert"
         }
       },
       "order": {
@@ -12618,47 +12650,47 @@
         "claude-code": {
           "ask": {
             "label": "Standardberechtigungen",
-            "description": "Erlaubt Lese- und Schreibzugriff im Arbeitsbereich und fragt vor der Nutzung höherer Berechtigungen, Netzwerkzugriffen oder Zugriffen auf Pfade außerhalb des Arbeitsbereichs."
+            "description": "Du genehmigst Aktionen bei Bedarf."
           },
           "acceptEdits": {
             "label": "Änderungen automatisch akzeptieren",
-            "description": "Akzeptiert Anfragen zur Dateibearbeitung automatisch, um wiederholte Bestätigungen zu reduzieren. Für risikoreichere Befehle oder Berechtigungen gilt weiterhin die zugrunde liegende Berechtigungsrichtlinie."
+            "description": "Dateiänderungen sind direkt erlaubt; andere Aktionen genehmigst du bei Bedarf."
           },
           "auto": {
             "label": "Automatische Prüfung",
-            "description": "Erlaubt Lese- und Schreibzugriff im Arbeitsbereich und prüft Anfragen nach erweiterten Berechtigungen automatisch; risikoreiche Aktionen können weiterhin abgelehnt werden oder eine Bestätigung erfordern. Das reduziert Unterbrechungen, kann aber zu Fehlern führen."
+            "description": "Ein KI-Modell genehmigt Aktionen. Das kann zusätzliche Wartezeit erfordern; bei Bedarf bestätigst du."
           },
           "bypassPermissions": {
             "label": "Vollzugriff",
-            "description": "Erlaubt das Bearbeiten jeder Datei und das Ausführen von Befehlen mit Netzwerkzugriff ohne weitere Bestätigung. Höchstes Risiko; nur für vertrauenswürdige Aufgaben verwenden."
+            "description": "Routineaktionen sind direkt erlaubt, einschließlich Dateien außerhalb des Arbeitsbereichs und Netzwerkbefehlen."
           }
         },
         "codex": {
           "ask": {
             "label": "Standardberechtigungen",
-            "description": "Erlaubt Lese- und Schreibzugriff im Arbeitsbereich und fragt vor der Nutzung höherer Berechtigungen, Netzwerkzugriffen oder Zugriffen auf Pfade außerhalb des Arbeitsbereichs."
+            "description": "Du genehmigst Aktionen bei Bedarf."
           },
           "auto": {
             "label": "Automatische Prüfung",
-            "description": "Führt Befehle automatisch in der geschützten Sandbox des Arbeitsbereichs aus. Aktionen, die die Sandbox-Grenze überschreiten, werden automatisch geprüft; risikoreiche Aktionen können weiterhin abgelehnt werden oder eine Bestätigung erfordern."
+            "description": "Ein KI-Modell genehmigt Aktionen. Das kann zusätzliche Wartezeit erfordern; bei Bedarf bestätigst du."
           },
           "bypassPermissions": {
             "label": "Vollzugriff",
-            "description": "Erlaubt das Bearbeiten jeder Datei und das Ausführen von Befehlen mit Netzwerkzugriff ohne weitere Bestätigung. Höchstes Risiko; nur für vertrauenswürdige Aufgaben verwenden."
+            "description": "Routineaktionen sind direkt erlaubt, einschließlich Dateien außerhalb des Arbeitsbereichs und Netzwerkbefehlen."
           }
         },
         "pi": {
           "ask": {
             "label": "Standardberechtigungen",
-            "description": "Nur lesende Tools werden direkt ausgeführt; beim Schreiben von Dateien, Ausführen von Befehlen und bei MCP-Tools wirst du jedes Mal gefragt."
+            "description": "Du genehmigst Aktionen bei Bedarf."
           },
           "auto": {
             "label": "Automatische Prüfung",
-            "description": "Schreibzugriffe im Arbeitsbereich und sichere Befehle werden automatisch ausgeführt; bei Schreibzugriffen außerhalb des Arbeitsbereichs, riskanten Befehlen und MCP-Tools wirst du weiterhin gefragt."
+            "description": "Ein KI-Modell genehmigt Aktionen. Das kann zusätzliche Wartezeit erfordern; bei Bedarf bestätigst du."
           },
           "bypassPermissions": {
             "label": "Vollzugriff",
-            "description": "Erlaubt das Bearbeiten jeder Datei und das Ausführen von Befehlen mit Netzwerkzugriff ohne weitere Bestätigung. Höchstes Risiko; nur für vertrauenswürdige Aufgaben verwenden."
+            "description": "Routineaktionen sind direkt erlaubt, einschließlich Dateien außerhalb des Arbeitsbereichs und Netzwerkbefehlen."
           }
         }
       }
@@ -13506,8 +13538,8 @@
       "dismissTitle": "Hinweis auf früheren Fehler schließen"
     },
     "worktreeRestoreBanner": {
-      "text": "Der Worktree dieser Sitzung wurde bereinigt (Verzeichnis fehlt).",
-      "textPendingSnapshot": "Diese Sitzung enthält einen noch nicht angewendeten Änderungs-Snapshot.",
+      "text": "Der Worktree „{{name}}“ dieser Sitzung wurde bereinigt (Verzeichnis fehlt).",
+      "textPendingSnapshot": "Der Worktree „{{name}}“ dieser Sitzung enthält einen noch nicht angewendeten Änderungs-Snapshot.",
       "restoreAction": "Worktree wiederherstellen",
       "applySnapshotAction": "Änderungen anwenden",
       "restoring": "Wiederherstellung läuft…",
@@ -14099,7 +14131,7 @@
       "errors": {
         "noPriorAssistantPreview": "Setze bitte von einer Frage aus zurück, die auf eine KI-Antwort folgt (vor dieser gibt es keine Assistentenantwort)",
         "sessionRunning": "Die Aufgabe wurde nicht rechtzeitig beendet – versuche das Zurücksetzen erneut",
-        "noLiveQuery": "Die Sitzung ist inaktiv – sende zuerst eine Nachricht (auch nur „ok“), um das SDK vor dem Zurücksetzen zu aktivieren",
+        "noLiveQuery": "Die Laufzeitumgebung der Aufgabe konnte nicht wiederhergestellt werden. Das Zurücksetzen wurde nicht abgeschlossen.",
         "noPriorAssistantCommit": "Setze bitte von einer Frage aus zurück, die auf eine KI-Antwort folgt",
         "commitGeneric": "Zurücksetzen fehlgeschlagen. Versuch es erneut",
         "remoteNotSupported": "Remote-Sitzungen mit Claude Code unterstützen das Zurücksetzen noch nicht"
@@ -19841,6 +19873,7 @@
   },
   "subscriptionAccounts": {
     "unassigned": "Konto nicht zugewiesen",
+    "boundUnavailable": "Konto nicht verfügbar",
     "providerManagedAuth": "Der aktuelle Codex-Anbieter stellt keine ChatGPT-Kontoinformationen bereit. Wähle beim Hinzufügen des Anbieters „$t(subscriptionAccounts.signIn.anotherAccount)“, um einen separaten Ordner zu verwenden.",
     "signIn": {
       "checking": "Lokales Konto wird geprüft…",
@@ -19868,7 +19901,12 @@
     "openDirectory": "Kontoordner öffnen",
     "openDirectoryFailed": "Der Kontoordner konnte nicht geöffnet werden. Er wurde möglicherweise verschoben oder gelöscht.",
     "loginAgain": "Erneut anmelden",
-    "login": "Anmelden"
+    "login": "Anmelden",
+    "quotaAverage": "Ø verbleibend {{percent}} %",
+    "quotaUpdating": "Kontingent wird aktualisiert",
+    "quotaResetSoon": "Bald zurückgesetzt",
+    "quotaAverageHint": "Wochenkontingent · Konten gleich gewichtet",
+    "quotaResetHint": "Beim aktuellen Verbrauch bleibt beim Zurücksetzen voraussichtlich Kontingent übrig: gelb innerhalb von 24 Stunden, rot innerhalb von 6 Stunden."
   },
   "sessionNotify": {
     "finished": "Diese Aufgabe hat ihren Durchgang abgeschlossen. Ihre endgültige Antwort:",

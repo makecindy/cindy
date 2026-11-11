@@ -24,6 +24,10 @@ const h = vi.hoisted(() => ({
   shared: true,
   legacyRead: vi.fn(),
   legacyLogin: vi.fn(),
+  importedRead: vi.fn(),
+  importedLogin: vi.fn(),
+  accountAllowed: vi.fn(),
+  setLegacyPaused: vi.fn(),
 }));
 vi.mock('../../appSessionState.js', () => ({
   activeOwnerScopeKey: () => h.owner,
@@ -40,13 +44,19 @@ vi.mock('../nativeCli.js', () => ({
   loginNativeAccount: h.login,
   readLegacyCodexAccount: h.legacyRead,
   loginLegacyCodexAccount: h.legacyLogin,
+  readLegacyCodexProviderAccount: h.importedRead,
+  loginLegacyCodexProviderAccount: h.importedLogin,
 }));
 vi.mock('../../maker-host/codex-home-path.js', () => ({
   getCodexHome: () => '/existing-cindy/codex-home',
 }));
 vi.mock('node:fs/promises', () => ({ mkdir: vi.fn() }));
+vi.mock('../legacyAccountAccess.js', () => ({ legacyCodexAccountCanRun: h.accountAllowed, setLegacyCodexAccountPaused: h.setLegacyPaused }));
 vi.mock('../store.js', () => ({
   readPool: (p: SubscriptionProvider) => h.pools[p] ?? null,
+  readLegacyCodexAccountId: (id: string) => h.pools.openai?.legacyCodexAccounts?.[id],
+  readLegacyCodexProviderId: (account: string) => Object.entries(h.pools.openai?.legacyCodexAccounts ?? {})
+    .find(([, id]) => id === account)?.[0],
   defaultPool: () => ({
     strategy: 'least',
     accounts: [{ id: 'default', paused: false, limit: 4, weight: 1 }],
@@ -80,6 +90,7 @@ import {
   readSubscriptionPoolUsage,
   readLegacySubscriptionPoolUsage,
   readSubscriptionSessionUsage,
+  readSubscriptionSessionAccount,
   readSubscriptionPoolAccountUsages,
   runSubscriptionAccountCommand,
   observeSubscriptionAccountUsage,
@@ -105,9 +116,166 @@ beforeEach(() => {
     authSource: 'oauth',
   });
   h.legacyLogin.mockReset().mockResolvedValue(undefined);
+  h.importedRead.mockReset().mockResolvedValue({ authenticated: true, identity: 'imported@example.test' });
+  h.importedLogin.mockReset().mockResolvedValue(undefined);
+  h.accountAllowed.mockReset().mockReturnValue(true);
+  h.setLegacyPaused.mockReset();
+});
+
+describe('tasks using imported Codex connections', () => {
+  // User upgrade regression 2026-11-11, standard: old IDs must keep their account
+  // for resume/fork in all OpenAI engines; prior coverage only tested the CLI default.
+  it.each(['codex', 'claude-code', 'pi'] as const)('pins a saved %s connection to its imported account', async kind => {
+    h.pools.openai = {
+      strategy: 'least', accounts: [account('default'), account('imported')],
+      legacyCodexAccounts: { 'openai-old': 'imported' },
+    };
+    const close = vi.fn(async () => {});
+    const start = vi.fn<BaseAgent['startSession']>(async () => ({ id: 'native-old', close } as unknown as AgentSessionHandle));
+    const agent = withSubscriptionAccounts({ kind, startSession: start } as unknown as BaseAgent);
+    const handle = await agent.startSession({ providerId: 'openai-old', sessionId: 'old-task', resumeSessionId: 'native-old' } as StartSessionOptions);
+    expect(start.mock.calls[0][0][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir).toBe('openai/imported');
+    expect(h.bindings.get('task:old-task')?.accountId).toBe('imported');
+    expect(h.importedRead).toHaveBeenCalledWith('openai-old', 'openai/imported');
+    await handle.close();
+    h.pools.openai.accounts = [account('default')];
+    await expect(agent.startSession({ providerId: 'openai-old', sessionId: 'old-task' } as StartSessionOptions)).rejects.toThrow();
+    expect(start).toHaveBeenCalledOnce();
+  });
+
+  it('forks old history through the same imported account and reconnects through its old login', async () => {
+    h.pools.openai = {
+      strategy: 'round', accounts: [account('default'), account('imported')],
+      legacyCodexAccounts: { 'openai-old': 'imported' },
+    };
+    const fork = vi.fn<(options: ForkSdkSessionOptions) => Promise<{ newSdkSessionId: string }>>(async () => ({ newSdkSessionId: 'forked' }));
+    const agent = withSubscriptionAccounts({ kind: 'codex', forkSdkSession: fork } as unknown as BaseAgent);
+    await agent.forkSdkSession({ providerId: 'openai-old', sourceSdkSessionId: 'old-native' } as ForkSdkSessionOptions);
+    expect(fork.mock.calls[0][0][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir).toBe('openai/imported');
+    expect(h.bindings.get('native:forked')?.accountId).toBe('imported');
+    await runSubscriptionAccountCommand({ action: 'login', providerId: 'openai', accountId: 'imported', loginKey: 'reconnect' });
+    expect(h.importedLogin).toHaveBeenCalledWith('openai-old', expect.any(AbortSignal));
+    expect(h.login).not.toHaveBeenCalled();
+    await runSubscriptionAccountCommand({ action: 'configure', providerId: 'openai', accountId: 'imported', paused: false });
+    expect(h.setLegacyPaused).toHaveBeenCalledWith('openai-old', false);
+  });
+
+  it('does not lend an imported account whose old connection disallows remote use', async () => {
+    h.pools.openai = {
+      strategy: 'least', accounts: [account('imported')],
+      legacyCodexAccounts: { 'openai-old': 'imported' },
+    };
+    h.accountAllowed.mockImplementation((_provider, _model, options) => !options.remote);
+    await expect(acquireSubscriptionAccount('openai', 'gpt-model', [], false, { remote: true })).rejects.toThrow('No subscription account');
+    const local = await acquireSubscriptionAccount('openai', 'gpt-model', []);
+    expect(local?.account.configDir).toBe('openai/imported');
+    local?.release();
+    h.accountAllowed.mockReturnValue(true);
+    const remote = await acquireSubscriptionAccount('openai', 'gpt-model', [], false, { remote: true });
+    h.accountAllowed.mockImplementation((_provider, _model, options) => !options.remote);
+    await expect(remote!.account.readState()).rejects.toThrow('remote access was revoked');
+    remote?.release();
+  });
+
+  it('pins an explicit old connection without task keys and does not persist a denied assignment', async () => {
+    h.pools.openai = {
+      strategy: 'least', accounts: [account('default'), account('imported')],
+      legacyCodexAccounts: { 'openai-old': 'imported' },
+    };
+    const start = vi.fn<BaseAgent['startSession']>(async () => ({ id: 'native-keys', close: async () => {} } as unknown as AgentSessionHandle));
+    const agent = withSubscriptionAccounts({ kind: 'codex', startSession: start } as unknown as BaseAgent);
+    const handle = await agent.startSession({ providerId: 'openai-old' } as StartSessionOptions);
+    expect(start.mock.calls[0][0][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir).toBe('openai/imported');
+    await handle.close();
+    h.bindings.clear();
+    h.accountAllowed.mockReturnValue(false);
+    await expect(agent.startSession({ providerId: 'openai-old', sessionId: 'denied-new-task' } as StartSessionOptions)).rejects.toThrow();
+    expect(h.bindings.size).toBe(0);
+    expect(start).toHaveBeenCalledOnce();
+  });
+
+  // PR #9900 review, standard: an existing remote lease must track the actual
+  // model after a hot switch. Earlier coverage only revoked the startup model.
+  it.each(['codex', 'claude-code', 'pi'] as const)('checks the current and target remote model for %s', async kind => {
+    h.pools.openai = {
+      strategy: 'least', accounts: [account('imported')],
+      legacyCodexAccounts: { 'openai-old': 'imported' },
+    };
+    const allowed = new Set(['model-a']);
+    h.accountAllowed.mockImplementation((_provider, model, options) => !options.remote || allowed.has(model));
+    const setModel = vi.fn<NonNullable<AgentSessionHandle['setModel']>>(async () => {});
+    const send = vi.fn<AgentSessionHandle['send']>(async () => {});
+    const start = vi.fn<BaseAgent['startSession']>(async () => ({
+      id: 'switch-native', setModel, send, close: async () => {},
+    } as unknown as AgentSessionHandle));
+    const agent = withSubscriptionAccounts({ kind, startSession: start } as unknown as BaseAgent);
+    const handle = await agent.startSession({
+      providerId: 'openai', model: 'model-a', workingDir: '.', sessionId: 'switch-task',
+      deviceHosted: {
+        workingDir: '.', extraDirs: [], writableDirs: [], platform: process.platform,
+        shell: 'fixture', isGitRepo: false, tunnelUrl: 'http://127.0.0.1',
+        tunnelToken: 'fixture-unused', mcpServers: [],
+      },
+    });
+    await expect(handle.setModel!('model-b')).rejects.toThrow('remote access was revoked');
+    expect(setModel).not.toHaveBeenCalled();
+    allowed.add('model-b');
+    setModel.mockRejectedValueOnce(new Error('switch failed'));
+    await expect(handle.setModel!('model-b')).rejects.toThrow('switch failed');
+    allowed.delete('model-b');
+    await handle.send({ type: 'user', content: 'still model a' });
+    allowed.add('model-b');
+    await handle.setModel!('model-b');
+    allowed.delete('model-a');
+    await handle.send({ type: 'user', content: 'now model b' });
+    expect(send).toHaveBeenCalledTimes(2);
+    allowed.delete('model-b');
+    await expect(handle.send({ type: 'user', content: 'revoked' })).rejects.toThrow('remote access was revoked');
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(() => start.mock.calls[0][0][NATIVE_SUBSCRIPTION_ACCOUNT]!.assertCurrent())
+      .toThrow('remote access was revoked');
+    allowed.add('model-b');
+    allowed.add('model-c');
+    setModel.mockImplementationOnce(async () => { allowed.delete('model-c'); });
+    await expect(handle.setModel!('model-c')).rejects.toThrow('remote access was revoked');
+    await expect(handle.send({ type: 'user', content: 'revoked during switch' })).rejects.toThrow('remote access was revoked');
+    expect(send).toHaveBeenCalledTimes(2);
+    await handle.close();
+  });
+
+  it('checks the imported connection model exclusion before a local switch', async () => {
+    h.pools.openai = {
+      strategy: 'least', accounts: [account('imported')],
+      legacyCodexAccounts: { 'openai-old': 'imported' },
+    };
+    h.accountAllowed.mockImplementation((_provider, model, options) => !options.modelSwitch || model !== 'model-b');
+    const setModel = vi.fn<NonNullable<AgentSessionHandle['setModel']>>(async () => {});
+    const agent = withSubscriptionAccounts({ kind: 'codex', startSession: async () => ({
+      id: 'local-switch', setModel, close: async () => {},
+    } as unknown as AgentSessionHandle) } as unknown as BaseAgent);
+    const handle = await agent.startSession({ providerId: 'openai', model: 'model-a', workingDir: '.' });
+    await expect(handle.setModel!('model-b')).rejects.toThrow('does not allow this model');
+    expect(setModel).not.toHaveBeenCalled();
+    await handle.setModel!('model-a');
+    expect(setModel).toHaveBeenCalledOnce();
+    await handle.close();
+  });
 });
 
 describe('native account assignment on the executing computer', () => {
+  it('projects the task binding without selecting, reserving or unpausing an account', async () => {
+    h.pools.anthropic!.accounts[0].paused = true;
+    h.bindings.set('task:existing', { providerId: 'anthropic', accountId: 'default' });
+    const bound = await readSubscriptionPool('anthropic', false, 'existing');
+    expect(bound.boundAccountId).toBe('default');
+    expect(bound.accounts[0]).toMatchObject({ paused: true, running: 0 });
+    expect((await readSubscriptionPool('anthropic', false, 'new-task')).boundAccountId).toBeNull();
+    expect(await readSubscriptionPool('anthropic')).not.toHaveProperty('boundAccountId');
+    h.pools.anthropic!.accounts = [account('second')];
+    expect((await readSubscriptionPool('anthropic', false, 'existing')).boundAccountId).toBe('default');
+    expect(h.bindings.size).toBe(1);
+  });
+
   // #9517 review, unit: Add must recover both bound and unbound managed defaults.
   // A disconnected pool and a first Add bypassed the bound-default fallback.
   it.each([
@@ -191,6 +359,53 @@ describe('native account assignment on the executing computer', () => {
     expect(h.login).toHaveBeenCalledOnce();
     expect(h.login.mock.calls[0][1]).not.toBe('openai/default');
     expect(next.accounts.at(-1)?.status).toBe('ready');
+  });
+
+  // 2026-11-11 user report (unit): the model list and composer usage showed the CLI default
+  // account for a task pinned to another pool account. Display reads must resolve the same
+  // bindings a resume does (task id first, then the native id a remote host knows), and never
+  // substitute the default or the next pool pick. Minimal input: a task bound to `second`.
+  it.each(['anthropic', 'openai'] as const)('names the account a %s task is pinned to', async (provider) => {
+    h.pools[provider] = { strategy: 'order', accounts: [account('default'), account('second')] };
+    h.read.mockImplementation(async (_p: string, directory: string) => ({
+      authenticated: true, identity: directory.endsWith('second') ? 'second@example.test' : 'first@example.test',
+    }));
+    const now = Date.now();
+    h.usage.mockImplementation(async (_p: string, directory: string) => {
+      const used = directory.endsWith('second') ? 30 : 90;
+      const bucket = { limitId: 'codex', limitName: null, updatedAt: now,
+        primary: { usedPercent: used, windowMinutes: 300, resetsAt: now / 1000 + 3600 }, secondary: null };
+      return provider === 'anthropic'
+        ? { claudeUsage: { updatedAt: now, fiveHour: { utilization: used, resetsAt: now / 1000 + 3600 }, sevenDay: null, scoped: [] } }
+        : { codexUsage: { appServerBuckets: { codex: bucket }, webSnapshot: bucket } };
+    });
+    const read = (keys: { sessionId?: string; nativeSessionId?: string }) =>
+      readSubscriptionSessionAccount(provider, keys);
+    h.bindings.set('task:task-1', { providerId: provider, accountId: 'second' });
+    const bound = await read({ sessionId: 'task-1', nativeSessionId: 'unbound-native' });
+    expect(bound).toMatchObject({ state: 'bound', account: {
+      isDefault: false, number: 2, identity: 'second@example.test', status: 'ready',
+    } });
+    expect(bound.state === 'bound' && (provider === 'anthropic'
+      ? bound.account.usage?.claude?.fiveHour?.utilization
+      : bound.account.usage?.codex?.buckets.codex.primary?.usedPercent)).toBe(30);
+    // A remote executor only knows the native id.
+    h.bindings.set('native:sdk-2', { providerId: provider, accountId: 'second' });
+    expect(await read({ sessionId: 'controller-id', nativeSessionId: 'sdk-2' }))
+      .toMatchObject({ state: 'bound', account: { number: 2 } });
+    h.bindings.set('task:task-3', { providerId: provider, accountId: 'default' });
+    expect(await read({ sessionId: 'task-3' }))
+      .toMatchObject({ state: 'bound', account: { isDefault: true, identity: 'first@example.test' } });
+    // Not yet run: the pool picks next turn. Pre-pool resume: the original default readers.
+    expect(await read({ sessionId: 'new' })).toEqual({ providerId: provider, state: 'unassigned' });
+    expect(await read({ sessionId: 'old', nativeSessionId: 'pre-pool' }))
+      .toEqual({ providerId: provider, state: 'legacy' });
+    // A removed account fails visibly instead of naming the remaining default.
+    h.pools[provider]!.accounts = [account('default')];
+    expect(await read({ sessionId: 'task-1' })).toEqual({ providerId: provider, state: 'unavailable' });
+    expect(await read({ sessionId: 'task-3' })).toEqual({ providerId: provider, state: 'legacy' });
+    h.pools = {};
+    expect(await read({ sessionId: 'task-1' })).toEqual({ providerId: provider, state: 'legacy' });
   });
 
   // Unit, #9295 review: reset lookups refresh the pinned profile rather than

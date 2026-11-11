@@ -35,12 +35,16 @@ it('exposes GitHub to all harnesses without implicit association', async () => {
 
 // #9433 P1: registry-only tests missed live default-surface filtering. Unit: a real
 // MCP client must discover and call the management chain, without self-only tools.
+// #9856 integration: the same default task must keep list_agents discovery; remote
+// Pi keeps that read while local target management stays unavailable remotely.
 it.each(['codex', 'claude-code', 'pi'] as const)('opens local teammate management to ordinary %s tasks', async agentKind => {
   let surface: 'default' | 'restricted' = 'default';
   let context = { agentKind, workingDir: '/fixture', sessionId: 'ordinary-task', remoteHostId: undefined as string | undefined };
   const calls: string[] = [];
+  const listAgents = vi.fn(async () => ({ ok: true as const, agents: [], unavailableDevices: [] }));
   const server = createXdtHelperMcpServer({
     resolveSurface: async () => surface,
+    botMessaging: { listAgents },
     botProfiles: { create: async () => { calls.push('create'); return { ok: true, bot: { id: 'target', name: 'Target', description: '' } }; } },
     botCapabilities: {
       list: async () => ({ ok: true, capabilities: [] }), select: async () => ({ ok: true, effective: 'next-turn', joined: true }),
@@ -63,7 +67,8 @@ it.each(['codex', 'claude-code', 'pi'] as const)('opens local teammate managemen
     expect(await call('get_capabilities', { scope: 'control', key: 'teammates.configuration' })).toMatchObject({ ok: true });
     const listed = parsePayload(await client.callTool({ name: 'list_tools', arguments: { category: 'bots' } }));
     expect(listed).toMatchObject({ ok: true });
-    expect((listed.tools as { name: string }[]).map(t => t.name).sort()).toEqual([...management].sort());
+    expect((listed.tools as { name: string }[]).map(t => t.name).sort()).toEqual([...management, 'list_agents'].sort());
+    expect(await call('list_agents')).toMatchObject({ ok: true, agents: [] });
     expect(await call('list_teammates')).toMatchObject({ ok: true, scope: 'local', teammates: [{ id: 'target', status: 'paused' }] });
     expect(await call('create_teammate', { name: 'Target' })).toMatchObject({ ok: true, bot: { id: 'target' } });
     expect(await call('get_app_default_model')).toMatchObject({ ok: true });
@@ -81,9 +86,13 @@ it.each(['codex', 'claude-code', 'pi'] as const)('opens local teammate managemen
     }
     const before = calls.length;
     surface = 'restricted';
+    expect(await call('list_agents')).toMatchObject({ ok: false });
+    expect(listAgents).toHaveBeenCalledOnce();
     expect(await call('create_teammate', { name: 'Denied' })).toMatchObject({ ok: false });
     surface = 'default'; context = { ...context, remoteHostId: 'remote-host' };
     expect(await call('list_teammates')).toMatchObject({ ok: false });
+    expect(await call('list_agents')).toMatchObject({ ok: agentKind === 'pi' });
+    expect(listAgents).toHaveBeenCalledTimes(agentKind === 'pi' ? 2 : 1);
     if (agentKind !== 'pi') {
       expect((await client.listTools()).tools.map(t => t.name)).not.toContain('list_teammates');
       expect(parsePayload(await client.callTool({ name: 'list_teammates', arguments: {} }))).toMatchObject({ ok: false });
@@ -537,13 +546,31 @@ describe("cindy_helper MCP server", () => {
     }
   });
 
+  // Unit/runtime surface: ordinary tasks need the model catalog even when Orca is disabled.
+  it.each(['codex', 'pi', 'claude-code'] as const)('exposes the shared model catalog to ordinary %s tasks without worker tools', async agentKind => {
+    const listAvailableModels = vi.fn(async () => ({ ok: true as const, codex: [{ id: 'gpt-model', label: 'Test' }] }));
+    const server = createXdtHelperMcpServer({ listAvailableModels, resolveSurface: async () => 'default' },
+      { agentKind, workingDir: '/repo', sessionId: 'ordinary' });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'ordinary-model-catalog', version: '1' });
+    await Promise.all([server.connect(b), client.connect(a)]);
+    try {
+      const catalog = parsePayload(await client.callTool({ name: 'list_tools', arguments: { category: 'control' } }));
+      expect(catalog.tools).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'list_available_models' })]));
+      expect(catalog.tools).not.toEqual(expect.arrayContaining([expect.objectContaining({ name: 'create_worker' })]));
+      expect(parsePayload(await client.callTool({ name: 'call_tool', arguments: { name: 'list_available_models',
+        args: { device: 'destination', provider_device_id: 'local' } } }))).toMatchObject({ ok: true, device: 'destination' });
+      expect(listAvailableModels).toHaveBeenCalledWith({ agent: undefined, callerSessionId: 'ordinary', executionDeviceId: 'destination', agentDeviceId: null });
+    } finally { await client.close(); await server.close(); }
+  });
+
   // V2 retired send_to_agent / check_agent_message; teammates are reached through
   // send_to_session with the main-chat address list_agents returns.
-  it("discovers teammates through the scoped helper entry without the retired message tools", async () => {
+  it.each(["bot", "default"] as const)("discovers teammates from %s without the retired message tools", async surface => {
     const listAgents = vi.fn(async () => ({ ok: true as const,
       agents: [{ id: 'studio::bot-b', name: 'Mimi', deviceName: 'Studio', session_id: 'studio::b-main' }], unavailableDevices: [] }));
     const server = createXdtHelperMcpServer(
-      { resolveSurface: async () => "bot", botMessaging: { listAgents } },
+      { resolveSurface: async () => surface, botMessaging: { listAgents } },
       { agentKind: "claude-code", workingDir: "/repo", sessionId: "bot-a-main" },
     );
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -741,31 +768,35 @@ describe("cindy_helper MCP server", () => {
     } finally { await client.close(); await server.close(); }
   });
 
-  it.each(["default", "restricted", "error", "unbound"] as const)("keeps companion-only commands closed on %s surface", async (surface) => {
+  it.each(["default", "restricted", "error", "unbound"] as const)("limits companion self-management on %s surface", async (surface) => {
     const callback = vi.fn(async () => ({ ok: false as const, errorCode: "UNEXPECTED", message: "must not run" }));
+    const listAgents = vi.fn(async () => ({ ok: true as const, agents: [], unavailableDevices: [] }));
     const server = createXdtHelperMcpServer({
       resolveSurface: async () => {
         if (surface === "error") throw new Error("classification unavailable");
         return surface === "unbound" ? "bot" : surface;
       },
-      botMessaging: { listAgents: callback, sendToUser: callback },
+      botMessaging: { listAgents, sendToUser: callback },
       botProfiles: { create: callback },
     }, { agentKind: "codex", workingDir: "/repo", sessionId: surface === "unbound" ? undefined : "normal-session" });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: "helper-surface-denial", version: "0.0.0" });
     await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
     try {
-      expect((await client.listTools()).tools.map((tool) => tool.name).sort()).toEqual(surface === "default" ? ["call_tool", "create_teammate", "list_tools"] : ["call_tool", "list_tools"]);
+      expect((await client.listTools()).tools.map((tool) => tool.name).sort()).toEqual(surface === "default" ? ["call_tool", "create_teammate", "list_agents", "list_tools"] : ["call_tool", "list_tools"]);
       const discovery = parsePayload(await client.callTool({ name: "list_tools", arguments: { category: "bots" } }));
-      expect(discovery).toMatchObject(surface === 'default'
-        ? { ok: true, tools: [expect.objectContaining({ name: 'create_teammate' })] }
-        : { ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
-      for (const name of ["list_agents", "send_to_user", ...(surface === "default" ? [] : ["create_teammate"])]) {
+      if (surface === 'default') {
+        expect(discovery).toMatchObject({ ok: true });
+        expect((discovery.tools as { name: string }[]).map(tool => tool.name).sort()).toEqual(['create_teammate', 'list_agents']);
+      } else expect(discovery).toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
+      for (const name of [...(surface === 'default' ? [] : ['list_agents', 'create_teammate']), 'send_to_user']) {
         const result = parsePayload(await client.callTool({ name: "call_tool", arguments: { name, args: {} } }));
         expect(result).toMatchObject({ ok: false, errorCode: "CAPABILITY_NOT_AVAILABLE" });
       }
       const direct = await client.callTool({ name: "list_agents", arguments: {} });
-      expect(parsePayload(direct)).toMatchObject({ ok: false, errorCode: "CAPABILITY_NOT_AVAILABLE" });
+      expect(parsePayload(direct)).toMatchObject(surface === "default"
+        ? { ok: true, agents: [] } : { ok: false, errorCode: "CAPABILITY_NOT_AVAILABLE" });
+      expect(listAgents).toHaveBeenCalledTimes(surface === "default" ? 1 : 0);
       expect(callback).not.toHaveBeenCalled();
     } finally {
       await client.close();
@@ -866,8 +897,8 @@ describe("cindy_helper MCP server", () => {
       const afterReclassification = parsePayload(await client.callTool({
         name: "call_tool", arguments: { name: "list_agents", args: {} },
       }));
-      expect(afterReclassification).toMatchObject({ ok: false, errorCode: "CAPABILITY_NOT_AVAILABLE" });
-      expect(listAgents).not.toHaveBeenCalled();
+      expect(afterReclassification).toMatchObject({ ok: true });
+      expect(listAgents).toHaveBeenCalledOnce();
     } finally {
       await client.close();
       await server.close();
@@ -1172,7 +1203,7 @@ describe("direct Bot MCP tools", () => {
     let sessionId: string | undefined = "bot-parent";
     const listAgents = vi.fn(async () => ({ ok: true as const, agents: [], unavailableDevices: [] }));
     const server = createXdtHelperMcpServer({
-      resolveSurface: async ({ sessionId }) => sessionId === "bot-parent" ? "bot" : "default",
+      resolveSurface: async ({ sessionId }) => sessionId === "bot-parent" ? "bot" : sessionId === "restricted-task" ? "restricted" : "default",
       botMessaging: { listAgents },
     }, {
       agentKind, workingDir: "",
@@ -1189,13 +1220,16 @@ describe("direct Bot MCP tools", () => {
       expect(await client.listTools()).toEqual(first);
       expect(parsePayload(await client.callTool({ name: "list_agents", arguments: {} }))).toMatchObject({ ok: true });
       // A shared Codex bridge must re-check the caller for both listing and execution.
-      for (const next of ["ordinary-task", undefined]) {
+      for (const next of ["ordinary-task", "restricted-task", undefined]) {
         sessionId = next;
-        expect((await client.listTools()).tools.map(t => t.name).sort()).toEqual(["call_tool", "list_tools"]);
+        const allowed = next === "ordinary-task";
+        expect((await client.listTools()).tools.map(t => t.name).sort()).toEqual(allowed
+          ? ["call_tool", "list_agents", "list_tools"] : ["call_tool", "list_tools"]);
         expect(parsePayload(await client.callTool({ name: "list_agents", arguments: {} })))
-          .toMatchObject({ ok: false, errorCode: "CAPABILITY_NOT_AVAILABLE" });
+          .toMatchObject(allowed ? { ok: true, agents: [] } : { ok: false, errorCode: "CAPABILITY_NOT_AVAILABLE" });
       }
-      expect(listAgents).toHaveBeenCalledTimes(1);
+      expect(listAgents).toHaveBeenCalledTimes(2);
+      expect(listAgents).toHaveBeenLastCalledWith({ callerSessionId: "ordinary-task" });
     } finally {
       await client.close();
       await server.close();

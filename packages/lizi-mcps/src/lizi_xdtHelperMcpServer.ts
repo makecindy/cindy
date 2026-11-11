@@ -1,4 +1,5 @@
 import { registerBotAvatarTools, type TeammateAvatarCallbacks } from './xdt-helper/bot_avatar.js';
+import { registerListAvailableModelsTool, type ListAvailableModelsDeps } from './xdt-helper/list_available_models.js';
 import { registerPiRuntimeTools, type PiRuntimeCallbacks } from './xdt-helper/pi_runtime.js';
 import { createControlReader } from './xdt-helper/control-catalog.js';
 import { registerAppModelsTools, type AppModelsCallbacks } from './xdt-helper/app_models.js';
@@ -174,11 +175,11 @@ export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number]
   cindy: `${BRAND_NAME} 能力说明、界面操作帮助（get_capabilities scope=help）与当前任务信息；get_capabilities({key:"self-management"}) 是管理自己的任务、定时任务、项目、伙伴的工具索引；get_capabilities({key:"computer-use"}) 说明桌面操作没开时怎么引导用户开启。本机。`,
   settings: '管理 Cindy 的全局设置、默认模型与 API 供应商连接（添加、安全填写密钥、发现型号、测试连接），普通任务和伙伴共用。作用于运行任务的本机；先查询当前值和可选项，再修改或恢复默认。密钥通过电脑或手机的加密代输入卡交给宿主。SSH 主机编辑使用 cindy_ssh。',
   auth: '本机窗口登录、保密输入与截图扫码（request_input_handoff）；MCP 设置表单（request_mcp_setup）；Grok 设备码登录、状态查询与取消（支持远程任务）。',
-  control: '管理任务与项目：当前任务的原生共享邀请/状态（create_shared_task_invitation / get_shared_task_state）在任务宿主执行，支持手机或同账号另一台电脑控制当前任务，不接受其他任务目标；归档/取消归档支持本机与跨电脑（deviceId::sessionId）；改名、移动、标签、排队消息、插话、停止、运行设置、给当前任务新建托管 worktree（create_task_worktree，可指定基线分支）、项目列表与增删改、从其他 AI 编程工具导入任务（scan_importable_sessions / import_sessions）仅本机。',
+  control: 'list_projects(device) 可查询远程项目。管理任务与项目：当前任务的原生共享邀请/状态（create_shared_task_invitation / get_shared_task_state）在任务宿主执行，支持手机或同账号另一台电脑控制当前任务，不接受其他任务目标；归档/取消归档支持本机与跨电脑（deviceId::sessionId）；改名、移动、标签、排队消息、插话、停止、运行设置、给当前任务新建托管 worktree（create_task_worktree，可指定基线分支）、项目增删改、从其他 AI 编程工具导入任务（scan_importable_sessions / import_sessions）仅本机。',
   github: '读取 PR、CI、评审变化与详情，明确管理任务关联。本机与同账号跨电脑；查询不会关联任务或启动跟进。',
   history: '按话题查找跨渠道聊天，支持伙伴归属（teammate_id）、最近活动时间与真实来源；不要默认限制当前工作目录或创建日期。查询任务、工作目录、聊天记录、任务摘要与输入队列；任务结果附带可直接引用的 sessionUrl，已知 id 要链接用 get_task_digest。任务列表、搜索、读取聊天记录、任务摘要（get_task_digest）可跨电脑（device 参数 / deviceId::sessionId）；搜索还能查到主力电脑离线的伙伴的云端对话；其余本机。',
   feedback: `向 ${BRAND_NAME} 官方提交反馈。`,
-  handoff: '给已有任务发消息或新建任务。新建可指定 title；省略 project_path 继承来源归属（来源不绑项目时按执行目录所在的已登记可见项目归属），传已有项目路径切换项目，传 null 创建不绑项目的任务。执行目录不隐式创建项目。发给已有任务可跨电脑（deviceId::sessionId）；新建的任务与文件仍在本机，新建时可用 agent_device_id 选择 Agent 使用哪台电脑的远程或分享供应商（取 list_available_models 的 locations）。',
+  handoff: '给已有任务发消息或新建任务。新建可指定 title；本机省略 project_path 继承来源归属（来源不绑项目时按执行目录所在的已登记可见项目归属），传已有项目路径切换项目，传 null 创建不绑项目的任务。执行目录不隐式创建项目。发给已有任务可跨电脑（deviceId::sessionId）；新建用 device 指定任务和文件所在电脑，省略为本机；provider_device_id 单独选择模型供应商位置（兼容 agent_device_id）；项目和模型先用同一 device 查询。',
   skills: 'Skill 的搜索、发布与学习。本机与 SkillHub。',
   app_update: `检查与安装本机的 ${BRAND_NAME} 更新。本机。`,
   bots: '伙伴：普通任务与伙伴共用本机名单与原生创建（list_teammates / create_teammate）、目标配置（inspect_teammate_configuration / update_teammate_configuration）与头像（set_target_teammate_avatar）；自身资料、能力、关联项目（list_teammate_projects / set_teammate_project，仅自身）、发现伙伴与主力电脑。发现伙伴（list_agents，返回伙伴主对话的 session_id，发消息用 handoff 类的 send_to_session）与主力电脑（get_teammate_home / move_teammate_home）可跨电脑；其余本机。',
@@ -203,17 +204,20 @@ function cindyAvailableForSession(sessionCtx: XdtHelperMcpSessionCtx): boolean {
   return !ctx.remoteHostId || ctx.agentKind === 'pi';
 }
 
-// Account management also belongs to ordinary local tasks. Self tools, messaging,
-// and memory still require a companion identity.
+// Target management also belongs to ordinary local tasks. Self-management and
+// memory still require a companion identity.
 const LOCAL_TEAMMATE_MANAGEMENT = new Set([
-  'list_teammates', 'create_teammate', 'inspect_teammate_configuration',
-  'update_teammate_configuration', 'set_target_teammate_avatar',
+  'create_teammate',
+  'inspect_teammate_configuration',
+  'list_teammates',
+  'set_target_teammate_avatar',
+  'update_teammate_configuration',
 ]);
 
 interface HelperSurfaceAllow {
   /** null means every registered category. An empty set means none. */
   categories: ReadonlySet<string> | null;
-  allowedTools?: ReadonlySet<string>;
+  tools?: ReadonlySet<string>;
 }
 
 function toolAllowed(
@@ -221,7 +225,7 @@ function toolAllowed(
   tool: { name: string; category: string },
 ): boolean {
   if (!allow.categories) return true;
-  return allow.categories.has(tool.category) || allow.allowedTools?.has(tool.name) === true;
+  return allow.categories.has(tool.category) || allow.tools?.has(tool.name) === true;
 }
 
 function registerListToolsEntry(
@@ -376,7 +380,7 @@ function registerBotMessagingEntries(
     inputShape: {},
     handler: async () => {
       const callerSessionId = resolveLiziMcpSessionContext(sessionCtx).sessionId;
-      if (!callerSessionId) return errorPayload('NOT_A_BOT_SESSION', 'An active teammate is required');
+      if (!callerSessionId) return errorPayload('NOT_A_BOT_SESSION', 'An active Cindy task is required');
       const result = await deps.botMessaging!.listAgents!({ callerSessionId });
       return result.ok ? okPayload(result) : errorPayload(result.errorCode, result.message);
     },
@@ -454,6 +458,8 @@ export interface XdtHelperMcpDeps {
    * 路由的原语, 放在 essential 的 cindy_helper 下常开保证 skill 永不断。
    */
   sendToSession?: SendToSessionCallback;
+  /** Read-only catalog shared with ordinary task creation; does not enable collaboration. */
+  listAvailableModels?: ListAvailableModelsDeps['listAvailableModels'];
   /** 另一台电脑上的既有任务(send_to_session 的 deviceId::sessionId 目标)。 */
   sendToRemoteSession?: SendToRemoteSessionCallback;
   /** Cindy-managed Learn flow; registered in the skills category when supplied by the host. */
@@ -560,7 +566,10 @@ export function createXdtHelperMcpServer(
     }
     const allow = (categories: ReadonlySet<string>): HelperSurfaceAllow => ({
       categories,
-      ...(sessionId && !context.remoteHostId ? { allowedTools: LOCAL_TEAMMATE_MANAGEMENT } : {}),
+      ...(sessionId && !remoteBotOnly ? { tools: new Set([
+        'list_agents',
+        ...(!context.remoteHostId ? LOCAL_TEAMMATE_MANAGEMENT : []),
+      ]) } : {}),
     });
     if (!sessionId) return allow(remoteBotOnly ? new Set() : defaultCategories);
     if (!deps.resolveSurface) return allow(remoteBotOnly ? new Set(['auth', 'cindy']) : defaultCategories);
@@ -702,6 +711,11 @@ export function createXdtHelperMcpServer(
       submit: deps.githubIssue,
     });
   }
+
+  if (deps.listAvailableModels) registerListAvailableModelsTool(registry, {
+    listAvailableModels: deps.listAvailableModels,
+    getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+  });
 
   // send_to_session: 仅 host 注入了 sendToSession 回调时注册到 handoff 类目(走 call_tool)。
   if (deps.sendToSession) {

@@ -170,6 +170,10 @@ export function isCompletedAssistantMessage(message: ChatMessage): boolean {
   if (message.failedSamplingAttempt) return false;
   return (
     message.turnCompleted === true ||
+    // Older scheduler final reports were persisted without a completion marker.
+    // Their reserved client id identifies the canonical answer, not stream prose.
+    (message.role === 'assistant' && message.turnCompleted !== false && !message.isStreaming &&
+      message.clientId.startsWith('schedule-result:')) ||
     (message.turnMoney?.amount ?? 0) > 0 ||
     (typeof message.turnCostUsd === 'number' && message.turnCostUsd > 0) ||
     // turnUsageDetails 也只在 turn 结束时 patch(算不出报价的轮次只落它),

@@ -36,7 +36,7 @@ vi.mock('../../logger', () => ({
   createLogger: () => ({ info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 
-import { __testing } from '../dispatch.desktop';
+import { __testing, setProviderShareAccess } from '../dispatch.desktop';
 
 const project = (result: unknown) =>
   __testing.projectInvokeResultForTunnel('maker:provider:list', result) as {
@@ -50,6 +50,37 @@ const projectForCurrentController = (result: unknown) =>
     providers: Record<string, unknown>[];
     modelVisibilityOverrides?: Record<string, boolean>;
   };
+
+// Upgrade 2026-11-11, standard: folding the local list must not remove an old remote grant.
+it.each([false, true])('retains the old remote source unless the complete pool is offered (%s)', offered => {
+  const projected = project({ providers: [
+    { id: 'openai', name: 'OpenAI', agents: [], models: {}, remoteInvocationEnabled: offered },
+    { id: 'old-openai', name: 'Old OpenAI', agents: [], models: {}, remoteInvocationEnabled: true, subscriptionPoolAlias: true },
+  ] });
+  expect(projected.providers.find(provider => provider.id === 'old-openai')?.subscriptionPoolAlias)
+    .toBe(offered ? true : undefined);
+});
+
+// PR #9900, standard: the pool's remote switch does not imply model coverage.
+// Previous upgrade fixtures had empty catalogs and could not expose a lost grant.
+it.each([
+  { poolModels: ['model-a'], oldModels: ['model-b'], hidden: false },
+  { poolModels: ['model-a', 'model-b'], oldModels: ['model-b'], hidden: true },
+])('keeps the old remote source until its models are covered: %j', ({ poolModels, oldModels, hidden }) => {
+  setProviderShareAccess({
+    guestAccess: () => null, ensureKnown: async () => {}, hasShares: () => false,
+    remoteModels: id => id === 'openai' ? poolModels : oldModels,
+  });
+  try {
+    const models = { codex: ['model-a', 'model-b'].map(id => ({ id, name: id, efforts: [], contextWindow: 1000 })) };
+    const projected = project({ providers: [
+      { id: 'openai', name: 'OpenAI', agents: ['codex'], models, remoteInvocationEnabled: true },
+      { id: 'old-openai', name: 'Old OpenAI', agents: ['codex'], models, remoteInvocationEnabled: true, subscriptionPoolAlias: true },
+    ] });
+    expect(projected.providers.find(provider => provider.id === 'old-openai')?.subscriptionPoolAlias)
+      .toBe(hidden ? true : undefined);
+  } finally { setProviderShareAccess(null); }
+});
 
 describe('schedule binding list projection', () => {
   const fields = {

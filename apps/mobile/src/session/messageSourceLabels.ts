@@ -28,6 +28,7 @@ export const MOBILE_IM_PLATFORMS = [
   "wechat",
   "wecom",
   "dingtalk",
+  "imessage",
 ] as const;
 
 export type MobileImPlatform = (typeof MOBILE_IM_PLATFORMS)[number];
