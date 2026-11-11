@@ -11,6 +11,7 @@ import { createComputerMcpServer } from '@cindy/mcps/computer';
 import { cleanupComputerDriverSession, getComputerMcpDeps } from '../mcp-integrations/computer.js';
 import { createLogger } from '../logger.js';
 import { windowStateElements } from './windowStateElements.js';
+import { runFolderPickerWheelSmoke } from './folderPickerWheelSmoke.js';
 
 const logger = createLogger('computer-use-smoke');
 let started = false;
@@ -26,7 +27,6 @@ export async function runComputerUseSmokeIfRequested(mainWindow?: BrowserWindow)
     && process.env.XDT_UI_MOCK === '1' && process.env.CINDY_CUA_SMOKE === 'folder-picker'
     && mainWindow) {
     started = true;
-    const { runFolderPickerWheelSmoke } = await import('./folderPickerWheelSmoke.js');
     await runFolderPickerWheelSmoke(mainWindow);
     return;
   }
