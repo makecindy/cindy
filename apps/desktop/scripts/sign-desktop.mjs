@@ -51,7 +51,8 @@ function assertNoLinksOut(dir, { allowInternal }) {
     const full = path.join(root, rel);
     if (!fs.lstatSync(full).isSymbolicLink()) continue;
     const target = path.resolve(path.dirname(full), fs.readlinkSync(full));
-    if (!allowInternal || !target.startsWith(root + path.sep)) fail(`${full} 是指向 ${target} 的链接,拒绝签名`);
+    // 抛错而不是 process.exit:解包后调用时要让 finally 清掉临时目录。
+    if (!allowInternal || !target.startsWith(root + path.sep)) throw new Error(`${full} 是指向 ${target} 的链接,拒绝签名`);
   }
 }
 
@@ -124,7 +125,7 @@ function main() {
     const entries = execFileSync('/usr/bin/zipinfo', ['-1', payloadPath], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 })
       .split('\n').filter(Boolean);
     const escaping = entries.find((e) => e.startsWith('/') || e.split('/').includes('..'));
-    if (escaping) fail(`${unsignedName} 含越界条目 ${escaping}`);
+    if (escaping) throw new Error(`${unsignedName} 含越界条目 ${escaping}`);
     execFileSync('/usr/bin/ditto', ['-x', '-k', payloadPath, packagedDir], { stdio: 'inherit' });
     assertNoLinksOut(packagedDir, { allowInternal: true });
     const files = signAndPackMacApp({
