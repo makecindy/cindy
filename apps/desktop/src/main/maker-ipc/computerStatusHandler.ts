@@ -1,4 +1,4 @@
-import type { getComputerDriverStatus } from '../mcp-integrations/computer.js';
+import type { getComputerDriverStatus } from '../mcp-integrations/computer.desktop.js';
 
 export type ComputerStatusRequest = NonNullable<Parameters<typeof getComputerDriverStatus>[0]> & {
   /** Page-entry reads must not publish a delayed snapshot into an active guide. */

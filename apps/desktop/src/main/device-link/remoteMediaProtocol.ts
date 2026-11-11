@@ -31,7 +31,7 @@ import * as ledger from '../cindy-media/ledger';
 import { buildRangedMediaResponse } from '../cindy-media/rangeResponse';
 import { remoteInvoke } from './index';
 import { DL_MEDIA_FETCH_CHANNEL } from '@cindy/device-link';
-import { downloadToBuffer, openMediaStream, removeRemote } from './mediaTransfer';
+import { downloadToBuffer, openMediaStream, removeRemote } from './mediaTransfer.desktop';
 import * as cache from './remoteMediaCacheStore';
 import type { RemoteMediaEntry, StreamEntry } from './remoteMediaCacheStore';
 import { activeOwnerScopeKey } from '../appSessionState';

@@ -9,6 +9,7 @@
 export { RemoteHost, isAuthFailure, authFailureHint, DEFAULT_REMOTE_FORWARD_PORT_BASE } from './RemoteHost.js';
 export type {
   RemoteHostDeps,
+  HostKeyErrorDetails,
   StatusListener,
   ExecOpts,
   ExecResult,

@@ -187,11 +187,11 @@ export function createHeadlessPluginSandbox(ports: HeadlessPluginSandboxPorts) {
   };
   return {
     adapter,
-    async deliver(id: string, message: unknown): Promise<boolean> {
+    async deliver(id: string, message: unknown, options: { failOnUncertain?: boolean } = {}): Promise<boolean> {
       const target = logic.get(id);
       if (!target?.partition.current() || target.page.isClosed()) return false;
       try { await target.bridge.evaluate((bridge, payload) => bridge.deliver(payload), message); return target.partition.current(); }
-      catch { return false; }
+      catch { if (options.failOnUncertain) throw new Error('PLUGIN_DELIVERY_UNKNOWN'); return false; }
     },
     /** A zero-bridge page in the exact same owner × installation partition. */
     async openPage(ghost: InstalledGhost, pathname: string): Promise<Page> {

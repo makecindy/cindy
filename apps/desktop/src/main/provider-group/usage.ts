@@ -348,6 +348,7 @@ export function createProviderGroupUsageReader<T>(deps: ProviderGroupUsageReader
             : await deps.readRemote(member.agentDeviceId!, member.providerId);
           return deps.isCurrent() ? deps.parseSnapshot(raw, deps.now()) : null;
         }).catch(() => null).then((snapshot) => {
+          if (pending.get(key) !== request) return null;
           pending.delete(key);
           if (deps.isCurrent() && (member.kind !== 'local' || deps.cacheLocal)) {
             if (cached.size >= MAX_CACHED_ACCOUNTS) cached.delete(cached.keys().next().value!);
@@ -360,6 +361,6 @@ export function createProviderGroupUsageReader<T>(deps: ProviderGroupUsageReader
       const snapshot = await bounded(request);
       return deps.isCurrent() ? deps.parseSnapshot(snapshot, deps.now()) : null;
     },
-    invalidate() { cached.clear(); },
+    invalidate() { cached.clear(); pending.clear(); },
   };
 }

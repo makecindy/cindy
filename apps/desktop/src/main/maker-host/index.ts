@@ -102,7 +102,7 @@ import { getWorkerLink, updateWorkerStatus, getRemoteOrcaSession, listWorkersByL
 import { createOrcaRemoteWorkerBridge } from '../maker-ipc/orcaRemoteWorkerBridge.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { makerStartupGate } from './startup-gate.js';
-import { cleanupSessionTempAttachments } from '../maker-ipc/normalizeAttachments.js';
+import { cleanupSessionTempAttachments } from '../maker-ipc/normalizeAttachments.desktop.js';
 import { resolveGhostFsSessionSnapshot } from '../maker-ipc/ghostFsSessionSnapshot.js';
 import { HOST_CONFIRM_TIMEOUT_MS } from '../maker-ipc/hostConfirmTiming.js';
 import { getActiveInteractionRoute, requestHostInteraction } from '../maker-ipc/interactionRouter.js';
@@ -191,7 +191,7 @@ import {
 import { createToolResultImageDescriptor } from '../vision-bridge/tool-result-image-descriptor.js';
 import * as blobStore from '../cindy-media/blobStore.desktop.js';
 import { buildPiVisionBridgeEnv } from '../vision-bridge/pi-vision-bridge-env.js';
-import { captureCodexLocalAuthPolicy, resolveVisionBackendRoute, setVisionGatewayKeyReader } from './provider-route.js';
+import { captureCodexLocalAuthPolicy, resolveConnectedDefaultProviderIdForModel, resolveVisionBackendRoute, setVisionGatewayKeyReader } from './provider-route.js';
 import { resolveSessionCcDebugFile, trackSessionCcDebugFile } from '../logger.js';
 import { resetProviderModelAutoRefreshCooldowns } from './provider-model-auto-refresh.js';
 import { getThinkingEnabledFromMemory } from './newMakerDefaultsCache.js';
@@ -321,7 +321,7 @@ import {
   ESSENTIAL_PLUGIN_IDS,
   resolveBotAllowedBuiltinPluginIds,
 } from './plugins/types.js';
-import { cleanupComputerDriverSession } from '../mcp-integrations/computer.js';
+import { cleanupComputerDriverSession } from '../mcp-integrations/computer.desktop.js';
 import { createPluginRegistry, resetPluginRegistry } from './plugins/index.js';
 import {
   withCodexMcpDiscoveryContext,
@@ -1060,11 +1060,6 @@ export function getMaker(): Maker {
       reviewOneShot: createMemoryReviewOneShot(),
     });
 
-    // Plugin registry — 先于 agent 构造, 让 createDesktopMcpProviders 拿 registry
-    // 包进每个 MCP provider 的 isEnabled 闭包里。registry 内部读 <userData>/plugin-prefs.json
-    // 和项目 .claude/settings.json, mtime-based 缓存, 只在 session start 时同步检查。
-    const pluginRegistry = createPluginRegistry();
-
     const makerMemoryProviderDeps = {
       runtimeCapabilities: async (context: import('@cindy/mcps').LiziMcpSessionContext, query: AgentCapabilityQuery) => {
         const session = context.sessionId ? _maker?.getSession(context.sessionId) : undefined;
@@ -1108,7 +1103,9 @@ export function getMaker(): Maker {
       getAppVersion: () => app.getVersion(),
       getMakerMemoryManager: () => makerMemoryManager,
       lspPool: getLspPool(),
-      pluginRegistry,
+      // Maker can initialize before login commits its owner. Resolve on every
+      // read so long-lived providers never retain the no-owner/previous owner registry.
+      get pluginRegistry() { return createPluginRegistry(); },
       invokeRemote: remoteInvoke,
       captureSharedTaskCommand: (sessionId: string, assertCurrent: () => void) => captureSharedTaskAgentCommand(sessionId, assertCurrent, {
         ready: waitForSharedTaskRelay, online: isSharedTaskRelayOnline, available: isSharedTaskAvailable,
@@ -1619,7 +1616,7 @@ export function getMaker(): Maker {
             ensureForward: ensureRemoteMcpForward,
             // collab 全局禁用 (Tier 4) 时整个不注入 — bridge 名单不反映
             // 开关 (codex-connector R20 P2, 与 codex daemon 侧同闸门)。
-            isCollabEnabled: () => pluginRegistry.isEnabled('collab'),
+            isCollabEnabled: () => createPluginRegistry().isEnabled('collab'),
             onOptionalInjectionError: (err) => {
               desktopMakerLogger.warn('cc remote MCP injection skipped', {
                 remoteHostId,
@@ -1928,7 +1925,7 @@ export function getMaker(): Maker {
               buildRemoteCodexSessionMcpConfig(ctx.remoteHostId!, instance, {
                 bridgeInstanceId: getActiveCodexBridgeInstanceId(),
                 serverNames: getActiveCodexBridgeServerNames() ?? [],
-                collabEnabled: pluginRegistry.isEnabled('collab'),
+                collabEnabled: createPluginRegistry().isEnabled('collab'),
                 makerMemoryEnabled: _maker?.makerMemory?.isEnabled() ?? false,
                 vendorOptions: session?.vendorOptions,
               }),
@@ -2123,8 +2120,11 @@ export function getMaker(): Maker {
     // 装配第二步: 把 agents 引用挂回 manager (manager.enable() 时遍历 setMemory(false))。
     // 保留同一份可变 map，供可选 Pi runtime 在 Maker 构造后动态注册。
     const makerAgents: ConstructorParameters<typeof Maker>[0]['agents'] = {
-      'claude-code': withSubscriptionAccounts(claudeAgent),
-      codex: withSubscriptionAccounts(codexAgent),
+      'claude-code': withSubscriptionAccounts(claudeAgent, desktopClaudeAuthAdapter),
+      codex: withSubscriptionAccounts(codexAgent, {
+        getState: desktopCodexAuthAdapter.getState.bind(desktopCodexAuthAdapter),
+        resolveDefaultProvider: model => model ? resolveConnectedDefaultProviderIdForModel(model, 'codex') : null,
+      }),
     };
     attachAgentsToMakerMemory(makerMemoryManager, makerAgents);
     if (makerMemoryManager.isEnabled()) {

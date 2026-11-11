@@ -113,6 +113,7 @@ import {
   clearDraft as clearComposerDraft,
   restoreRemoteOptimisticDraft,
   subscribeDraft as subscribeComposerDraft,
+  registerDraftFlush,
   tiptapDocHasContent,
 } from '@/lib/composerDraftStore';
 import {
@@ -129,6 +130,8 @@ import {
   takeComposerSubmitRequest,
 } from '@/lib/composerActionsBus';
 import { resolveComposerModelSelection } from './composerModelSelection';
+import { PluginUiSlot, usePluginUiHas } from '@/cindy-brain/PluginUiContributions';
+import { registerPluginUiDraftEditor } from '@/cindy-brain/pluginUiContext';
 import type { SessionRuntimeProfileProjection, SessionRuntimePendingProjection } from '@/lib/ccAgent.types';
 import {
   ModelSelector,
@@ -1509,6 +1512,7 @@ export function ChatInput({
   // call sites keep working unchanged; NewMakerDraftRoute passes an explicit
   // sentinel to keep the transient draft alive across sidebar switches.
   const storageKey = draftKey ?? sessionId;
+  const hasPluginToolbar = usePluginUiHas('composer.toolbar');
   // perf/session-switch 探针(见文件头 perfLog 注释):按 storageKey 换代计一次
   // render 起点,layout effect 里量到 commit 完成;覆盖"remount"与"复用组件仅换
   // key"两种切换形态。纯诊断:所有测量走 import.meta.env.DEV,生产构建里 body
@@ -2394,6 +2398,9 @@ export function ChatInput({
     null,
   );
   draftSaveSchedulerRef.current ??= createComposerDraftSaveScheduler();
+  useEffect(() => storageKey ? registerDraftFlush(storageKey, () => {
+    if (storageKeyForDraftRef.current === storageKey) draftSaveSchedulerRef.current?.flush();
+  }) : undefined, [storageKey]);
   const caretScrollEditorRef = useRef<Editor | null>(null);
   const caretScrollSchedulerRef = useRef<ReturnType<typeof createComposerFrameScheduler> | null>(
     null,
@@ -3177,6 +3184,9 @@ export function ChatInput({
   // Hold a live ref to the editor for handlers that mount before Tiptap
   // exposes it through React (e.g. the blur handler above).
   const editorRef = useRef<Editor | null>(null);
+  useEffect(() => storageKey && editor
+    ? registerPluginUiDraftEditor(storageKey, editor, () => composerMutationLockedRef.current)
+    : undefined, [storageKey, editor]);
   useEffect(() => {
     editorRef.current = editor;
   }, [editor]);
@@ -9984,6 +9994,13 @@ export function ChatInput({
                 />
                 {useNarrowToolbar && !useCompactMiddleToolbar && <>{middleToolbarSlot}</>}
               </div>
+              {hasPluginToolbar && (
+                <div className="mx-1 min-w-0 flex-1 overflow-x-auto">
+                  <div className="w-max">
+                    <PluginUiSlot position="composer.toolbar" sessionId={sessionId} />
+                  </div>
+                </div>
+              )}
               <div
                 className={cn(
                   useNarrowToolbar

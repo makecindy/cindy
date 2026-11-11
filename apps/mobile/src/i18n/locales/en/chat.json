@@ -153,5 +153,13 @@
     "working": "Working…",
     "worked": "Worked for {{duration}}",
     "workDetails": "Work details"
+  },
+  "subscriptionAccountError": {
+    "limited": "The subscription account used by this task has reached its usage limit. Wait for the limit to reset or choose another model source. This task stays with its assigned account.",
+    "limitedUntil": "The subscription account used by this task has reached its usage limit. Expected reset: {{resetAt}}. Wait until then or choose another model source. This task stays with its assigned account.",
+    "loginRequired": "The subscription account used by this task needs sign-in. Sign in again on the computer running the task, then retry.",
+    "signingIn": "The subscription account used by this task is signing in. Retry after sign-in finishes.",
+    "unavailable": "The subscription account assigned to this task is unavailable for this request. Check the account in model provider settings on the computer running the task, or choose another model source.",
+    "legacy": "The subscription account assigned to this task is unavailable. Check its sign-in and usage status on the computer running the task, or choose another model source. This task does not switch accounts automatically."
   }
 }

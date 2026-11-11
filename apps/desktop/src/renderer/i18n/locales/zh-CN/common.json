@@ -862,6 +862,7 @@
       "runningCount_other": "{{count}} 个任务运行中",
       "limitAria": "{{name}} 的并发上限",
       "limitOption_other": "同时 {{count}}",
+      "limitUnlimited": "不限制",
       "weightAria": "{{name}} 的权重",
       "weightOption": "权重 {{weight}}",
       "assignAria": "给 {{name}} 分配任务",
@@ -1858,6 +1859,15 @@
     },
     "remote": {
       "title": "远端机器",
+      "hostKeyError": {
+        "missing": "SSH 主机密钥校验尚未配置。连接已拒绝。",
+        "read": "Cindy 无法读取已信任的主机密钥：{{reason}}。连接已拒绝。",
+        "write": "Cindy 无法保存已信任的主机密钥：{{reason}}。连接已拒绝。",
+        "mismatch": "主机 {{host}} 的密钥已变化（{{fingerprint}}），和 Cindy 之前信任的指纹不一致。这可能是服务器重装，也可能是中间人攻击。连接已拒绝。",
+        "file": "主机密钥信任文件：\n{{filePath}}",
+        "repair": "Cindy 不读取 ~/.ssh/known_hosts。旧指纹在：\n{{filePath}}\n键名是 \"{{host}}\"。\n如果确认这次变化可信：先退出 Cindy，只删除这个键，保留文件和其他主机，再重新连接。新指纹会在首次连接时写入。不要删除整个文件。",
+        "verifyChange": "请先向服务器管理员核实密钥变化，再更新主机密钥信任记录。"
+      },
       "footnote": "第一版仅支持 SSH 连接管理。在远端运行 Agent 的能力将在后续版本中加入。",
       "viaAuth": "通过 {{label}} 认证",
       "readOnlyFromSshConfig": "连接信息来自 SSH 配置",
@@ -2270,7 +2280,7 @@
         "desktopVisibilityHint": "透出 Cindy 后面的桌面与窗口，文字和控件保持清晰。",
         "desktopBlurLabel": "桌面模糊",
         "desktopBlurHint": "模糊窗口后面的桌面，0 为关闭，数值越大越模糊。不支持强度调节的系统使用默认效果。",
-        "desktopBlurSwitchHint": "用 Windows 系统效果模糊窗口后面的桌面。需要 Windows 11 22H2 或更高版本。",
+        "desktopBlurSwitchHint": "用 Windows 系统效果模糊窗口后面的桌面。需要 Windows 11 22H2 或更高版本。关闭后需要重启应用才能生效。",
         "blurLabel": "壁纸模糊",
         "blurHint": "仅模糊壁纸，0 为关闭。动态壁纸开启模糊后会增加显卡负载。",
         "motionLabel": "展示方式",
@@ -8127,7 +8137,9 @@
         "mcpUi": "可在对话中显示交互页面",
         "mcpUiDomains": "页面可连接域名：{{domains}}",
         "mcpAppOnly": "仅页面可用",
-        "uiPageAccess": "页面：{{pages}}；域名：{{domains}}；页面可调用的工具：{{tools}}"
+        "uiPageAccess": "页面：{{pages}}；域名：{{domains}}；页面可调用的工具：{{tools}}",
+        "uiHost": "在 Cindy 中提供界面和宿主操作",
+        "uiHostAccess": "{{subject}}：{{access}}"
       },
       "connections": {
         "confirmTitle": "添加连接地址",
@@ -11655,6 +11667,8 @@
       "takeOverConflict": "{{name}} 已经换到「{{device}}」继续了",
       "takeOverOffline": "连不上服务器，暂时无法在这台电脑继续",
       "takeOverFailed": "未能在这台电脑上接手 {{name}}",
+      "localCindyConflict": "接手的电脑上已有另一位 Cindy。请先在那位 Cindy 的设置中处理，或选择其他主力电脑",
+      "localCindyConflictAction": "查看本机 Cindy 设置",
       "notEnabled": "当前服务器不支持更换主力电脑",
       "readOnlyNote": "这里是云端保存的对话，只能查看",
       "empty": "还没有云端对话",
@@ -14090,6 +14104,7 @@
       "botSentNamed": "由伙伴「{{name}}」发送",
       "orcaFromLead": "来自 Lead 的消息",
       "orcaFromWorker": "来自 Worker 的消息",
+      "orcaFromWorkerBatch": "系统回传的 {{count}} 条 Worker 结果",
       "orcaFromWorkerNamed": "来自 Worker「{{role}}」的消息",
       "hookChannelFrom": "来自 {{channel}}",
       "deviceSentMobileNamed": "从手机「{{name}}」发送",
@@ -14238,6 +14253,8 @@
       "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "这是旧版分享，开启「仅使用 Agent-Net」后暂时不能用。关闭这个开关就能继续，也可以换成其他模型。",
       "REMOTE_AGENT_GROUP_USAGE_LIMIT": "此模型的可用账号已达到用量上限。可换用其他模型，或等配额重置后继续。",
       "REMOTE_AGENT_GROUP_UNAVAILABLE": "供应商组里的电脑现在都不能运行这个任务：可能都不在线、已暂停分配、正在冷却，或没有这个模型。可以到这个供应商的「远程与分享」页查看组内电脑。",
+      "REMOTE_AGENT_GROUP_FULL": "能运行这个任务的账号或电脑都已达到并发上限。等正在运行的任务结束，或在供应商设置里调高上限。",
+      "SUBSCRIPTION_ACCOUNTS_FULL": "能运行这个任务的账号或电脑都已达到并发上限。等正在运行的任务结束，或在供应商设置里调高上限。",
       "REMOTE_AGENT_DEVICE_LIMIT": "这台设备保留的远程任务数已达上限。可归档暂时不用的任务，或请远程电脑的主人在“远程与分享”中提高上限。",
       "REMOTE_AGENT_TOTAL_LIMIT": "远程电脑保留的任务总数已达上限。请那台电脑的主人释放暂时不用的任务，或在“远程与分享”中提高上限。",
       "REMOTE_AGENT_RESUME_LOST": "之前在那台电脑上的对话没能接上，Agent 会在没有之前上下文的情况下继续。",
@@ -14426,6 +14443,14 @@
       "replied": "回信",
       "toggle": "展开或收起「{{title}}」的回信",
       "openTask": "打开任务"
+    },
+    "subscriptionAccountError": {
+      "limited": "此任务使用的订阅账号用量已达上限。可等用量重置后重试，或选择其他模型来源。此任务仍绑定原账号，不会自动换号。",
+      "limitedUntil": "此任务使用的订阅账号用量已达上限，预计于 {{resetAt}} 重置。可等重置后重试，或选择其他模型来源。此任务仍绑定原账号，不会自动换号。",
+      "loginRequired": "此任务使用的订阅账号需要重新登录。请在执行任务的电脑上重新登录该账号，再重试。",
+      "signingIn": "此任务使用的订阅账号正在登录，请完成登录后重试。",
+      "unavailable": "此任务绑定的订阅账号无法用于本次请求。请在执行任务的电脑上检查模型供应商中的账号设置，或选择其他模型来源。",
+      "legacy": "此任务绑定的订阅账号暂不可用。请在执行任务的电脑上检查该账号的登录与用量状态，或选择其他模型来源。此任务不会自动换号。"
     }
   },
   "ccAgent": {
@@ -19388,6 +19413,12 @@
       "restore": "恢复默认"
     }
   },
+  "pluginUi": {
+    "display": "显示方式",
+    "original": "原始内容",
+    "menu": "插件视图与命令",
+    "actionFailed": "未能完成这项插件操作，请重试。"
+  },
   "mcpApps": {
     "sharedTaskReadOnly": "此卡片仅任务主人可操作。",
     "retry": "重新加载",
@@ -19686,12 +19717,6 @@
       "from": "来自「{{name}}」的迁移",
       "closeChecklist": "关闭清单"
     },
-    "suggestion": {
-      "title": "用迁移助理从「{{name}}」迁移？",
-      "description": "可以把那台电脑上的插件、技能、设置和连接搬到这台电脑。需要在这台电脑上重新登录或授权的内容会列成清单。之后也可以在「设置 → 通用 → 迁移助理」中打开。",
-      "confirm": "打开迁移助理",
-      "later": "以后再说"
-    },
     "walkthrough": {
       "progress": "迁移清单 {{current}} / {{total}}",
       "open": "打开",
@@ -19713,6 +19738,103 @@
         "allow": "允许",
         "deny": "拒绝"
       }
+    }
+  },
+  "firstRunGuide": {
+    "title": {
+      "new": "欢迎使用 Cindy",
+      "returning": "欢迎回来"
+    },
+    "stepsLabel": "引导步骤",
+    "close": "关闭引导",
+    "next": "下一步",
+    "skip": "跳过",
+    "preparing": "正在准备…",
+    "steps": {
+      "legacy": "旧版数据",
+      "intro": "认识 Cindy",
+      "migration": "从旧电脑迁移",
+      "models": "连接模型",
+      "import": "导入已有内容",
+      "finish": "完成"
+    },
+    "legacy": {
+      "title": "旧版本的数据已经带过来了",
+      "body": "历史任务、媒体文件和 Agent 浏览器的登录状态已迁到新版本，可以接着用。",
+      "note": "已授权的第三方密钥与凭证不随数据迁移，需要在设置中重新授权或填写。"
+    },
+    "intro": {
+      "lead": "Cindy 是助你心想事成的 AI 助手。",
+      "work": {
+        "title": "把事情交给它做",
+        "body": "它在你的文件夹和应用里直接完成工作，不只是回答问题。"
+      },
+      "connect": {
+        "title": "用你已有的模型和工具",
+        "body": "接上自己的订阅或 API Key，插件和技能按需添加。"
+      },
+      "continue": {
+        "title": "在哪都能接着做",
+        "body": "在手机上发起、查看和继续电脑上的任务。"
+      },
+      "start": "开始",
+      "next": "接下来"
+    },
+    "migration": {
+      "title": "把另一台电脑上的 Cindy 搬过来",
+      "body": "你的账号下有一台电脑已经配置好了。迁移助理会把它的插件、技能、设置和连接复制到这台电脑；密钥只在你在那台电脑上点「允许」后复制。",
+      "manualBody": "在另一台电脑上用过 Cindy 的话，迁移助理可以把它的插件、技能、设置和连接复制到这台电脑。",
+      "done": "已从「{{name}}」迁移",
+      "from": "旧电脑",
+      "to": "这台电脑"
+    },
+    "models": {
+      "title": "给 Cindy 接上模型",
+      "body": "下面两种方式可以一起用。",
+      "cindy": {
+        "badge": "官方服务",
+        "body": "Cindy 官方提供的模型服务，登录后自带，不需要开通。新账号有免费赠送的余额，用来试用；付费后几乎所有模型都可以用，不付费时可用的模型范围会受限。",
+        "active": "已包含在你的账号里，可以直接使用",
+        "freeBalance": "免费赠送的金额，欢迎试用"
+      },
+      "own": {
+        "title": "用你自己的套餐",
+        "badge": "更加实惠",
+        "body": "已有 Claude、ChatGPT 等订阅或 API Key？非常推荐接进来配合使用，这样体验最好。",
+        "more": "其他供应商与 API Key",
+        "connected": "已连接"
+      }
+    },
+    "import": {
+      "title": "把这台电脑上已有的内容带进来",
+      "body": "下面是在这台电脑的其他 AI 工具里找到的内容。只读取原记录，不会改动它们。",
+      "empty": "这台电脑上没有找到可以导入的内容。",
+      "tasksHeading": "任务",
+      "tasksHint": "勾选工具，把其中的任务接到 Cindy 接着做。",
+      "pick": "逐个挑选",
+      "started": "已开始在后台导入，可在「设置 → 任务导入」查看进度。",
+      "startFailed": "导入没有开始。可在「设置 → 任务导入」重新导入。",
+      "teammatesHeading": "伙伴",
+      "teammatesHint": "把其他工具里的 Agent 连同记忆、技能和自动化导入成伙伴。",
+      "importTeammate": "导入成伙伴"
+    },
+    "finish": {
+      "title": "准备好了",
+      "legacy": "旧版本的数据已迁到新版本",
+      "modelReady": "模型已连接",
+      "modelMissing": "还没有连接模型。新建任务时可以随时连接。",
+      "importStarted": "其他工具的任务正在后台导入",
+      "native": "你在 Claude Code、Codex 里的技能和 MCP 可以直接使用，不需要导入。",
+      "start": "开始第一个任务"
+    },
+    "resume": {
+      "label": "引导进行中 · {{step}}",
+      "back": "回到引导"
+    },
+    "settings": {
+      "title": "开始引导",
+      "description": "重新查看认识 Cindy、从旧电脑迁移、连接模型和导入已有内容的引导。",
+      "open": "打开引导"
     }
   },
   "forwardedRequest": {
@@ -19875,6 +19997,10 @@
     "openDirectoryFailed": "无法打开账号目录，它可能已被移动或删除。",
     "loginAgain": "重新登录",
     "login": "登录",
+    "quotaRecoverIn": "{{duration}}后恢复",
+    "quotaExhausted": "额度已用完",
+    "quotaFiveHourRemaining": "5 小时剩余 {{percent}}%",
+    "quotaFiveHourExhausted": "5 小时额度已用完",
     "quotaAverage": "平均余量 {{percent}}%",
     "quotaUpdating": "余量待更新",
     "quotaResetSoon": "即将重置",

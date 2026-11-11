@@ -880,6 +880,7 @@
       "limitAria": "Limite de tâches pour {{name}}",
       "limitOption_one": "{{count}} max.",
       "limitOption_other": "{{count}} max.",
+      "limitUnlimited": "Illimité",
       "weightAria": "Poids pour {{name}}",
       "weightOption": "Poids {{weight}}",
       "assignAria": "Attribuer des tâches à {{name}}",
@@ -1926,6 +1927,15 @@
     },
     "remote": {
       "title": "Machines distantes",
+      "hostKeyError": {
+        "missing": "La vérification de la clé d'hôte SSH n'est pas configurée. Connexion refusée.",
+        "read": "Cindy n'a pas pu lire les clés d'hôte approuvées : {{reason}}. Connexion refusée.",
+        "write": "Cindy n'a pas pu enregistrer la clé d'hôte approuvée : {{reason}}. Connexion refusée.",
+        "mismatch": "La clé d'hôte de {{host}} a changé ({{fingerprint}}) et ne correspond plus à l'empreinte précédemment approuvée par Cindy. Le serveur a peut-être été réinstallé, ou il peut s'agir d'une attaque de l'homme du milieu. Connexion refusée.",
+        "file": "Fichier des clés d'hôte approuvées :\n{{filePath}}",
+        "repair": "Cindy ne lit pas ~/.ssh/known_hosts. L'ancienne empreinte est enregistrée dans :\n{{filePath}}\nLa clé de l'entrée est \"{{host}}\".\nSi vous avez vérifié que ce changement est fiable, quittez Cindy, supprimez uniquement cette entrée en conservant le fichier et tous les autres hôtes, puis reconnectez-vous. La nouvelle empreinte sera enregistrée lors de la première connexion. Ne supprimez pas le fichier entier.",
+        "verifyChange": "Vérifiez ce changement auprès de l'administrateur du serveur avant de mettre à jour le registre des clés d'hôte approuvées."
+      },
       "footnote": "Phase A : gestion des connexions SSH uniquement. L'exécution d'Agents sur la machine distante arrivera dans une prochaine mise à jour.",
       "viaAuth": "via {{label}}",
       "readOnlyFromSshConfig": "Les détails de connexion proviennent de la configuration SSH",
@@ -2338,7 +2348,7 @@
         "desktopVisibilityHint": "Laisse voir le bureau et les fenêtres derrière Cindy. Le texte et les commandes restent nets.",
         "desktopBlurLabel": "Flou du bureau",
         "desktopBlurHint": "Floute le bureau derrière la fenêtre. 0 désactive le flou ; une valeur plus élevée le renforce. Les systèmes sans réglage utilisent leur effet par défaut.",
-        "desktopBlurSwitchHint": "Floute le bureau derrière la fenêtre avec l’effet système de Windows. Nécessite Windows 11 version 22H2 ou ultérieure.",
+        "desktopBlurSwitchHint": "Floute le bureau derrière la fenêtre avec l’effet système de Windows. Nécessite Windows 11 version 22H2 ou ultérieure. Après l’avoir désactivé, redémarrez l’application pour appliquer la modification.",
         "blurLabel": "Flou du fond d'écran",
         "blurHint": "Floute uniquement le fond d'écran. Réglez sur 0 pour désactiver. Flouter un fond d'écran animé augmente l'utilisation du GPU.",
         "motionLabel": "Affichage",
@@ -8242,7 +8252,9 @@
         "mcpUi": "Afficher des pages interactives dans la conversation",
         "mcpUiDomains": "Domaines accessibles aux pages : {{domains}}",
         "mcpAppOnly": "Page uniquement",
-        "uiPageAccess": "Pages : {{pages}} ; domaines : {{domains}} ; outils disponibles aux pages : {{tools}}"
+        "uiPageAccess": "Pages : {{pages}} ; domaines : {{domains}} ; outils disponibles aux pages : {{tools}}",
+        "uiHost": "Fournir des interfaces et des actions hôte dans Cindy",
+        "uiHostAccess": "{{subject}} : {{access}}"
       },
       "connections": {
         "confirmTitle": "Ajouter une adresse de connexion",
@@ -11799,6 +11811,8 @@
       "takeOverConflict": "{{name}} a déjà été déplacé vers « {{device}} »",
       "takeOverOffline": "Impossible de joindre le serveur, {{name}} ne peut donc pas continuer ici pour le moment",
       "takeOverFailed": "Impossible de reprendre {{name}} sur cet ordinateur",
+      "localCindyConflict": "L’ordinateur qui prend le relais a déjà une autre Cindy. Gérez-la dans ses réglages ou choisissez un autre ordinateur principal",
+      "localCindyConflictAction": "Ouvrir les réglages de la Cindy locale",
       "notEnabled": "Ce serveur ne permet pas de changer d'ordinateur principal",
       "readOnlyNote": "Cette conversation est enregistrée dans le cloud et est en lecture seule",
       "empty": "Aucune conversation dans le cloud pour le moment",
@@ -14235,6 +14249,7 @@
       "botSentNamed": "Envoyé par le coéquipier « {{name}} »",
       "orcaFromLead": "Message du Lead",
       "orcaFromWorker": "Message du Worker",
+      "orcaFromWorkerBatch": "Rapport système : {{count}} résultats de Worker",
       "orcaFromWorkerNamed": "Message du Worker « {{role}} »",
       "hookChannelFrom": "Depuis {{channel}}",
       "deviceSentMobileNamed": "Envoyé depuis le téléphone « {{name}} »",
@@ -14383,6 +14398,8 @@
       "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "Ceci est un ancien partage, inutilisable tant que « Utiliser uniquement Agent-Net » est activé. Désactivez cette option pour continuer, ou passez à un autre modèle.",
       "REMOTE_AGENT_GROUP_USAGE_LIMIT": "Les comptes disponibles pour ce modèle ont atteint leur limite d'utilisation. Changez de modèle ou continuez lorsque le quota sera réinitialisé.",
       "REMOTE_AGENT_GROUP_UNAVAILABLE": "Aucun ordinateur du groupe de fournisseurs ne peut exécuter cette tâche pour le moment. Ils sont peut-être hors ligne, en pause, en période de refroidissement ou ne disposent pas de ce modèle. Vérifiez le groupe sur la page Accès distant et partage de ce fournisseur.",
+      "REMOTE_AGENT_GROUP_FULL": "Tous les comptes ou ordinateurs pouvant exécuter cette tâche ont atteint leur limite de tâches simultanées. Attendez la fin d’une tâche en cours ou augmentez la limite dans les réglages du fournisseur.",
+      "SUBSCRIPTION_ACCOUNTS_FULL": "Tous les comptes ou ordinateurs pouvant exécuter cette tâche ont atteint leur limite de tâches simultanées. Attendez la fin d’une tâche en cours ou augmentez la limite dans les réglages du fournisseur.",
       "REMOTE_AGENT_DEVICE_LIMIT": "Cet appareil a atteint sa limite de sessions distantes. Archivez les sessions inutilisées ou demandez au propriétaire du fournisseur de relever la limite dans Accès distant et partage.",
       "REMOTE_AGENT_TOTAL_LIMIT": "L'ordinateur du fournisseur a atteint sa limite totale de sessions distantes. Demandez au propriétaire de libérer les sessions inutilisées ou de relever la limite dans Accès distant et partage.",
       "REMOTE_AGENT_RESUME_LOST": "La conversation précédente sur l'autre ordinateur n'a pas pu être reconnectée : l'Agent continue donc sans ce contexte.",
@@ -14627,6 +14644,14 @@
       "replied": "a répondu",
       "toggle": "Afficher ou masquer la réponse de « {{title}} »",
       "openTask": "Ouvrir la tâche"
+    },
+    "subscriptionAccountError": {
+      "limited": "Le compte avec abonnement utilisé par cette tâche a atteint sa limite d’utilisation. Attendez sa réinitialisation ou choisissez une autre source de modèles. Le compte n’est pas changé automatiquement.",
+      "limitedUntil": "Le compte avec abonnement utilisé par cette tâche a atteint sa limite d’utilisation. Réinitialisation prévue : {{resetAt}}. Attendez cette date ou choisissez une autre source de modèles. Le compte n’est pas changé automatiquement.",
+      "loginRequired": "Le compte avec abonnement utilisé par cette tâche nécessite une nouvelle connexion. Reconnectez-vous sur l’ordinateur qui exécute la tâche, puis réessayez.",
+      "signingIn": "La connexion au compte avec abonnement utilisé par cette tâche est en cours. Réessayez une fois la connexion terminée.",
+      "unavailable": "Le compte avec abonnement affecté à cette tâche ne peut pas être utilisé pour cette demande. Vérifiez le compte dans les paramètres du fournisseur de modèles sur l’ordinateur d’exécution, ou choisissez une autre source de modèles.",
+      "legacy": "Le compte avec abonnement affecté à cette tâche est indisponible. Vérifiez sa connexion et son utilisation sur l’ordinateur d’exécution, ou choisissez une autre source de modèles. Le compte n’est pas changé automatiquement."
     }
   },
   "ccAgent": {
@@ -19634,6 +19659,12 @@
       "restore": "Réinitialiser"
     }
   },
+  "pluginUi": {
+    "display": "Affichage",
+    "original": "Original",
+    "menu": "Vues et commandes du plugin",
+    "actionFailed": "Cette action du plugin n’a pas pu être effectuée. Réessayez."
+  },
   "mcpApps": {
     "sharedTaskReadOnly": "Seul le propriétaire de la session peut interagir avec cette carte.",
     "retry": "Recharger",
@@ -19945,12 +19976,6 @@
       "from": "Transféré depuis « {{name}} »",
       "closeChecklist": "Fermer la liste"
     },
-    "suggestion": {
-      "title": "Utiliser l'assistant de migration pour transférer depuis « {{name}} » ?",
-      "description": "Vous pouvez configurer cet ordinateur avec les plugins, compétences, réglages et connexions de l'autre. Tout ce qui demande une nouvelle connexion ou autorisation ici est listé pour vous. Vous pouvez aussi l'ouvrir plus tard dans Réglages → Général → Assistant de migration.",
-      "confirm": "Ouvrir l'assistant de migration",
-      "later": "Plus tard"
-    },
     "walkthrough": {
       "progress": "Liste de configuration {{current}} / {{total}}",
       "open": "Ouvrir",
@@ -19972,6 +19997,103 @@
         "allow": "Autoriser",
         "deny": "Refuser"
       }
+    }
+  },
+  "firstRunGuide": {
+    "title": {
+      "new": "Bienvenue dans Cindy",
+      "returning": "Bon retour"
+    },
+    "stepsLabel": "Étapes du guide",
+    "close": "Fermer le guide",
+    "next": "Suivant",
+    "skip": "Passer",
+    "preparing": "Préparation…",
+    "steps": {
+      "legacy": "Données antérieures",
+      "intro": "Découvrir Cindy",
+      "migration": "Migrer",
+      "models": "Connecter un modèle",
+      "import": "Importer l’existant",
+      "finish": "Terminé"
+    },
+    "legacy": {
+      "title": "Vos données de la version précédente sont là",
+      "body": "Les sessions passées, les fichiers multimédias et les connexions du navigateur de l’Agent ont été transférés vers cette version et sont prêts à l’emploi.",
+      "note": "Les clés et identifiants tiers que vous aviez autorisés ne sont pas transférés avec les données. Autorisez-les ou saisissez-les à nouveau dans les Réglages."
+    },
+    "intro": {
+      "lead": "Cindy est l’assistant IA qui vous aide à concrétiser ce que vous avez en tête.",
+      "work": {
+        "title": "Confiez-lui le travail",
+        "body": "Il travaille directement dans vos dossiers et vos applications, au lieu de seulement répondre à des questions."
+      },
+      "connect": {
+        "title": "Utilisez les modèles et outils que vous avez déjà",
+        "body": "Connectez votre abonnement ou votre clé API, et ajoutez des plugins et des skills quand vous en avez besoin."
+      },
+      "continue": {
+        "title": "Reprenez où que vous soyez",
+        "body": "Depuis votre téléphone, lancez, consultez et poursuivez les sessions de votre ordinateur."
+      },
+      "start": "Commencer",
+      "next": "Ensuite"
+    },
+    "migration": {
+      "title": "Rapatrier Cindy depuis votre autre ordinateur",
+      "body": "Un autre ordinateur de votre compte est déjà configuré. L’Assistant de migration copie ses plugins, skills, réglages et connexions sur cet ordinateur ; les clés ne sont copiées qu’après avoir choisi Autoriser sur cet autre ordinateur.",
+      "manualBody": "Si vous avez utilisé Cindy sur un autre ordinateur, l’Assistant de migration peut copier ses plugins, skills, réglages et connexions sur cet ordinateur.",
+      "done": "Migré depuis « {{name}} »",
+      "from": "Ancien ordinateur",
+      "to": "Cet ordinateur"
+    },
+    "models": {
+      "title": "Donner un modèle à Cindy",
+      "body": "Ces deux options peuvent être utilisées ensemble.",
+      "cindy": {
+        "badge": "Service officiel",
+        "body": "Le service de modèles fourni par Cindy. Il est inclus dans votre compte, sans rien à activer. Les nouveaux comptes reçoivent un solde offert pour l’essayer ; une fois l’offre payée, presque tous les modèles sont disponibles, et sans payer le choix de modèles est plus restreint.",
+        "active": "Inclus dans votre compte et prêt à l’emploi",
+        "freeBalance": "Montant offert : bienvenue pour l’essayer"
+      },
+      "own": {
+        "title": "Utiliser votre propre offre",
+        "badge": "Plus avantageux",
+        "body": "Vous avez déjà un abonnement Claude ou ChatGPT, ou une clé API ? Nous vous recommandons vivement de le connecter et de l’utiliser avec Cindy AI pour une expérience optimale.",
+        "more": "Autres fournisseurs et clés API",
+        "connected": "Connecté"
+      }
+    },
+    "import": {
+      "title": "Importer ce qui se trouve déjà sur cet ordinateur",
+      "body": "Voici ce que Cindy a trouvé dans les autres outils d’IA de cet ordinateur. Cindy lit les originaux sans jamais les modifier.",
+      "empty": "Rien à importer n’a été trouvé sur cet ordinateur.",
+      "tasksHeading": "Sessions",
+      "tasksHint": "Sélectionnez des outils pour importer leurs sessions dans Cindy et poursuivre le travail.",
+      "pick": "Choisir une par une",
+      "started": "L’import a démarré en arrière-plan. Suivez sa progression dans Réglages → Import de sessions.",
+      "startFailed": "L’import n’a pas démarré. Relancez-le depuis Réglages → Import de sessions.",
+      "teammatesHeading": "Coéquipiers",
+      "teammatesHint": "Importez un Agent d’un autre outil comme coéquipier, avec sa mémoire, ses skills et ses automatisations.",
+      "importTeammate": "Importer comme coéquipier"
+    },
+    "finish": {
+      "title": "Tout est prêt",
+      "legacy": "Les données de la version précédente ont été transférées vers cette version",
+      "modelReady": "Un modèle est connecté",
+      "modelMissing": "Aucun modèle n’est encore connecté. Vous pourrez en connecter un au moment de démarrer une session.",
+      "importStarted": "Les sessions des autres outils sont importées en arrière-plan",
+      "native": "Vos skills et serveurs MCP de Claude Code et Codex fonctionnent ici directement ; il n’y a rien à importer.",
+      "start": "Démarrer votre première session"
+    },
+    "resume": {
+      "label": "Guide en cours · {{step}}",
+      "back": "Revenir au guide"
+    },
+    "settings": {
+      "title": "Guide de démarrage",
+      "description": "Revoir comment découvrir Cindy, migrer depuis un autre ordinateur, connecter un modèle et importer l’existant.",
+      "open": "Ouvrir le guide"
     }
   },
   "forwardedRequest": {
@@ -20134,6 +20256,10 @@
     "openDirectoryFailed": "Impossible d’ouvrir le dossier du compte. Il a peut-être été déplacé ou supprimé.",
     "loginAgain": "Se reconnecter",
     "login": "Se connecter",
+    "quotaRecoverIn": "Disponible dans {{duration}}",
+    "quotaExhausted": "Quota épuisé",
+    "quotaFiveHourRemaining": "Quota de 5 heures restant : {{percent}}%",
+    "quotaFiveHourExhausted": "Quota de 5 heures épuisé",
     "quotaAverage": "Restant moyen {{percent}} %",
     "quotaUpdating": "Quota en attente de mise à jour",
     "quotaResetSoon": "Réinitialisation proche",
