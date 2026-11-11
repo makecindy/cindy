@@ -6,20 +6,20 @@ export function rememberLiveSessionSettings(live, options) {
     planModeEnabled: options.planMode });
 }
 
-/** Reused sessions must apply the next input's settings, not keep the first
+/** Reused sessions must apply current task settings, not keep the first
  * turn's model. Skip unchanged options so unsupported live switches are not
  * invoked for an ordinary continuation. Direct settings edits update this same
- * snapshot below, so a queued choice cannot be mistaken for the current one. */
+ * snapshot below. Plan is per-message intent at dispatch, not an instruction
+ * to overwrite the runtime's armed state; only direct picker edits do that. */
 export async function applyQueuedSessionSettings(live, options, stored) {
   const previous = appliedSettings.get(live) ?? stored;
-  const desired = { ...options, providerId: options.providerId ?? null, planModeEnabled: options.planMode };
+  const desired = { ...options, providerId: options.providerId ?? null };
   const current = { ...previous,
     ...(typeof live.model === 'string' ? { model: live.model } : {}),
     ...(live.stablePermissionModeState?.mode ? { permissionMode: live.stablePermissionModeState.mode } : {}),
-    ...(live.stablePlanModeState ? { planModeEnabled: live.stablePlanModeState.enabled } : {}),
   };
   const patch = {};
-  for (const key of ['model', 'providerId', 'permissionMode', 'effort', 'fastMode', 'planModeEnabled']) {
+  for (const key of ['model', 'providerId', 'permissionMode', 'effort', 'fastMode']) {
     if (desired[key] !== undefined && desired[key] !== current[key]) patch[key] = desired[key];
   }
   await applyLiveSessionSettings(live, patch, stored);

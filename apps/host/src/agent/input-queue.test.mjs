@@ -11,6 +11,7 @@ import { saveAgentInputQueueSnapshot, loadAgentInputQueueSnapshot, getPersistedI
 import { markSessionTurnStarted, markSessionTurnEnded, drainSessionActiveTurnWrites } from '../../../desktop/src/main/localDb/sessionActiveTurn.ts';
 
 import { createInputQueue } from './input-queue.mjs';
+import { applyLiveSessionSettings } from './session-settings.mjs';
 import { GhostGrantConfirmBridge } from '../../../desktop/src/main/cindy-brain/ghostGrantConfirmBridge.ts';
 import { AcceptedCallbackDispatchCancelled } from '../../../desktop/src/main/maker-ipc/acceptedCallbackRunner.ts';
 import { MCP_APP_MESSAGE_GUARD } from '../../../desktop/src/main/mcp-apps/message.ts';
@@ -300,10 +301,12 @@ test('reopens a stored conversation with its SDK identity after a Host restart',
 // like Desktop. A queued snapshot must not restore an older route or widen a
 // newly tightened mode. Unit: two pending inputs and a picker edit before drain;
 // cover both the existing runtime and a cold resume through the real queue.
-for (const cold of [false, true]) {
-  test(`queued messages use latest task settings (${cold ? 'cold' : 'live'} runtime)`, async t => {
+// Plan is the Desktop exception: per-message intent survives picker edits in
+// either direction, while the runtime retains the task's current armed state.
+for (const cold of [false, true]) for (const queuedPlan of [false, true]) {
+  test(`queued messages use latest settings but retain Plan=${queuedPlan} (${cold ? 'cold' : 'live'} runtime)`, async t => {
     const settings = { agentKind: 'claude-code', workingDir: '/tmp', model: 'model-a',
-      providerId: 'provider-a', permissionMode: 'bypassPermissions', effort: 'low', fastMode: true, planModeEnabled: false };
+      providerId: 'provider-a', permissionMode: 'bypassPermissions', effort: 'low', fastMode: true, planModeEnabled: queuedPlan };
     const h = createHarness({ readSession: async id => ({ id, ...settings }) });
     t.after(() => h.queue.dispose());
     await enqueue(h, 'settings', { clientId: 'first', text: 'one' });
@@ -311,7 +314,8 @@ for (const cold of [false, true]) {
     await h.queue.enqueue('settings', { clientId: 'second', text: 'two', model: 'model-a', permissionMode: 'bypassPermissions' });
     // This represents the existing /sessions/update picker endpoint, not input metadata.
     Object.assign(settings, { model: 'model-b', providerId: 'provider-b', permissionMode: 'ask',
-      effort: 'high', fastMode: false, planModeEnabled: true });
+      effort: 'high', fastMode: false, planModeEnabled: !queuedPlan });
+    await applyLiveSessionSettings(first, { planModeEnabled: settings.planModeEnabled }, settings);
     await h.queue.enqueue('settings', { clientId: 'third', text: 'three', model: 'model-a', permissionMode: 'bypassPermissions' });
     if (cold) await h.maker.closeSession('settings');
     first.emit({ type: 'done' });
@@ -321,11 +325,14 @@ for (const cold of [false, true]) {
     for (const key of ['model', 'providerId', 'permissionMode', 'effort', 'fastMode']) {
       assert.equal(current.options[key], settings[key], key);
     }
-    assert.equal(current.options.planMode, true);
+    assert.equal(current.sendOptions.at(-1).planMode, queuedPlan, 'the queued message retains its own Plan intent');
+    assert.equal(current.options.planMode, !queuedPlan, 'dispatch must not overwrite the current runtime Plan state');
     current.emit({ type: 'done' });
     await waitFor(() => current.sent.includes('three'));
     assert.equal(current.options.model, 'model-b');
     assert.equal(current.options.permissionMode, 'ask');
+    assert.equal(current.sendOptions.at(-1).planMode, !queuedPlan, 'the next message uses its own enqueue-time intent');
+    assert.equal(current.options.planMode, !queuedPlan);
   });
 }
 
@@ -564,6 +571,25 @@ test('an MCP App message restores user history without treating page text as con
   await h.queue.enqueue('human-task', { clientId: 'human-1', text: 'hello' });
   await waitFor(() => h.maker.getSession('human-task')?.sendOptions.length === 1);
   assert.equal(h.maker.getSession('human-task').sendOptions[0][AUTO_REVIEW_DELEGATED_CONTINUATION], undefined);
+});
+
+// History parity (unit): connect the production sender's durable user receipt
+// to the next send's authorization reader, not handcrafted history rows. A lost
+// delivery/intent field would otherwise silently drop the earlier restriction.
+test('the next turn restores the user receipt actually persisted by the Host', async t => {
+  const h = createHarness();
+  t.after(() => h.queue.dispose());
+  await enqueue(h, 'receipt-chain', { clientId: 'request', text: 'Deploy the app. Do not delete files.' });
+  const session = h.maker.getSession('receipt-chain');
+  session.emit({ type: 'done' });
+  await h.queue.enqueue('receipt-chain', { clientId: 'continue', text: 'continue' });
+  await waitFor(() => session.sendOptions.length === 2);
+  const options = session.sendOptions[1];
+  const intent = options.resolveAutoReviewUserIntent
+    ? await options.resolveAutoReviewUserIntent() : options[AUTO_REVIEW_USER_INTENT];
+  assert.deepEqual(intent, {
+    earlierUserMessages: ['Deploy the app. Do not delete files.'], currentUserMessage: 'continue',
+  });
 });
 
 // Desktop parity: ordinary sends, scheduled continuation and same-turn steer

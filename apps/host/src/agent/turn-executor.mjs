@@ -277,12 +277,11 @@ export function createTurnExecutor(deps) {
     turn.preparing = (async () => {
       await sendOpts[MCP_APP_MESSAGE_GUARD]?.();
       const stored = await readExecutionSession(sessionId);
-      const scheduled = (sendOpts.persistUserMessage?.origin ?? sendOpts.origin)?.kind === 'scheduler';
-      const scheduledPlan = createOpts.planMode;
+      const queuedPlan = createOpts.planMode;
       await reconcileCreateOptsWithDb(sessionId, createOpts);
-      // Scheduled input keeps its explicit per-turn Plan intent, as on Desktop;
-      // the shared lazy bootstrap still starts the runtime with the stored mode.
-      if (scheduled) createOpts.planMode = scheduledPlan;
+      // Every input retains its enqueue-time Plan intent, as on Desktop. The
+      // shared transaction reconciles a copy for cold bootstrap separately.
+      createOpts.planMode = queuedPlan;
       createOpts.workingDir = stored.workingDir || '';
       turn.dbKind = dbKind(createOpts.agentKind);
       await deps.beforeSessionStart?.(sessionId, createOpts.agentKind);
