@@ -1,0 +1,17 @@
+name: scratch windows git probe repro
+on:
+  push:
+    branches: [test/windows-git-probe-repro]
+permissions:
+  contents: read
+jobs:
+  repro:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: git --version
+      - run: npx -y tsx repro/run.mts
