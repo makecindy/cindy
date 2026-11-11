@@ -23,7 +23,7 @@ export const ORDINARY_CLAUDE_TASK_SQL = `SELECT id FROM sessions s
 WHERE s.id = ? AND s.status = 'active' AND s.source = 'desktop'
 AND s.hidden_at IS NULL AND s.agent_device_id IS NULL
 AND s.sdk_session_id = ? AND s.sdk_session_id != '<pending>'
-AND s.agent_kind = 'claude-code' AND s.remote_host_id IS NULL AND s.orca_role IS NULL
+AND s.agent_kind = 'cc' AND s.remote_host_id IS NULL AND s.orca_role IS NULL
 AND NOT EXISTS (SELECT 1 FROM bot_session_links b WHERE b.session_id = s.id)
 AND NOT EXISTS (SELECT 1 FROM orca_workers w WHERE w.session_id = s.id)
 AND NOT EXISTS (SELECT 1 FROM orca_teams t WHERE t.lead_session_id = s.id AND t.status = 'active')

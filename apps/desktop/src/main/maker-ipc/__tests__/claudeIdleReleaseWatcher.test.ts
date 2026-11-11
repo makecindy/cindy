@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import os from 'node:os';
 import path from 'node:path';
+import { makerToDbAgentKind } from '../../../shared/agentKindConversion';
 import { Maker, type AgentSessionHandle, type BaseAgent, type SessionMeta, type SessionStorage, type StartSessionOptions } from '@cindy/maker-core';
 import { createRehydrateCloseSuppression } from '../../maker-host/rehydrateCloseSuppression';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -159,10 +160,20 @@ describe('ordinary Claude task eligibility in SQLite', () => {
       CREATE TABLE orca_workers (session_id TEXT);
       CREATE TABLE orca_teams (lead_session_id TEXT, status TEXT);
       CREATE TABLE session_goals (session_id TEXT, status TEXT);
-      INSERT INTO sessions VALUES ('task', 'active', 'desktop', 'claude-code', NULL, NULL, 'native-history', NULL, NULL);
+      INSERT INTO sessions VALUES ('task', 'active', 'desktop', '${makerToDbAgentKind('claude-code')}', NULL, NULL, 'native-history', NULL, NULL);
     `);
     return db;
   }
+  it('releases a Claude runtime using the kind written by Desktop persistence', async () => {
+    const db = database();
+    const f = fixture();
+    try {
+      const eligible = db.prepare(ORDINARY_CLAUDE_TASK_SQL);
+      f.deps.isOrdinaryTask.mockImplementation(async (id, nativeId) => Boolean(eligible.get(id, nativeId)));
+      await aged(f); await f.watcher.scanNow();
+      expect(f.deps.close).toHaveBeenCalledOnce();
+    } finally { f.watcher.stop(); db.close(); }
+  });
   it.each([
     "UPDATE sessions SET status = 'archived'",
     "UPDATE sessions SET status = 'deleted'",
