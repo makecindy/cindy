@@ -59,6 +59,12 @@
 仍是 0.85.1 资料，整表同步随 Pi 版本升级另做。新地址与原供应商记录不同的行（OpenCode Zen/Go 已改到
 `/inference`）没有合并，否则会悄悄改掉已有连接的请求地址。
 
+2026-11-11：[#9863](https://github.com/makecindy/cindy/issues/9863) 的 Copilot Astra
+在官方个人端点拒绝 Chat Completions。`tools/pi/catalog-format.mjs` 对精确供应商、型号、
+地址及旧 API 做具名纠正为 Responses，随包条目同步；在线刷新与 bundle 导入共用该入口。
+不把 `nativeApi` 当通用路由覆盖，不改用户显式接口、其他地址或已有任务的接口快照。
+回归覆盖生成、三引擎预设/ID-only 导入及 Pi 启动描述符；真实 Copilot 账号推理仍需验收。
+
 ## 用户实测后的补充验收
 
 最初审计把三引擎都构造成 Chat 路由，没有覆盖实际添加请求。OpenRouter 的公开模型接口

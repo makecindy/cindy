@@ -13946,7 +13946,7 @@
         },
         "execution": {
           "pi": {
-            "api": "openai-completions",
+            "api": "openai-responses",
             "headers": {
               "User-Agent": "GitHubCopilotChat/0.35.0",
               "Editor-Version": "vscode/1.107.0",
