@@ -3964,6 +3964,7 @@ export function NewMakerDraftRoute() {
             deviceId: routedTo
               ? modelCatalogKey(routeAgentDeviceId ?? effectiveDeviceLinkDeviceId, controlledModelRoute.catalogHostDeviceId)
               : catalogDeviceId,
+            remoteHostId: isRemoteProjectDraft ? effectiveRemoteHostId : null,
           });
           if (isDeviceLinkDraft && !isCurrentDataOwner()) return;
           if (!proceed) return;
@@ -5226,6 +5227,7 @@ export function NewMakerDraftRoute() {
           deviceId: routedTo
             ? modelCatalogKey(routeAgentDeviceId ?? effectiveDeviceLinkDeviceId, controlledModelRoute.catalogHostDeviceId)
             : catalogDeviceId,
+          remoteHostId: isRemoteProjectDraft ? effectiveRemoteHostId : null,
         });
         if (!proceed) return; // 用户取消授权:弹窗关闭即可,不算错误。
         if (isDeviceLinkDraft) {

@@ -224,8 +224,10 @@ interface UseVendorAuthGateReturn {
    *   - unauthenticated → 弹 confirmDialog
    *       - 用户点确认 → navigate 到 /settings?tab=...,返回 { proceed: false }
    *       - 用户点取消 → 直接返回 { proceed: false }
-   *   - codex binary-missing → 复用同一弹窗提示去连接页处理
+   *   - binary-missing → 复用同一弹窗提示去对应设置页处理
    *   - 其他 (ready / loading) → { proceed: true },不拦截
+   *
+   * SSH:传 `remoteHostId` 时 Agent 在远端主机上运行,跳过本机运行时检查,只看来源。
    *
    * 语音输入会走 main 端 getReadiness,由当前 ASR provider 决定是检查
    * Codex 连接还是 API Key。
@@ -237,7 +239,7 @@ interface UseVendorAuthGateReturn {
    */
   checkAndConfirm: (
     vendor: AgentKind,
-    options?: { purpose?: GatePurpose; deviceId?: string; existingSessionRoute?: boolean },
+    options?: { purpose?: GatePurpose; deviceId?: string; existingSessionRoute?: boolean; remoteHostId?: string | null },
   ) => Promise<GateResult>;
 }
 
@@ -253,7 +255,7 @@ export function useVendorAuthGate(): UseVendorAuthGateReturn {
   const checkAndConfirm = useCallback(
     async (
       vendor: AgentKind,
-      options?: { purpose?: GatePurpose; deviceId?: string; existingSessionRoute?: boolean },
+      options?: { purpose?: GatePurpose; deviceId?: string; existingSessionRoute?: boolean; remoteHostId?: string | null },
     ): Promise<GateResult> => {
       if (options?.purpose === 'voice-input') {
         const cached = window.electronAPI.voiceInput.getReadinessCached();
@@ -374,6 +376,8 @@ export function useVendorAuthGate(): UseVendorAuthGateReturn {
       // 已建会话的发送门禁计入 suspended 来源(见 useVendorReadiness 注释);草稿不传。
       const readiness = await target.revalidate({
         includeSuspended: options?.existingSessionRoute === true,
+        // SSH 任务的 Agent 在远端主机上运行,不需要本机运行时。
+        skipBinary: Boolean(options?.remoteHostId),
       });
       const dialogCopy = pickCopy(copy, vendor, readiness);
       if (!dialogCopy) return { proceed: true };

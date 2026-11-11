@@ -32,17 +32,18 @@ export function readinessFromBinaryStatus(
 
 export function useVendorReadiness(vendorKey: 'cc' | 'codex' | 'pi'): {
   readiness: Readiness;
-  revalidate: (opts?: { includeSuspended?: boolean }) => Promise<Readiness>;
+  revalidate: (opts?: { includeSuspended?: boolean; skipBinary?: boolean }) => Promise<Readiness>;
 } {
   const [readiness, setReadiness] = useState<Readiness>('loading');
 
-  const revalidate = useCallback(async (opts?: { includeSuspended?: boolean }): Promise<Readiness> => {
+  const revalidate = useCallback(async (opts?: { includeSuspended?: boolean; skipBinary?: boolean }): Promise<Readiness> => {
     const agent: AgentKind = vendorKey === 'cc' ? 'claude-code' : vendorKey === 'pi' ? 'pi' : 'codex';
 
     // 轴 2(正交于来源):本地二进制是运行时前提,缺了连发都发不了 → 优先返回
     // binary-missing。binary 状态走 maker:agent:status(其 authReady 是 codex OAuth 专属,已被
     // 下方 provider 维度的来源判定取代,这里只取 binaryReady)。断网首装时 cc 也可能缺失。
-    {
+    // skipBinary:SSH 任务在远端主机运行、使用远端运行时,本机缺包不应拦截。
+    if (!opts?.skipBinary) {
       setReadiness('loading');
       try {
         const status = (await window.electronAPI.maker.agent.getStatus(agent)) as {

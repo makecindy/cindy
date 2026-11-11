@@ -4232,6 +4232,7 @@ function CCAgentSessionContent({
         // 已建会话:suspended 来源计入(停用不打断运行中会话,门禁只看凭证连接态,
         // PR #744 review 第十七轮)。
         existingSessionRoute: true,
+        remoteHostId: session?.remoteHostId,
       })).proceed;
       // 输入框在点击时就已清空。普通发送把这项检查交给 store 的 beforeEnqueue:
       // 气泡先上屏,和清空同一帧出现,不再等这次主进程往返;不通过时 store 按
