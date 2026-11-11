@@ -10,6 +10,16 @@ type Invoke = NonNullable<XdtHelperMcpDeps['mcpGateway']>;
 /** Close an idle upstream session so abandoned tasks do not hold remote connections. */
 const DEFAULT_IDLE_MS = 90_000;
 
+/** Request-level rejections that arrive before any business call is dispatched. The
+ *  upstream session is still healthy, so the cached connection must survive them. */
+const RECOVERABLE_REJECTION = /TOOL_NOT_VISIBLE|TOOL_NOT_FOUND|INVALID_ARGS|MethodNotFound|-32601/i;
+export function isRecoverableMcpRejection(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const { code, message } = error as { code?: unknown; message?: unknown };
+  return (typeof code === 'string' && RECOVERABLE_REJECTION.test(code))
+    || (typeof message === 'string' && RECOVERABLE_REJECTION.test(message));
+}
+
 interface LiveConnection {
   /** Configuration identity of the server this session talks to. */
   signature: string;
@@ -126,9 +136,10 @@ export function createLiveMcpGateway(deps: {
       assertCurrent();
       connection.lastUsed = Date.now();
       return result as Awaited<ReturnType<Invoke>>;
-    } catch {
-      // Transport or scope failure: the session may be half-open, so never keep it.
-      dropConnection(key);
+    } catch (error) {
+      // A rejected tool name or schema never reaches the upstream session; evicting there
+      // would throw away a healthy session's state (database selection, transactions).
+      if (!isRecoverableMcpRejection(error)) dropConnection(key);
       return failure(signal?.aborted ? 'MCP_GATEWAY_CANCELLED' : 'MCP_GATEWAY_REQUEST_FAILED');
     }
   };

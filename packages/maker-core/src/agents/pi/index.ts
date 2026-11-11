@@ -322,6 +322,12 @@ const PI_API_KEY_ENV = 'CINDY_PI_API_KEY';
 const PI_SESSION_ID_ENV = 'CINDY_PI_SESSION_ID';
 const PI_SESSION_TOKEN_ENV = 'CINDY_PI_SESSION_TOKEN';
 const PI_MCP_BRIDGE_ENV = 'CINDY_PI_MCP_BRIDGE';
+/** A retired bridge generation may still serve calls already dispatched through the old
+ *  bridge; release it after this grace instead of holding it for the task's lifetime.
+ *  Each live generation keeps its custom-MCP facades registered with the App host, which
+ *  has a shared connection budget, so unbounded retention leaks capacity across tasks. */
+const PI_MCP_RETIRED_LEASE_GRACE_MS = 60_000;
+const PI_MCP_RETIRED_LEASE_LIMIT = 4;
 const PI_SECRET_ENV_NAMES_ENV = 'CINDY_PI_SECRET_ENV_NAMES';
 const PI_MANAGED_RG_PATH_ENV = 'CINDY_PI_MANAGED_RG_PATH';
 const PI_LEGACY_SUBAGENT_NODE_ENV = 'CINDY_PI_SUBAGENT_NODE';
@@ -3771,6 +3777,24 @@ export class PiAgent extends BaseAgent {
     let mcpEnv: PiExtraSpawnConfig['mcpEnv'] = {};
     let disposeSessionCtx: (() => void) | undefined;
     let refreshMcpConfig: PiExtraSpawnConfig['refreshMcpConfig'];
+    /** Sessions retired by a config refresh, kept briefly for already-dispatched calls. */
+    const retiredSessionCtx: Array<{ dispose: () => void; timer: ReturnType<typeof setTimeout> }> = [];
+    const retireSessionCtx = (dispose: () => void) => {
+      const entry = { dispose, timer: undefined as unknown as ReturnType<typeof setTimeout> };
+      entry.timer = setTimeout(() => {
+        const index = retiredSessionCtx.indexOf(entry);
+        if (index >= 0) retiredSessionCtx.splice(index, 1);
+        try { dispose(); } catch { /* best-effort release */ }
+      }, PI_MCP_RETIRED_LEASE_GRACE_MS);
+      entry.timer.unref?.();
+      retiredSessionCtx.push(entry);
+      while (retiredSessionCtx.length > PI_MCP_RETIRED_LEASE_LIMIT) {
+        const oldest = retiredSessionCtx.shift();
+        if (!oldest) break;
+        clearTimeout(oldest.timer);
+        try { oldest.dispose(); } catch { /* best-effort release */ }
+      }
+    };
     const registeredMcpServerNames = new Set<string>();
     // 远端会话:host 可 gate 掉 in-process MCP bridge(loopback URL 远端够不到;
     // Phase 1 不桥 orca/memory/ghost)。外部 HTTP MCP 直连不受影响。
@@ -5915,8 +5939,10 @@ export class PiAgent extends BaseAgent {
                 if (update) {
                   const oldDispose = disposeSessionCtx;
                   const nextDispose = update.config?.disposeSessionCtx;
-                  // Old leases remain valid for calls already dispatched, until close.
-                  disposeSessionCtx = () => { nextDispose?.(); oldDispose?.(); };
+                  disposeSessionCtx = nextDispose;
+                  // Release the previous generation once its dispatched calls have drained,
+                  // so repeated saves do not pile up App-host facades until close().
+                  if (oldDispose) retireSessionCtx(oldDispose);
                   registeredMcpServerNames.clear();
                   for (const server of update.config?.mcpBridge?.servers ?? []) registeredMcpServerNames.add(server.name);
                 }

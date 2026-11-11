@@ -5,7 +5,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { createLiveMcpGateway } from '../liveMcpGateway.js';
+import { createLiveMcpGateway, isRecoverableMcpRejection } from '../liveMcpGateway.js';
 
 const context = { agentKind: 'codex', workingDir: '/test', sessionId: 'task', sessionInstanceId: 'instance', mcpCallerKind: 'root' as const };
 function fixture() {
@@ -108,6 +108,25 @@ describe('stable live MCP entry', () => {
     f.editConfig();
     expect(await call()).toMatchObject({ content: [{ type: 'text', text: '1' }] });
     expect(f.created()).toBe(2);
+  });
+  it('keeps the session when a rejection never reached the upstream server', async () => {
+    const f = statefulFixture();
+    const call = (tool: string) => f.gateway(context, { action: 'call', server: 'custom_example', tool, arguments: {} });
+    expect(await call('increment')).toMatchObject({ content: [{ type: 'text', text: '1' }] });
+    // Unknown tool names rejected by the facade are request-level: the transport is healthy.
+    expect(await call('missing')).toMatchObject({ isError: true });
+    expect(await call('increment')).toMatchObject({ content: [{ type: 'text', text: '2' }] });
+    expect(f.created()).toBe(1);
+  });
+  it.each([
+    [{ code: 'MCP_APP_TOOL_NOT_VISIBLE' }, true],
+    [{ message: 'MCP error -32601: Method not found' }, true],
+    [{ message: 'INVALID_ARGS: tool arguments rejected' }, true],
+    [new Error('socket hang up'), false],
+    [Object.assign(new Error('boom'), { code: 'ECONNRESET' }), false],
+    [undefined, false],
+  ])('classifies %j as recoverable=%s', (error, expected) => {
+    expect(isRecoverableMcpRejection(error)).toBe(expected);
   });
   it('does not start a cancelled call or return data after task invalidation', async () => {
     const f = fixture(); f.save();
