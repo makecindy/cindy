@@ -203,7 +203,7 @@ describe('Windows Store PowerShell execution aliases', () => {
       exists: true,
     },
   ])(
-    'lists and selects a valid alias when stat fails with $code (exists=$exists)',
+    'lists a valid alias for explicit selection when stat fails with $code (exists=$exists)',
     ({ directory, code, exists }) => {
       const alias = path.win32.join(directory, 'pwsh.exe');
       process.env.PATH = directory;
@@ -216,13 +216,31 @@ describe('Windows Store PowerShell execution aliases', () => {
         id: 'pwsh',
         command: alias,
         displayName: 'PowerShell',
-        isAutoDetectTarget: true,
+        isAutoDetectTarget: false,
       });
       expect(resolveShellById('pwsh')).toMatchObject({ id: 'pwsh', command: alias });
       expect(resolveShellForCreate('pwsh')).toMatchObject({ id: 'pwsh', command: alias });
-      expect(resolveShellForCreate('auto')).toMatchObject({ id: 'pwsh', command: alias });
+      expect(resolveShellForCreate('auto')).toMatchObject({
+        id: 'cmd',
+        command: process.env.COMSPEC,
+      });
     },
   );
+
+  it('keeps Windows PowerShell as the auto target when Store PowerShell is available', () => {
+    const alias = path.win32.join(windowsApps, 'pwsh.exe');
+    const powershell = path.win32.join(
+      'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe',
+    );
+    process.env.PATH = `${windowsApps};${path.win32.dirname(powershell)}`;
+    setExistingFiles([target, powershell]);
+    fixture.statErrors.set(alias, 'EACCES');
+    fixture.links.set(alias, target);
+
+    expect(probeAvailableShells().find((shell) => shell.isAutoDetectTarget)?.id).toBe('powershell');
+    expect(resolveShellForCreate('pwsh').command).toBe(alias);
+    expect(resolveShellForCreate('auto')).toMatchObject({ id: 'powershell', command: powershell });
+  });
 
   it.each([
     'missing alias',
@@ -264,6 +282,7 @@ describe('Windows Store PowerShell execution aliases', () => {
 
     process.env.PATH = `${windowsApps};${path.win32.dirname(msi)}`;
     expect(resolveShellForCreate('pwsh').command).toBe(alias);
+    expect(resolveShellForCreate('auto').command).toBe(msi);
     fixture.statErrors.set(target, 'ENOENT');
     expect(resolveShellForCreate('pwsh').command).toBe(msi);
   });

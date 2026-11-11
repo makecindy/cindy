@@ -103,8 +103,9 @@ function isAvailableWindowsAppAlias(candidate: string): boolean {
 /**
  * 在 PATH 里找一个可执行文件。Windows 自动按 PATHEXT 追加扩展名（若 bin 已带匹配扩展则不重复追）。
  * 找到返回绝对路径，找不到回 null。不抛错（权限拒绝静默跳过）。
+ * AppExecLink 的文件目标有效不保证 ConPTY 激活成功，仅在用户显式选择时补验别名。
  */
-function whichSync(bin: string): string | null {
+function whichSync(bin: string, allowWindowsAppAliases = false): string | null {
   if (process.platform === 'win32') {
     const pathext = (process.env.PATHEXT ?? WIN_PATHEXT_DEFAULT)
       .split(';')
@@ -122,7 +123,11 @@ function whichSync(bin: string): string | null {
           if (statSync(candidate).isFile()) return candidate;
         } catch (error) {
           const code = (error as NodeJS.ErrnoException).code;
-          if ((code === 'EACCES' || code === 'EPERM') && isAvailableWindowsAppAlias(candidate)) {
+          if (
+            allowWindowsAppAliases &&
+            (code === 'EACCES' || code === 'EPERM') &&
+            isAvailableWindowsAppAlias(candidate)
+          ) {
             return candidate;
           }
         }
@@ -263,7 +268,7 @@ export function resolveShellById(id: Exclude<ShellId, 'auto'>): ResolvedShell | 
   if (process.platform === 'win32') {
     switch (id) {
       case 'pwsh': {
-        const p = whichSync('pwsh.exe');
+        const p = whichSync('pwsh.exe', true);
         return p ? { id, command: p, args: [], displayName: 'PowerShell' } : null;
       }
       case 'powershell': {
