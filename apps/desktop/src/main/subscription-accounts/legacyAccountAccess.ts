@@ -11,13 +11,13 @@ export function setLegacyCodexAccountPaused(providerId: string, paused: boolean)
 export function legacyCodexAccountCanRun(
   providerId: string,
   model: string | undefined,
-  options: { remote: boolean; newRoute: boolean },
+  options: { remote: boolean; newRoute: boolean; modelSwitch?: boolean },
 ): boolean {
   if (options.remote && (!isRemoteProviderInvocationAllowed(providerId)
     || !remoteModelAccess.allows(providerId, model ?? ''))) return false;
-  if (!options.newRoute) return true;
+  if (!options.newRoute && !options.modelSwitch) return true;
   const access = readModelDisableOverrides();
-  if (isProviderDisabled(access, providerId)) return false;
+  if (options.newRoute && isProviderDisabled(access, providerId)) return false;
   if (!model) return true;
   const bare = model.replace(/^chatgpt\//, '');
   return !isModelDisabled(access, providerId, bare)

@@ -500,6 +500,7 @@ export async function readSubscriptionPool(
 
 export interface SubscriptionAccountLease {
   account: NativeSubscriptionAccount;
+  changeModel(model: string, apply: () => Promise<void>): Promise<void>;
   bind(keys: string[]): Promise<void>;
   running(active: boolean): void;
   release(): void;
@@ -577,7 +578,8 @@ export async function acquireSubscriptionAccount(
     changed(provider);
   }
   let released = false;
-  const assertCurrent = () => {
+  let currentModel = model;
+  const assertCurrent = (targetModel = currentModel, modelSwitch = false) => {
     assertOwner(state);
     const current = readPool(provider);
     if (current?.disconnected || !current?.accounts.some((a) => a.id === selected))
@@ -585,8 +587,11 @@ export async function acquireSubscriptionAccount(
     if (selected === 'default' && !defaultAccountBound(provider))
       throw new Error('Subscription account was disconnected');
     const imported = provider === 'openai' ? readLegacyCodexProviderId(selected) : undefined;
-    if (options.remote && imported && !legacyAccess?.legacyCodexAccountCanRun(imported, model, { remote: true, newRoute: false }))
-      throw new Error('Subscription account remote access was revoked');
+    if (imported && (options.remote || modelSwitch)
+      && !legacyAccess?.legacyCodexAccountCanRun(imported, targetModel, {
+        remote: options.remote === true, newRoute: false, modelSwitch,
+      }))
+      throw new Error(options.remote ? 'Subscription account remote access was revoked' : 'Subscription account does not allow this model');
   };
   return {
     account: {
@@ -636,6 +641,20 @@ export async function acquireSubscriptionAccount(
             },
           }
         : {}),
+    },
+    changeModel: async (nextModel, apply) => {
+      assertCurrent(nextModel, true);
+      const previous = currentModel;
+      currentModel = nextModel;
+      try {
+        await apply();
+      } catch (error) {
+        currentModel = previous;
+        throw error;
+      }
+      // A successful switch must keep the new model even if its grant was
+      // revoked during the operation; all later sends must fail against it.
+      assertCurrent();
     },
     bind: async (ids) => {
       assertCurrent();

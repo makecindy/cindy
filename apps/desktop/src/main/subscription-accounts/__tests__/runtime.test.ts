@@ -192,6 +192,73 @@ describe('tasks using imported Codex connections', () => {
     expect(h.bindings.size).toBe(0);
     expect(start).toHaveBeenCalledOnce();
   });
+
+  // PR #9900 review, standard: an existing remote lease must track the actual
+  // model after a hot switch. Earlier coverage only revoked the startup model.
+  it.each(['codex', 'claude-code', 'pi'] as const)('checks the current and target remote model for %s', async kind => {
+    h.pools.openai = {
+      strategy: 'least', accounts: [account('imported')],
+      legacyCodexAccounts: { 'openai-old': 'imported' },
+    };
+    const allowed = new Set(['model-a']);
+    h.accountAllowed.mockImplementation((_provider, model, options) => !options.remote || allowed.has(model));
+    const setModel = vi.fn<NonNullable<AgentSessionHandle['setModel']>>(async () => {});
+    const send = vi.fn<AgentSessionHandle['send']>(async () => {});
+    const start = vi.fn<BaseAgent['startSession']>(async () => ({
+      id: 'switch-native', setModel, send, close: async () => {},
+    } as unknown as AgentSessionHandle));
+    const agent = withSubscriptionAccounts({ kind, startSession: start } as unknown as BaseAgent);
+    const handle = await agent.startSession({
+      providerId: 'openai', model: 'model-a', workingDir: '.', sessionId: 'switch-task',
+      deviceHosted: {
+        workingDir: '.', extraDirs: [], writableDirs: [], platform: process.platform,
+        shell: 'fixture', isGitRepo: false, tunnelUrl: 'http://127.0.0.1',
+        tunnelToken: 'fixture-unused', mcpServers: [],
+      },
+    });
+    await expect(handle.setModel!('model-b')).rejects.toThrow('remote access was revoked');
+    expect(setModel).not.toHaveBeenCalled();
+    allowed.add('model-b');
+    setModel.mockRejectedValueOnce(new Error('switch failed'));
+    await expect(handle.setModel!('model-b')).rejects.toThrow('switch failed');
+    allowed.delete('model-b');
+    await handle.send({ type: 'user', content: 'still model a' });
+    allowed.add('model-b');
+    await handle.setModel!('model-b');
+    allowed.delete('model-a');
+    await handle.send({ type: 'user', content: 'now model b' });
+    expect(send).toHaveBeenCalledTimes(2);
+    allowed.delete('model-b');
+    await expect(handle.send({ type: 'user', content: 'revoked' })).rejects.toThrow('remote access was revoked');
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(() => start.mock.calls[0][0][NATIVE_SUBSCRIPTION_ACCOUNT]!.assertCurrent())
+      .toThrow('remote access was revoked');
+    allowed.add('model-b');
+    allowed.add('model-c');
+    setModel.mockImplementationOnce(async () => { allowed.delete('model-c'); });
+    await expect(handle.setModel!('model-c')).rejects.toThrow('remote access was revoked');
+    await expect(handle.send({ type: 'user', content: 'revoked during switch' })).rejects.toThrow('remote access was revoked');
+    expect(send).toHaveBeenCalledTimes(2);
+    await handle.close();
+  });
+
+  it('checks the imported connection model exclusion before a local switch', async () => {
+    h.pools.openai = {
+      strategy: 'least', accounts: [account('imported')],
+      legacyCodexAccounts: { 'openai-old': 'imported' },
+    };
+    h.accountAllowed.mockImplementation((_provider, model, options) => !options.modelSwitch || model !== 'model-b');
+    const setModel = vi.fn<NonNullable<AgentSessionHandle['setModel']>>(async () => {});
+    const agent = withSubscriptionAccounts({ kind: 'codex', startSession: async () => ({
+      id: 'local-switch', setModel, close: async () => {},
+    } as unknown as AgentSessionHandle) } as unknown as BaseAgent);
+    const handle = await agent.startSession({ providerId: 'openai', model: 'model-a', workingDir: '.' });
+    await expect(handle.setModel!('model-b')).rejects.toThrow('does not allow this model');
+    expect(setModel).not.toHaveBeenCalled();
+    await handle.setModel!('model-a');
+    expect(setModel).toHaveBeenCalledOnce();
+    await handle.close();
+  });
 });
 
 describe('native account assignment on the executing computer', () => {

@@ -66,6 +66,11 @@ function wrapHandle(
             throw error;
           }
         };
+      if (property === 'setModel' && target.setModel)
+        return async (...args: Parameters<NonNullable<AgentSessionHandle['setModel']>>) => {
+          if (cleanupPending) throw new Error('Subscription account runtime is closing');
+          return lease.changeModel(args[0], () => target.setModel!(...args));
+        };
       if (property === 'close' || property === 'detach') {
         const method = target[property];
         return method

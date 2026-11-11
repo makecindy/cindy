@@ -20,6 +20,7 @@ export default {
   },
   cases: {
     'legacy-upgrade': { about: 'Old connection IDs remain in the host snapshot, while the actual settings rail shows one OpenAI supplier and both migrated accounts' },
+    'legacy-upgrade-shared': { about: 'A migrated connection with an existing share keeps its selective revocation entry even when disconnected and paused, without duplicating unshared connections' },
     'subscription-claude-choice': { about: 'An existing Claude Code login is shown before choosing it or another account' },
     'subscription-codex-choice': { about: 'An existing Codex login is shown before choosing it or another account' },
     'subscription-login': { about: 'OpenAI browser login adds an account inside the existing provider' },
@@ -35,14 +36,21 @@ export default {
     await page.getByTestId('provider-share-received').waitFor();
   },
   async check(page, ui) {
-    if (ui.case === 'legacy-upgrade') {
+    if (ui.case.startsWith('legacy-upgrade')) {
       await page.getByRole('button', { name: /^OpenAI/ }).first().click();
       const accounts = page.getByTestId('subscription-accounts');
       await accounts.getByText('alex@example.com', { exact: true }).waitFor();
       await accounts.getByText('work@example.com', { exact: true }).waitFor();
-      assert.equal(await page.getByText('Old login one', { exact: true }).count(), 0);
+      const shared = ui.case === 'legacy-upgrade-shared';
+      assert.equal(await page.getByText('Old login one', { exact: true }).count(), shared ? 1 : 0);
       assert.equal(await page.getByText('Old login two', { exact: true }).count(), 0);
       await ui.capture('upgraded-accounts');
+      if (shared) {
+        const owned = page.getByTestId('provider-share-owned');
+        await owned.getByText('Old login one', { exact: true }).click();
+        await page.getByTestId('provider-share-entry').waitFor();
+        await ui.capture('legacy-share-controls');
+      }
       return;
     }
     if (ui.case === 'subscription-claude-choice' || ui.case === 'subscription-codex-choice') {

@@ -102,10 +102,13 @@ describe('legacy Codex account upgrade', () => {
     h.access.disabledModels['openai-a:chatgpt/gpt-model'] = true;
     expect(legacyCodexAccountCanRun('openai-a', 'gpt-model', { remote: false, newRoute: true })).toBe(false);
     expect(legacyCodexAccountCanRun('openai-a', 'gpt-model', { remote: false, newRoute: false })).toBe(true);
+    expect(legacyCodexAccountCanRun('openai-a', 'gpt-model', { remote: false, newRoute: false, modelSwitch: true })).toBe(false);
     expect(legacyCodexAccountCanRun('openai-a', undefined, { remote: true, newRoute: false })).toBe(false);
     h.remoteAllowed.add('openai-a');
     expect(legacyCodexAccountCanRun('openai-a', 'other-model', { remote: true, newRoute: true })).toBe(true);
     h.access.disabledProviders['openai-a'] = true;
+    // Pausing allocation must not block a bound task switching to an allowed model.
+    expect(legacyCodexAccountCanRun('openai-a', 'other-model', { remote: false, newRoute: false, modelSwitch: true })).toBe(true);
     expect(legacyCodexAccountCanRun('openai-a', undefined, { remote: false, newRoute: true })).toBe(false);
     setLegacyCodexAccountPaused('openai-a', false);
     expect(legacyCodexAccountCanRun('openai-a', undefined, { remote: false, newRoute: true })).toBe(true);
