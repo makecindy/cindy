@@ -20,8 +20,8 @@ vi.mock('../clientEndpointsService.js', async importOriginal => ({
 
 // 中转身份:限流期限按它分桶(官方中转与自建中转是各自独立的限流桶)。
 const relayScope = vi.hoisted(() => ({ baseUrl: 'https://relay-a.test.invalid' }));
-vi.mock('../device-link/deviceLinkApi.js', async importOriginal => ({
-  ...await importOriginal<typeof import('../device-link/deviceLinkApi.js')>(),
+vi.mock('../device-link/deviceLinkApi.desktop.js', () => ({
+  deviceLinkApiFetch: vi.fn(),
   resolveDeviceLinkApiBase: () => relayScope.baseUrl,
 }));
 
