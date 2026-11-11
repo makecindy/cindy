@@ -161,5 +161,12 @@ rebase、fetch（包括 Cindy 自己的快照提交与 worktree 池 fetch）都�
 - 依赖和命令的事实源是当前 checkout 的 `package.json` 与脚本。文档和脚本冲突时，
   先核对代码并修正文档，不要继续执行已失效命令。
 - 不要把其他 checkout 的 `node_modules`、用户数据、授权文件或数据库复制进当前工作区。
+- 有安装脚本或 patch 的依赖，在 hoisted 布局里只能有一个位置。根 `.npmrc` 使用
+  `node-linker=hoisted`：pnpm 10 会在 worker 线程里用相对路径把这类包复制到它的其余
+  位置，而打 patch 时会切换整个进程的工作目录，两者重叠时安装随机以 `ERR_PNPM_ENOENT`
+  或 `ENOTEMPTY` 失败（[pnpm#13627](https://github.com/pnpm/pnpm/issues/13627)，pnpm 11
+  才修复）。因此根 `package.json` 的 `pnpm.overrides` 把 `esbuild` 统一为一个版本，升级
+  esbuild 时连同这条 override 一起改。增减或升级依赖后，查看 `node_modules/.modules.yaml`
+  的 `hoistedLocations`，这类包出现多个位置时先统一版本再合入。
 
 贡献方式与 PR 流程见仓库根 [`CONTRIBUTING.md`](../../CONTRIBUTING.md)。
