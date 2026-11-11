@@ -1950,6 +1950,14 @@ function visibleChipGhosts(
 }
 
 
+/** A cold registry cannot prove absence; list() restores it before exact matching. */
+function findInstalledGhostForToolCall(instanceId: string): InstalledGhost | undefined {
+  const manager = getGhostManager();
+  return manager.findInstalledInstance(instanceId)
+    ?? findInstalledGhostByInstanceId(manager.list(), instanceId);
+}
+
+
 const ghostVisibilityDeps = {
   listGhosts: () => getGhostManager().list(),
   findInstalledInstance: (id: string) => getGhostManager().findInstalledInstance(id),
@@ -2460,7 +2468,7 @@ function getCindyGhostsMcpDeps(
       const sessionWorkdir = sessionContext?.workingDir ?? null;
       // Page authority already binds a physical instance; do not rediscover
       // every installed plugin for each page interaction.
-      const pageGhost = pageCall ? getGhostManager().findInstalledInstance(pageCall.instance) : undefined;
+      const pageGhost = pageCall ? findInstalledGhostForToolCall(pageCall.instance) : undefined;
       const installed = pageCall ? (pageGhost ? [pageGhost] : []) : await listInstalledGhostsAsync();
       const initialVisibility = classifyGhostVisibility(
         ghostId,
@@ -2830,7 +2838,7 @@ function getCindyGhostsMcpDeps(
       // a same-ID plugin replacement removing the declaration during the await.
       if (preDispatch.manifest.sessionContext === true) {
         const ctx = await buildGhostSessionContext(sessionIdForConfirm, sessionWorkdir);
-        const postCtxManifest = getGhostManager().findInstalledInstance(instanceId)?.manifest;
+        const postCtxManifest = findInstalledGhostForToolCall(instanceId)?.manifest;
         if (postCtxManifest?.sessionContext === true) {
           mergedArgs = { ...mergedArgs, session_context: ctx };
         }

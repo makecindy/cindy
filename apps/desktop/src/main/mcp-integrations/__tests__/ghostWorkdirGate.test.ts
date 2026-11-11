@@ -3913,6 +3913,28 @@ describe('plugin page audience and shared tool execution', () => {
       .toMatchObject({ ok: false, errorCode: 'GHOST_AMBIGUOUS' });
     expect(dispatchMock).not.toHaveBeenCalled();
   });
+  // PR #9936: undefined also means the registry is not populated. Previous
+  // fixtures only modeled missing installs, so an approved page could fail cold.
+  // Unit: real ticket/call entry; one cache miss before setup or after the DB await,
+  // with another same-name copy first in the list to detect accidental redirection.
+  it.each(['initial', 'session-context'] as const)('recovers a page instance after an %s registry cache miss', async phase => {
+    const [bound, other] = legacyPageCopies();
+    bound.manifest.sessionContext = true;
+    listMock.mockReturnValue([other, bound]);
+    if (phase === 'initial') findInstalledInstanceMock.mockReturnValueOnce(undefined);
+    else sessionSnapshotMock.mockImplementationOnce(async () => {
+      findInstalledInstanceMock.mockReturnValueOnce(undefined);
+      return { workingDir: WORKDIR, permissionMode: 'auto', planModeEnabled: false, remoteHostId: null };
+    });
+    expect(await callPage(bound)).toMatchObject({ ok: true, result: 'done' });
+    expect(dispatchMock).toHaveBeenCalledOnce();
+    expect(dispatchMock).toHaveBeenCalledWith(expect.objectContaining({
+      ghostId: bound.instanceKey, tool: 'run',
+      args: expect.objectContaining({ session_context: expect.objectContaining({ session_id: 's1' }) }),
+    }));
+    expect(listInstalledMock).toHaveBeenCalledOnce();
+    expect(listInstalledAsyncMock).not.toHaveBeenCalled();
+  });
   // The initial lookup must retain the same errors before setup can run;
   // revision drift here is a page authorization error, unlike drift after await.
   // Keep the other copy available throughout: neither gate may redirect to it.
@@ -3932,7 +3954,7 @@ describe('plugin page audience and shared tool execution', () => {
     expect(ensureReadyMock).not.toHaveBeenCalled();
     expect(dispatchMock).not.toHaveBeenCalled();
     expect(listInstalledAsyncMock).not.toHaveBeenCalled();
-    expect(listInstalledMock).not.toHaveBeenCalled();
+    expect(listInstalledMock).toHaveBeenCalledTimes(change === 'missing' ? 1 : 0);
   });
   it.each([
     ['disabled', 'GHOST_ASLEEP'],
@@ -3953,7 +3975,7 @@ describe('plugin page audience and shared tool execution', () => {
     expect(await callPage(ghost)).toMatchObject({ ok: false, errorCode });
     expect(dispatchMock).not.toHaveBeenCalled();
     expect(listInstalledAsyncMock).not.toHaveBeenCalled();
-    expect(listInstalledMock).not.toHaveBeenCalled();
+    expect(listInstalledMock).toHaveBeenCalledTimes(change === 'missing' ? 1 : 0);
   });
   // C14/X01: a cold page call used to bootstrap with no business id, then leak
   // its ALS grant into long-lived MCP callbacks. Existing tests only used live
