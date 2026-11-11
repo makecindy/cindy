@@ -49,6 +49,7 @@ vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => mocks.sc
 
 import { deviceLinkApiFetch, officialDeviceLinkApiFetch } from '../deviceLinkApi.desktop';
 import { __resetDeviceDirectoryUnionForTests } from '../agentNetDeviceDirectory';
+import { invalidateProviderDirectoryContinuity } from '../providerMetadataContinuity';
 import { __resetDirectoryThrottleForTests, recordDirectoryRetryDeadline } from '../directoryThrottle';
 import { setSelfHostedRelaySource } from '../selfHostedRelayRouting';
 import { remoteLocalAgentModels } from '../../local-agent/remoteCatalog.js';
@@ -126,6 +127,61 @@ describe('deviceLinkApiFetch', () => {
     const error = await pending;
     expect(aborted).toBe(true);
     expect(String((error as Error)?.message ?? error)).toContain('aborted');
+  });
+
+  // 这份并集必须跟着**当前目录**走:改了名 / 删了设备(目录代次变了)之后,被删掉的设备
+  // 不能因为每次部分读都续一次 30 分钟预算而一直复活(Codex review #9360「Fence the
+  // remembered union to the active directory」)。
+  // 最小失败输入:一次完整目录 → 目录作废(改名 / 删除) → 一条腿卡住;并集里的旧设备
+  // 不该再回来。tier:unit(真实 deviceLinkApi + 真实 readCurrentDeviceDirectory)。
+  it('drops the remembered union once the directory is invalidated', async () => {
+    mocks.v2Active = true; mocks.onlyEncrypted = false;
+    mocks.v2Directory.mockResolvedValue([{ certificate: { deviceId: 'v2-peer' }, name: 'V2 Peer', online: true }]);
+    mocks.netFetch.mockResolvedValue(new Response(JSON.stringify({
+      devices: [{ deviceId: 'v1-peer', name: 'V1 Peer', online: true }],
+    }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    const complete = await deviceLinkApiFetch<{ devices: Array<{ deviceId: string }> }>('/api/device-link/devices');
+    expect(complete.devices.map((device) => device.deviceId).sort()).toEqual(['v1-peer', 'v2-peer']);
+    // 改名 / 删除设备:目录代次作废,上一次完整目录不再作数。
+    invalidateProviderDirectoryContinuity();
+    mocks.netFetch.mockImplementation((_url: string, opts: RequestInit) => new Promise((_resolve, reject) => {
+      opts.signal?.addEventListener('abort', () => reject(opts.signal!.reason), { once: true });
+    }));
+    const controller = new AbortController();
+    const pending = deviceLinkApiFetch<{ devices: Array<{ deviceId: string }>; partial?: boolean }>('/api/device-link/devices', { signal: controller.signal });
+    await vi.waitFor(() => expect(mocks.v2Directory).toHaveBeenCalledTimes(2));
+    controller.abort(Object.assign(new Error('设备目录读取超时'), { name: 'TimeoutError' }));
+    const partial = await pending;
+    expect(partial.partial).toBe(true);
+    expect(partial.devices.map((device) => device.deviceId)).toEqual(['v2-peer']);
+  });
+
+  // 活下来的那条腿说不了另一条路的账:它可能只是因为对端关掉了 V2 才把对方列成离线。
+  // 没有当前数据通路的权威证据时,不能用「离线」覆盖记忆里「活着」的行(与完整合并
+  // 同一道护栏)(Codex review #9360「Do not downgrade live rows from a partial leg」)。
+  // 最小失败输入:完整目录里 v1-peer 在线 → 旧版腿卡住,V2 腿把 v1-peer 列成离线。
+  it('does not downgrade a live remembered row with an offline row from the surviving leg', async () => {
+    mocks.v2Active = true; mocks.onlyEncrypted = false;
+    mocks.v2Directory.mockResolvedValue([{ certificate: { deviceId: 'v2-peer' }, name: 'V2 Peer', online: true }]);
+    mocks.netFetch.mockResolvedValue(new Response(JSON.stringify({
+      devices: [{ deviceId: 'v1-peer', name: 'V1 Peer', online: true }],
+    }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    await deviceLinkApiFetch('/api/device-link/devices');
+    // 旧版腿卡住;活下来的 V2 腿把 v1-peer 标成离线(V2 在对端关掉了)。
+    mocks.v2Directory.mockResolvedValue([
+      { certificate: { deviceId: 'v1-peer' }, name: 'V1 Peer', online: false },
+      { certificate: { deviceId: 'v2-peer' }, name: 'V2 Peer', online: true },
+    ]);
+    mocks.netFetch.mockImplementation((_url: string, opts: RequestInit) => new Promise((_resolve, reject) => {
+      opts.signal?.addEventListener('abort', () => reject(opts.signal!.reason), { once: true });
+    }));
+    const controller = new AbortController();
+    const pending = deviceLinkApiFetch<{ devices: Array<{ deviceId: string; online: boolean }>; partial?: boolean }>('/api/device-link/devices', { signal: controller.signal });
+    await vi.waitFor(() => expect(mocks.v2Directory).toHaveBeenCalledTimes(2));
+    controller.abort(Object.assign(new Error('设备目录读取超时'), { name: 'TimeoutError' }));
+    const partial = await pending;
+    expect(partial.partial).toBe(true);
+    expect(partial.devices.find((device) => device.deviceId === 'v1-peer')?.online).toBe(true);
   });
 
   // 混合发现里一条腿卡到**调用方的总期限**时,不能把另一条已经读成的腿一起拖掉:中止错误

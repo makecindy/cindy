@@ -507,7 +507,12 @@ function ensureStarted(): void {
       authoritative);
       // A source already retired cannot be refreshed into validity by another
       // stale answer. Keep the normal retry cadence instead of a tight loop.
-      if (!displayed && !directoryRetireReplayPending) scheduleRetry();
+      // A **partial** directory is displayed but still missing one leg's devices:
+      // schedule a retry even though rows were shown, so the switcher converges
+      // instead of waiting for the 30-minute budget to expire or for an unrelated
+      // push (Codex review #9360「Retry the missing leg after displaying a partial
+      // list」). The Retry-After deadline still wins over the backoff.
+      if ((!displayed || result?.partial === true) && !directoryRetireReplayPending) scheduleRetry();
     } catch (error) {
       // 只有最新请求的失败才算本轮首拉已经结算；更晚的 refresh 仍在途时继续等待它。
       if (gen !== loadGeneration) {

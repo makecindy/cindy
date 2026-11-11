@@ -115,6 +115,51 @@ describe('useDeviceLinkDeviceList initial request', () => {
     });
   });
 
+  // 一条腿读到的目录:行已显示,但另一条腿上的设备还缺。要按退避再问一次,而不是等
+  // 30 分钟预算过期、或等一个无关的 push(Codex review #9360「Retry the missing leg
+  // after displaying a partial list」)。
+  it('schedules a retry after displaying a partial directory', async () => {
+    const peer = {
+      deviceId: 'peer-1', name: 'Peer Mac', platform: 'darwin', appVersion: '0.1.27',
+      lastSeenAt: null, online: true, busy: false, remoteControlEnabled: true,
+      controlEnabled: true, isSelf: false,
+    };
+    const listDevices = vi
+      .fn()
+      .mockResolvedValueOnce({ devices: [peer], partial: true })
+      .mockResolvedValue({ devices: [peer] });
+    vi.useFakeTimers();
+    vi.stubGlobal('electronAPI', {
+      deviceLink: {
+        listDevices,
+        getState: vi.fn().mockResolvedValue({ linkStatus: 'online' }),
+        onPresenceChanged: vi.fn(),
+        onStatusChanged: vi.fn(),
+        onControlTargetChanged: vi.fn(),
+      },
+    });
+
+    const {
+      useDeviceLinkDeviceList,
+      nextDeviceListRetryDelay,
+    } = await import('@/features/device-link/useDeviceLinkDeviceList');
+    const { result } = renderHook(() => ({ devices: useDeviceLinkDeviceList() }));
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(listDevices).toHaveBeenCalledTimes(1);
+    expect(result.current.devices).toHaveLength(1);
+
+    await act(async () => {
+      vi.advanceTimersByTime(nextDeviceListRetryDelay(0));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(listDevices).toHaveBeenCalledTimes(2);
+  });
+
   it('keeps the backoff timer when presence arrives before the first snapshot', async () => {
     let resolveBackground: ((value: { devices: DeviceLinkDeviceView[] }) => void) | undefined;
     let presenceChanged: ((payload: DeviceLinkPresenceSnapshot) => void) | undefined;
