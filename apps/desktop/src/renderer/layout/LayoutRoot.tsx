@@ -1004,7 +1004,9 @@ export function LayoutRoot({
   const sidebarPresentation = useSidebarPresentation(
     layoutRootRef,
     rightTabsCollapsed || suppressNonChatPanels,
-    sidebarExpansionReady && expandsRight,
+    // A Settings takeover hides the sidebar without a session change: treat it as a
+    // route exit so the expansion retracts instead of settling the expanded rect.
+    sidebarExpansionReady && expandsRight && !suppressNonChatPanels,
     () => sidebarExpansionWidth(layoutRootRef.current?.getBoundingClientRect().width ?? 0,
       expansionEntries.filter((entry) => !containsChat(entry.node)).map((entry) => ({
         share: entry.share, min: paneMinPx(entry.node),
