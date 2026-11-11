@@ -2053,6 +2053,7 @@ describe('OrcaTeamService', () => {
     expect(deps.setWorkerLatestReport).toHaveBeenLastCalledWith('worker-1', expect.objectContaining({ state: 'waiting' }));
   });
 
+  // 队列回执是投影的事实源：消息被改写，投影就不能继续宣称旧状态。
   it('records a progress report without settling the assignment or bridging text', async () => {
     const leadMessages: string[] = [];
     const { deps, service } = createDeps({
