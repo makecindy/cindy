@@ -13486,8 +13486,8 @@
       "dismissTitle": "이전 실패 알림 닫기"
     },
     "worktreeRestoreBanner": {
-      "text": "이 세션의 워크트리가 정리되었습니다(디렉터리가 존재하지 않음).",
-      "textPendingSnapshot": "이 세션에 적용되지 않은 변경 스냅샷이 있습니다.",
+      "text": "이 세션의 워크트리({{name}})가 정리되었습니다(디렉터리가 존재하지 않음).",
+      "textPendingSnapshot": "이 세션의 워크트리({{name}})에 적용되지 않은 변경 스냅샷이 있습니다.",
       "restoreAction": "워크트리 복원",
       "applySnapshotAction": "변경 사항 적용",
       "restoring": "복원 중…",

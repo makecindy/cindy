@@ -13629,8 +13629,8 @@
       "dismissTitle": "Dispensar aviso de falha anterior"
     },
     "worktreeRestoreBanner": {
-      "text": "O worktree desta Sessão foi removido (diretório ausente).",
-      "textPendingSnapshot": "Esta Sessão tem um snapshot de alterações não aplicado.",
+      "text": "O worktree “{{name}}” desta Sessão foi removido (diretório ausente).",
+      "textPendingSnapshot": "O worktree “{{name}}” desta Sessão tem um snapshot de alterações não aplicado.",
       "restoreAction": "Restaurar worktree",
       "applySnapshotAction": "Aplicar alterações",
       "restoring": "Restaurando…",

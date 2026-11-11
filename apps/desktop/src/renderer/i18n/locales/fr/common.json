@@ -13629,8 +13629,8 @@
       "dismissTitle": "Fermer l'avis d'échec passé"
     },
     "worktreeRestoreBanner": {
-      "text": "Le worktree de cette session a été nettoyé (répertoire manquant).",
-      "textPendingSnapshot": "Cette session contient un instantané de modifications non appliqué.",
+      "text": "Le worktree « {{name}} » de cette session a été nettoyé (répertoire manquant).",
+      "textPendingSnapshot": "Le worktree « {{name}} » de cette session contient un instantané de modifications non appliqué.",
       "restoreAction": "Restaurer le worktree",
       "applySnapshotAction": "Appliquer les modifications",
       "restoring": "Restauration…",
