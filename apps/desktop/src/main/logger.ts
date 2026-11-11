@@ -806,20 +806,26 @@ export function writeFromRenderer(level: LogLevel, scope: string, msg: string): 
  *
  * Use for: workingDir, execPath, resourcesPath, userData, file paths in logs.
  */
-export function maskPath(p: string | null | undefined): string {
+export function maskPath(
+  p: string | null | undefined,
+  platform: NodeJS.Platform = process.platform,
+): string {
   if (!p) return '<null>';
-  // Pick whichever separator splits into more non-empty segments. A POSIX
-  // directory name may legally contain a literal backslash
-  // (`/home/alice/proj\private/resources/icon.png`): choosing the separator by
-  // mere presence of `\` would split that path into 2 chunks and hand back the
-  // FULL absolute path through the "already short" branch (2026-11-11 review).
-  // The dominant separator is the path's real structure; a stray other-separator
-  // character stays inside its segment and is dropped together with it.
-  const bySlash = p.split('/').filter((s) => s.length > 0);
-  const byBackslash = p.split('\\').filter((s) => s.length > 0);
-  const [sep, parts] =
-    bySlash.length >= byBackslash.length ? ['/', bySlash] : ['\\', byBackslash];
+  // Separator semantics come from the HOST platform, never from the path's
+  // content. Two consecutive reviews (2026-11-11) killed both content heuristics:
+  //  1. "split on `\` if present" handed back the full path for POSIX dirs with
+  //     a literal backslash (`/home/alice/proj\private/resources/icon.png`).
+  //  2. "whichever separator yields more segments" flipped back to `\` when one
+  //     POSIX component held more backslashes than the path had `/` segments
+  //     (`/home/alice/a\c1\c2\c3\c4\c5/resources/icon.png`), leaking directory
+  //     fragments as a bogus "trailing 2 segments".
+  // On POSIX a backslash is a legal filename character, never a separator; on
+  // Windows both `/` and `\` are separators. Stray other-separator characters
+  // stay inside their segment and are dropped together with it.
+  const isWindows = platform === 'win32';
+  const parts = (isWindows ? p.split(/[\\/]/) : p.split('/')).filter((s) => s.length > 0);
   if (parts.length <= 2) return p; // already short — show as-is
+  const sep = isWindows ? '\\' : '/';
   const tail = parts.slice(-2).join(sep);
   // Preserve a leading separator so absolute paths still look absolute-ish.
   return `...${sep}${tail}`;
