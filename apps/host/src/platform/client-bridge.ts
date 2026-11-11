@@ -15,6 +15,7 @@ export function createPlatformClientBridge(options: { assertCurrent(): void; own
   });
   return {
     call: gate.call,
+    cleanupSession: gate.cleanupSession,
     status: gate.status,
     async accept(socket: WebSocket) {
       options.assertCurrent();

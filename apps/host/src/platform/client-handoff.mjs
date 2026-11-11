@@ -4,6 +4,7 @@ export function createPlatformClientHandoff({ assertCurrent, maxWaiting = 128, i
   let client = null, paused = false, closed = false, lost = false;
   let inFlight = 0, preparing = false, prepared = false;
   const waiting = new Set();
+  const sessionClients = new Map();
   const check = () => {
     if (closed) throw Error('PLATFORM_RUNTIME_CLOSED');
     assertCurrent();
@@ -28,7 +29,7 @@ export function createPlatformClientHandoff({ assertCurrent, maxWaiting = 128, i
       if (client) throw Error('PLATFORM_CLIENT_ALREADY_ATTACHED');
       client = next; prepared = false; lost = false; paused = false; wake();
     },
-    async call(operation, { signal } = {}) {
+    async call(operation, { signal, sessionId } = {}) {
       for (;;) {
         check(); signal?.throwIfAborted();
         if (client && !paused) break;
@@ -41,6 +42,7 @@ export function createPlatformClientHandoff({ assertCurrent, maxWaiting = 128, i
         });
       }
       const selected = client;
+      if (sessionId) sessionClients.set(sessionId, { id: selected.id, pid: selected.pid });
       // No await between selection and admission: prepare() cannot miss a call.
       inFlight++;
       try {
@@ -49,6 +51,19 @@ export function createPlatformClientHandoff({ assertCurrent, maxWaiting = 128, i
         if (client !== selected || lost) throw Error('PLATFORM_CLIENT_RESULT_UNCERTAIN');
         return result;
       } finally { inFlight--; }
+    },
+    async cleanupSession(sessionId, operation) {
+      // Cleanup belongs to the process that executed the task, never to its
+      // replacement. A frozen/disconnected executor cleans up on its own exit.
+      const identity = sessionClients.get(sessionId);
+      sessionClients.delete(sessionId);
+      if (closed) return;
+      check();
+      if (!identity || !matches(identity) || paused || lost) return;
+      const selected = client;
+      inFlight++;
+      try { await selected.call(operation); }
+      finally { inFlight--; }
     },
     async prepare(identity) {
       check();
@@ -113,6 +128,6 @@ export function createPlatformClientHandoff({ assertCurrent, maxWaiting = 128, i
       client = next; lost = false; paused = frozen; prepared = frozen; wake();
     },
     status() { return { attached: Boolean(client) && !lost, paused, inFlight, waiting: waiting.size }; },
-    close() { closed = true; client = null; rejectWaiting(Error('PLATFORM_RUNTIME_CLOSED')); },
+    close() { closed = true; client = null; sessionClients.clear(); rejectWaiting(Error('PLATFORM_RUNTIME_CLOSED')); },
   };
 }

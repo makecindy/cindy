@@ -1,4 +1,3 @@
-import { connectHostPlatformClient } from './host-platform/client.desktop.js';
 import type { HostConnectionState } from '@cindy/maker-shared/host-event-stream';
 import { applyMacWindowBackdrop, setMacSidebarWidth } from './macosDesktopBlur';
 import { createPersonalBuildMonitor, personalMonitorEnvironment } from './personalBuildMonitor.js';
@@ -851,7 +850,7 @@ import { SidebarTabWindowsController } from './sidebar-tab-window/controller.js'
 import { resolveWindowBoundsNearPoint } from './windowBounds.js';
 import { createSidebarTabWindow } from './sidebar-tab-window/window.js';
 import { registerSidebarTabWindowIpc } from './sidebar-tab-window/ipc.js';
-import { setRightSidebarTabsChangeBroadcaster } from './localDb/ipc/rightSidebarTabs.js';
+import { setRightSidebarTabsChangeBroadcaster } from './localDb/ipc/rightSidebarTabs.desktop.js';
 import {
   readRsbWindowSettings,
   resetRsbWindowSettingsForStartup,
@@ -1293,6 +1292,8 @@ import { fetchHubSkillReference } from './learn-host/hubReference.js';
 import { registerLearnIpc, broadcastLearnEvent } from './learn-host/registerIpc.js';
 import { registerGoalHandlers, broadcastGoalStatus } from './maker-ipc/goal.js';
 import { createLogger as createSchedulerLogger } from './logger.js';
+// Keep opt-in platform dependencies after the existing desktop bootstrap imports.
+import { connectHostPlatformClient } from './host-platform/client.desktop.js';
 
 let makerProviderRefreshConfigured = false;
 
@@ -1321,7 +1322,7 @@ function installHostClientMode(): boolean {
   // The host owns the profile's database too; a local open would be a second writer.
   setHostClientMode(true);
   const hostClient = createHostClient(delegation);
-  const installed = registerHostDelegatedIpc({ client: hostClient, ipcMain });
+  const installed = registerHostDelegatedIpc({ client: hostClient, ipcMain, assertTrusted: assertTrustedAppRendererEvent });
   // Registered outside the runtime block by other modules; drop those so the
   // host stays authoritative instead of throwing on a duplicate handler.
   claimProxiedChannels(ipcMain, (channel) => {

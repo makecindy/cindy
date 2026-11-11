@@ -9,6 +9,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { createHostPlatformTools } from './tools.ts';
+import { createPlatformClientHandoff } from './client-handoff.mjs';
+import { createHostService } from '../service.mjs';
 import { configureHostOwner } from '../agent/claude-auth.mjs';
 import { createBrowserBackendSettingsStore } from '../../../desktop/src/main/browser-backend-settings-store.ts';
 import { CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY } from '../../../desktop/src/main/mcp-integrations/codexBuiltinToolPolicy.ts';
@@ -54,7 +56,7 @@ async function fixture(t, kind = 'user-browser', platformClient) {
     t.after(async () => { await client.close(); await instance.close(); });
     return client;
   }
-  return { tools, jobs, client, settings, stale: () => { current = false; },
+  return { tools, jobs, client, settings, profileDir, stale: () => { current = false; },
     answer: callback => { answer = callback; }, powerFacts: () => ({ powerStarts, powerClosed, refreshes }) };
 }
 
@@ -135,14 +137,49 @@ test('Host refuses foreground and background writes before opening a native driv
 // Production closeSession previously cleaned only an unused Host-side driver.
 // A delegated task must release its actual client session, and an old account
 // must not send cleanup into the new account's executor.
-test('delegated computer cleanup follows the execution client and respects the owner boundary', async t => {
-  const sessions = new Set(['task-a']);
-  const f = await fixture(t, 'user-browser', { call: async op => {
-    assert.equal(op.method, 'computer.closeSession'); sessions.delete(op.sessionId);
-  } });
+test('delegated computer cleanup never waits for or reaches a replacement client', async t => {
+  const gate = createPlatformClientHandoff({ assertCurrent() {} });
+  t.after(() => gate.close());
+  const calls = [];
+  const f = await fixture(t, 'user-browser', gate);
+  // No client, no computer use: close is a no-op, not an undispatched request.
+  await f.tools.closeSession('unused');
+  assert.equal(gate.status().waiting, 0);
+  const identity = { id: 'client-a', pid: 42 };
+  gate.attach({ ...identity, call: async op => { calls.push(op); }, canDetach: async () => true, resume: async () => true });
+  await gate.call({ method: 'computer.call' }, { sessionId: 'task-a' });
   await f.tools.closeSession('task-a');
-  assert.equal(sessions.has('task-a'), false);
-  sessions.add('new-account-task'); f.stale();
+  assert.equal(calls.at(-1).method, 'computer.closeSession');
+  await gate.call({ method: 'computer.call' }, { sessionId: 'task-paused' });
+  await gate.prepare(identity);
+  await f.tools.closeSession('task-paused');
+  assert.equal(gate.status().waiting, 0);
+  await gate.cancel(identity);
+  await gate.call({ method: 'computer.call' }, { sessionId: 'task-lost' });
+  gate.lost(identity);
+  await f.tools.closeSession('task-lost');
+  assert.equal(gate.status().waiting, 0);
+  f.stale();
   await assert.rejects(f.tools.closeSession('new-account-task'), /OWNER_CHANGED/);
-  assert.equal(sessions.has('new-account-task'), true);
+});
+
+// Real service + production browser controller/MCP. A settings response must
+// change the executor used by the very next task, not just a settings file.
+test('Host browser settings change the active task backend and reject stale owners', async t => {
+  const f = await fixture(t, 'rsb-webview');
+  const service = createHostService({ browserBackend: (handler, payload) => f.tools.browserSettings[handler](undefined, payload) });
+  const a = await f.client('settings-task');
+  const before = await tabs(a);
+  assert.match(JSON.stringify(before), /persistent embedded browser is not connected/);
+  const state = () => service('/api/browser-backend/get-state');
+  assert.equal((await state()).body.active, 'rsb-webview');
+  await assert.rejects(service('/api/browser-backend/set-kind', { kind: 'invalid' }));
+  const changed = await service('/api/browser-backend/set-kind', { kind: 'user-browser' });
+  assert.deepEqual(changed.body, { ok: true, active: 'user-browser' });
+  assert.equal((await state()).body.active, 'user-browser');
+  assert.equal((await tabs(a)).isError, false);
+  assert.equal(f.jobs.length, 1);
+  f.stale();
+  await assert.rejects(service('/api/browser-backend/set-kind', { kind: 'external' }), /OWNER_CHANGED/);
+  assert.equal(createBrowserBackendSettingsStore(() => f.profileDir).readBrowserBackendSettings().kind, 'user-browser');
 });

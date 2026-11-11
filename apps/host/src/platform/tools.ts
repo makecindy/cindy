@@ -116,7 +116,7 @@ export function createHostPlatformTools(options: {
       callTool: async (name: string, args: Record<string, unknown>, context?: any) => {
         if (context?.agentKind !== 'codex' && !registry.isEnabled('computer')) throw Error('COMPUTER_USE_DISABLED');
         const { signal, ...metadata } = context ?? {};
-        return options.client!.call({ method: 'computer.call', name, args, context: metadata }, { signal });
+        return options.client!.call({ method: 'computer.call', name, args, context: metadata }, { signal, sessionId: metadata.sessionId });
       },
       isSecureTarget: async (target: any) => options.client!.call({ method: 'computer.secureTarget', target }) as Promise<boolean>,
       describeDesktop: async () => options.client!.call({ method: 'computer.describe' }) as Promise<any>,
@@ -127,11 +127,12 @@ export function createHostPlatformTools(options: {
   let closing: Promise<void> | undefined;
   return {
     providers, browser, computer,
+    browserSettings: guardMethods(browser.createBrowserSettingsHandlers(check)),
     async closeSession(id: string) {
       browser.clearUserBrowserMarksForSession(id);
       if (options.client) {
         check();
-        await options.client.call({ method: 'computer.closeSession', sessionId: id });
+        await options.client.cleanupSession(id, { method: 'computer.closeSession', sessionId: id });
       } else await computer.cleanupComputerDriverSession(id);
     },
     // Platform transport alone is not full-client migration readiness.

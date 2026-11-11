@@ -49,7 +49,18 @@ export const {
   // Preserve Desktop's lazy load of the native input handoff helpers.
   isSecureTarget: async target => (await import('../input-handoff/macDriver.js')).isSecureInputTarget(target),
   getPath: name => app.getPath(name),
-  powerMonitor,
+  // Read Electron's monitor at the original call sites, not during module
+  // assembly (it may not be available before app readiness).
+  powerMonitor: {
+    on: (event, listener) => event === 'lock-screen'
+      ? powerMonitor.on('lock-screen', listener)
+      : powerMonitor.on('unlock-screen', listener),
+    removeListener: (event, listener) => event === 'lock-screen'
+      ? powerMonitor.removeListener('lock-screen', listener)
+      : powerMonitor.removeListener('unlock-screen', listener),
+    getSystemIdleTime: () => powerMonitor.getSystemIdleTime(),
+    getSystemIdleState: threshold => powerMonitor.getSystemIdleState(threshold),
+  },
   outboundFetch,
   resolveOutboundProxy: resolveDesktopOutboundProxy,
 });

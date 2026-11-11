@@ -90,6 +90,7 @@ export function createHostClient(config: HostDelegationConfig): HostClient {
 }
 
 interface ProxiedChannel {
+  readonly trustedRenderer?: boolean;
   readonly channel: string;
   readonly path: string;
   /** Renderer args → request body. */
@@ -105,6 +106,7 @@ export const PROXIED_CHANNELS: readonly ProxiedChannel[] = [
     path: def.hostPath,
     body: def.body ?? (() => null),
     map: def.map,
+    trustedRenderer: def.trustedRenderer,
   })),
   {
     // Legacy composer path: enqueue and report acceptance; the answer arrives on
@@ -168,6 +170,7 @@ export function claimProxiedChannels(ipcMain: unknown, log: (channel: string) =>
 }
 
 export interface HostDelegatedIpcDeps {
+  readonly assertTrusted?: (event: IpcMainInvokeEvent) => void;
   readonly client: HostClient;
   readonly ipcMain: {
     removeHandler(channel: string): void;
@@ -201,7 +204,11 @@ export function registerHostDelegatedIpc(deps: HostDelegatedIpcDeps): string[] {
 
   for (const entry of PROXIED_CHANNELS) {
     deps.ipcMain.removeHandler(entry.channel);
-    rawHandle(entry.channel, async (_event, ...args: unknown[]) => {
+    rawHandle(entry.channel, async (event, ...args: unknown[]) => {
+      if (entry.trustedRenderer) {
+        if (!deps.assertTrusted) throw new Error('Trusted renderer admission is required');
+        deps.assertTrusted(event);
+      }
       const response = await deps.client.request(entry.path, entry.body(args));
       return entry.map ? entry.map(response) : response;
     });

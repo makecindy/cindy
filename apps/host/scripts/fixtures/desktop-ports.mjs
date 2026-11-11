@@ -1,4 +1,4 @@
-import { createRightSidebarTabsService } from '../../../desktop/src/main/localDb/ipc/rightSidebarTabsService.ts';
+import { createRightSidebarTabsService } from '../../../desktop/src/main/localDb/ipc/rightSidebarTabs.ts';
 /** Synthetic account and empty optional features; real SQLite/profile readers.
  * Only the test server imports this file, never the production Host. */
 import {

@@ -1,5 +1,5 @@
 import { clientMigrationContract } from './client-migration-contract.mjs';
-import { createRightSidebarTabsService } from '../../desktop/src/main/localDb/ipc/rightSidebarTabsService.js';
+import { createRightSidebarTabsService } from '../../desktop/src/main/localDb/ipc/rightSidebarTabs.js';
 import { createHostPlatformTools } from './platform/tools.js';
 import { createHostCodexRuntime } from './agent/codex-runtime.js';
 import { createAvailabilityPolicy } from '../../desktop/src/main/device-link/providerShareAvailabilityPolicyCore.js';
@@ -926,6 +926,10 @@ function writeProfileAppearance(patch: unknown) {
 }
 
 const serverDeps = {
+  browserBackend: (handler: keyof NonNullable<typeof platformTools>['browserSettings'], payload: unknown) => {
+    if (!platformTools) throw new Error('HOST_RUNTIME_NOT_READY');
+    return platformTools.browserSettings[handler](undefined, payload);
+  },
   executeTaskTags: taskTags.executeTaskTags,
   searchConversations: executeConversationSearch,
   rightSidebarTabs: createRightSidebarTabsService({
@@ -1473,6 +1477,9 @@ async function disposeOwnerRuntime(): Promise<void> {
     const drainedPlugins = stopPlugins?.then(() => {}, error => { errors.push(error); });
     const drainedApps = stopApps?.then(() => {}, error => { errors.push(error); });
     await attempt(() => remote?.stop());
+    // Settle disconnected platform calls before Maker awaits task-close hooks.
+    // Client-owned OS sessions are released by its authenticated socket teardown.
+    platformClient?.close();
     await attempt(() => inputQueue.dispose());
     await attempt(() => (agentGraph?.maker as { shutdown?: () => Promise<void> } | undefined)?.shutdown?.());
     await attempt(() => codexRuntime?.close());

@@ -15,7 +15,12 @@ Electron 内执行任务，使用原桌面装配；不自动启动 Host、不迁
 - 交接先暂停新平台调用并检查在途操作、输入占用与活跃 webview。不能释放时拒绝交接，
   旧窗口可恢复。只有尚未派发的请求能等候新窗口；已经派发但断线的输入返回结果不确定，
   不自动重放。取消和账号变化会解除等待或拒绝旧结果。
-- 侧栏页签持久化复用同一服务，桌面 IPC 与 Host API 注入各自数据库和事件出口。
+- 任务关闭只清理由原客户端实际执行过的电脑会话，不排队等待替代窗口，也不清理替代窗口的会话。
+  账号运行时关闭先结束平台连接，再等待任务关闭钩子，防止断连时关闭流程挂起。
+- 浏览器设置的八个 `browser-backend:*` 通道在显式客户端模式下转交 Host 的同一浏览器执行器；
+  保留可信 Renderer 校验，不开放 Web shim 的特权设置入口。
+- 侧栏页签主体保留在 `localDb/ipc/rightSidebarTabs.ts`，`.desktop.ts` 仅装配 Electron。
+  桌面 IPC 与 Host API 注入各自数据库和事件出口。
   页签记录可恢复不代表活跃网页内存可恢复，因此有活跃 webview 时仍拒绝换窗。
 
 ## 自动验证与边界
@@ -32,3 +37,15 @@ Electron 内执行任务，使用原桌面装配；不自动启动 Host、不迁
 
 首次迁移、profile 写入权切换、旧客户端恢复和个人版升级命令不属于本次地基。
 真实账号、真实模型服务、正式安装包、Windows、手机及整机迁移未实测时不能宣称通过。
+
+## 尚未接通的客户端界面通道
+
+本层的平台 RPC 是后台调用原生能力的入口，不等于已接通所有 Renderer IPC。
+`maker:computer:*` 十个通道、`maker:browser:open-for-login`、`maker:browser:status`、
+`update-relaunch:blocking-activity`、`update-relaunch:blocking-summary` 共十四个通道
+仍仅在 `registerMakerIpcsAfterSplash` 中注册；显式客户端模式跳过该函数，因此均不可用。
+普通 Desktop 仍注册原处理器。Host 通道覆盖工作需另行接线并验证，不能据此开启整机迁移。
+
+插件扩展 relay 保留“发送返回 false 后唤醒失败”的 `PLUGIN_UNAVAILABLE` 与 warn；
+发送本身抛错才返回 `PLUGIN_DELIVERY_UNKNOWN`，不重放。等待中账号变化会用旧 bridge
+回 `BRIDGE_STOPPED` 结束请求，不转给新账号。能力 slot 的变更仍需维护者明确审查放行。

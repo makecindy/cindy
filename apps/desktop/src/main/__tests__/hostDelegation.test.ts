@@ -429,3 +429,21 @@ describe('claimProxiedChannels and unsupported fallbacks', () => {
     expect(projectAliasesNotified).toBe(true);
   });
 });
+
+// Preserve the desktop settings sender gate even when the authoritative browser
+// runtime lives in Host. A later local registration must not shadow the proxy.
+it('delegates browser settings only from the trusted renderer and keeps Host authoritative', async () => {
+  const handlers = new Map<string, (...args: any[]) => unknown>();
+  const ipcMain = { removeHandler: (key: string) => handlers.delete(key), handle: (key: string, fn: (...args: any[]) => unknown) => { handlers.set(key, fn); } };
+  const trusted = {} as IpcMainInvokeEvent;
+  const request = vi.fn(async () => ({ ok: true, active: 'user-browser' }));
+  registerHostDelegatedIpc({ client: { request }, ipcMain, assertTrusted: event => { if (event !== trusted) throw Error('UNTRUSTED'); } });
+  claimProxiedChannels(ipcMain, () => {});
+  const local = vi.fn();
+  ipcMain.handle('browser-backend:set-kind', local);
+  await expect(handlers.get('browser-backend:set-kind')!({}, { kind: 'user-browser' })).rejects.toThrow('UNTRUSTED');
+  expect(request).not.toHaveBeenCalled();
+  await expect(handlers.get('browser-backend:set-kind')!(trusted, { kind: 'user-browser' })).resolves.toEqual({ ok: true, active: 'user-browser' });
+  expect(request).toHaveBeenCalledWith('/api/browser-backend/set-kind', { kind: 'user-browser' });
+  expect(local).not.toHaveBeenCalled();
+});

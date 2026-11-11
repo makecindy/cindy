@@ -356,20 +356,38 @@ export class GhostBrowserExtensionSlot {
       request: notice.request,
       ts: (this.deps.now ?? Date.now)(),
     };
+    const stillLive = () => {
+      if (this.isLive(entry)) return true;
+      // Owner changes can precede reconcile/close. Finish this old bridge's
+      // pending request now; never leave it waiting for a new account's plugin.
+      entry.bridge.relayResult(notice.id, { ok: false, error: 'BRIDGE_STOPPED' });
+      return false;
+    };
+    if (!stillLive()) return;
     let delivered = false;
     try {
       delivered = await this.deps.sendToGhost(instanceId, payload);
-      if (!this.isLive(entry)) return;
-      if (!delivered && this.deps.wake && await this.deps.wake(instanceId)) {
-        if (!this.isLive(entry)) return;
-        delivered = await this.deps.sendToGhost(instanceId, payload);
+      if (!stillLive()) return;
+      if (!delivered && this.deps.wake) {
+        let awake = false;
+        try { awake = await this.deps.wake(instanceId); }
+        catch (err) {
+          // The first send explicitly reported offline. A failed wake cannot
+          // have delivered this request; retain the desktop failure contract.
+          this.deps.log?.warn('browser extension relay wake failed', {
+            instanceId, error: errorText(err),
+          });
+        }
+        if (!stillLive()) return;
+        if (awake) delivered = await this.deps.sendToGhost(instanceId, payload);
       }
     } catch {
       // An asynchronous transport error may follow delivery. Do not replay it.
+      if (!stillLive()) return;
       entry.bridge.relayResult(notice.id, { ok: false, error: 'PLUGIN_DELIVERY_UNKNOWN' });
       return;
     }
-    if (!this.isLive(entry)) return;
+    if (!stillLive()) return;
     if (delivered)
       this.deps.log?.info('browser extension relay delivered to plugin', {
         instanceId,

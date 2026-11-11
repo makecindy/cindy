@@ -893,13 +893,35 @@ describe('browserExtensionSlot · asynchronous host delivery', () => {
       answer(false);
       await new Promise<void>(resolve => setImmediate(resolve));
       expect(wake).not.toHaveBeenCalled();
+      expect(bridges[0].calls).toContainEqual(['relayResult', ['old-owner', { ok: false, error: 'BRIDGE_STOPPED' }]]);
     } finally { await slot.dispose(); }
   });
 
-  it('reports uncertain delivery without retrying a possible side effect', async () => {
+  it('keeps a failed wake unavailable and logged without a second delivery', async () => {
+    const warn = vi.fn();
+    const wake = vi.fn(async () => { throw Error('wake failed'); });
+    const sendToGhost = vi.fn(async (_id, payload) => (payload as { name: string }).name !== 'browser-extension-relay');
+    const { slot, ghosts, bridges } = await makeSlot({ wake, sendToGhost, log: { info: vi.fn(), warn } });
+    try {
+      slot.reconcile(ghosts);
+      await slot.handleRequest('_root__my-browser', { kind: 'status' });
+      bridges[0].emitRelay({ id: 'wake-failed', clientId: 'browser', request: {} } as BrowserExtensionRelayNotice);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(wake).toHaveBeenCalledTimes(1);
+      expect(sendToGhost.mock.calls.filter(([, p]) => (p as { name: string }).name === 'browser-extension-relay')).toHaveLength(1);
+      expect(warn).toHaveBeenCalledWith('browser extension relay wake failed', expect.objectContaining({ error: 'wake failed' }));
+      expect(bridges[0].calls).toContainEqual(['relayResult', ['wake-failed', { ok: false, error: 'PLUGIN_UNAVAILABLE' }]]);
+    } finally { await slot.dispose(); }
+  });
+
+  it.each([1, 2])('reports uncertain delivery on send %s without replaying a possible side effect', async failAt => {
     const wake = vi.fn(async () => true);
+    let sends = 0;
     const { slot, ghosts, bridges } = await makeSlot({ wake, sendToGhost: async (_id, payload) => {
-      if ((payload as { name: string }).name === 'browser-extension-relay') throw new Error('transport closed after send');
+      if ((payload as { name: string }).name === 'browser-extension-relay') {
+        if (++sends === failAt) throw new Error('transport closed after send');
+        return false;
+      }
       return true;
     } });
     try {
@@ -907,7 +929,8 @@ describe('browserExtensionSlot · asynchronous host delivery', () => {
       await slot.handleRequest('_root__my-browser', { kind: 'status' });
       bridges[0].emitRelay({ id: 'uncertain', clientId: 'browser', request: {} } as BrowserExtensionRelayNotice);
       await new Promise<void>(resolve => setImmediate(resolve));
-      expect(wake).not.toHaveBeenCalled();
+      expect(wake).toHaveBeenCalledTimes(failAt - 1);
+      expect(sends).toBe(failAt);
       expect(bridges[0].calls).toContainEqual(['relayResult', ['uncertain', { ok: false, error: 'PLUGIN_DELIVERY_UNKNOWN' }]]);
     } finally { await slot.dispose(); }
   });

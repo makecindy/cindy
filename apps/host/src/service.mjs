@@ -1,4 +1,5 @@
 import { clientErrorMessage } from './client-error.mjs';
+import { HOST_BROWSER_SETTINGS_ACTIONS } from '@cindy/maker-shared/host-channel-contract';
 
 /** Owner business operations shared by HTTP and authenticated Device Link.
  * Transport admission and owner leases belong to the caller. No synthetic HTTP
@@ -7,6 +8,11 @@ import { clientErrorMessage } from './client-error.mjs';
 export function createHostService(deps) {
   return async function invoke(pathname, body = {}, context = {}) {
     const url = { pathname };
+
+    for (const [action, handler] of Object.entries(HOST_BROWSER_SETTINGS_ACTIONS)) {
+      if (pathname === `/api/browser-backend/${action}`)
+        return { status: 200, body: await deps.browserBackend(handler, body) };
+    }
 
     for (const action of ['list', 'ensure-singleton', 'upsert', 'close', 'setActive', 'reorder']) {
       if (url.pathname === `/api/right-sidebar-tabs/${action}`)

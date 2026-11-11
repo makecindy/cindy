@@ -121,3 +121,22 @@ test('same-process reconnect preserves a freeze and cannot admit a different pro
   assert.equal(await work, 1);
   gate.close();
 });
+
+// Closing an old task must neither wait for a window nor clean a replacement's
+// unrelated native session. Exercise the same dispatch/cleanup gate as tools.
+test('session cleanup stays with its executor across window replacement', async () => {
+  const gate = createPlatformClientHandoff({ assertCurrent() {} });
+  const calls = [];
+  gate.attach(client({ call: async operation => calls.push(['old', operation]) }));
+  await gate.call('input', { sessionId: 'old-task' });
+  await gate.prepare(identity);
+  gate.detach(identity);
+  await gate.cleanupSession('never-used', 'cleanup');
+  assert.equal(gate.status().waiting, 0);
+  gate.attach(client({ id: 'new', pid: 13, call: async operation => calls.push(['new', operation]) }));
+  await gate.cleanupSession('old-task', 'cleanup');
+  await gate.call('input', { sessionId: 'new-task' });
+  await gate.cleanupSession('new-task', 'cleanup');
+  assert.deepEqual(calls, [['old', 'input'], ['new', 'input'], ['new', 'cleanup']]);
+  gate.close();
+});
