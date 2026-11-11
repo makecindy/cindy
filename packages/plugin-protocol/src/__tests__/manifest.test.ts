@@ -1,4 +1,4 @@
-import { getPluginToolUi, pluginHasToolUi, pluginToolVisible, pluginUiDomains, pluginUiPermissionsExpand } from '../toolUi.js';
+import { getPluginHostUi, getPluginToolUi, pluginHasToolUi, pluginToolVisible, pluginUiDomains, pluginUiPermissionsExpand } from '../toolUi.js';
 import { hostUiApprovalSubjects } from '../hostUi.js';
 import { describe, expect, it } from 'vitest';
 import {
@@ -2089,6 +2089,30 @@ describe('interactive page declarations', () => {
     expect(validateStoredGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host: historical } })).toMatchObject({ ok: true,
       manifest: { mcpApps: { host: { contributions: historical.contributions } } } });
     expect(hostUiApprovalSubjects(historical)).toEqual(hostUiApprovalSubjects(host));
+  });
+  // Unit, #9987: persisted unknown data must not revoke approved toolbar/command
+  // subjects. The metadata-only case above did not exercise newly strict fields.
+  it.each([
+    { settings: { vendor: true } },
+    { settings: [{ id: 'invalid', title: 'Invalid', type: 'boolean', default: 'yes' }] },
+    { contributions: [{ id: 'new', title: 'New', position: 'sidebar.navigation', kind: 'status' }] },
+    { contributions: [{ id: 'new', title: 'New', position: 'session.menu', kind: 'select', tool: 'help', options: [{ label: 'One', value: 'one' }] }] },
+    { contributions: [{ id: 'new', title: 'New', position: 'settings.section', tool: 'help' }] },
+    { contributions: [{ id: 'new', title: 'New', position: 'composer.completion', tool: 'help' }] },
+    { contributions: [{ id: 'new', title: 'New', position: 'composer.attachment', tool: 'help' }] },
+    { contributions: [{ id: 'new', title: 'New', position: 'sidebar.section', tool: 'help' }] },
+    { contributions: [{ id: 'new', title: 'New', position: 'window.titlebar', kind: 'status' }] },
+  ])('keeps legacy host authority when stored extensions are invalid: %j', extension => {
+    const legacy = { contributions: [{ id: 'old', title: 'Old toolbar', position: 'composer.toolbar', tool: 'help' }],
+      commands: [{ id: 'command', title: 'Old command', tool: 'help', shortcut: 'Mod+Shift+H' }] };
+    const host = { ...legacy, ...extension, contributions: [...legacy.contributions, ...(extension.contributions ?? [])] };
+    const raw = { ...base, mcpApps: { ...base.mcpApps, host } };
+    expect(validateGhostManifest(raw).ok).toBe(false);
+    const stored = validateStoredGhostManifest(raw);
+    if (!stored.ok) throw new Error(stored.reason);
+    const projected = getPluginHostUi(stored.manifest);
+    expect(projected).toMatchObject(legacy);
+    expect(hostUiApprovalSubjects(projected!)).toEqual(hostUiApprovalSubjects(legacy));
   });
   it.each(['sidebar.navigation', 'session.menu', 'settings.section', 'composer.completion', 'window.titlebar'])(
     'approves the understood %s placement without changing an existing entry token', position => {

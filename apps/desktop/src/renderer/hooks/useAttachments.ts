@@ -303,7 +303,8 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
     for (const file of files) {
       const currentFiles = () => isAttachmentOperationScopeCurrent(scope)
         ? attachmentsRef.current : scope.storageKey ? getComposerDraft(scope.storageKey)?.attachments ?? [] : [];
-      const current = () => isAttachmentDraftScopeActive(scope) && currentFiles().some(item => item.id === file.id);
+      // Editing annotations replaces the object but deliberately keeps its id.
+      const current = () => isAttachmentDraftScopeActive(scope) && currentFiles().includes(file);
       if (!current()) continue;
       const controller = new AbortController();
       const stop = scope.storageKey ? subscribeDraftContent(scope.storageKey, () => { if (!current()) controller.abort(); }) : () => {};

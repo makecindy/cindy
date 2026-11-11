@@ -26,6 +26,7 @@ export type PluginUiEntry = { ghost: InstalledGhost; instanceId: string; contrib
 type Directory = ReadonlyMap<GhostHostUiPosition, readonly PluginUiEntry[]>;
 const EMPTY: Directory = new Map();
 const NO_ENTRIES: readonly PluginUiEntry[] = [];
+const NO_SETTINGS: readonly InstalledGhost[] = [];
 const DirectoryContext = createContext<Directory>(EMPTY);
 type SlotVisibility = { element: Element; intersecting: boolean; listeners: Set<(visible: boolean) => void> };
 const observedSlots = new Map<Element, SlotVisibility>();
@@ -133,7 +134,7 @@ function compileDirectory(ghosts: readonly InstalledGhost[]) {
         values.push({ ghost, instanceId: installedGhostStoragePart(ghost), contribution });
       }
     }
-    return { entries: entries.size ? entries : EMPTY, launchers, settings, active };
+    return { entries: entries.size ? entries : EMPTY, launchers, settings: settings.length ? settings : NO_SETTINGS, active };
 }
 function compiledDirectory(ghosts: readonly InstalledGhost[]) {
   let value = compiledDirectories.get(ghosts);
@@ -142,7 +143,12 @@ function compiledDirectory(ghosts: readonly InstalledGhost[]) {
 }
 /** Read the existing owner projection; never subscribe once more at a placement. */
 export const readPluginUiEntries = (position: GhostHostUiPosition) => compiledDirectory(readInstalledGhostsSnapshot()).entries.get(position) ?? NO_ENTRIES;
-export const readPluginUiSettings = () => compiledDirectory(readInstalledGhostsSnapshot()).settings;
+/** Window owners subscribe to the same cached roster; placements add no Context or IPC. */
+export function usePluginUiWindowCandidates() {
+  const { entries, settings } = compiledDirectory(useInstalledGhosts());
+  return { settings, sidebarSections: entries.get('sidebar.section') ?? NO_ENTRIES,
+    titlebarEntries: entries.get('window.titlebar') ?? NO_ENTRIES };
+}
 export function usePluginUiComposerCandidates() {
   const directory = useContext(DirectoryContext);
   return { toolbar: !!directory.get('composer.toolbar')?.length, completion: directory.get('composer.completion') ?? NO_ENTRIES };

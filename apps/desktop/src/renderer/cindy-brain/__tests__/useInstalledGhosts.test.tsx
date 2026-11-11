@@ -12,7 +12,8 @@
 import { act, cleanup, render, renderHook, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { InstalledGhost } from '../../../shared/ghost';
+import { ghostHostUiApprovalTokens, type InstalledGhost } from '../../../shared/ghost';
+import { usePluginUiWindowCandidates } from '../PluginUiContributions';
 import { useWorkdirDisabledGhostIds } from '../ghostWorkdirFilter';
 import {
   __resetInstalledGhostsStoreForTest,
@@ -61,6 +62,42 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   __resetInstalledGhostsStoreForTest();
+});
+
+// Unit, #9987: snapshot getters did not give their window owner a reactive
+// projection; old placement tests manually rerendered. Only ghosts:changed may
+// update this owner. Empty projections must also stay stable across roster pushes.
+it('updates window contributions on installation, revocation and disable without another IPC scan', () => {
+  listSync.mockReturnValue({ ghosts: [] });
+  const invoke = vi.fn();
+  Object.assign(window.electronAPI, { maker: { mcpApps: invoke } });
+  const { result } = renderHook(() => usePluginUiWindowCandidates());
+  const empty = result.current;
+  const plugin: InstalledGhost = { ...ghost('window-extensions'), uiCapabilityApproved: true };
+  plugin.manifest = { ...plugin.manifest, schemaVersion: 3, minCindyVersion: '0.1.61' };
+  plugin.manifest.mcpApps = {
+    ui: { resources: [{ uri: 'ui://page', file: 'page.html' }], tools: {} },
+    host: { views: [{ id: 'page', title: 'Page', resourceUri: 'ui://page' }],
+      settings: [{ id: 'enabled', title: 'Enabled', type: 'boolean', default: false }],
+      contributions: [
+        { id: 'section', title: 'Section', position: 'sidebar.section', view: 'page' },
+        { id: 'action', title: 'Action', position: 'window.titlebar', view: 'page' },
+      ] },
+  };
+  plugin.approvedHostUi = ghostHostUiApprovalTokens(plugin.manifest);
+  act(() => changedCbs.forEach(callback => callback({ ghosts: [plugin] })));
+  expect(result.current.settings.map(item => item.manifest.id)).toEqual(['window-extensions']);
+  expect(result.current.sidebarSections.map(entry => entry.contribution.id)).toEqual(['section']);
+  expect(result.current.titlebarEntries.map(entry => entry.contribution.id)).toEqual(['action']);
+  for (const next of [{ ...plugin, approvedHostUi: [] }, { ...plugin, enabled: false }, ghost('ordinary')]) {
+    act(() => changedCbs.forEach(callback => callback({ ghosts: [next] })));
+    expect(result.current.settings).toBe(empty.settings);
+    expect(result.current.sidebarSections).toBe(empty.sidebarSections);
+    expect(result.current.titlebarEntries).toBe(empty.titlebarEntries);
+  }
+  expect(listSync).toHaveBeenCalledOnce();
+  expect(onChanged).toHaveBeenCalledOnce();
+  expect(invoke).not.toHaveBeenCalled();
 });
 
 // KFJS unit regression: old-directory responses must not expose commands in a

@@ -1,7 +1,7 @@
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { PerformanceTrace, openPerformanceTrace } from '@/components/performance-trace/PerformanceTrace';
 import { readInstalledGhostsSnapshot } from '@/cindy-brain/useInstalledGhosts';
-import { readPluginUiSettings, readPluginUiEntries, PluginUiSlotControls } from '@/cindy-brain/PluginUiContributions';
+import { usePluginUiWindowCandidates, PluginUiSlotControls } from '@/cindy-brain/PluginUiContributions';
 import { installedGhostStoragePart, resolvePluginInstanceQuery } from '../../../shared/pluginIdentity';
 import { drainPendingDeepLinks } from '@/lib/pendingDeepLinks';
 import { ChatInviteHost, reportMalformedChatInvite, requestChatInvite } from '@/features/bots/ChatInviteHost';
@@ -1696,9 +1696,8 @@ export function MainLayout() {
 
   // Session/tool-pane declarations update Shell state during navigation. Keep
   // unrelated updates from invalidating the entire routed conversation again.
-  const pluginSettings = readPluginUiSettings();
-  const pluginSidebarSections = readPluginUiEntries('sidebar.section');
-  const pluginTitlebarEntries = readPluginUiEntries('window.titlebar');
+  const { settings: pluginSettings, sidebarSections: pluginSidebarSections,
+    titlebarEntries: pluginTitlebarEntries } = usePluginUiWindowCandidates();
   const outletContext = useMemo(() => ({
     sidebarWidth,
     pluginSettings,

@@ -1,12 +1,14 @@
 import { isSafeGhostRelativePath } from './internal/ghostPath.js';
 import { PLUGIN_APPEARANCE_FIELDS, type PluginAppearanceField } from './appearance.js';
-/** Cindy placement and Host capabilities; page content stays in MCP Apps resources. */
-export const HOST_UI_POSITIONS = [
-  'composer.toolbar', 'session.header', 'statusbar', 'message.actions', 'message.menu',
-  'turn.footer', 'message.body', 'tool.body',
+const EXTENDED_HOST_UI_POSITIONS = [
   'sidebar.navigation', 'session.menu', 'settings.section', 'composer.completion',
   'composer.attachment', 'sidebar.section',
   'window.titlebar',
+] as const;
+/** Cindy placement and Host capabilities; page content stays in MCP Apps resources. */
+export const HOST_UI_POSITIONS = [
+  'composer.toolbar', 'session.header', 'statusbar', 'message.actions', 'message.menu',
+  'turn.footer', 'message.body', 'tool.body', ...EXTENDED_HOST_UI_POSITIONS,
 ] as const;
 export type GhostHostUiPosition = typeof HOST_UI_POSITIONS[number];
 export const HOST_UI_CAPABILITIES = ['context', 'draft', 'appearance', 'visibility'] as const;
@@ -202,6 +204,33 @@ export function parseGhostHostUi(
     }
   }
   return raw as GhostHostUi;
+}
+
+/** Historical unknown extensions cannot invalidate previously understood authority.
+ * New-package validation still uses parseGhostHostUi without this projection. */
+export function parseStoredGhostHostUi(
+  raw: unknown,
+  resources: ReadonlySet<string>,
+  tools: ReadonlySet<string>,
+): GhostHostUi | null {
+  const strict = parseGhostHostUi(raw, resources, tools);
+  if (strict || !object(raw)) return strict;
+  const compatible = { ...raw };
+  delete compatible.settings;
+  if (Array.isArray(raw.contributions)) {
+    compatible.contributions = raw.contributions.filter(item => !object(item) ||
+      !(EXTENDED_HOST_UI_POSITIONS as readonly unknown[]).includes(item.position) ||
+      parseGhostHostUi({ views: raw.views, contributions: [item] }, resources, tools));
+  }
+  if (Array.isArray(raw.settings)) {
+    const ids = new Set<string>();
+    compatible.settings = raw.settings.filter(field => {
+      if (!parseGhostHostUi({ settings: [field] }, resources, tools) || ids.has(field.id)) return false;
+      ids.add(field.id);
+      return true;
+    });
+  }
+  return parseGhostHostUi(compatible, resources, tools);
 }
 
 /** Stable approval subjects include only understood authority, never future data or translated titles. */
