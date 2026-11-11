@@ -45,6 +45,7 @@ import type {
   TurnPermissionOrigin,
   UserContentBlock,
   UserMessage,
+  SendOptions,
 } from '@cindy/maker-core';
 import {
   effectiveSourceIdForModel,
@@ -63,6 +64,9 @@ import {
   acquirePendingAgentSwitchForImSend,
   beginTurnChangeSetAtDispatch,
   prepareUnhealthySessionForSend,
+  prepareRuntimePluginsForDirectSend,
+  composeRuntimePluginMessageForSend,
+  createSessionWithRuntimePlugins,
   prepareBotSessionForImSend,
   wireSessionToIpc,
   isSessionInTurn,
@@ -70,6 +74,7 @@ import {
   onSilentStopSettled,
 } from '../maker-ipc/register.js';
 import { clearPendingTurnChangeSets } from '../turn-change-set/store.js';
+import { RuntimePluginControlError } from '../cindy-brain/runtimeControl.js';
 import {
   beginInteractionRoute,
   type InteractionHandler,
@@ -672,7 +677,7 @@ export function createMakerHookSessionRunner(deps: {
       return { workingDir, usable };
     },
 
-    async run(req: HookRunRequest, releaseSendLock = (): void => {}) {
+    async run(req: HookRunRequest, releaseSendLock = (): void => {}, runtimeOptions?: Partial<SendOptions>) {
       const startedAt = Date.now();
       const maker = getMaker();
       // 新任务的账号代次从读取偏好 / 默认配置之前算起(与个人 IM 同一判据): 中途换账号时
@@ -955,14 +960,14 @@ export function createMakerHookSessionRunner(deps: {
         session = req.isNew
           ? await openChannelSession(req.sessionId, newSessionRoute, (admitted) => {
               sessionProviderId = admitted.providerId;
-              return maker.createSession({
+              return createSessionWithRuntimePlugins({
                 ...createOpts,
                 model: admitted.model,
                 ...(admitted.providerId !== null ? { providerId: admitted.providerId } : {}),
                 ...(admitted.effort !== undefined ? { effort: admitted.effort } : {}),
               });
             }, assertAccount)
-          : await maker.createSession(createOpts);
+          : await createSessionWithRuntimePlugins(createOpts);
       } catch (err) {
         // session 未建成: 若有预建 worktree 则回收(同 maker-ipc/register.ts
         // 的 shouldRecycleHandoffWorktreeOnFailure 判据), 防孤儿泄漏
@@ -991,14 +996,14 @@ export function createMakerHookSessionRunner(deps: {
           session = req.isNew
             ? await openChannelSession(req.sessionId, newSessionRoute, (admitted) => {
                 sessionProviderId = admitted.providerId;
-                return maker.createSession({
+                return createSessionWithRuntimePlugins({
                   ...createOpts,
                   model: admitted.model,
                   ...(admitted.providerId !== null ? { providerId: admitted.providerId } : {}),
                   ...(admitted.effort !== undefined ? { effort: admitted.effort } : {}),
                 });
               }, assertAccount)
-            : await maker.createSession(createOpts);
+            : await createSessionWithRuntimePlugins(createOpts);
         } catch (err) {
           // session 未建成: 预建 worktree 同步回收(同上方新建失败路径), 防孤儿泄漏
           if (req.isNew && worktreeStore.get(req.sessionId)) {
@@ -1500,9 +1505,11 @@ export function createMakerHookSessionRunner(deps: {
         const goalInactiveNote = await enqueueDurableWrite(`goal-inactive-read:${session.id}`, () =>
           peekGoalInactiveNote(session.id),
         ).catch(() => null);
-        const outgoingMessage: UserMessage = goalInactiveNote
+        let outgoingMessage: UserMessage = goalInactiveNote
           ? (prependNoteToWireUserMessage(withPlanReconcile, goalInactiveNote) as UserMessage)
           : withPlanReconcile;
+        const runtimeMessage = composeRuntimePluginMessageForSend(session.id, outgoingMessage);
+        if (runtimeMessage) outgoingMessage = await runtimeMessage;
         const trustedChannelOrigin = mainOwnedChannelOrigin(req.source?.im);
         // 新任务从入口起绑定账号: 建行后的补写、附件与上下文准备期间换了账号, 就终止这次
         // 派发(下面的 catch 统一收尾并回失败), 不让迟到的 send 在 teardown 之后重新启动
@@ -1517,6 +1524,7 @@ export function createMakerHookSessionRunner(deps: {
             })
           : undefined;
         const sendResult = await session.send(outgoingMessage, {
+          ...runtimeOptions,
           origin,
           planMode: false,
           ...(trustedChannelOrigin
@@ -1770,6 +1778,14 @@ export function createMakerHookSessionRunner(deps: {
         if (blocked) return { status: 'error' as const, finalText: '', errorMessage: blocked, durationMs: 0 };
       }
       // 切换可能重建引擎，必须先应用选择，再读 meta、建会话和挂观察器。
+      let runtimeOptions: Partial<SendOptions> | undefined;
+      try {
+        const preparation = req.createOnly ? undefined : prepareRuntimePluginsForDirectSend(req.sessionId, req.prompt);
+        if (preparation) runtimeOptions = await preparation;
+      } catch (error) {
+        if (!(error instanceof RuntimePluginControlError)) throw error;
+        return { status: 'error' as const, finalText: '', errorMessage: error.message, durationMs: 0 };
+      }
       // 与创建任务共用取值链：迁移前保留 server 偏好，迁移后由本机正本忽略旧便签。
       const overrides: HookDispatchOverrides = {
         agentKind: req.agentKind, model: req.model,
@@ -1797,7 +1813,7 @@ export function createMakerHookSessionRunner(deps: {
         unlock?.();
       };
       try {
-        return await runner.run(req, releaseOnce);
+        return await runner.run(req, releaseOnce, runtimeOptions);
       } finally {
         // 建会话、目录检查等在 send 前提前退出时也释放。
         releaseOnce();

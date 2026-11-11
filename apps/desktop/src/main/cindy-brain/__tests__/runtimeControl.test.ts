@@ -118,6 +118,24 @@ describe('task runtime plugin control', () => {
     expect(output.request).toEqual(body);
   });
 
+  // Review regression, unit: an oversized Pi request cannot reach the plugin.
+  // Apply the same task failure policy without a truncated provider body. The
+  // existing malformed-response case only covers failures after plugin delivery.
+  it.each(['allow', 'skip', 'block'] as const)('settles a request transport failure using task policy: %s', async onFailure => {
+    const settings = { 'will-model-request': [{ pluginId: 'editor', onFailure }] };
+    const f = fixture(settings);
+    const service = createTaskRuntimePlugins({ control: f.control,
+      readSettings: () => settings, readRoute: async () => input.route,
+      routeAvailable: async () => true, applyRoute: vi.fn(), changed: vi.fn(),
+    });
+    const options = await service.prepare('task', 'hello');
+    const pending = options![MODEL_REQUEST_CONTROL]!({ phase: 'payload', providerId: 'p', model: 'm1',
+      failure: 'request-too-large' });
+    if (onFailure === 'block') await expect(pending).rejects.toMatchObject({ action: 'block', failure: true });
+    else await expect(pending).resolves.toEqual(onFailure === 'skip' ? { skip: true } : { request: undefined });
+    expect(f.screen).not.toHaveBeenCalled();
+  });
+
   // Provider origin belongs to the Host, and search input is the query alone.
   // Unit: production provider adapter, selected-only transport, no storage copy.
   it('supplies attributed context and memories only for the selected task', async () => {

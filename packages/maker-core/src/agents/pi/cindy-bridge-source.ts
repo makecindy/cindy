@@ -1,5 +1,6 @@
 import { PI_CACHE_RECOVERY_SOURCE } from './cache-recovery-source.js';
 import { PI_NATIVE_PROVIDER_ADAPTER_SOURCE } from './native-provider-adapter-source.js';
+import { MAX_JSONL_BUFFER_CHARS } from './transport.js';
 /**
  * cindy-bridge —— 写进 pi agentHome/extensions/ 的扩展源码(字符串常量)。
  *
@@ -1906,8 +1907,8 @@ function installRuntimeModelControl(pi: any): () => any {
   pi.on('before_agent_start', async (_event: any, ctx: any) => {
     if (ctx.model?.provider !== provider) {
       baseline = ctx.model;
-      baselineThinking = ctx.thinkingLevel;
     }
+    baselineThinking = ctx.thinkingLevel;
     dispatched = undefined;
     requestFast = undefined;
     if (!modelRequestControlActive) {
@@ -1924,14 +1925,14 @@ function installRuntimeModelControl(pi: any): () => any {
         route: async (request: any, routeCtx: any) => {
           const response = await runtimeModelControl(routeCtx, {
             phase: 'select', provider: baseline.provider, model: baseline.id,
-            thinkingLevel: baselineThinking,
+            thinkingLevel: request.thinkingLevel,
           });
           const route = response.route;
           const model = route ? routeCtx.modelRegistry.find(route.provider, route.model) : baseline;
           if (!model) throw new Error('Requested model is unavailable');
           dispatched = model;
           requestFast = typeof route?.fastMode === 'boolean' ? route.fastMode : undefined;
-          return { model, thinkingLevel: route?.thinkingLevel ?? baselineThinking ?? request.thinkingLevel };
+          return { model, thinkingLevel: route?.thinkingLevel ?? request.thinkingLevel ?? baselineThinking };
         },
       });
       registered = true;
@@ -1943,7 +1944,17 @@ function installRuntimeModelControl(pi: any): () => any {
 }
 
 async function runtimeModelControl(ctx: any, input: any): Promise<any> {
-  const raw = await ctx.ui.input('cindy:model-request-control', JSON.stringify(input));
+  let serialized = JSON.stringify(input);
+  // The placeholder is itself JSON-encoded in an extension UI frame. Keep room
+  // for the native envelope and report transport failure without sending a
+  // truncated request. The host applies the selected task's existing policy.
+  const frameBudget = ${MAX_JSONL_BUFFER_CHARS - 4096};
+  if (input.phase === 'payload' && serialized.length > frameBudget / 2
+    && JSON.stringify(serialized).length > frameBudget) {
+    serialized = JSON.stringify({ phase: 'payload', provider: input.provider, model: input.model,
+      failure: 'request-too-large' });
+  }
+  const raw = await ctx.ui.input('cindy:model-request-control', serialized);
   const result = typeof raw === 'string' ? JSON.parse(raw) : null;
   if (result?.skip === true) {
     ctx.abort();

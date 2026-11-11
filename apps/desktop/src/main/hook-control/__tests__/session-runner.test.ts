@@ -25,6 +25,11 @@ import { rewriteTaskImageReferences } from '../../cindy-media/taskImageMarkdown'
 import type { AgentEvent, Effort, PermissionMode, PermissionModeState } from '@cindy/maker-core';
 import type { CatalogModel, ProviderView } from '@cindy/model-providers';
 import { IM_DEFAULT_SETTINGS } from '../../../shared/imDefaultSettings';
+import { createTaskRuntimePlugins } from '../../maker-ipc/runtimePlugins';
+import { createRuntimePluginControl } from '../../cindy-brain/runtimeControl';
+import { createRuntimeContextProviders } from '../../cindy-brain/runtimeContext';
+import type { RuntimePluginSettings } from '../../../shared/pluginRuntime';
+import type { SendOptions, UserMessage } from '@cindy/maker-core';
 
 const h = vi.hoisted(() => {
   /** 跨模块调用顺序记录: 'touch:<id>' / 'created:<id>' */
@@ -37,6 +42,8 @@ const h = vi.hoisted(() => {
     syncDefaultRoute: vi.fn(async () => false),
     writeDefaultRecord: vi.fn(async (_id: string, _fingerprint: string) => undefined),
     acquirePendingAgentSwitch: vi.fn(async (_id: string, _sync: () => Promise<boolean>): Promise<() => void> => () => {}),
+    prepareRuntimeTurn: vi.fn((_id: string, _message: unknown): Promise<Partial<SendOptions>> | undefined => undefined),
+    composeRuntimeMessage: vi.fn((_id: string, _message: UserMessage): Promise<UserMessage> | undefined => undefined),
     touchUserSendInDb: vi.fn(async (id: string) => {
       calls.push(`touch:${id}`);
     }),
@@ -147,6 +154,7 @@ vi.mock('@cindy/maker-core', async (importOriginal) => {
     isAutoReviewConfirmUndeliveredNotice: actual.isAutoReviewConfirmUndeliveredNotice,
     isTerminalAgentErrorEvent: actual.isTerminalAgentErrorEvent,
     MAIN_OWNED_SEND_CONTEXT: actual.MAIN_OWNED_SEND_CONTEXT,
+    MODEL_REQUEST_CONTROL: actual.MODEL_REQUEST_CONTROL,
     parseOverloadError: actual.parseOverloadError,
     parseOverloadRetryProgress: actual.parseOverloadRetryProgress,
     parseTerminalRateLimitRetryProgress: actual.parseTerminalRateLimitRetryProgress,
@@ -162,6 +170,9 @@ vi.mock('../../maker-ipc/register.js', () => ({
   beginTurnChangeSetAtDispatch: h.beginTurnChangeSetAtDispatch,
   prepareBotSessionForImSend: h.prepareBot,
   prepareUnhealthySessionForSend: vi.fn(async () => undefined),
+  prepareRuntimePluginsForDirectSend: h.prepareRuntimeTurn,
+  composeRuntimePluginMessageForSend: h.composeRuntimeMessage,
+  createSessionWithRuntimePlugins: (opts: { id?: string }) => fakeMaker.createSession(opts),
   wireSessionToIpc: vi.fn(),
   isSessionInTurn: () => false,
   installDesktopInteractionListener: h.installDesktopInteractionListener,
@@ -434,7 +445,7 @@ vi.mock('../../im/shared/sessionProviderLabel.js', () => ({
 }));
 
 import { createMakerHookSessionRunner, extractToolResultMediaUrls } from '../session-runner.js';
-import { MAIN_OWNED_SEND_CONTEXT, Session, type AgentSessionHandle, type Capabilities } from '@cindy/maker-core';
+import { MAIN_OWNED_SEND_CONTEXT, MODEL_REQUEST_CONTROL, Session, type AgentSessionHandle, type Capabilities } from '@cindy/maker-core';
 import { observeHookTurn } from '../turnObserver.js';
 import { buildHookPromptNote, SLACK_HOOK_PROMPT_NOTE } from '../outbound.js';
 import { getResolvedMainLocale } from '../../i18n.desktop.js';
@@ -506,6 +517,8 @@ beforeEach(() => {
   setClaudeProxySessionIdResolver(() => null);
   h.acquirePendingAgentSwitch.mockReset();
   h.acquirePendingAgentSwitch.mockResolvedValue(() => {});
+  h.prepareRuntimeTurn.mockReset();
+  h.composeRuntimeMessage.mockReset();
   h.calls.length = 0;
   h.eventCbs.clear();
   h.headlessDuringSend.length = 0;
@@ -537,6 +550,60 @@ beforeEach(() => {
 });
 
 describe('hook task model selection on next send', () => {
+  // Review regression, unit: the real hook entry must apply the same selected
+  // task preparation and ordinary context. Existing hooks only tested routing
+  // defaults; the minimum failure is a task selected in Desktop then sent here.
+  it('applies task runtime plugins to hook sends and preserves unselected prompt and wire bytes', async () => {
+    let settings: RuntimePluginSettings = {};
+    const screen = vi.fn(async (point: string) => point === 'will-compose-context'
+      ? { action: 'context' as const, ghostId: 'context', ghostName: 'Context', blocks: [{ id: 'b', text: 'Hook plugin reference' }] }
+      : { action: 'allow' as const });
+    const control = createRuntimePluginControl({ readSettings: () => settings, captureOwner: () => () => true, screen });
+    const providers = createRuntimeContextProviders(control);
+    const service = createTaskRuntimePlugins({ control, readSettings: () => settings,
+      readRoute: async () => ({ agentKind: 'pi', providerId: 'xd', model: 'test-model' }),
+      routeAvailable: async () => true, applyRoute: vi.fn(), changed: vi.fn(), composeContext: providers.compose });
+    h.prepareRuntimeTurn.mockImplementation((id, message) => service.prepare(id, message));
+    h.composeRuntimeMessage.mockImplementation((id, message) => service.compose(id, message));
+    const bodies: unknown[] = [];
+    const prompts: unknown[] = [];
+    for (const selected of [false, true, false]) {
+      settings = selected ? {
+        'will-start-turn': [{ pluginId: 'router', onFailure: 'block' }],
+        'will-compose-context': [{ pluginId: 'context', onFailure: 'block' }],
+        'will-model-request': [{ pluginId: 'request', onFailure: 'block' }],
+      } : {};
+      const session = makeFakeSession('sess-runtime');
+      fakeMaker.createSession.mockResolvedValueOnce(session);
+      const result = await createMakerHookSessionRunner({ log }).run(baseReq({ sessionId: 'sess-runtime', isNew: false }));
+      expect(result.status).toBe('ok');
+      const [message, options] = session.send.mock.calls[0];
+      bodies.push(message);
+      prompts.push((fakeMaker.createSession.mock.calls.at(-1)![0] as { userPrompt?: string }).userPrompt);
+      expect(typeof (options as SendOptions)[MODEL_REQUEST_CONTROL]).toBe(selected ? 'function' : 'undefined');
+    }
+    expect(bodies[2]).toEqual(bodies[0]);
+    expect(prompts[2]).toBe(prompts[0]);
+    expect(JSON.stringify(bodies[0])).not.toContain('Hook plugin reference');
+    expect(JSON.stringify(bodies[1])).toContain('Hook plugin reference');
+    expect(screen.mock.calls.map(([point]) => point)).toEqual(['will-start-turn', 'will-compose-context']);
+  });
+
+  it('blocks a hook send when the selected task plugin stops the turn', async () => {
+    const settings = { 'will-start-turn': [{ pluginId: 'router', onFailure: 'block' as const }] };
+    const control = createRuntimePluginControl({ readSettings: () => settings, captureOwner: () => () => true,
+      screen: async () => ({ action: 'block', ghostId: 'router', ghostName: 'Router', reason: '', failure: false }) });
+    const service = createTaskRuntimePlugins({ control, readSettings: () => settings,
+      readRoute: async () => ({ agentKind: 'cc', providerId: 'xd', model: 'test-model' }),
+      routeAvailable: async () => true, applyRoute: vi.fn(), changed: vi.fn() });
+    h.prepareRuntimeTurn.mockImplementation((id, message) => service.prepare(id, message));
+    const session = makeFakeSession('sess-runtime-blocked');
+    const result = await createMakerHookSessionRunner({ log }).run(baseReq({ sessionId: session.id, isNew: false }));
+    expect(result.status).toBe('error');
+    expect(session.send).not.toHaveBeenCalled();
+    expect(h.acquirePendingAgentSwitch).not.toHaveBeenCalled();
+  });
+
   // PR #7291 unit: automatic selection must use the execution location and still
   // reach the existing stale-source rule; previous coverage used pinned defaults.
   it('creates an automatic remote workspace task and follows its resolved route', async () => {

@@ -11,6 +11,11 @@
 执行电脑仍在统一发送入口应用其已保存的选择。官方及自建中转无新帧、relay 或服务端改动。
 逐请求控制只支持本机 Pi；Claude Code、Codex、SSH／设备托管 Pi 明确不支持。
 Pi 通过进程内 Symbol 接收宿主回调，能力不从 Renderer／远程 JSON 选项取得。
+Desktop、个人 IM 与官方 hook 共用任务运行插件的准备和资料装配实现；直发入口在原有
+发送锁之前执行选模准备，沿原有重读／启动流程取得实际会话，再把逐请求回调交给发送。
+静态片段在同一个启动入口装配，未选择时直接传回原启动选项，不改渠道队列或授权。
+Pi 在完整正文进入宿主私有 RPC 前核对 JSON 转义后的 16 Mi 字符帧预算；超限只交接
+有界错误标识，由宿主沿同一任务出错策略继续、跳过或失败，不发送截断正文，不放宽通道上限。
 
 同一任务设置追加 `will-compose-context` 和 `will-search-memory`。管子返回分别为
 `context + blocks[{id,text}]`、`memories + entries[{id,title,content,type?}]`，旧宿主忽略未知

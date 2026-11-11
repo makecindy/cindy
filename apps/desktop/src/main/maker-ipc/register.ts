@@ -5104,6 +5104,25 @@ export async function prepareUnhealthySessionForSend(sessionId: string): Promise
   await contextOverflowRolloverHolder?.prepareUnhealthySession(sessionId);
 }
 
+let runtimePluginDirectSendPreparer: ReturnType<typeof createTaskRuntimePlugins>['prepare'] | undefined;
+let runtimePluginMessageComposer: ReturnType<typeof createTaskRuntimePlugins>['compose'] | undefined;
+type RuntimePluginSessionOptions = Parameters<ReturnType<typeof getMaker>['createSession']>[0];
+let runtimePluginSessionStarter: ((opts: RuntimePluginSessionOptions, signal?: AbortSignal) => ReturnType<ReturnType<typeof getMaker>['createSession']>) | undefined;
+
+/** Direct channels use the same task control preparation before their existing send lock. */
+export function prepareRuntimePluginsForDirectSend(sessionId: string, message: unknown, signal?: AbortSignal) {
+  return runtimePluginDirectSendPreparer?.(sessionId, message, signal);
+}
+
+export function composeRuntimePluginMessageForSend(sessionId: string, message: UserMessage, signal?: AbortSignal) {
+  return runtimePluginMessageComposer?.(sessionId, message, signal);
+}
+
+/** Keep task prompt assembly identical at Desktop, IM and hook startup entries. */
+export function createSessionWithRuntimePlugins(opts: RuntimePluginSessionOptions, signal?: AbortSignal) {
+  return runtimePluginSessionStarter ? runtimePluginSessionStarter(opts, signal) : getMaker().createSession(opts, signal);
+}
+
 /** Later successful model/provider picks supersede an earlier cross-engine intent. */
 export function cancelPendingAgentSwitchForSession(sessionId: string): void {
   cancelPendingAgentSwitchHolder?.(sessionId);
@@ -9207,6 +9226,32 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   const appliedTaskPrompts = new WeakMap<Awaited<ReturnType<typeof maker.createSession>>, string>();
   const readTaskPrompt = (sessionId: string, agentKind: AgentKind, agentDeviceId?: string | null) =>
     ghostTaskSystemPrompt(sessionId, agentKind === 'claude-code' ? 'cc' : agentKind, !(agentKind === 'pi' && agentDeviceId));
+  runtimePluginSessionStarter = (o, signal) => {
+    if (o.id && maker.getSession(o.id)) return maker.createSession(o, signal);
+    const taskPrompt = o.id ? readTaskPrompt(o.id, o.agentKind, o.agentDeviceId) : '';
+    if (!taskPrompt) return maker.createSession(o, signal);
+    const runtimeOpts = { ...o,
+      ...(o.agentKind === 'pi' ? { [TASK_SYSTEM_PROMPT]: taskPrompt } : {
+        userPrompt: assembleSystemPromptSections(o.userPrompt?.trim() ?? '', [{ name: 'task', order: 0, text: taskPrompt }]),
+      }),
+    };
+    return maker.createSession(runtimeOpts, signal).then(session => {
+      appliedTaskPrompts.set(session, taskPrompt);
+      return session;
+    });
+  };
+  const prepareTaskPromptForSend = (sessionId: string): Promise<void> | undefined => {
+    const live = maker.getSession(sessionId);
+    if (!live) {
+      if (!readRuntimePluginSettings(sessionId)?.['system-prompt']?.length) return undefined;
+      return readSessionRuntimeProfiles(sessionId).then(profiles => {
+        if (!profiles) throw new RuntimePluginControlError('block', '', true, 'task-unavailable');
+        readTaskPrompt(sessionId, profiles.effective.agentKind, profiles.effective.agentDeviceId);
+      });
+    }
+    if (live.isTurnRunning() || (appliedTaskPrompts.get(live) ?? '') === readTaskPrompt(sessionId, live.agentKind, live.agentDeviceId)) return undefined;
+    return withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId, 'agent-switch'));
+  };
   const assertTaskPromptCurrent = (sessionId: string) => {
     const live = maker.getSession(sessionId);
     if (live && (appliedTaskPrompts.get(live) ?? '') !== readTaskPrompt(sessionId, live.agentKind, live.agentDeviceId)) {
@@ -9363,14 +9408,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         delete vendorOptions._cindyRequireNativeResume;
         if (nativeHistoryResume || nativeRelocation?.nativeId) vendorOptions._cindyRequireNativeResume = true;
         o.vendorOptions = vendorOptions;
-        const taskPrompt = o.id ? readTaskPrompt(o.id, o.agentKind, o.agentDeviceId) : '';
-        const runtimeOpts = taskPrompt ? { ...o,
-          ...(o.agentKind === 'pi' ? { [TASK_SYSTEM_PROMPT]: taskPrompt } : {
-            userPrompt: assembleSystemPromptSections(o.userPrompt?.trim() ?? '', [{ name: 'task', order: 0, text: taskPrompt }]),
-          }),
-        } : o;
-        session = await maker.createSession(runtimeOpts, creationSignal);
-        appliedTaskPrompts.set(session, taskPrompt);
+        session = await createSessionWithRuntimePlugins(o, creationSignal);
         try { assertAccess?.(); assertTaskPromptCurrent(session.id); } catch (error) {
           const cancelledSession = session;
           session = undefined;
@@ -18389,6 +18427,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   const runtimePluginControl = getGhostRuntimePluginControl();
   const taskRuntimePlugins = createTaskRuntimePlugins({
     control: runtimePluginControl, readSettings: readRuntimePluginSettings,
+    composeContext: composeGhostRuntimeContext,
     requestSupported: sessionId => !maker.getSession(sessionId)?.remoteHostId,
     readRoute: async sessionId => {
       const profiles = await readSessionRuntimeProfiles(sessionId);
@@ -18419,6 +18458,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     changed: (sessionId, pluginId, phase) => log.info('runtime plugin changed model request', { sessionId, pluginId, phase }),
   });
+  runtimePluginMessageComposer = taskRuntimePlugins.compose;
+  runtimePluginDirectSendPreparer = (sessionId, message, signal) => {
+    const pending = taskRuntimePlugins.prepare(sessionId, message, signal);
+    const live = maker.getSession(sessionId);
+    if (!pending && !readRuntimePluginSettings(sessionId)?.['system-prompt']?.length
+      && (!live || !appliedTaskPrompts.get(live))) return undefined;
+    return (async () => {
+      const options = pending ? await pending : {};
+      const prompt = prepareTaskPromptForSend(sessionId);
+      if (prompt) await prompt;
+      return options;
+    })();
+  };
 
   ipcMain.handle('maker:runtime-plugins', async (event, sessionId: unknown, value: unknown) => {
     assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
@@ -18444,18 +18496,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     prewarmSession: prewarmSessionRuntime,
     hydrateActiveOrcaSession,
   } = createMakerSendTransaction({
-    prepareRuntimePrompt: sessionId => {
-      const live = maker.getSession(sessionId);
-      if (!live) {
-        if (!readRuntimePluginSettings(sessionId)?.['system-prompt']?.length) return undefined;
-        return readSessionRuntimeProfiles(sessionId).then(profiles => {
-          if (!profiles) throw new RuntimePluginControlError('block', '', true, 'task-unavailable');
-          readTaskPrompt(sessionId, profiles.effective.agentKind, profiles.effective.agentDeviceId);
-        });
-      }
-      if (live.isTurnRunning() || (appliedTaskPrompts.get(live) ?? '') === readTaskPrompt(sessionId, live.agentKind, live.agentDeviceId)) return undefined;
-      return withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId, 'agent-switch'));
-    },
+    prepareRuntimePrompt: prepareTaskPromptForSend,
     composeRuntimeContext: composeGhostRuntimeContext,
     prepareRuntimeTurn: (sessionId, message, signal) => {
       const prepared = taskRuntimePlugins.prepare(sessionId, message, signal);

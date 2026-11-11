@@ -44,8 +44,8 @@ import {
   type HandoffWireMessage,
 } from './agentHandoff.js';
 import type { MessageSourceDevice, MessageSourceHostDevice } from '@cindy/maker-shared/message-source';
-import { pluginMessageText } from '../../shared/pluginMessage.js';
 import { RuntimePluginControlError } from '../cindy-brain/runtimeControl.js';
+import { appendRuntimePluginContext } from './runtimePlugins.js';
 import {
   buildClientEnvironmentNote,
   shouldPrependMobileClientPromptNote,
@@ -1586,7 +1586,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         try {
           const pending = deps.composeRuntimeContext?.(sessionId, extractIpcUserMessageText(normalized), so.signal);
           const context = pending ? await pending : undefined;
-          if (context) outgoing = prependNoteToWireUserMessage(outgoing as HandoffWireMessage, pluginMessageText('', context).trimStart());
+          if (context) outgoing = appendRuntimePluginContext(outgoing as HandoffWireMessage, context);
         } catch (error) {
           await cleanupRejectedMaterialization();
           if (so.signal?.aborted) {

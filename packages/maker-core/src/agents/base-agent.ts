@@ -2219,6 +2219,8 @@ export interface ModelRequestRoute {
 export interface ModelRequestInput extends ModelRequestRoute {
   phase: 'select' | 'payload';
   request?: Record<string, unknown>;
+  /** Host transport failed before plugin delivery; no partial request is exposed. */
+  failure?: 'request-too-large';
 }
 export type ModelRequestControl = (input: ModelRequestInput) => Promise<{
   skip?: true;

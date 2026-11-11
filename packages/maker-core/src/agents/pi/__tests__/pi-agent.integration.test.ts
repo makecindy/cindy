@@ -494,6 +494,83 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     }
   });
 
+  // Review regression, integration: a selected task must preserve later effort
+  // changes and thinking-off, including the first send after deselection. The
+  // existing routing case only used a non-reasoning model with unchanged effort.
+  it('preserves current thinking preferences across selected and unselected requests', { timeout: 30_000 }, async () => {
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-control-thinking-'));
+    const deps = buildDeps();
+    const model = 'deepseek/deepseek-v4-flash';
+    deps.capabilityAdditions = { availableModels: [{ id: model, displayName: 'Thinking fixture',
+      contextWindow: 200_000, efforts: ['low', 'high'], defaultEffort: 'high' }] };
+    deps.resolvePiGatewayModelApi = () => 'openai-completions';
+    deps.resolvePiGatewayModelSpec = () => ({ api: 'openai-completions',
+      compat: { thinkingFormat: 'deepseek', maxTokensField: 'max_tokens' },
+      thinkingLevelMap: { low: 'low', high: 'high' } });
+    let handle: AgentSessionHandle | undefined;
+    const before = seenRequests.length;
+    try {
+      handle = await new PiAgent(deps).startSession({ sessionId: 'control-thinking', workingDir,
+        model, providerId: 'xd', effort: 'high', permissionMode: 'bypassPermissions' });
+      const send = async (selected: boolean) => {
+        const done = (async () => { for await (const event of handle!.events()) {
+          if (event.type === 'error') throw new Error(JSON.stringify(event.data));
+          if (event.type === 'done') return event;
+        } })();
+        await handle!.send({ type: 'user', content: 'Reply briefly.' }, selected
+          ? { [MODEL_REQUEST_CONTROL]: async () => ({}) } : undefined);
+        expect((await done)?.data).toMatchObject({ status: 'completed' });
+      };
+      await send(true);
+      await handle.setEffort!('low');
+      await send(true);
+      await handle.setThinkingEnabled!(false);
+      await send(true);
+      await send(false);
+      const bodies = seenRequests.slice(before).map(row => JSON.parse(row.body));
+      expect(bodies).toHaveLength(4);
+      expect(bodies.slice(0, 2).map(body => body.reasoning_effort)).toEqual(['high', 'low']);
+      expect(bodies.slice(2).map(body => body.thinking?.type)).toEqual(['disabled', 'disabled']);
+    } finally {
+      await handle?.close();
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
+
+  // Review regression, integration: valid large history exceeds the outbound
+  // JSONL frame limit. The host must receive a bounded failure and settle using
+  // task policy; the former small-body fixture could not observe the lost frame.
+  it('handles oversized selected request bodies without waiting on a discarded RPC frame', { timeout: 30_000 }, async () => {
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-control-large-'));
+    const deps = buildDeps();
+    deps.capabilityAdditions = { availableModels: [{ id: 'pi-test-model', displayName: 'Large fixture',
+      contextWindow: 20_000_000, efforts: [], defaultEffort: null }] };
+    let handle: AgentSessionHandle | undefined;
+    const before = seenRequests.length;
+    const payloads: unknown[] = [];
+    try {
+      handle = await new PiAgent(deps).startSession({ sessionId: 'control-large', workingDir,
+        model: 'pi-test-model', permissionMode: 'bypassPermissions' });
+      const done = (async () => { for await (const event of handle!.events()) {
+        if (event.type === 'error') throw new Error(JSON.stringify(event.data));
+        if (event.type === 'done') return event;
+      } })();
+      await handle.send({ type: 'user', content: 'x'.repeat(17 * 1024 * 1024) }, {
+        [MODEL_REQUEST_CONTROL]: async input => {
+          if (input.phase === 'payload') payloads.push(input);
+          return {};
+        },
+      });
+      expect((await done)?.data).toMatchObject({ status: 'completed' });
+      expect(payloads).toEqual([expect.objectContaining({ phase: 'payload', failure: 'request-too-large' })]);
+      expect(JSON.stringify(payloads).length).toBeLessThan(1024);
+      expect(seenRequests.slice(before)).toHaveLength(1);
+    } finally {
+      await handle?.close();
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
+
   // Runtime skip, integration: cancel native dispatch rather than emitting a
   // successful answer or a retryable provider error. The gateway sees no HTTP.
   it('settles a selected request skip as cancelled without dispatching HTTP', { timeout: 30_000 }, async () => {

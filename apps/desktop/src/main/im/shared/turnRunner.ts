@@ -91,6 +91,8 @@ import {
 import type {
   AgentEvent,
   AgentKind,
+  CreateSessionOptions,
+  SendOptions,
   InteractionDecision,
   InteractionRequest,
   PermissionMode,
@@ -709,6 +711,9 @@ function routeOfRow(
 }
 
 export interface ImTurnRunnerDeps {
+  prepareRuntimeTurn?: (sessionId: string, message: unknown) => Promise<Partial<SendOptions>> | undefined;
+  composeRuntimeMessage?: (sessionId: string, message: UserMessage) => Promise<UserMessage> | undefined;
+  createRuntimeSession?: (options: CreateSessionOptions) => Promise<MakerSession>;
   /**
    * 锁住 session 并落实 deferred switch；IM 在刷新 live session + send 后 release。
    * `channelOwned` = 本渠道自有任务(非 `/ctr` 接管、非通知回复): 锁内先对齐渠道默认跟随。
@@ -736,6 +741,7 @@ export function createTurnRunner(
   cards: ImCardBuilders,
   deps: ImTurnRunnerDeps = {},
 ): ImTurnRunner {
+  const createRuntimeSession = deps.createRuntimeSession ?? ((options: CreateSessionOptions) => getMaker().createSession(options));
   const { im, output, ui, channel } = adapter;
   const pendingOwner = Symbol('im-runner-pending');
   const cardExpirations = new Set<{ done: Promise<void>; cancel(): void }>();
@@ -1525,6 +1531,7 @@ export function createTurnRunner(
     let turnChangeSetStarted = false;
 
     let releaseAgentSwitchLock = (): void => {};
+    let runtimeOptions: Partial<SendOptions> | undefined;
     try {
       if (item.turn.notificationReply) {
         await item.turn.revalidateNotificationReply?.();
@@ -1594,6 +1601,8 @@ export function createTurnRunner(
         };
         agentSwitchCloseSuppressed.set(rowId, suppression);
         try {
+          const preparation = deps.prepareRuntimeTurn?.(rowId, item.userMessage);
+          if (preparation) runtimeOptions = await preparation;
           releaseAgentSwitchLock = await deps.acquirePendingAgentSwitch(rowId, {
             // 伙伴任务跟随伙伴模型链, 不对齐渠道默认。
             channelOwned: !state.attached && !item.turn.notificationReply && !state.botLane,
@@ -1606,6 +1615,8 @@ export function createTurnRunner(
         }
         await refreshSessionAfterPendingAgentSwitch(state, rowId, userId);
       } else {
+        const preparation = deps.prepareRuntimeTurn?.(rowId, item.userMessage);
+        if (preparation) runtimeOptions = await preparation;
         await refreshSessionAfterPendingAgentSwitch(state, rowId, userId);
       }
       // 发送时刻的实际路由兜底: 授权检查只验过「将要切到」的新默认路由, 跟随切换
@@ -1686,12 +1697,14 @@ export function createTurnRunner(
       const goalInactiveNote = await enqueueDurableWrite(`goal-inactive-read:${rowId}`, () =>
         peekGoalInactiveNote(rowId),
       ).catch(() => null);
-      const outgoingMessage = goalInactiveNote
+      let outgoingMessage = goalInactiveNote
         ? prependNoteToWireUserMessage(
             withPlanReconcile as Parameters<typeof prependNoteToWireUserMessage>[0],
             goalInactiveNote,
           )
         : withPlanReconcile;
+      const runtimeMessage = deps.composeRuntimeMessage?.(rowId, outgoingMessage as UserMessage);
+      if (runtimeMessage) outgoingMessage = await runtimeMessage;
 
       // 群护栏取缔: 按会话当前权限档决定是否真正挂强确认策略, 见
       // resolveEffectiveTurnPolicy。不挂时走与 DM 轮次相同的无策略路径。
@@ -1764,6 +1777,7 @@ export function createTurnRunner(
       }
 
       const sendResult = await state.makerSession.send(outgoingMessage as typeof item.userMessage, {
+        ...runtimeOptions,
         planMode: false,
         // IM owns successful replies, including turns in an attached desktop task.
         origin: { kind: 'user', surface: 'im' },
@@ -2116,7 +2130,7 @@ export function createTurnRunner(
       hydrateSessionProvider(sessionId, row.providerId ?? null);
       if (row.effort) setSessionEffort(sessionId, row.effort);
       setSessionFastMode(sessionId, (row.fastMode ?? false));
-      current = await maker.createSession({
+      current = await createRuntimeSession({
         id: sessionId,
         agentKind,
         workingDir: row.workingDir,
@@ -2379,7 +2393,7 @@ export function createTurnRunner(
     // "总结当前状态" 就变成总结空会话, agent 输出短促/无内容; 用户看到渠道卡片
     // 停在 "灵感正在路上..." 然后秒收 finalize, 像是没回应 (Bug 2)。
     // 非接管路径 (渠道默认 session) 也带上, 进程重启后能继续之前的会话。
-    const makerSession = await maker.createSession({
+    const makerSession = await createRuntimeSession({
       id: row.id,
       agentKind: row.agentKind,
       workingDir: row.workingDir,

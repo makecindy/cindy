@@ -32,6 +32,7 @@ export function createRuntimePluginControl(deps: {
         assertCurrent: () => void,
       ) => Promise<Data | void>,
       signal?: AbortSignal,
+      inputError?: Error,
     ): Promise<Data> | undefined {
       const targets = deps.readSettings(sessionId)?.[point];
       if (!targets?.length) return undefined;
@@ -49,6 +50,7 @@ export function createRuntimePluginControl(deps: {
         for (const target of targets) {
           assertCurrent();
           try {
+            if (inputError) throw inputError;
             const result = await deps.screen(point, data, target);
             assertCurrent();
             if (result.action === 'skip' || result.action === 'block') {

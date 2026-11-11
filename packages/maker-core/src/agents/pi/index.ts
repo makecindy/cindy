@@ -5948,6 +5948,7 @@ export class PiAgent extends BaseAgent {
                   providerId: input.provider === PI_PROVIDER_ID ? 'xd' : resolveSourceProvider(input.provider),
                   model: sourceModel?.id ?? input.model,
                   ...(input.request ? { request: input.request } : {}),
+                  ...(input.failure ? { failure: input.failure } : {}),
                 });
                 if (control !== activeModelRequestControl || closed || accountBoundaryTeardown) throw new Error('Model request control expired');
                 if (result.skip) markPiHostAbortRequested(ctx);
@@ -9227,7 +9228,7 @@ export class PiAgent extends BaseAgent {
       currentModelIds: readonly string[];
       readNativeFast?: (provider: string, model: string) => boolean;
       controlModelRequest?: (input: { phase: 'select' | 'payload'; provider: string; model: string;
-        request?: Record<string, unknown> }) => Promise<unknown>;
+        request?: Record<string, unknown>; failure?: 'request-too-large' }) => Promise<unknown>;
       workspaceRoots: string[];
       readRoots: string[];
       writableRoots: string[];
@@ -9309,7 +9310,8 @@ export class PiAgent extends BaseAgent {
             throw new Error('Model request control is unavailable');
           }
           const input = JSON.parse(typeof event.placeholder === 'string' ? event.placeholder : '');
-          if (!['select', 'payload'].includes(input?.phase) || typeof input.provider !== 'string' || typeof input.model !== 'string') {
+          if (!['select', 'payload'].includes(input?.phase) || typeof input.provider !== 'string' || typeof input.model !== 'string'
+            || (input.failure !== undefined && (input.phase !== 'payload' || input.failure !== 'request-too-large'))) {
             throw new Error('Invalid model request control input');
           }
           const result = await context.controlModelRequest(input);
