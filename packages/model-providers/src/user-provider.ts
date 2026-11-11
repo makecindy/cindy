@@ -4,7 +4,7 @@ import { nativeModelAgents } from './modelProtocol.js';
 import { isMimoTokenPlanProvider } from './mimoPresentation.js';
 import { resolveCatalogModelNativeApi, resolveModelNativeApi } from './modelRegistry.js';
 import { providerEndpointBindings, bindProviderEndpoint, bindProviderPresetRuntime, canonicalProviderEndpoint } from './providerEndpointTemplate.js';
-import { PI_MODEL_APIS } from "./types.js";
+import { PI_MODEL_APIS, isProviderVideoApi } from "./types.js";
 import { providerModelRecord, providerModelGenerationRecord, providerPresetModelRecord, providerModelMetadata } from "./providerModelCatalog.js";
 import { BUNDLED_CATALOG, BUILTIN_PROVIDERS } from './builtin.js';
 import { providerMediaField } from "./providerMediaModels.js";
@@ -490,7 +490,7 @@ export function buildUserProvider(
       rt.supportsImageGeneration,
     );
     if (rt.imageApi === "openai-images") routing[agent]!.imageApi = rt.imageApi;
-    if (rt.videoApi === "xai-videos") routing[agent]!.videoApi = rt.videoApi;
+    if (isProviderVideoApi(rt.videoApi)) routing[agent]!.videoApi = rt.videoApi;
     const followsPreset =
       presetRuntime &&
       withoutTrailingSlashes(resolvedBaseUrl) ===
@@ -569,9 +569,9 @@ export function buildUserProvider(
             m.api ?? (agent === 'pi' ? m.piApi ?? wire : wire),
             !m.api && !m.piApi && !m.route)
           ?? (hasDeclaredProviderInterface(m, agent, rt.catalogPresetId, resolvedBaseUrl, options.modelRegistry ?? BUNDLED_CATALOG.modelRegistry)
-            ? providerPresetModelRecord(rt.catalogPresetId, m.id) : undefined)
+            ? providerPresetModelRecord(rt.catalogPresetId, m.id, undefined, m.route?.baseUrl ?? resolvedBaseUrl) : undefined)
           ?? (followsPreset && sameRoute && m.api && presetModel?.api === m.api
-            ? providerPresetModelRecord(preset?.id, m.id, m.api) : undefined)
+            ? providerPresetModelRecord(preset?.id, m.id, m.api, m.route?.baseUrl ?? resolvedBaseUrl) : undefined)
           ?? providerModelGenerationRecord(m.id, m.route?.baseUrl ?? resolvedBaseUrl, m.api ?? m.piApi ?? wire, followsPreset ? preset?.id : undefined)
         : undefined;
       // Existing catalog identities keep their established execution path. A
@@ -733,7 +733,7 @@ export function buildUserProvider(
     >
   > = {};
   const imageAgents = agents.filter((agent) => routing[agent]?.imageApi === "openai-images");
-  const videoAgents = agents.filter((agent) => routing[agent]?.videoApi === "xai-videos");
+  const videoAgents = agents.filter((agent) => routing[agent]?.videoApi !== undefined);
   for (const [agent, list] of Object.entries(models)) {
     for (const model of list ?? []) {
       const field = providerMediaField(model.mode);

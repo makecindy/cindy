@@ -56,6 +56,19 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+it('keeps the favorite identity for this share and drops one that names another share', () => {
+  const favoriteSource = {
+    shareId: 'share-1', memberId: 'member-1', providerId: 'anthropic', owner: { region: 'global' as const },
+  };
+  expect(parseProviderShareCatalogs({ shares: [rawShare({ favoriteSource })] })[0]?.favoriteSource)
+    .toEqual(favoriteSource);
+  const dropped = parseProviderShareCatalogs({ shares: [rawShare({
+    favoriteSource: { ...favoriteSource, shareId: 'other' },
+  })] })[0];
+  expect(dropped?.favoriteSource).toBeUndefined();
+  expect(dropped?.shareId).toBe('share-1');
+});
+
 // Unit: failed refreshes used to keep re-exporting one share catalog indefinitely.
 it('expires a retained share catalog after its original budget and never revives it from a failed refresh', async () => {
   vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });

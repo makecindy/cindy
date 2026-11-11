@@ -110,6 +110,7 @@ import {
   resolveDesktopIceServers,
 } from "@cindy/device-link";
 import { Text } from "@/components/AppText";
+import { ErrorNotice } from "@/components/ErrorNotice";
 import { mobileInteractionStyles } from "@/components/mobileInteractionStyles";
 import { useScreenEdgePadding } from "@/components/screenEdgeInsets";
 import { goBackGuarded } from "@/utils/backGuard";
@@ -544,6 +545,14 @@ export function RemoteDesktopSession({
   const [controlPage, setControlPage] = useState<
     "controls" | "display" | "security"
   >("controls");
+  const unlockNotice =
+    lease &&
+    security.notice &&
+    !showConnectionStatus &&
+    !showExitLockStatus &&
+    !(operations && controlPage === "security")
+      ? security.notice
+      : null;
   const [toolbarSize, setToolbarSize] = useState({ width: 0, height: 0 });
   const [videoSettings, setVideoSettings, videoPreferencesLoaded] =
     useVideoSettingsPreference();
@@ -4025,7 +4034,8 @@ export function RemoteDesktopSession({
             )}
           {(showConnectionStatus ||
             showExitLockStatus ||
-            (!lease && error)) && (
+            (!lease && error) ||
+            unlockNotice) && (
             <View
               pointerEvents="box-none"
               style={[
@@ -4064,7 +4074,17 @@ export function RemoteDesktopSession({
                   )}
                 </View>
               )}
-              {showConnectionStatus || showExitLockStatus ? (
+              {unlockNotice ? (
+                <ErrorNotice
+                  message={unlockNotice}
+                  testID="remoteDesktop.autoUnlockNotice"
+                  accessibilityRole="alert"
+                  accessibilityLiveRegion="polite"
+                  onDismiss={security.clearNotice}
+                  dismissLabel={t("remoteDesktop.close")}
+                  dismissTestID="remoteDesktop.dismissUnlockNotice"
+                />
+              ) : showConnectionStatus || showExitLockStatus ? (
                 <View
                   style={[
                     styles.connectionBadge,
@@ -4293,6 +4313,7 @@ export function RemoteDesktopSession({
                         : {
                             ...security,
                             ...safety,
+                            notice: security.notice,
                             hostPlatform: caps?.platform,
                             lockOnExit,
                             lockOnExitAvailable:

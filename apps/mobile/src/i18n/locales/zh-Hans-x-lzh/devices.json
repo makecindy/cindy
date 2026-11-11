@@ -621,8 +621,6 @@
       "minutes": "{{n}} 分",
       "hoursMinutes": "{{h}} 时 {{m}} 分"
     },
-    "retrying": "尚未起始，方再试…",
-    "stopTask": "止差事",
     "actionFailed": "暂不能读取或完成所为",
     "messages": "往来之讯",
     "readOnly": "仅供观览",
@@ -760,8 +758,6 @@
     "artifactsEmpty": "尚无成果。令同僚挥毫一二，自见文章。",
     "openSourceTask": "启来源差事",
     "modelFollowsDefault": "从今之预设模型链",
-    "taskModel": "差事模型",
-    "taskInheritsPrimary": "承主模型",
     "modelOverride": "用此同僚自订之模型链",
     "modelsUnavailable": "暂无可用之模型，请于机上察此同僚之模型设置，再刷新。",
     "artifactsRecovery": "请自讯卡中启卷，或于 {{deviceName}} 上览之。",
@@ -867,7 +863,6 @@
   },
   "glance": {
     "open": "{{name}}之近况",
-    "dueUnseen": "有待办届期",
     "computers": "机",
     "runningHere": "方行于此机",
     "online": "在线",
@@ -875,37 +870,16 @@
     "current": "今",
     "offlineCount_one": "脱机 {{count}} 台",
     "offlineCount_other": "脱机 {{count}} 台",
-    "todos": "待理",
     "showMore": "示余者",
     "showLess": "收",
     "doneCount_one": "已毕 {{count}}",
     "doneCount_other": "已毕 {{count}}",
-    "delete": "删",
-    "deleted": "已删，同事此后不复记",
-    "undo": "复",
-    "undoFailed": "不能复之，请再试",
-    "deleteFailed": "不能删之，请再试",
-    "check": "为吾查之",
     "checkMeta": "于已连之邮件与讯中寻新待办",
-    "checkPrompt": "请为吾查已连之信箱、消息等来源中，有无须吾处理之新事；若有，记为待办。",
-    "dailyCheck": "每日为吾查一次",
-    "dailyCheckMeta": "工作日 9:00，无新待办则不扰",
     "recentTasks": "近日差事",
     "unread": "未读之果",
-    "stopDailyCheck": "止每日之查",
     "openFailed": "链接不能打开",
-    "dailyCheckFailed": "未能存之，请再试",
-    "loadFailed": "待办不能读取",
     "outputs": "所出",
-    "outputMeta": "{{time}} · {{task}}",
-    "source": {
-      "conversation": "君所嘱",
-      "mail": "自邮件",
-      "feishu": "自飞书",
-      "github": "自 GitHub",
-      "community": "自社区",
-      "task": "自差事"
-    }
+    "outputMeta": "{{time}} · {{task}}"
   },
   "cloudCompanion": {
     "homeOffline": "主力之机「{{device}}」脱机",
@@ -928,6 +902,8 @@
     "moveTo": "移至「{{device}}」",
     "moveTitle": "令 {{name}} 移至「{{device}}」行事乎？",
     "moveDescription": "自今以后，{{name}} 行于「{{device}}」，言谈之录一并携往。工作目录、连接与此机之卷，仍留原机。",
+    "olderTarget": "旧版 Cindy",
+    "olderTargetNote": "「{{device}}」之 Cindy 为旧版，{{name}} 于彼依旧法而行：对话记录照常同步，项目规约与自动之事于彼不行。",
     "moveAction": "移至「{{device}}」",
     "moving": "方将 {{name}} 移至「{{device}}」…",
     "busyTitle": "{{name}} 尚在作覆",
@@ -996,5 +972,8 @@
       "disk-full": "纳之未成：磁盘空间不足",
       "native-unloadable": "纳之未成：原始记录无法加载"
     }
+  },
+  "liveActivity": {
+    "waitingForUpdate": "待更新"
   }
 }

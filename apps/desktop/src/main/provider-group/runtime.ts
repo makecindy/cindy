@@ -27,7 +27,7 @@ import { isMobilePlatform } from '../device-link/controllerPlatform.js';
 import { deviceName } from '../device-link/deviceName.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { readDeviceProviderCatalog, readDeviceProviderViews } from '../remote-agent/controller/deviceCatalog.js';
-import { listProviderGroupBindings } from './bindings.js';
+import { listProviderGroupBindings } from './bindings.desktop.js';
 import { readProviderGroupCooling, writeProviderGroupCooling } from './coolingStore.js';
 import { createProviderGroupDirectory, type ProviderGroupCatalogRead, type ProviderGroupDirectory } from './directory.js';
 import { createProviderGroupExternalLoad, type ProviderGroupExternalLoad } from './externalLoad.js';
@@ -36,7 +36,7 @@ import { captureProviderManagementScope } from './managementScope.js';
 import { createProviderGroupRouter, type ProviderGroupRouter } from './router.js';
 import type { ProviderGroupRemoteGroups } from './service.js';
 import { readProviderGroup } from './store.js';
-import { readSubscriptionPoolUsage } from '../subscription-accounts/runtime.js';
+import { readSubscriptionPoolUsage, readSubscriptionPoolModelAvailability } from '../subscription-accounts/runtime.js';
 import { isSubscriptionProvider } from '../../shared/subscriptionAccounts.js';
 import { createGroupContinuityClient } from './continuityClient.js';
 import { createProviderGroupUsageReader, providerGroupUsageSnapshot, providerGroupCodexUsageSnapshot, providerGroupCodexUsageFromReads, type ProviderGroupCodexUsageSnapshot } from './usage.js';
@@ -179,6 +179,20 @@ function runtimeForActiveOwner(): OwnerRuntime {
   const applicationLoad = createLocalAgentLoadRegistry();
   const router = createProviderGroupRouter({
     directory,
+    readPoolModelAvailability: async (member, model, options) => {
+      if (activeOwnerScopeKey() !== owner || !isSubscriptionProvider(member.providerId)) return null;
+      if (member.kind === 'local') return readSubscriptionPoolModelAvailability(member.providerId, model, options);
+      if (member.kind !== 'device' || !member.agentDeviceId) return null;
+      const result = await remoteBackgroundInvoke(member.agentDeviceId, 'maker:subscription-pool:quota', [member.providerId, model], {
+        preSend: () => { if (activeOwnerScopeKey() !== owner) throw new Error('provider group account changed'); },
+      });
+      if (activeOwnerScopeKey() !== owner || !result.ok) return null;
+      const raw = result.result as { providerId?: unknown; model?: unknown; available?: unknown } | null;
+      // Old peers ignore the model argument; their aggregate quota cannot prove
+      // that this model has an alternative account. Never inspect guest pools.
+      return raw?.providerId === member.providerId && raw.model === model && typeof raw.available === 'boolean'
+        ? raw.available : null;
+    },
     readCaps: async (member) => {
       if (activeOwnerScopeKey() !== owner) throw new Error('The account changed');
       const reply = await remoteBackgroundInvoke(member.agentDeviceId!, REMOTE_AGENT_CHANNEL, [{ op: 'caps' }]);
@@ -429,6 +443,7 @@ export async function readProviderGroupOfSession(sessionId: string): Promise<Pro
 export interface ProviderGroupSessionRebalance {
   suggest(sessionId: string): Promise<ProviderGroupRebalanceSuggestion>;
   decide(sessionId: string, memberKey: string, remember: boolean, clientId?: string): Promise<boolean>;
+  preference(sessionId: string, enabled: boolean): Promise<boolean>;
 }
 
 let sessionRebalance: ProviderGroupSessionRebalance | null = null;
@@ -455,6 +470,12 @@ export async function recordProviderGroupRebalanceDecision(sessionId: string, me
   } catch {
     return false;
   }
+}
+
+/** 任务偏好由所属电脑保存；失败不伪报成功。 */
+export async function setProviderGroupRebalancePreference(sessionId: string, enabled: boolean): Promise<boolean> {
+  if (!sessionRebalance) return false;
+  return sessionRebalance.preference(sessionId, enabled);
 }
 
 /** register 装配会话表后注入：这台电脑上每个供应商正在运行一轮的任务数(localLoad.ts)。 */

@@ -22,11 +22,11 @@ import type {
   ProviderGroupView,
   ProviderGroupUsageLimit,
 } from '../../shared/providerGroup.js';
-import type { ProviderGroupBinding } from './bindings.js';
+import type { ProviderGroupBinding } from './bindings.desktop.js';
 import type { ProviderGroupDirectory, ResolvedProviderGroupMember } from './directory.js';
 import { pickProviderGroupMember, type SchedulableMember } from './scheduler.js';
 import { createGuestSupportReader } from './sharedStatus.js';
-import { providerGroupMemberUsageState, providerGroupRebalanceTarget } from './usage.js';
+import { providerGroupMemberUsageState, providerGroupRebalanceTarget, PROVIDER_GROUP_USAGE_READ_TIMEOUT_MS } from './usage.js';
 import { coolingScope, currentCooling, PROVIDER_GROUP_COOLING_SCOPE_CAP, type ProviderGroupPersistedCooling } from './cooling.js';
 export { PROVIDER_GROUP_FAILURE_COOLDOWN_MS, type ProviderGroupPersistedCooling } from './cooling.js';
 
@@ -47,6 +47,8 @@ export interface ProviderGroupRouterDeps {
   directory: ProviderGroupDirectory;
   /** 仅详情页按需读取；分配与普通状态查询不探测远端能力。 */
   readCaps?(member: ProviderGroupMember): Promise<RemoteAgentCaps>;
+  /** Owner-only, model-specific confirmation from a configured multi-account pool. */
+  readPoolModelAvailability?(member: ProviderGroupMember, model: string, options: { remote: boolean }): Promise<boolean | null>;
   readGroup(providerId: string): ProviderGroupConfig | null;
   listBindings(): Record<string, ProviderGroupBinding>;
   /** 这个任务现在是否正在运行一轮。 */
@@ -164,6 +166,40 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
   const tried = new Map<string, { at: number; keys: Set<string> }>();
   /** 本机任务刚选中、还没开始运行一轮的临时占用：任务 id → 那台。 */
   const provisional = new Map<string, { providerId: string; memberKey: string; until: number }>();
+  const poolReads = new Map<string, { cooling: Record<string, number>; result: Promise<boolean | null> }>();
+
+  async function recoverPoolCooling(providerId: string, member: ProviderGroupMember, model: string, remote: boolean): Promise<void> {
+    if (!deps.readPoolModelAvailability || member.kind === 'share') return;
+    const key = coolKey(providerId, member.key);
+    const remembered = cooling.get(key);
+    const scope = coolingScope(model);
+    if (!scope || !remembered || !(remembered[scope] > deps.now())) return;
+    // Local-only account grants cannot serve as proof for a remote route.
+    const readKey = `${key}\u0000${model}\u0000${remote}`;
+    let read = poolReads.get(readKey);
+    if (!read) {
+      read = { cooling: remembered, result: deps.readPoolModelAvailability(member, model, { remote }).catch(() => null) };
+      poolReads.set(readKey, read);
+      void read.result.finally(() => { if (poolReads.get(readKey) === read) poolReads.delete(readKey); });
+    }
+    // Keep one request in flight, but never reuse its evidence for a later failure.
+    if (read.cooling !== remembered) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const available = await Promise.race([read.result, new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), PROVIDER_GROUP_USAGE_READ_TIMEOUT_MS);
+      })]);
+      // A newer failure wins over a slow read. Clear only this model's quota
+      // cooldown; authentication/overload and other models retain their scopes.
+      if (available !== true || cooling.get(key) !== remembered) return;
+      const next = { ...remembered };
+      delete next[scope];
+      cooling.set(key, next);
+      persistCooling();
+    } finally {
+      clearTimeout(timer);
+    }
+  }
 
   function currentTried(sessionId: string): Set<string> | null {
     const entry = tried.get(sessionId);
@@ -249,6 +285,10 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
           && !input.exclude?.has(r.member.key),
         ...(input.fresh ? { fresh: true } : {}),
       });
+      await Promise.all(resolved.filter((r) => !r.pending && !r.providerContinuity?.stale
+        && offersModel(r, input.agentKind, input.model) && !paused(r) && !input.exclude?.has(r.member.key))
+        .map((r) => recoverPoolCooling(input.providerId, r.member, input.model,
+          r.member.kind !== 'local' || input.localTask !== true)));
       const now = deps.now();
       const schedulable: SchedulableMember[] = resolved.map((r) => {
         const quota = providerGroupMemberUsageState(r, input.model, now, input.agentKind);
@@ -381,6 +421,8 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
             weight: r.member.weight,
             paused: r.member.paused,
             ...(until !== null ? { coolingUntil: until } : {}),
+            // 展示确认的配额原因，不把登录/繁忙等普通冷却说成配额耗尽；不改分配与持久冷却。
+            ...(state === 'cooling' && quota.limited ? { usageLimit: { resetAtMs: quota.resetAtMs } } : {}),
             // 与选电脑排序用的同一个窗口，同账号电脑据此提议任务进行中换号(provider-groups.md §6.2)；分享来的电脑本来就不读配额。
             ...(quota.quota ? { quota: quota.quota } : {}),
             ...(quota.quota && quota.fiveHourTight ? { fiveHourTight: true as const } : {}),

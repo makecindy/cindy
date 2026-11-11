@@ -11,7 +11,7 @@ import { PROVIDER_GROUP_USAGE_READ_TIMEOUT_MS, providerGroupMemberUsageState } f
 import { createGroupContinuityExecutor } from '../continuityExecutor.js';
 import type { GroupContinuityGrant } from '../../../shared/providerGroupContinuity.js';
 import { createProviderGroupService, type ProviderGroupServiceDeps } from '../service.js';
-import type { ProviderGroupBinding } from '../bindings.js';
+import type { ProviderGroupBinding } from '../bindings.desktop.js';
 
 let owner = 'owner-a';
 const io = vi.hoisted(() => ({
@@ -42,7 +42,7 @@ vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
 }));
 vi.mock('../../remote-agent/controller/deviceCatalog.js', () => ({ readDeviceProviderViews: io.catalog,
   readDeviceProviderCatalog: io.catalogState }));
-vi.mock('../bindings.js', () => ({ listProviderGroupBindings: () => ({}) }));
+vi.mock('../bindings.desktop.js', () => ({ listProviderGroupBindings: () => ({}) }));
 vi.mock('../store.js', () => ({ readProviderGroup: io.group }));
 vi.mock('../coolingStore.js', () => ({ readProviderGroupCooling: () => ({}), writeProviderGroupCooling: vi.fn() }));
 // Heavy leaves used only by service's failover/auto-resume paths, which these runtime
@@ -666,6 +666,46 @@ describe('provider group runtime quota account selection', () => {
     const read = () => getProviderGroupDirectory().resolveMembers(localId, config);
     return { read, config, localId };
   }
+
+  // #9833, unit: run the owner runtime → directory → router with a remote
+  // account-pool reply. Legacy aggregate quota cannot prove model availability.
+  it.each(['healthy', 'exhausted', 'old-peer', 'wrong-model', 'owner-change'] as const)(
+    'recovers remote model cooling only from a current matching pool reply (%s)', async (reply) => {
+      const h = harness('anthropic');
+      const model = 'claude-sonnet-5-5';
+      h.config.members = h.config.members.slice(1);
+      io.group.mockReturnValue(h.config);
+      io.catalog.mockResolvedValue([{ id: 'anthropic', connected: true, agents: ['claude-code'],
+        auth: { method: 'oauth', native: 'claude' },
+        models: { 'claude-code': [{ id: model, name: model, efforts: [], defaultEffort: null }] },
+        routing: { 'claude-code': {} },
+      } as unknown as ProviderView]);
+      let preSend!: () => void;
+      io.invoke.mockImplementation(async (_device, channel, args, options) => {
+        expect(channel).toBe('maker:subscription-pool:quota');
+        if (args.length === 1 || reply === 'old-peer')
+          return { ok: true, result: { providerId: 'anthropic', pooled: true, usage: { claudeUsage: usage() } } };
+        preSend = options.preSend;
+        preSend();
+        if (reply === 'owner-change') owner = 'changed-during-model-read';
+        return { ok: true, result: { providerId: 'anthropic', model: reply === 'wrong-model' ? 'opus' : model,
+          available: reply !== 'exhausted' } };
+      });
+      const router = getProviderGroupOwnerScope().router;
+      const member = h.config.members[0];
+      const until = Date.now() + 1_800_000;
+      router.markCooling(h.localId, member.key, until, model);
+      const pick = await router.pick({ providerId: h.localId, model, agentKind: 'claude-code' });
+      expect(pick.kind).toBe(reply === 'healthy' ? 'member' : 'unavailable');
+      expect(router.coolingUntil(h.localId, member.key, model)).toBe(reply === 'healthy' ? null : until);
+      expect(io.invoke.mock.calls.filter(([, , args]) => args.length === 2)).toHaveLength(1);
+      if (reply === 'owner-change') expect(() => preSend()).toThrow('provider group account changed');
+      if (reply === 'healthy') {
+        expect((await router.pick({ providerId: h.localId, model, agentKind: 'claude-code' })).kind).toBe('member');
+        expect(io.invoke.mock.calls.filter(([, , args]) => args.length === 2)).toHaveLength(1);
+      }
+    },
+  );
 
   // Unit: a new controller must keep the existing provider usable when an old
   // host explicitly rejects the new pool channel; named-account echo tests do

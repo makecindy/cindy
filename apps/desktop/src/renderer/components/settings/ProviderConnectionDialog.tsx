@@ -3,7 +3,7 @@ import { ProviderNameSearch } from './ProviderNameSearch';
 import { providerSearchChoices, type ProviderSearchTarget } from './providerSearch';
 import { useDialogExit } from '@/hooks/useDialogExit';
 import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
-import { providerEndpointBindings, canonicalProviderEndpoint, BUNDLED_CATALOG, mergeModelMetadata } from '@cindy/model-providers';
+import { providerEndpointBindings, canonicalProviderEndpoint, BUNDLED_CATALOG, mergeModelMetadata, type ProviderVideoApi } from '@cindy/model-providers';
 import { matchOfficialProviders, bindDetectedProvider, isAgentSelectableModel, isLoopbackProviderUrl } from '@cindy/model-providers';
 import type { ProviderConnectionTestResult } from '../../../shared/providerConnectionTest';
 import type { DetectedProviderDraft, DetectionCatalog } from '../../../shared/providerDetection';
@@ -44,6 +44,7 @@ import { SegmentedControl } from '@/components/ui/segmented-control';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Select } from '@/components/ui/select';
 import { FormField } from '@/components/ui/form-field';
 import { Tip } from '@/components/ui/tooltip';
@@ -233,7 +234,7 @@ interface RuntimeFields extends RuntimeFillDraft {
   supportsImageGeneration: boolean;
   /** Standalone Images API, independent of the Codex Responses hosted tool. */
   imageApi?: 'openai-images';
-  videoApi?: 'xai-videos';
+  videoApi?: ProviderVideoApi;
 }
 
 function followsDefaultConnection(agent: DialogAgentKind, value: RuntimeFields, source: RuntimeFields): boolean {
@@ -394,26 +395,26 @@ function PresetDropdown({
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>
-        <button
+        {/* Shared Select trigger geometry (36px pill, full width). The panel stays a Popover:
+            the dialog's child-layer Escape/scrim contract and IME guard own its dismissal. */}
+        <Button data-settings-search-action="Open the provider preset list"
+          pressFeedback={false}
+          variant="secondary"
+          size="lg"
           type="button"
           aria-label={label}
-          className={cn(
-            'flex h-[40px] w-full items-center justify-between rounded-[10px] border pl-[12px] pr-3 text-14 outline-none transition-colors',
-            'border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] focus:border-[var(--settings-input-border-focus)]',
-          )}
+          className="w-full min-w-0 justify-between gap-2 px-3 font-normal"
         >
           <span
             className={cn(
-              'truncate text-left',
-              selected
-                ? 'text-[var(--settings-input-text)]'
-                : 'text-[var(--settings-input-placeholder)]',
+              'min-w-0 truncate text-left',
+              !selected && 'text-[var(--settings-input-placeholder)]',
             )}
           >
             {selected ? presetDisplayName(selected, locale) : placeholder}
           </span>
-          <ChevronDown size={16} className="shrink-0 text-[var(--settings-eye-icon)]" />
-        </button>
+          <ChevronDown size={14} className="shrink-0" aria-hidden />
+        </Button>
       </PopoverTrigger>
       <PopoverContent
         side="bottom"
@@ -2685,14 +2686,18 @@ export function ProviderConnectionDialog({
                 label={t('settings.providers.custom.fields.baseUrl')}
                 error={errorFor(`${activeTab}:baseUrl`)}
                 labelAction={!simpleAdding && !templateBound && (
-                  <button
+                  <Button data-settings-search-action="Open runtime fill for this connection draft"
                     ref={runtimeFillTriggerRef}
+                    variant="secondary"
+                    size="xs"
+                    tone="quiet"
+                    compact
                     type="button"
                     onClick={openRuntimeFill}
-                    className="shrink-0 rounded-full px-1 py-0.5 text-11 font-medium text-[var(--text-tertiary)] transition-colors hover:text-[var(--settings-section-title)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                    className="text-12"
                   >
                     {t('settings.providers.custom.runtimeFill.action')}
-                  </button>
+                  </Button>
                 )}
                 reserveFeedback={!simpleAdding}
               >
@@ -3050,7 +3055,11 @@ export function ProviderConnectionDialog({
                       </Tip>
                     </div>
                   ))}
-                  <button
+                  <Button data-settings-search-action="Add a custom request header row to this runtime draft"
+                    variant="secondary"
+                    size={simpleAdding ? 'md' : 'sm'}
+                    tone={simpleAdding ? 'default' : 'quiet'}
+                    compact={!simpleAdding}
                     type="button"
                     id={fieldId(`${activeTab}:add-header`)}
                     onClick={() => {
@@ -3059,18 +3068,17 @@ export function ProviderConnectionDialog({
                       patch(activeTab, (x) => ({ ...x, headers: [...x.headers, row] }));
                       requestAnimationFrame(() => document.getElementById(nextId)?.focus());
                     }}
-                    className={cn('flex items-center gap-1.5 self-start text-13 font-medium text-[var(--settings-section-title)]', simpleAdding ? 'h-8 rounded-full border border-[var(--border-default)] px-4' : 'py-0.5')}
+                    className="self-start"
                   >
-                    <Plus size={14} className="text-[var(--settings-section-desc)]" />
+                    <Plus size={14} aria-hidden />
                     {t('settings.providers.custom.fields.addHeader')}
-                  </button>
+                  </Button>
                 </div>
 
                 {authMode !== 'oauth' && (!simpleAdding || f.models.some(model => model.mode === 'image_generation')) && (
                   <div className="flex flex-col gap-1.5 border-t border-[var(--border-default)] pt-3">
                     <label className="flex cursor-pointer items-center gap-2 text-13 text-[var(--settings-section-title)]">
-                      <input
-                        type="checkbox"
+                      <Checkbox data-settings-search-action="Make this runtime the OpenAI Images connection of the provider draft"
                         id={fieldId(`${activeTab}:image-api`)}
                         aria-describedby={fieldId(`${activeTab}:image-api-hint`)}
                         checked={f.imageApi === 'openai-images'}
@@ -3086,7 +3094,6 @@ export function ProviderConnectionDialog({
                             }]),
                           ) as Record<DialogAgentKind, RuntimeFields>);
                         }}
-                        className="h-4 w-4 shrink-0 cursor-pointer accent-[var(--settings-menu-text-selected)]"
                       />
                       {t('settings.providers.custom.fields.openaiImages')}
                     </label>
@@ -3101,34 +3108,41 @@ export function ProviderConnectionDialog({
 
                 {!simpleAdding && authMode !== 'oauth' && (
                   <div className="flex flex-col gap-1.5 border-t border-[var(--border-default)] pt-3">
-                    <label className="flex cursor-pointer items-center gap-2 text-13 text-[var(--settings-section-title)]">
-                      <input
-                        type="checkbox"
-                        id={fieldId(`${activeTab}:video-api`)}
-                        aria-describedby={fieldId(`${activeTab}:video-api-hint`)}
-                        checked={f.videoApi === 'xai-videos'}
-                        onChange={(event) => {
-                          const enabled = event.currentTarget.checked;
-                          // One explicit media owner per provider; other chat routes and keys stay intact.
-                          setRtSynced((prev) => Object.fromEntries(
-                            Object.entries(prev).map(([agent, runtime]) => [agent, {
-                              ...runtime,
-                              videoApi: agent === activeTab && enabled
-                                ? 'xai-videos'
-                                : enabled || agent === activeTab ? undefined : runtime.videoApi,
-                            }]),
-                          ) as Record<DialogAgentKind, RuntimeFields>);
-                        }}
-                        className="h-4 w-4 shrink-0 cursor-pointer accent-[var(--settings-menu-text-selected)]"
-                      />
-                      {t('settings.providers.custom.fields.xaiVideos')}
-                    </label>
-                    <p
-                      id={fieldId(`${activeTab}:video-api-hint`)}
-                      className="text-12 leading-5 text-[var(--settings-section-desc)]"
-                    >
-                      {t('settings.providers.custom.fields.xaiVideosHint')}
-                    </p>
+                    {([
+                      ['xai-videos', 'video-api', t('settings.providers.custom.fields.xaiVideos'), t('settings.providers.custom.fields.xaiVideosHint')],
+                      ['minimax-videos', 'minimax-video-api', t('settings.providers.custom.fields.minimaxVideos'), t('settings.providers.custom.fields.minimaxVideosHint')],
+                      ['openai-videos', 'openai-video-api', t('settings.providers.custom.fields.openaiVideos'), t('settings.providers.custom.fields.openaiVideosHint')],
+                    ] as const).map(([api, idSuffix, label, hint]) => (
+                      <div key={api} className="flex flex-col gap-1.5">
+                        <label className="flex cursor-pointer items-center gap-2 text-13 text-[var(--settings-section-title)]">
+                          <Checkbox
+                            data-settings-search-action="Choose this connection's video API inside the provider dialog; search entry providers.videoApi opens the providers panel"
+                            id={fieldId(`${activeTab}:${idSuffix}`)}
+                            aria-describedby={fieldId(`${activeTab}:${idSuffix}-hint`)}
+                            checked={f.videoApi === api}
+                            onChange={(event) => {
+                              const enabled = event.currentTarget.checked;
+                              // One explicit media owner and one video API per provider; other chat routes and keys stay intact.
+                              setRtSynced((prev) => Object.fromEntries(
+                                Object.entries(prev).map(([agent, runtime]) => [agent, {
+                                  ...runtime,
+                                  videoApi: agent === activeTab && enabled
+                                    ? api
+                                    : enabled || agent === activeTab ? undefined : runtime.videoApi,
+                                }]),
+                              ) as Record<DialogAgentKind, RuntimeFields>);
+                            }}
+                          />
+                          {label}
+                        </label>
+                        <p
+                          id={fieldId(`${activeTab}:${idSuffix}-hint`)}
+                          className="text-12 leading-5 text-[var(--settings-section-desc)]"
+                        >
+                          {hint}
+                        </p>
+                      </div>
+                    ))}
                   </div>
                 )}
 
@@ -3164,8 +3178,7 @@ export function ProviderConnectionDialog({
                         className="flex min-h-11 items-center justify-between gap-3 rounded-lg bg-[var(--surface-elevated)] px-3 py-2.5"
                       >
                         <label className="flex min-w-0 cursor-pointer items-center gap-2 text-[var(--settings-section-desc)]">
-                          <input
-                            type="checkbox"
+                          <Checkbox data-settings-search-action="Declare Codex image-generation support in the provider draft"
                             checked={f.supportsImageGeneration}
                             onChange={(event) => {
                               const supportsImageGeneration = event.currentTarget.checked;
@@ -3174,7 +3187,6 @@ export function ProviderConnectionDialog({
                                 supportsImageGeneration,
                               }));
                             }}
-                            className="h-4 w-4 shrink-0 cursor-pointer accent-[var(--settings-menu-text-selected)]"
                           />
                           <span className="text-12 font-medium leading-5 text-[var(--settings-section-sublabel)]">
                             {t('settings.providers.custom.fields.runtimeSupportsImageGeneration')}
@@ -3595,20 +3607,12 @@ export function ModelPickerOverlay({
               />
             )}
             <div className="flex items-center gap-3">
-              <button
-                type="button"
-                onClick={() => setAllFiltered(true)}
-                className="text-12 font-medium text-[var(--settings-section-title)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-              >
+              <Button data-settings-search-action="Select every model in the filtered fetch list" variant="secondary" size="xs" tone="quiet" compact type="button" onClick={() => setAllFiltered(true)}>
                 {t('settings.providers.custom.fetch.selectAll')}
-              </button>
-              <button
-                type="button"
-                onClick={() => setAllFiltered(false)}
-                className="text-12 font-medium text-[var(--text-secondary)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-              >
+              </Button>
+              <Button data-settings-search-action="Clear every model in the filtered fetch list" variant="secondary" size="xs" tone="quiet" compact type="button" onClick={() => setAllFiltered(false)}>
                 {t('settings.providers.custom.fetch.clearAll')}
-              </button>
+              </Button>
             </div>
           </div>
           {/* 列表 */}

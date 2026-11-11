@@ -9,7 +9,8 @@ import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
 import { mobileDurableOutbox } from '@/session/mobileDurableOutbox';
 import { enqueueChatMessage, enqueueChatShare, settleChatOutbox } from './chatOutbox';
-import { getActiveMobileSessionRealm, getMobileEndpointForRealm, loadMobileEndpointsForRealm } from '@/config/env';
+import { BUILD_AUTH_REGION, getActiveMobileSessionRealm, getMobileEndpointForRealm, loadMobileEndpointsForRealm } from '@/config/env';
+import { createChatInviteShares } from './chatInviteShare';
 import { cacheChatRoster, forgetRemoteResource, hideCachedChatRooms, markRemoteResourceRead, peekCachedChatRoster, readCachedChatRoster } from '@/device-link/remoteResourceCache';
 import { useRemoteSyncCoordinator } from '@/device-link/remoteSyncTask';
 import type { BotGroupChatState } from '@/session/useBotGroupChat';
@@ -78,7 +79,10 @@ export function useChatClient() {
       const { randomUUID } = await import('expo-crypto');
       return createChatHistory({ api: request, current, newGeneration: randomUUID,
         store: createMobileChatHistoryStore(auth.user!.id, realm, url, human, current) });
-    });
+    }, createChatInviteShares({
+      baseUrl: () => getMobileEndpointForRealm(BUILD_AUTH_REGION, 'shareBaseUrl'), region: BUILD_AUTH_REGION, realm, current,
+      apiFetch: (path, options) => deps.current.apiFetch(path, options),
+    }));
     const upload = createChatServerUpload({ request, current,
       operationId: () => `${Date.now()}-${Math.random().toString(36).slice(2)}`,
       put: async (url, uri, type, signal) => {
@@ -251,6 +255,8 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
   const { t } = useTranslation();
   const identity = `${api.owner}:${groupId}:${threadRootId ?? 'main'}`;
   const active = useRef(identity); active.current = identity;
+  const stopOwner = useMemo(() => ({}), [identity, enabled, focused]);
+  const stopOwnerRef = useRef(stopOwner); stopOwnerRef.current = stopOwner;
   const ledger = useSyncExternalStore(mobileDurableOutbox.subscribe, mobileDurableOutbox.getSnapshot);
   const pendingAccount = enabled && api.current() ? getMobileAuthOwner().accountKey : null;
   const pending = useMemo(() => ledger.filter(row => pendingAccount !== null && row.accountId === pendingAccount
@@ -447,8 +453,12 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
       }
     }
     if (action === 'stop') {
+      if (!enabled || !focused || !valid() || threadRootId) throw new Error('OWNER_CHANGED');
+      if (input?.scope !== undefined && input.scope !== 'all') throw new Error('INVALID_PARAMS');
+      const generation = accessGeneration.current;
+      const current = () => valid() && stopOwnerRef.current === stopOwner && accessGeneration.current === generation;
       const operationId = (await import('expo-crypto')).randomUUID();
-      try { await api.client.stop(groupId, operationId); } finally { if (valid()) reload(); }
+      try { await api.client.stop(groupId, operationId, input?.scope as 'all' | undefined, current); } finally { if (valid()) reload(); }
       return { effects: [] };
     }
     if (action === 'dissolve' || action === 'leave' || action === 'hide') {

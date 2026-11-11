@@ -64,7 +64,8 @@
       "discord": "Discord",
       "wechat": "WeChat",
       "wecom": "WeCom",
-      "dingtalk": "DingTalk"
+      "dingtalk": "DingTalk",
+      "imessage": "iMessage"
     },
     "modelMismatch": "今回は選択した {{selected}} ではなく {{actual}} が応答しました（サーバー側の一時的なダウングレード）",
     "copyStateCopying": "コピー中",

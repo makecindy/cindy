@@ -46,6 +46,14 @@ export default {
     const messageId = `incoming-${11 + ui.data.history}`;
     const target = page.locator(`[data-bot-group-message-id="${messageId}"]`);
     await target.waitFor();
+    // Finish the tail read before entering history: the rapid fixture burst can
+    // otherwise leave a throttled read pending, so new-message navigation correctly hides catch-up.
+    await page.bringToFront();
+    await timeline.evaluate(element => {
+      element.scrollTop = element.scrollHeight;
+      element.dispatchEvent(new Event('scroll', { bubbles: true }));
+      window.dispatchEvent(new Event('focus'));
+    });
     if (ui.data.history) await timeline.evaluate(element => { element.scrollTop = 0; });
     await page.getByTestId('group-attention-hint').click();
     await page.locator(`[data-mention-message="${messageId}"]`).click();

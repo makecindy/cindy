@@ -43,6 +43,8 @@ const mocks = vi.hoisted(() => ({
   resetSnapshot: null as MobileCodexRateLimitsResult | null,
   consumeReset: vi.fn(),
   fetchProviderAccountUsage: vi.fn(),
+  codexQuotaReadFailed: false,
+  codexQuotaRefreshing: false,
 }));
 
 vi.mock('react-i18next', () => ({
@@ -59,6 +61,9 @@ vi.mock('react-i18next', () => ({
         'todaySpend.openClaudeUsage': '打开 Claude 用量页面',
         'todaySpend.openCodexUsage': '打开 Codex 用量页面',
         'todaySpend.claude.weeklyLabel': '周限',
+        'todaySpend.claude.totalWeeklyLabel': '总周',
+        'todaySpend.claude.temporarilyLimited': '暂时受限',
+        'quotaCard.limitRejected': '已触发套餐限额',
         'todaySpend.claude.modelWeeklyLabel': '{{model}} 周限',
         'todaySpend.claude.windowSegment': '{{label}} 剩余 {{remaining}}',
         'todaySpend.codex.weekWindow': '周限',
@@ -152,6 +157,8 @@ vi.mock('@/hooks/useCodexRateLimits', () => ({
   useCodexRateLimits: () => ({
     snapshot: mocks.resetSnapshot,
     refresh: mocks.refreshCodexRateLimits,
+    failed: mocks.codexQuotaReadFailed,
+    refreshing: mocks.codexQuotaRefreshing,
   }),
 }));
 // device-link 远程会话读被控端镜像 hook(#3789);本文件不铺隧道 API,镜像一律返回 null →
@@ -266,6 +273,8 @@ beforeEach(() => {
   mocks.codexSnapshot = null;
   mocks.resetSnapshot = null;
   mocks.consumeReset.mockReset();
+  mocks.codexQuotaReadFailed = false;
+  mocks.codexQuotaRefreshing = false;
   mocks.xaiSnapshot = null;
   mocks.gatewaySnapshot = null;
   mocks.creditSnapshot = null;
@@ -435,6 +444,33 @@ describe('TodaySpendChip credit snapshot time', () => {
 });
 
 describe('TodaySpendChip Claude subscription popover', () => {
+  // F13 unit: exercise the task entry, where quota data and read details come
+  // from separate hooks. A detail read failure must keep the available meter.
+  it('keeps task quota visible and connects its failed-read retry action', () => {
+    mocks.codexAuthInjection = 'oauth-bearer';
+    mocks.codexQuotaReadFailed = true;
+    mocks.codexSnapshot = {
+      source: 'codex-app-server',
+      primary: { usedPercent: 25, windowMinutes: 300 },
+    };
+    const props = { vendorKey: 'codex' as const, providerId: 'openai', sessionId: 'f13-codex' };
+    const view = render(<TodaySpendChip {...props} />);
+    fireEvent.mouseEnter(screen.getByRole('button', { name: '用量明细' }));
+    act(() => vi.advanceTimersByTime(300));
+    const card = screen.getByTestId('quota-hover-card');
+    expect(within(card).getByRole('status').textContent).toContain('quotaCard.codexRefreshFailed');
+    expect(within(card).getByRole('progressbar').getAttribute('aria-valuenow')).toBe('75');
+    mocks.refreshCodexRateLimits.mockClear();
+    const retryButton = within(card).getByRole('button', { name: 'quotaCard.retryQuota' });
+    fireEvent.focus(retryButton);
+    expect(mocks.refreshCodexRateLimits).not.toHaveBeenCalled();
+    fireEvent.click(retryButton);
+    expect(mocks.refreshCodexRateLimits).toHaveBeenCalledTimes(1);
+    mocks.codexQuotaReadFailed = false;
+    view.rerender(<TodaySpendChip {...props} />);
+    expect(within(card).queryByRole('status')).toBeNull();
+  });
+
   it.each(['accountId', 'source', 'limitId'] as const)(
     'does not celebrate a Codex %s switch as a reset',
     (field) => {
@@ -595,7 +631,7 @@ describe('TodaySpendChip Claude subscription popover', () => {
     expect(trigger.textContent).toContain('本任务价值 $7.82');
   });
 
-  it('服务端拒绝时整条变红兜底，即使 chip 上只有黄色窗口', () => {
+  it('服务端拒绝单独标红，额度按自身水位上色且任务价值保持常色', () => {
     mocks.claudeSnapshot = {
       source: 'unified-headers',
       rateLimitStatus: 'rejected',
@@ -606,8 +642,49 @@ describe('TodaySpendChip Claude subscription popover', () => {
     renderClaudeSubscriptionChip();
 
     const trigger = screen.getByTestId('task-usage-trigger');
-    expect(trigger.className).toContain('error-fg');
+    expect(trigger.className).not.toContain('error-fg');
+    expect(trigger.querySelector('[class*="error-fg"]')?.textContent).toBe('暂时受限');
+    expect(trigger.querySelector('[class*="quota-bar-warn"]')?.textContent).toBe('25%');
+    const { card } = openCardFromHover();
+    expect(within(card).getByText('已触发套餐限额')).toBeTruthy();
+  });
+
+  it('显示吃紧的总周额度，恢复后收起，分模型额度和价值不继承颜色', () => {
+    const money = usdMoney(8.15, 'value-estimate');
+    mocks.sessionUsage = { actualMoney: null, estimatedValueMoney: money, totalMoney: money };
+    mocks.claudeSnapshot = {
+      source: 'oauth-endpoint',
+      fiveHour: { utilization: 25 },
+      sevenDay: { utilization: 76, severity: 'warning' },
+      scoped: [{ modelDisplayName: 'Fable', utilization: 10, severity: 'normal' }],
+    };
+    const props = { vendorKey: 'cc' as const, providerId: 'anthropic', modelId: 'claude-fable-5-2', sessionId: 'session-1' };
+    const { rerender } = render(<TodaySpendChip {...props} />);
+    const trigger = screen.getByTestId('task-usage-trigger');
+    expect(trigger.textContent).toContain('Fable 周限 剩余 90%');
+    expect(trigger.textContent).toContain('总周 剩余 24%');
+    expect(trigger.textContent).toContain('本任务价值 $8.15');
+    expect(trigger.className).not.toContain('error-fg');
+    expect(Array.from(trigger.querySelectorAll('[class*="quota-bar-warn"]')).map(el => el.textContent)).toEqual(['24%']);
     expect(trigger.querySelector('[class*="error-fg"]')).toBeNull();
+    mocks.claudeSnapshot = { ...mocks.claudeSnapshot, sevenDay: { utilization: 20, severity: 'normal' } };
+    rerender(<TodaySpendChip {...props} />);
+    expect(trigger.textContent).not.toContain('总周');
+    expect(trigger.textContent).toContain('Fable 周限');
+  });
+
+  it('没有分模型窗口时不重复总周额度；其它模型的预警不影响当前任务', () => {
+    mocks.claudeSnapshot = {
+      source: 'unified-headers', rateLimitStatus: 'allowed_warning',
+      fiveHour: { utilization: 25 }, sevenDay: { utilization: 76 },
+      scoped: [{ modelDisplayName: 'Fable', utilization: 100, severity: 'critical' }],
+    };
+    renderClaudeSubscriptionChip(); // Opus
+    const trigger = screen.getByTestId('task-usage-trigger');
+    expect(trigger.textContent).not.toContain('总周');
+    expect(trigger.textContent).not.toContain('暂时受限');
+    expect(trigger.className).not.toContain('error-fg');
+    expect(trigger.querySelector('[class*="quota-bar-warn"]')?.textContent).toBe('24%');
   });
 
   it.each([true, false])('returns focus after reset confirmation accepted=%s', async accepted => {

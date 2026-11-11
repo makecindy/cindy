@@ -57,6 +57,7 @@ export * from "./metadataContinuity.js";
 export * from "./providerShareEnvelope.js";
 export * from "./providerGroup.js";
 export * from "./modelFavorites.js";
+export * from "./orcaWorkerRoles.js";
 export * from "./sessionListTransport.js";
 export * from "./sessionMessageReuse.js";
 
@@ -66,6 +67,7 @@ export * from "./clipboardTransfer.js";
 
 export * from "./selfHostedRelay.js";
 export * from "./selfHostedRelayAuth.js";
+export * from "./relayAccountDirectory.js";
 
 export * from "./pluginOauth.js";
 export * from "./pluginSettings.js";

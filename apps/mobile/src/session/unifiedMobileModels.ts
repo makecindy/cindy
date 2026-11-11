@@ -1,4 +1,4 @@
-import { unifiedModelEntries, type UnifiedModelEntry } from '@cindy/model-providers';
+import { unifiedModelEntries, withEffectiveModelContextWindows, type UnifiedModelEntry } from '@cindy/model-providers';
 import { isModelVisible } from '@cindy/model-providers/sections';
 import type { AgentKind } from '@cindy/model-providers/types';
 import type { ProviderView } from '@cindy/model-providers/registry';
@@ -21,7 +21,7 @@ export function matchesEntry(entry: UnifiedModelEntry, modelId: string) {
   return entry.modelId === modelId || Object.values(entry.capabilities).some(c => c?.wireModelId === modelId);
 }
 export function mobileUnifiedEntries(providers: readonly ProviderView[], agents: readonly AgentKind[], visibility: Record<string, boolean> | undefined, existing: boolean, keepModel?: {providerId: string | null; modelId: string; agent: AgentKind}) {
-  return unifiedModelEntries({ providers, agents, scope: existing ? 'session' : 'draft', keepModel,
+  return unifiedModelEntries({ providers: providers.map(withEffectiveModelContextWindows), agents, scope: existing ? 'session' : 'draft', keepModel,
     isVisible: (providerId, model, agent) => visibility === undefined || isModelVisible(visibility[`${agent}:${providerId}:${model.id}`], model.defaultEnabled),
   });
 }

@@ -1,6 +1,10 @@
 {
   "progress": {
-    "stop": "Stop"
+    "stop": "Stop",
+    "stopMine": "Stop Mine",
+    "stopAll": "Stop All",
+    "stopAllHint": "Includes other people’s requests",
+    "step": "Step {{step}}/{{total}}"
   },
   "title": "Group Chats",
   "memberSeparator": ", ",
@@ -79,7 +83,8 @@
     "planDone_one": "{{count}} step is done",
     "planDone_other": "All {{count}} steps are done",
     "planDoneGeneric": "Work split finished",
-    "olderOnComputer": "Earlier messages are on your computer"
+    "olderOnComputer": "Earlier messages are on your computer",
+    "endTalk": "End"
   },
   "quote": {
     "label": "Quoting {{name}}: {{summary}}",
@@ -98,6 +103,13 @@
     "stepFailed": "{{name}} ran into a problem and didn’t finish this step",
     "stepTimeout": "{{name}} took too long, so this step was stopped",
     "stepUnavailable": "{{name}} is unavailable and can’t do this step",
+    "runtimeFailureReason": {
+      "unclaimed_timeout": {
+        "summary": "{{name}} did not start processing within the waiting period. This request has ended.",
+        "advice": "Ask the teammate’s owner to check that Cindy is running and the network is connected on its computer.",
+        "details": "Once Cindy and the network are working again, send the message again."
+      }
+    },
     "runtimeFailure": {
       "REMOTE_DEVICE_LIMIT": {
         "summary": "{{name}} can’t reply: the teammate’s device has reached its remote session limit.",
@@ -169,6 +181,8 @@
     "start": "Start Plan",
     "dismiss": "Skip Plan",
     "editHint": "To change who does what, just say so",
+    "autoContinue": "Start the next step automatically",
+    "autoContinueSaveFailed": "Couldn’t save step handoffs. Try again.",
     "autoNote": "Each finished step starts the next one automatically.",
     "pauseNote": "Work pauses after each step until you click “Start Next Step”.",
     "superseded": "Updated",
@@ -212,12 +226,6 @@
     "stopping": "Stopping…",
     "planning": "Splitting the work…",
     "step": "Working on it…"
-  },
-  "work": {
-    "queued": "Queued {{count}}",
-    "active": "In progress {{count}}",
-    "expand": "Expand teammate activity",
-    "collapse": "Collapse teammate activity"
   },
   "task": {
     "state": {
@@ -324,7 +332,9 @@
     "groupDissolved": "This group has been dissolved. You can still read the available history.",
     "lastOwner": "Transfer ownership or dissolve this group before leaving.",
     "allBotsMentionDisabled": "The group owner has not enabled @all teammates.",
-    "turnAlreadyStarted": "This teammate has already started and cannot be skipped"
+    "turnAlreadyStarted": "This teammate has already started and cannot be skipped",
+    "stopOwnershipUnknown": "Could not stop some work because its requester could not be verified.",
+    "nothingToStop": "There is no active work to stop."
   },
   "followUp": {
     "next": "Plan · Next step",
@@ -623,5 +633,6 @@
       "uncertain": "Join result not confirmed"
     },
     "externalFormatError": "Reopen the complete link from the original message."
-  }
+  },
+  "waitingForOwner": "Waiting for confirmation"
 }

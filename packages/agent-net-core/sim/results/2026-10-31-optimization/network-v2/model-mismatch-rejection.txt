@@ -1,0 +1,10 @@
+CMD ['python3', 'sim/summarize.py', '--baseline', 'sim/results/2026-10-31/simulation-kcp-baseline.txt', '--candidate', 'sim/results/2026-10-31-optimization/network-v2/simulation-auto.txt', '--output', 'sim/results/2026-10-31-optimization/network-v2/must-not-exist.md']
+Traceback (most recent call last):
+  File "<home>/Documents/Cindy/cindy/.cindy-worktrees/agent-net/packages/agent-net-core/sim/summarize.py", line 115, in <module>
+    main()
+    ~~~~^^
+  File "<home>/Documents/Cindy/cindy/.cindy-worktrees/agent-net/packages/agent-net-core/sim/summarize.py", line 90, in main
+    raise ValueError(f"network model mismatch: {args.baseline} uses {model}, {path} uses {network_model(path)}")
+ValueError: network model mismatch: sim/results/2026-10-31/simulation-kcp-baseline.txt uses shared-burst-rng-v1, sim/results/2026-10-31-optimization/network-v2/simulation-auto.txt uses independent-burst-calendar-v2
+
+EXIT 1

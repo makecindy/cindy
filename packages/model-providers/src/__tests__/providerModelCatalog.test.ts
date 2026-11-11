@@ -8,6 +8,52 @@ import { BUNDLED_CATALOG } from '../builtin.js';
 import { modelProtocolComparison } from '../modelProtocol.js';
 
 describe("standard provider catalog", () => {
+  // #9863, unit: an ID-only Copilot discovery previously selected Chat in all three
+  // engines. The mixed OpenCode cases do not cover this supplier's source record.
+  it.each(['claude-code', 'codex', 'pi'] as const)('routes Copilot Astra through Responses in %s', agent => {
+    const baseUrl = 'https://api.individual.githubcopilot.com';
+    const models = ['gpt-6-astra', 'gpt-5.5', 'kimi-k3'].map(id => ({ id, name: id }));
+    const provider = buildUserProvider({ id: 'copilot-test', name: 'Copilot', runtimes: {
+      [agent]: { baseUrl, wireProtocol: 'openai-chat', models },
+    } });
+    expect(provider.models[agent]?.map(model => model.api)).toEqual([
+      'openai-responses', 'openai-responses', 'openai-completions',
+    ]);
+    expect(provider.models[agent]?.[0]).toMatchObject({
+      route: { baseUrl, wireProtocol: 'openai-responses' },
+      reasoningRequired: true,
+      efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      ...(agent === 'pi' ? { piApi: 'openai-responses' } : {}),
+      userModelConfig: models[0],
+    });
+    expect(provider.models[agent]?.[0].userModelConfig).not.toHaveProperty('api');
+    const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'github-copilot')!;
+    const presetProvider = buildUserProvider({ id: 'copilot-preset', name: 'Copilot', runtimes: preset.runtimes });
+    expect(presetProvider.models[agent]?.find(model => model.id === 'gpt-6-astra')).toMatchObject({
+      api: 'openai-responses', route: { baseUrl, wireProtocol: 'openai-responses' },
+      reasoningRequired: true, efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    });
+  });
+
+  it.each(['claude-code', 'codex', 'pi'] as const)('preserves custom Copilot transport choices in %s', agent => {
+    for (const [baseUrl, override] of [
+      ['https://proxy.example/v1', {}],
+      ['https://api.individual.githubcopilot.com', { api: 'openai-completions' as const }],
+      ['https://api.individual.githubcopilot.com', { route: {
+        baseUrl: 'https://api.individual.githubcopilot.com', wireProtocol: 'openai-chat' as const,
+      } }],
+    ] as const) {
+      const provider = buildUserProvider({ id: 'copilot-test', name: 'Copilot', runtimes: {
+        [agent]: { baseUrl, wireProtocol: 'openai-chat', catalogPresetId: 'github-copilot',
+          models: [{ id: 'gpt-6-astra', name: 'Astra', ...override }] },
+      } });
+      const model = provider.models[agent]![0];
+      expect(model.api ?? model.piApi ?? provider.routing[agent]!.wireProtocol).not.toBe('openai-responses');
+      expect(model.route?.baseUrl ?? provider.routing[agent]!.upstream).toBe(baseUrl);
+      expect(model.userModelConfig).toMatchObject(override);
+    }
+  });
+
   it('carries Cindy canonical model declarations into imported connection details', () => {
     const provider = buildUserProvider({ id: 'my-router', name: 'Router', runtimes: {
       pi: { baseUrl: 'https://openrouter.ai/api/v1', wireProtocol: 'openai-chat',

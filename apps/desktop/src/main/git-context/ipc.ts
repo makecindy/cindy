@@ -1,6 +1,6 @@
 import { glabCliTokenSource } from './glabCliTokenSource';
 import { fetchGitlabMr } from './gitlabPrSummary';
-import { outboundFetch } from '../maker-host/outbound-fetch';
+import { outboundFetch } from '../maker-host/outbound-fetch.desktop';
 import { setGithubReadRuntime } from './githubReadRuntime';
 import { manageSessionPrs } from './manageSessionPrs';
 /**
@@ -74,7 +74,7 @@ import {
 
 import { fetchPrSummary } from './prSummary';
 import { PrFollowWatch } from './prFollowWatch';
-import { getSchedulerIfInitialized } from '../scheduler-host/index.js';
+import { getSchedulerIfInitialized } from '../scheduler-host/index.desktop.js';
 
 const log = createLogger('git-context/ipc');
 

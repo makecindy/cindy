@@ -56,7 +56,6 @@ export function useWallpaperBackground({
     if (desktopBackground) {
       root.dataset.desktopBackground = 'true';
       // Suspend covered backdrop work without changing the saved slider value.
-      // The independent sidebar material is resolved separately in main.
       root.dataset.desktopBlur = String(visibility > 0 ? blur : 0);
       root.style.setProperty('--desktop-background-veil', `${100 - visibility * 100}%`);
     } else {

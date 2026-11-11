@@ -1,0 +1,37 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+group = 'app.cindy.agentnet'
+version = '0.1.0'
+def nativeDir = file('../../../../../packages/agent-net-native').canonicalFile
+def agentNetAbis = (project.findProperty('reactNativeArchitectures') ?: 'armeabi-v7a,arm64-v8a,x86,x86_64').toString()
+android {
+  namespace 'app.cindy.agentnet'
+  // The Rust cdylib is built outside CMake. Importing it for linking does not
+  // add it to the APK: publish it as a JNI library for every selected ABI.
+  sourceSets.main.jniLibs.srcDir new File(nativeDir, 'dist/android')
+  defaultConfig {
+    ndk { abiFilters(*agentNetAbis.split(',')) }
+    minSdkVersion 24
+    versionCode 1
+    versionName '0.1.0'
+    consumerProguardFiles 'consumer-rules.pro'
+    externalNativeBuild {
+      cmake {
+        arguments "-DCINDY_AGENT_NET_NATIVE_DIR=${nativeDir.absolutePath}"
+        cppFlags '-std=c++17'
+      }
+    }
+  }
+  externalNativeBuild { cmake { path 'CMakeLists.txt' } }
+}
+def rustBuild = tasks.register('buildAgentNetRust', Exec) {
+  workingDir nativeDir
+  environment 'CINDY_AGENT_NET_ANDROID_ABIS', agentNetAbis
+  environment 'ANDROID_NDK_HOME', android.ndkDirectory.absolutePath
+  commandLine (System.getenv('NODE_BINARY') ?: 'node'), new File(nativeDir, 'build-android.mjs').absolutePath
+}
+tasks.configureEach {
+  if (name == 'preBuild' || name.startsWith('configureCMake')) dependsOn rustBuild
+}
