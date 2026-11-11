@@ -62,6 +62,7 @@ import {
 import {
   getDeviceLinkStatus,
   getDirectDataDeviceIds,
+  deviceLinkPeerTransportUrl,
   hasOfflineDirectPath,
   isDeviceDataPathAvailable,
   isPeerControlAvailable,
@@ -367,16 +368,23 @@ export function handleGetPeerLinks(deps: DeviceLinkIpcDeps): DeviceLinkPeerLinks
  * 反复失败时提示「本机可能在走代理」。null = 没判定(候选判定冲突 / 解析未落快照),
  * 渲染侧按无提示处理;`unknown`(没问出来)照实透传,渲染侧不得当事实用。
  *
- * 候选给两条线路的 origin:同账号设备走当前中转(官方或自建);自建中转选中时,共享
- * 任务走独立的官方连接(自建中转不转发跨账号帧,见 routedClient crossAccountConnection)。
- * 无自建中转时两者相同,退化为单候选。判定不一致(PAC 逐 path / NO_PROXY / loopback
- * 直连例外)时探针返回 null —— 宁可不报,也不谎称走了代理。
+ * 首选探针目标是**这个对端控制通道实际使用的 WebSocket URL**(协议 + path 都与真实
+ * socket 一致,PAC / env 可按协议或路径给出不同答案)。拿不到时(无 deviceId / client
+ * 未就绪 / 主连接由 agent-net 承载)退回两条 REST 线路 origin:同账号设备走当前中转
+ * (官方或自建);自建中转选中时,共享任务走独立的官方连接(自建中转不转发跨账号帧,见
+ * routedClient crossAccountConnection),无自建中转时两者相同、退化为单候选。判定不
+ * 一致(PAC 逐 path / NO_PROXY / loopback 直连例外)时探针返回 null —— 宁可不报,
+ * 也不谎称走了代理。
  */
-export async function handleGetProxyVerdict(deps: DeviceLinkIpcDeps): Promise<DeviceLinkProxyVerdict | null> {
-  const snap = await deps.probeProxyVerdict([
-    resolveDeviceLinkApiBase(),
-    officialDeviceLinkApiBase(),
-  ]);
+export async function handleGetProxyVerdict(
+  deps: DeviceLinkIpcDeps,
+  deviceId?: string,
+): Promise<DeviceLinkProxyVerdict | null> {
+  const transportUrl = deviceId ? deviceLinkPeerTransportUrl(deviceId) : null;
+  const candidates = transportUrl
+    ? [transportUrl]
+    : [resolveDeviceLinkApiBase(), officialDeviceLinkApiBase()];
+  const snap = await deps.probeProxyVerdict(candidates);
   if (!snap) return null;
   return { kind: snap.kind, proxy: snap.proxy ?? null };
 }
@@ -1846,10 +1854,13 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
     assertTrustedAppRendererEvent(e);
     return gated(() => handleGetPeerLinks(deps))();
   });
-  ipcMain.handle(DEVICE_LINK_INVOKE.GET_PROXY_VERDICT, (e) => {
+  ipcMain.handle(DEVICE_LINK_INVOKE.GET_PROXY_VERDICT, (e, deviceId: unknown) => {
     // 本机只读诊断(系统/env 代理判定,不进隧道):与 GET_PEER_LINKS 同门槛。
+    // deviceId = 当前会话的对端(共享任务 peer id 亦可),用来取它实际走的 transport URL。
     assertTrustedAppRendererEvent(e);
-    return gated(() => handleGetProxyVerdict(deps))();
+    return gated(() =>
+      handleGetProxyVerdict(deps, typeof deviceId === 'string' && deviceId ? deviceId : undefined),
+    )();
   });
   ipcMain.handle(DEVICE_LINK_INVOKE.RENAME_DEVICE, (_e, payload: unknown) => {
     requireDeviceLinkCapability();

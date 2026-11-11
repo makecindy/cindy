@@ -5189,9 +5189,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }> => ipcRenderer.invoke('device-link:get-peer-links'),
     /** 对端链路拓扑变化(建链 / 断链 / 直连↔relay),payload 为全量快照 */
     onPeerLinksChanged: fanOutDeviceLinkPeerLinksChanged,
-    /** 出站路径诊断(#9537):跨设备通道 origin 的当前代理判定;null = 没判定 */
-    getProxyVerdict: (): Promise<DeviceLinkProxyVerdict | null> =>
-      ipcRenderer.invoke(DEVICE_LINK_INVOKE.GET_PROXY_VERDICT),
+    /** 出站路径诊断(#9537):跨设备通道 origin 的当前代理判定;null = 没判定。
+     *  deviceId = 当前会话对端,用于取它实际走的 transport URL(可省略)。 */
+    getProxyVerdict: (deviceId?: string): Promise<DeviceLinkProxyVerdict | null> =>
+      ipcRenderer.invoke(DEVICE_LINK_INVOKE.GET_PROXY_VERDICT, deviceId),
     listDevices: (): Promise<{
       devices: Array<{
         deviceId: string;

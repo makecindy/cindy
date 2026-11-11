@@ -17,7 +17,8 @@ export const DEVICE_LINK_INVOKE = {
   LIST_DEVICES: 'device-link:list-devices',
   /** 远程连接拓扑:本机已协商可靠链路的对端 + 数据路径 + RTT 快照(纯本机读,不进隧道) */
   GET_PEER_LINKS: 'device-link:get-peer-links',
-  /** 本机出站路径诊断:跨设备通道 origin 的系统/env代理判定(纯本机读,不进隧道;供连接失败时给排查提示) */
+  /** 本机出站路径诊断:跨设备通道 origin 的系统/env代理判定(纯本机读,不进隧道;供连接失败时给排查提示)。
+   *  payload: deviceId?(当前会话对端,用来取它实际走的 transport URL) */
   GET_PROXY_VERDICT: 'device-link:get-proxy-verdict',
   /** 重命名设备 */
   RENAME_DEVICE: 'device-link:rename-device',

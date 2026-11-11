@@ -1265,7 +1265,8 @@ function CCAgentSessionContent({
   const remoteLinkIssue = useDeviceLinkConnectionIssue(!!remoteDeviceId, remoteDeviceId);
   // #9537:degraded(通路不稳定)时探一次本机是否经 Proxy 出站,给 banner 附排查提示;
   // 只在确证 kind='proxy' 时有值,unknown / direct 不展示(见 useOutboundProxyVerdict)。
-  const remoteProxyVerdict = useOutboundProxyVerdict(remoteConn === 'degraded');
+  // 带 remoteDeviceId:main 据此取这个对端实际走的 transport URL,而不是猜一条线路。
+  const remoteProxyVerdict = useOutboundProxyVerdict(remoteConn === 'degraded', remoteDeviceId);
   const remoteSessionUnavailable = remoteConn === 'reconnecting' || remoteConn === 'host-offline';
   const remoteWritesBlocked = remoteSessionUnavailable || isRemoteSessionWriteBlocked(session);
   const showRemoteWriteBlockedToast = useCallback(() => {

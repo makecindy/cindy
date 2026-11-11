@@ -83,30 +83,35 @@ describe('useOutboundProxyVerdict (#9537 degraded 诊断)', () => {
       configurable: true,
       value: { deviceLink: { getProxyVerdict } },
     });
-    const hook = renderHook((active: boolean) => useOutboundProxyVerdict(active), { initialProps: false });
+    const hook = renderHook(
+      ({ active, deviceId }: { active: boolean; deviceId?: string }) => useOutboundProxyVerdict(active, deviceId),
+      { initialProps: { active: false, deviceId: 'peer-a' } },
+    );
     await act(async () => {});
     expect(getProxyVerdict).not.toHaveBeenCalled(); // 非 degraded 不探测
     expect(hook.result.current).toBeNull();
 
-    hook.rerender(true);
+    hook.rerender({ active: true, deviceId: 'peer-a' });
     await act(async () => {});
     expect(getProxyVerdict).toHaveBeenCalledTimes(1);
+    // deviceId 一并下发:main 据此取这个对端实际走的 transport URL
+    expect(getProxyVerdict).toHaveBeenCalledWith('peer-a');
     expect(hook.result.current).toEqual({ kind: 'proxy', proxy: 'http://127.0.0.1:7890' });
 
     // unknown(fail-open 兜底)不得当「确认走 Proxy」展示
     getProxyVerdict.mockResolvedValue({ kind: 'unknown', proxy: null });
-    hook.rerender(false);
+    hook.rerender({ active: false, deviceId: 'peer-a' });
     await act(async () => {});
     expect(hook.result.current).toBeNull(); // 降级恢复即清空
-    hook.rerender(true);
+    hook.rerender({ active: true, deviceId: 'peer-a' });
     await act(async () => {});
     expect(hook.result.current).toBeNull();
 
     // 探测失败静默 → null(banner 不得因诊断自身报错打扰用户)
     getProxyVerdict.mockRejectedValue(new Error('probe failed'));
-    hook.rerender(false);
+    hook.rerender({ active: false, deviceId: 'peer-a' });
     await act(async () => {});
-    hook.rerender(true);
+    hook.rerender({ active: true, deviceId: 'peer-a' });
     await act(async () => {});
     expect(hook.result.current).toBeNull();
   });

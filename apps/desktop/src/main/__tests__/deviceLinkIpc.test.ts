@@ -9,6 +9,8 @@ import { createProviderGroupDirectory } from '../provider-group/directory';
 const capabilities = vi.hoisted(() => ({ canUseDeviceLink: true }));
 const metadataOwner = vi.hoisted(() => ({ key: 'directory-owner-a' }));
 const dataPath = vi.hoisted(() => ({ available: vi.fn<(deviceId: string) => boolean>(() => false) }));
+// #9537:对端实际 transport URL 的替身(null = 拿不到,handler 退回两条 REST 线路 origin)。
+const peerTransport = vi.hoisted(() => ({ url: null as string | null }));
 vi.mock('../appSessionState.js', async importOriginal => ({
   ...await importOriginal<typeof import('../appSessionState.js')>(), activeOwnerScopeKey: () => metadataOwner.key,
 }));
@@ -80,6 +82,7 @@ vi.mock('./index', () => ({
 vi.mock('../device-link/index', () => ({
   getDeviceLinkStatus: () => 'online',
   getDeviceLinkPeerLinks: () => ({ links: [], relayRttMs: null }),
+  deviceLinkPeerTransportUrl: () => peerTransport.url,
   hasOfflineDirectPath: () => false,
   isDeviceDataPathAvailable: dataPath.available,
   clearDeviceResponsiveness: vi.fn(),
@@ -238,6 +241,7 @@ describe('device-link IPC handlers', () => {
     refcountTesting.reset(); // 多窗口订阅引用计数:每个用例独立
     capabilities.canUseDeviceLink = true;
     metadataOwner.key = 'directory-owner-a';
+    peerTransport.url = null;
     __resetDeviceListCoalescingForTests(); // /devices 合并窗口:不让上一用例的在途请求漏到下一个
     vi.restoreAllMocks();
     dataPath.available.mockReset().mockReturnValue(false);
@@ -271,6 +275,34 @@ describe('device-link IPC handlers', () => {
     });
     // 两条候选:当前中转(同账号设备)+ 官方中转(自建中转下共享任务走独立官方连接)。
     // 测试端点替身对两者同值,无自建中转时即退化为单候选。
+    expect(probe).toHaveBeenCalledWith([
+      'https://continuity.test.invalid',
+      'https://continuity.test.invalid',
+    ]);
+  });
+
+  it('#9537 出站路径判定:优先探这个对端实际走的 transport URL', async () => {
+    // 协议(ws/wss)与 path 都进代理解析 key,PAC / env 可按协议或路径给出不同答案,
+    // 拿 REST base 代替就是张冠李戴(Codex review P1)。
+    peerTransport.url = 'wss://relay.example.com/api/device-link/ws';
+    const probe = vi.fn(async () => ({
+      source: 'system' as const,
+      kind: 'proxy' as const,
+      proxy: 'http://127.0.0.1:7890',
+      upstream: 'wss://relay.example.com',
+      at: 0,
+    }));
+    await expect(
+      handleGetProxyVerdict(makeDeps({ probeProxyVerdict: probe }), 'peer-a'),
+    ).resolves.toEqual({ kind: 'proxy', proxy: 'http://127.0.0.1:7890' });
+    expect(probe).toHaveBeenCalledWith(['wss://relay.example.com/api/device-link/ws']);
+  });
+
+  it('#9537 出站路径判定:拿不到 transport URL 时按两条候选线路 origin 探测', async () => {
+    const probe = vi.fn(async () => null);
+    // 有 deviceId 但 transport URL 不可知(agent-net 承载 / client 未就绪)→ 回落;
+    // 两个候选 = 当前中转 + 自建中转下共享任务走的官方连接(测试端点替身两者同值)。
+    await handleGetProxyVerdict(makeDeps({ probeProxyVerdict: probe }), 'peer-a');
     expect(probe).toHaveBeenCalledWith([
       'https://continuity.test.invalid',
       'https://continuity.test.invalid',
