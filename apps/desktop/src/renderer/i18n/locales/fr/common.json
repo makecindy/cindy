@@ -12250,6 +12250,7 @@
   },
   "commonUi": {
     "retry": "Réessayer",
+    "listSeparator": ", ",
     "crossAgentConvert": {
       "asking": {
         "title": "Configuration d'espace de travail convertible détectée",
@@ -12266,7 +12267,8 @@
     },
     "confirmDialog": {
       "confirm": "Confirmer",
-      "cancel": "Annuler"
+      "cancel": "Annuler",
+      "dontShowAgain": "Ne plus afficher"
     },
     "toastContainer": {
       "ariaLabel": "Notifications"
@@ -13824,6 +13826,9 @@
       "editIndex": "Modification {{index}}/{{total}}",
       "omittedDiffSegments": "{{count}} segments de diff supplémentaires omis dans l'aperçu",
       "diffPreviewTruncated": "Certaines lignes du diff sont masquées dans cet aperçu",
+      "diffUnchangedLines_one": "{{count}} ligne inchangée",
+      "diffUnchangedLines_other": "{{count}} lignes inchangées",
+      "diffUnchangedLines_many": "{{count}} lignes inchangées",
       "diffPreviewLoading": "Préparation de l'aperçu du diff…"
     },
     "textLightbox": {
@@ -14526,6 +14531,7 @@
       "expandFields": "Développer",
       "collapseFields": "Réduire",
       "formSyncFailed": "Les modifications de la carte n'ont pas été synchronisées. Vérifiez la connexion et continuez la modification ; le message n'a pas été envoyé.",
+      "attachmentNotAdded": "La pièce jointe n'a pas été ajoutée. Sélectionnez de nouveau le fichier.",
       "linkOpenFailed": "Impossible d'ouvrir le lien",
       "modelSelectFailed": "Le modèle n'a pas été changé. Choisissez-le à nouveau.",
       "mailPreview": "Aperçu de l'e-mail",

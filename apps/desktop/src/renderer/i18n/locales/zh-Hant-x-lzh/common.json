@@ -3316,7 +3316,7 @@
       "archived": "已封存",
       "unsupported": "其式暫不支援",
       "untitled": "無名差事",
-      "selectAll": "全選今篩選所得（{{count}} 件）",
+      "selectAll": "盡選",
       "selectGroup": "擇全組",
       "expand": "展分組",
       "collapse": "收分組",
@@ -12104,6 +12104,7 @@
   },
   "commonUi": {
     "retry": "再試",
+    "listSeparator": "、",
     "crossAgentConvert": {
       "asking": {
         "title": "察得工作區配置可轉",
@@ -12120,7 +12121,8 @@
     },
     "confirmDialog": {
       "confirm": "善",
-      "cancel": "罷"
+      "cancel": "罷",
+      "dontShowAgain": "後不復示"
     },
     "toastContainer": {
       "ariaLabel": "告示之區"
@@ -13670,6 +13672,8 @@
       "editIndex": "修 {{index}}/{{total}}",
       "omittedDiffSegments": "先覽中略去 {{count}} 段額外差異",
       "diffPreviewTruncated": "先覽中隱去部分差異行",
+      "diffUnchangedLines_one": "{{count}} 行未易",
+      "diffUnchangedLines_other": "{{count}} 行未易",
       "diffPreviewLoading": "方備差異先覽…"
     },
     "textLightbox": {
@@ -14354,6 +14358,7 @@
       "expandFields": "展",
       "collapseFields": "收",
       "formSyncFailed": "卡之修改尚未同步，請察連線後續修；訊尚未遣。",
+      "attachmentNotAdded": "附件未入，請重擇其檔",
       "linkOpenFailed": "連結未能啟",
       "modelSelectFailed": "模型未易，請復擇",
       "mailPreview": "郵件先覽",
@@ -15916,7 +15921,7 @@
         "onFailureLabel": "法器有失時",
         "source": {
           "plugin": "法器",
-          "script": "脚本"
+          "script": "腳本"
         },
         "sourceLabel": "檢查之法",
         "tooltip": "每番運行前先詢君所擇之法器：可放行、略此番或止此番運行，不能代君准允須君確認之事。",

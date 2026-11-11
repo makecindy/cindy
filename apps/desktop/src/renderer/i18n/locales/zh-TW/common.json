@@ -1575,7 +1575,7 @@
       "usedUpWithCredits": "{{at}}回滿；在那之前 Codex 會扣 {{credits}} credits 繼續工作。",
       "creditsOnly": "Codex 會扣 {{credits}} credits 繼續工作。",
       "resetsAt": "{{at}}回滿。",
-      "emptyIn": "按现在的速度，約 {{duration}}後見底。",
+      "emptyIn": "按現在的速度，約 {{duration}}後見底。",
       "beforeReset": "比重置早 {{duration}}。",
       "full": "滿格。",
       "relaxed": "節奏寬鬆。",
@@ -12104,6 +12104,7 @@
   },
   "commonUi": {
     "retry": "重試",
+    "listSeparator": "、",
     "crossAgentConvert": {
       "asking": {
         "title": "檢測到工作區配置可轉換",
@@ -12120,7 +12121,8 @@
     },
     "confirmDialog": {
       "confirm": "確認",
-      "cancel": "取消"
+      "cancel": "取消",
+      "dontShowAgain": "下次不再提示"
     },
     "toastContainer": {
       "ariaLabel": "通知區域"
@@ -13678,6 +13680,8 @@
       "editIndex": "編輯 {{index}}/{{total}}",
       "omittedDiffSegments": "預覽中省略了 {{count}} 個額外差異片段",
       "diffPreviewTruncated": "預覽中隱藏了部分差異行",
+      "diffUnchangedLines_one": "{{count}} 行未變",
+      "diffUnchangedLines_other": "{{count}} 行未變",
       "diffPreviewLoading": "正在準備差異預覽…"
     },
     "textLightbox": {
@@ -14362,6 +14366,7 @@
       "expandFields": "展開",
       "collapseFields": "收起",
       "formSyncFailed": "卡片修改尚未同步，請檢查連線後繼續編輯；訊息尚未傳送。",
+      "attachmentNotAdded": "附件未加入，請重新選擇檔案",
       "linkOpenFailed": "連結開啟失敗",
       "modelSelectFailed": "模型沒有換成，請重新選擇",
       "mailPreview": "郵件預覽",

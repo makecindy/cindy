@@ -12250,6 +12250,7 @@
   },
   "commonUi": {
     "retry": "Reintentar",
+    "listSeparator": ", ",
     "crossAgentConvert": {
       "asking": {
         "title": "Se detectó una configuración de espacio de trabajo que se puede convertir",
@@ -12266,7 +12267,8 @@
     },
     "confirmDialog": {
       "confirm": "Confirmar",
-      "cancel": "Cancelar"
+      "cancel": "Cancelar",
+      "dontShowAgain": "No volver a mostrar"
     },
     "toastContainer": {
       "ariaLabel": "Notificaciones"
@@ -13824,6 +13826,9 @@
       "editIndex": "Edición {{index}}/{{total}}",
       "omittedDiffSegments": "Se omitieron {{count}} segmentos adicionales de diferencias en la vista previa",
       "diffPreviewTruncated": "Algunas líneas de diferencias están ocultas en esta vista previa",
+      "diffUnchangedLines_one": "{{count}} línea sin cambios",
+      "diffUnchangedLines_other": "{{count}} líneas sin cambios",
+      "diffUnchangedLines_many": "{{count}} líneas sin cambios",
       "diffPreviewLoading": "Preparando vista previa de diferencias…"
     },
     "textLightbox": {
@@ -14526,6 +14531,7 @@
       "expandFields": "Expandir",
       "collapseFields": "Contraer",
       "formSyncFailed": "Las ediciones de la tarjeta no se han sincronizado. Verifique la conexión y continúe editando; el mensaje no ha sido enviado.",
+      "attachmentNotAdded": "No se añadió el adjunto. Vuelve a seleccionar el archivo.",
       "linkOpenFailed": "No se pudo abrir el enlace",
       "modelSelectFailed": "No se cambió el modelo. Vuelve a elegirlo.",
       "mailPreview": "Vista previa de correo electrónico",

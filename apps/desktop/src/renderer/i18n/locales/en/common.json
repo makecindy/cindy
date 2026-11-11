@@ -12150,6 +12150,7 @@
   },
   "commonUi": {
     "retry": "Try again",
+    "listSeparator": ", ",
     "crossAgentConvert": {
       "asking": {
         "title": "Convertible workspace config detected",
@@ -12166,7 +12167,8 @@
     },
     "confirmDialog": {
       "confirm": "Confirm",
-      "cancel": "Cancel"
+      "cancel": "Cancel",
+      "dontShowAgain": "Don’t show again"
     },
     "toastContainer": {
       "ariaLabel": "Notifications"
@@ -13736,6 +13738,8 @@
       "editIndex": "Edit {{index}}/{{total}}",
       "omittedDiffSegments": "{{count}} additional diff segments omitted from preview",
       "diffPreviewTruncated": "Some diff lines are hidden in this preview",
+      "diffUnchangedLines_one": "{{count}} unchanged line",
+      "diffUnchangedLines_other": "{{count}} unchanged lines",
       "diffPreviewLoading": "Preparing diff preview…"
     },
     "textLightbox": {
@@ -14429,6 +14433,7 @@
       "expandFields": "Expand",
       "collapseFields": "Collapse",
       "formSyncFailed": "Card edits have not synced. Check the connection and continue editing; the message has not been sent.",
+      "attachmentNotAdded": "Attachment not added. Choose the file again.",
       "linkOpenFailed": "Failed to open link",
       "modelSelectFailed": "The model wasn't changed. Please choose again.",
       "mailPreview": "Email preview",

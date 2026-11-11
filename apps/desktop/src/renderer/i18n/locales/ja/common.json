@@ -12104,6 +12104,7 @@
   },
   "commonUi": {
     "retry": "再試行",
+    "listSeparator": "、",
     "crossAgentConvert": {
       "asking": {
         "title": "変換できるワークスペース設定を検出",
@@ -12120,7 +12121,8 @@
     },
     "confirmDialog": {
       "confirm": "確認",
-      "cancel": "キャンセル"
+      "cancel": "キャンセル",
+      "dontShowAgain": "次回から表示しない"
     },
     "toastContainer": {
       "ariaLabel": "通知エリア"
@@ -13679,6 +13681,8 @@
       "editIndex": "編集 {{index}}/{{total}}",
       "omittedDiffSegments": "プレビューでは追加の差分 {{count}} 件を省略しています",
       "diffPreviewTruncated": "プレビューでは一部の差分行を非表示にしています",
+      "diffUnchangedLines_one": "変更なし {{count}} 行",
+      "diffUnchangedLines_other": "変更なし {{count}} 行",
       "diffPreviewLoading": "差分プレビューを準備しています…"
     },
     "textLightbox": {
@@ -14363,6 +14367,7 @@
       "expandFields": "展開",
       "collapseFields": "折りたたむ",
       "formSyncFailed": "カードの変更を同期できませんでした。接続を確認して編集を続けてください。メッセージは未送信です。",
+      "attachmentNotAdded": "添付ファイルを追加できませんでした。もう一度ファイルを選択してください。",
       "linkOpenFailed": "リンクを開けませんでした",
       "modelSelectFailed": "モデルを変更できませんでした。もう一度選択してください。",
       "mailPreview": "メールプレビュー",

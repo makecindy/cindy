@@ -12150,6 +12150,7 @@
   },
   "commonUi": {
     "retry": "Erneut versuchen",
+    "listSeparator": ", ",
     "crossAgentConvert": {
       "asking": {
         "title": "Konvertierbare Arbeitsbereichskonfiguration erkannt",
@@ -12166,7 +12167,8 @@
     },
     "confirmDialog": {
       "confirm": "Bestätigen",
-      "cancel": "Abbrechen"
+      "cancel": "Abbrechen",
+      "dontShowAgain": "Nicht mehr anzeigen"
     },
     "toastContainer": {
       "ariaLabel": "Benachrichtigungen"
@@ -13699,6 +13701,8 @@
       "editIndex": "Bearbeitung {{index}}/{{total}}",
       "omittedDiffSegments": "{{count}} weitere Diff-Abschnitte in der Vorschau ausgelassen",
       "diffPreviewTruncated": "Einige Diff-Zeilen sind in dieser Vorschau ausgeblendet",
+      "diffUnchangedLines_one": "{{count}} unveränderte Zeile",
+      "diffUnchangedLines_other": "{{count}} unveränderte Zeilen",
       "diffPreviewLoading": "Diff-Vorschau wird vorbereitet…"
     },
     "textLightbox": {
@@ -14392,6 +14396,7 @@
       "expandFields": "Aufklappen",
       "collapseFields": "Einklappen",
       "formSyncFailed": "Kartenänderungen wurden nicht synchronisiert. Prüfe die Verbindung und bearbeite weiter; die Nachricht wurde nicht gesendet.",
+      "attachmentNotAdded": "Anhang wurde nicht hinzugefügt. Wähle die Datei erneut aus.",
       "linkOpenFailed": "Link konnte nicht geöffnet werden",
       "modelSelectFailed": "Das Modell wurde nicht geändert. Bitte erneut auswählen.",
       "mailPreview": "E-Mail-Vorschau",

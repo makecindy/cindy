@@ -17,6 +17,7 @@ import { BotGroupMarkdownText } from './BotGroupMessageText';
 import type { BotGroupMentionContext } from './botGroupMentions';
 import type { ResolveRemoteMediaFn } from './remoteMedia';
 import { copyMessageText, type CopyMessageStatus } from './messageActions';
+import appI18n from 'i18next';
 
 type BotGroupThreadSummary = Pick<BotGroupMessageView, 'replyCount' | 'threadPreview' | 'threadUnread'>;
 
@@ -118,7 +119,7 @@ export function BotGroupMessageActions({ message, align = 'left', onQuote, onThr
     else if (id === 'thread') onThread?.();
     else if (id === 'share') { if (shared?.bySelf) onReveal?.(); else onShare?.(); }
   };
-  const sections = [{ id: 'time', options: [{ id: 'timestamp', title: new Date(message.createdAt).toLocaleString(), disabled: true }] },
+  const sections = [{ id: 'time', options: [{ id: 'timestamp', title: new Date(message.createdAt).toLocaleString(appI18n.language), disabled: true }] },
     { id: 'message', options }];
   return <View style={styles.messageActions} testID={`botGroup.messageActions.${message.id}`}>
     <Pressable accessibilityRole="button" accessibilityLabel={t(copyLabel)} accessibilityLiveRegion="polite" disabled={copyDisabled || copying}

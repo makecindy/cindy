@@ -9,6 +9,7 @@ import { cn } from '@/lib/utils';
 import { useUserPrompt } from '@/hooks/useUserPrompt';
 import { USER_PROMPT_MAX_LENGTH } from '@/lib/userPrompt.constants';
 import { toast } from '@/lib/toast';
+import appI18n from 'i18next';
 
 export function UserPromptSection() {
   const { value, setValue } = useUserPrompt();
@@ -35,7 +36,7 @@ export function UserPromptSection() {
   }, [canSave, draft, setValue, t]);
 
   const counter = useMemo(
-    () => `${length.toLocaleString()} / ${USER_PROMPT_MAX_LENGTH.toLocaleString()}`,
+    () => `${length.toLocaleString(appI18n.language)} / ${USER_PROMPT_MAX_LENGTH.toLocaleString(appI18n.language)}`,
     [length],
   );
 

@@ -3316,7 +3316,7 @@
       "archived": "已封存",
       "unsupported": "其式暂不支持",
       "untitled": "无名差事",
-      "selectAll": "全选今筛选所得（{{count}} 件）",
+      "selectAll": "尽选",
       "selectGroup": "择全组",
       "expand": "展分组",
       "collapse": "收分组",
@@ -12104,6 +12104,7 @@
   },
   "commonUi": {
     "retry": "再试",
+    "listSeparator": "、",
     "crossAgentConvert": {
       "asking": {
         "title": "察得工作区配置可转",
@@ -12120,7 +12121,8 @@
     },
     "confirmDialog": {
       "confirm": "善",
-      "cancel": "罢"
+      "cancel": "罢",
+      "dontShowAgain": "后不复示"
     },
     "toastContainer": {
       "ariaLabel": "告示之区"
@@ -13670,6 +13672,8 @@
       "editIndex": "修 {{index}}/{{total}}",
       "omittedDiffSegments": "先览中略去 {{count}} 段额外差异",
       "diffPreviewTruncated": "先览中隐去部分差异行",
+      "diffUnchangedLines_one": "{{count}} 行未易",
+      "diffUnchangedLines_other": "{{count}} 行未易",
       "diffPreviewLoading": "方备差异先览…"
     },
     "textLightbox": {
@@ -14354,6 +14358,7 @@
       "expandFields": "展",
       "collapseFields": "收",
       "formSyncFailed": "卡之修改尚未同步，请察连接后续修；讯尚未遣。",
+      "attachmentNotAdded": "附件未入，请重择其档",
       "linkOpenFailed": "链接未能启",
       "modelSelectFailed": "模型未易，请复择",
       "mailPreview": "邮件先览",

@@ -12104,6 +12104,7 @@
   },
   "commonUi": {
     "retry": "重试",
+    "listSeparator": "、",
     "crossAgentConvert": {
       "asking": {
         "title": "检测到工作区配置可转换",
@@ -12120,7 +12121,8 @@
     },
     "confirmDialog": {
       "confirm": "确认",
-      "cancel": "取消"
+      "cancel": "取消",
+      "dontShowAgain": "下次不再提示"
     },
     "toastContainer": {
       "ariaLabel": "通知区域"
@@ -13679,6 +13681,8 @@
       "editIndex": "编辑 {{index}}/{{total}}",
       "omittedDiffSegments": "预览中省略了 {{count}} 个额外差异片段",
       "diffPreviewTruncated": "预览中隐藏了部分差异行",
+      "diffUnchangedLines_one": "{{count}} 行未变",
+      "diffUnchangedLines_other": "{{count}} 行未变",
       "diffPreviewLoading": "正在准备差异预览…"
     },
     "textLightbox": {
@@ -14363,6 +14367,7 @@
       "expandFields": "展开",
       "collapseFields": "收起",
       "formSyncFailed": "卡片修改尚未同步，请检查连接后继续编辑；消息尚未发送。",
+      "attachmentNotAdded": "附件未添加，请重新选择文件",
       "linkOpenFailed": "链接打开失败",
       "modelSelectFailed": "模型没有换成，请重新选择",
       "mailPreview": "邮件预览",

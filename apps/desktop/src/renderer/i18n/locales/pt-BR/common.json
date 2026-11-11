@@ -12250,6 +12250,7 @@
   },
   "commonUi": {
     "retry": "Tentar novamente",
+    "listSeparator": ", ",
     "crossAgentConvert": {
       "asking": {
         "title": "Configuração de espaço de trabalho conversível detectada",
@@ -12266,7 +12267,8 @@
     },
     "confirmDialog": {
       "confirm": "Confirmar",
-      "cancel": "Cancelar"
+      "cancel": "Cancelar",
+      "dontShowAgain": "Não mostrar novamente"
     },
     "toastContainer": {
       "ariaLabel": "Notificações"
@@ -13824,6 +13826,9 @@
       "editIndex": "Edição {{index}}/{{total}}",
       "omittedDiffSegments": "{{count}} segmentos adicionais de diff omitidos da prévia",
       "diffPreviewTruncated": "Algumas linhas do diff estão ocultas nesta prévia",
+      "diffUnchangedLines_one": "{{count}} linha sem alterações",
+      "diffUnchangedLines_other": "{{count}} linhas sem alterações",
+      "diffUnchangedLines_many": "{{count}} linhas sem alterações",
       "diffPreviewLoading": "Preparando prévia do diff…"
     },
     "textLightbox": {
@@ -14526,6 +14531,7 @@
       "expandFields": "Expandir",
       "collapseFields": "Recolher",
       "formSyncFailed": "As edições do cartão não foram sincronizadas. Verifique a conexão e continue editando; a mensagem não foi enviada.",
+      "attachmentNotAdded": "O anexo não foi adicionado. Selecione o arquivo novamente.",
       "linkOpenFailed": "Falha ao abrir o link",
       "modelSelectFailed": "O modelo não foi alterado. Escolha novamente.",
       "mailPreview": "Prévia do e-mail",

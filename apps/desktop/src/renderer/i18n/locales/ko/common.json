@@ -12104,6 +12104,7 @@
   },
   "commonUi": {
     "retry": "다시 시도",
+    "listSeparator": ", ",
     "crossAgentConvert": {
       "asking": {
         "title": "변환 가능한 워크스페이스 설정 감지됨",
@@ -12120,7 +12121,8 @@
     },
     "confirmDialog": {
       "confirm": "확인",
-      "cancel": "취소"
+      "cancel": "취소",
+      "dontShowAgain": "다음부터 표시하지 않기"
     },
     "toastContainer": {
       "ariaLabel": "알림 영역"
@@ -13679,6 +13681,8 @@
       "editIndex": "편집 {{index}}/{{total}}",
       "omittedDiffSegments": "미리보기에서 추가 diff 세그먼트 {{count}}개를 생략했습니다",
       "diffPreviewTruncated": "미리보기에서 일부 diff 줄을 숨겼습니다",
+      "diffUnchangedLines_one": "변경 없는 줄 {{count}}개",
+      "diffUnchangedLines_other": "변경 없는 줄 {{count}}개",
       "diffPreviewLoading": "diff 미리보기를 준비하는 중입니다…"
     },
     "textLightbox": {
@@ -14363,6 +14367,7 @@
       "expandFields": "펼치기",
       "collapseFields": "접기",
       "formSyncFailed": "카드 변경 사항이 동기화되지 않았습니다. 연결을 확인한 후 편집을 계속하세요. 메시지는 전송되지 않았습니다.",
+      "attachmentNotAdded": "첨부 파일을 추가하지 못했습니다. 파일을 다시 선택하세요.",
       "linkOpenFailed": "링크를 열지 못했습니다",
       "modelSelectFailed": "모델을 바꾸지 못했습니다. 다시 선택하세요.",
       "mailPreview": "메일 미리보기",
