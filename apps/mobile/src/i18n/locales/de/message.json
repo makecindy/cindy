@@ -64,7 +64,8 @@
       "discord": "Discord",
       "wechat": "WeChat",
       "wecom": "WeCom",
-      "dingtalk": "DingTalk"
+      "dingtalk": "DingTalk",
+      "imessage": "iMessage"
     },
     "modelMismatch": "Dieser Durchgang wurde von {{actual}} statt vom ausgewählten {{selected}} beantwortet (vorübergehende serverseitige Herabstufung)",
     "copyStateCopying": "Wird kopiert",

@@ -28,6 +28,7 @@ import {
 	formatDesktopStartupFailure,
 	inspectSharedUserDataRegion,
 	partitionDesktopDevProcesses,
+	assertNoRestartTargets,
 	commandBelongsToCheckout,
 	darwinTerminalLoggedCommand,
 	desktopDevTerminalLogPath,
@@ -1032,6 +1033,26 @@ test("structured startup failures keep their actionable reason", () => {
 	);
 });
 
+// Test value: identifyDesktopProcesses must return the actual profile so whoami
+// can load its ready/source record. Windows Crashpad's /prefetch:4 was included
+// in that path, producing WHOAMI_MISMATCH for a running dev instance. Existing
+// fixtures only used --switch boundaries; the minimum missing input is an
+// unquoted profile path followed by /prefetch:4. Unit tier, in-memory process facts.
+test("desktop whoami excludes Windows prefetch from the Crashpad userData path", () => {
+	const sourceRoot = path.join(os.tmpdir(), "whoami-source");
+	const userData = path.join(os.tmpdir(), "Application Support", "CindyGlobal-dev");
+	const electron = path.join(sourceRoot, "node_modules", "electron", "dist", "electron.exe");
+	const appPath = path.join(sourceRoot, "apps", "desktop");
+	const instances = identifyDesktopProcesses([
+		{ pid: 10, ppid: 9, command: `"${electron}" .` },
+		{ pid: 11, ppid: 10, command: `"${electron}" --type=crashpad-handler --user-data-dir=${userData} /prefetch:4 --no-rate-limit --database=unused` },
+		{ pid: 12, ppid: 10, command: `"${electron}" --type=renderer --app-path="${appPath}" --enable-sandbox` },
+	], [{ rootDir: sourceRoot, branch: null }]);
+
+	assert.equal(instances.length, 1);
+	assert.equal(instances[0].userDataDir, userData);
+});
+
 test("desktop whoami identifies multiple passive previews sharing one userData", () => {
 	const previewRoot = path.resolve("/repo/cindy-preview");
 	const previewRootTwo = path.resolve("/repo/cindy-preview-two");
@@ -1199,7 +1220,7 @@ test("devEnvPrefix carries the Cindy Make test-window marker through restart", (
 });
 
 test("devEnvPrefix overrides a stale Computer Use smoke flag in the target shell", () => {
-	for (const value of [undefined, "", "0", "1", "cursor-goal", "invalid"]) {
+	for (const value of [undefined, "", "0", "1", "cursor-goal", "folder-picker", "invalid"]) {
 		const env = value === undefined ? {} : { CINDY_CUA_SMOKE: value };
 		const node = process.platform === "win32" ? "%CINDY_TEST_NODE%" : "$CINDY_TEST_NODE";
 		const result = spawnSync(
@@ -1212,7 +1233,7 @@ test("devEnvPrefix overrides a stale Computer Use smoke flag in the target shell
 			},
 		);
 		assert.equal(result.status, 0, result.stderr);
-		assert.equal(result.stdout.trim(), ["1", "cursor-goal"].includes(value) ? value : "0", `caller value: ${value}`);
+		assert.equal(result.stdout.trim(), ["1", "cursor-goal", "folder-picker"].includes(value) ? value : "0", `caller value: ${value}`);
 	}
 });
 
@@ -1934,4 +1955,15 @@ test('whoami attributes a shared personal shell to its business checkout', { ski
   fs.unlinkSync(fixed+'.personal-install.json');
   assert.equal(identifyDesktopProcesses(processes,roots.map(rootDir=>({rootDir,branch:null}))).length,1);
  } finally {fs.rmSync(dir,{recursive:true,force:true});}
+});
+
+// Real kill partition: changing userData never makes a shared instance in this checkout safe
+// to restart. This is the missing regression behind personal manual-check's unsafe rehearsal.
+test('isolated preview refuses a shared instance in its checkout before stopping or clearing caches', () => {
+ const root='/tmp/fixture-personal-baseline';
+ const processes=[{pid:42,ppid:1,command:`/Users/fixture/Applications/Cindy Personal.app/Contents/MacOS/Electron ${root}/apps/desktop --user-data-dir=/tmp/shared`}];
+ const dev=processes.filter(p=>isRepositoryDesktopDevProcess(p,[root]));
+ assert.equal(dev.length,1);
+ assert.throws(()=>assertNoRestartTargets(dev,root,[root]),/occupied checkout/);
+ assert.doesNotThrow(()=>assertNoRestartTargets(processes,'/tmp/another-candidate',[root,'/tmp/another-candidate']));
 });

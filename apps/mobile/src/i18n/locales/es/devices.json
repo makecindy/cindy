@@ -624,8 +624,6 @@
       "minutes": "{{n}} mín.",
       "hoursMinutes": "{{h}} h {{m}} mín."
     },
-    "retrying": "Aún no ha comenzado. Volviendo a intentarlo…",
-    "stopTask": "Detener tarea",
     "actionFailed": "No se puede cargar o completar esta acción",
     "messages": "Mensajes",
     "readOnly": "Sólo lectura",
@@ -767,8 +765,6 @@
     "artifactsEmpty": "Aún no hay artefactos. Pídele a tu compañero de equipo que cree algo.",
     "openSourceTask": "Abrir sesión de origen",
     "modelFollowsDefault": "Usar la cadena de modelos predeterminada",
-    "taskModel": "Modelo de tarea",
-    "taskInheritsPrimary": "Heredar modelo principal",
     "modelOverride": "Usa la cadena de modelos propia de este compañero",
     "modelsUnavailable": "No hay modelos disponibles. Revisa la configuración de modelos de este compañero en tu computadora y actualiza la vista.",
     "artifactsRecovery": "Abra archivos de las tarjetas de mensajes o búsquelos en {{deviceName}}.",
@@ -874,7 +870,6 @@
   },
   "glance": {
     "open": "{{name}} de un vistazo",
-    "dueUnseen": "Una tarea pendiente ha vencido",
     "computers": "Computadoras",
     "runningHere": "Corriendo aquí",
     "online": "En línea",
@@ -882,37 +877,16 @@
     "current": "Actual",
     "offlineCount_one": "{{count}} sin conexión",
     "offlineCount_other": "{{count}} sin conexión",
-    "todos": "Pendientes",
     "showMore": "Mostrar más",
     "showLess": "Mostrar menos",
     "doneCount_one": "{{count}} completado",
     "doneCount_other": "{{count}} completados",
-    "delete": "Eliminar",
-    "deleted": "Eliminado. No se volverá a agregar.",
-    "undo": "Deshacer",
-    "undoFailed": "No se pudo deshacer. Intentar otra vez.",
-    "deleteFailed": "No se pudo eliminar. Intentar otra vez.",
-    "check": "Compruébalo por mí",
     "checkMeta": "Buscar nuevos pendientes en el correo y las conversaciones conectadas",
-    "checkPrompt": "Revisa mis fuentes conectadas, como el correo y los mensajes, para encontrar asuntos nuevos que deba atender y agrégalos a mis pendientes.",
-    "dailyCheck": "comprobar todos los dias",
-    "dailyCheckMeta": "Entre semana a las 9:00, tranquilo cuando no hay nada nuevo.",
     "recentTasks": "Tareas recientes",
     "unread": "Resultado no leído",
-    "stopDailyCheck": "Deja de comprobar diariamente",
     "openFailed": "No se pudo abrir este enlace",
-    "dailyCheckFailed": "No se pudo guardar. Intentar otra vez.",
-    "loadFailed": "No se pudo cargar la lista de tareas",
     "outputs": "Salidas",
     "outputMeta": "{{time}} · {{task}}",
-    "source": {
-      "conversation": "tu preguntaste",
-      "mail": "Desde correo electrónico",
-      "feishu": "Desde Feishu",
-      "github": "Desde GitHub",
-      "community": "De la comunidad",
-      "task": "de una tarea"
-    },
     "offlineCount_many": "{{count}} sin conexión",
     "doneCount_many": "{{count}} completados"
   },
@@ -937,6 +911,8 @@
     "moveTo": "Mover a “{{device}}”",
     "moveTitle": "¿Ejecutar {{name}} en “{{device}}”?",
     "moveDescription": "De ahora en adelante, {{name}} se ejecuta en \"{{device}}\" y aparece el historial de chat. Los directorios de trabajo, las conexiones y los archivos locales permanecen en la computadora en la que se encuentran.",
+    "olderTarget": "Cindy antigua",
+    "olderTargetNote": "“{{device}}” ejecuta una versión antigua de Cindy, así que {{name}} funcionará allí como antes: el historial del chat se sigue sincronizando, pero las reglas y automatizaciones del proyecto no se aplican allí.",
     "moveAction": "Mover a “{{device}}”",
     "moving": "Moviendo {{name}} a “{{device}}”…",
     "busyTitle": "{{name}} sigue respondiendo",
@@ -1016,5 +992,8 @@
     "sumFailed_many": "{{count}} fallidas",
     "found_many": "Se encontraron {{count}} sesiones en {{device}}",
     "confirmBody_many": "Se importarán {{count}} sesiones y se ocuparán hasta {{size}} de espacio en disco. La importación continúa en segundo plano en el ordenador; puedes detenerla cuando quieras. Toca de nuevo para empezar."
+  },
+  "liveActivity": {
+    "waitingForUpdate": "Esperando actualización"
   }
 }

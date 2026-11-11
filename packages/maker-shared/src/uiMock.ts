@@ -130,6 +130,17 @@ const RICH_ANSWER = [
 export const UI_MOCK_TASKS: readonly UiMockTask[] = [
   ...UI_MOCK_SHOWCASE_TASKS,
   {
+    id: 'visual-issue-confirm',
+    title: '反馈手机上的问题',
+    project: 'cindy-demo',
+    agentKind: 'cc', model: 'claude-sonnet-5', effort: 'medium',
+    status: 'active', source: 'desktop', minutesAgo: 1,
+    messages: [
+      { role: 'user', text: '手机上反馈问题时，确认卡提示只能回电脑处理。' },
+      { role: 'assistant', text: '已整理好反馈，请检查标题、正文和公开署名，确认后提交。' },
+    ],
+  },
+  {
     id: 'ui-mock-inline-math',
     title: '行内公式语义验收',
     project: 'cindy-demo',

@@ -19,23 +19,38 @@ import {
   observeSubscriptionAccountUsage,
   type SubscriptionAccountLease,
 } from './runtime.js';
-import { readAccountBinding, readPool, writeAccountBindings } from './store.js';
+import { readAccountBinding, readPool, writeAccountBindings, readLegacyCodexAccountId } from './store.js';
 import { registerSessionSubscriptionAccount } from './session.js';
 
 function providerFor(
   agent: BaseAgent,
   options: { providerId?: string | null; remoteHostId?: string | null },
 ): SubscriptionProvider | null {
-  if (options.remoteHostId || !isSubscriptionProvider(options.providerId)) return null;
-  return (agent.kind === 'claude-code' && options.providerId === 'anthropic') ||
-    (options.providerId === 'openai' && ['codex', 'claude-code', 'pi'].includes(agent.kind))
+  if (options.remoteHostId) return null;
+  const providerId = isSubscriptionProvider(options.providerId)
     ? options.providerId
+    : options.providerId && readLegacyCodexAccountId(options.providerId) ? 'openai' : null;
+  return (agent.kind === 'claude-code' && providerId === 'anthropic') ||
+    (providerId === 'openai' && ['codex', 'claude-code', 'pi'].includes(agent.kind))
+    ? providerId
     : null;
+}
+function legacyConnectionAccount(providerId: string | null | undefined, keys: string[], agentKind: string): string | undefined {
+  const account = providerId ? readLegacyCodexAccountId(providerId) : undefined;
+  if (!account) return;
+  if (!readPool('openai')?.accounts.some(entry => entry.id === account))
+    throw new AgentNotAuthenticatedError(agentKind, 'Subscription account was removed');
+  if (keys.some(key => {
+    const binding = readAccountBinding(key, 'openai');
+    return binding && binding.accountId !== account;
+  })) throw new Error('The task subscription account changed');
+  return account;
 }
 function wrapHandle(
   handle: AgentSessionHandle,
   lease: SubscriptionAccountLease,
   unregister: () => void,
+  model: string | undefined,
 ): AgentSessionHandle {
   let cleanupPending = false;
   return new Proxy(handle, {
@@ -48,9 +63,19 @@ function wrapHandle(
           try {
             return await target.send(...args);
           } catch (error) {
+            lease.observeFailure(error, model, 'run');
             if (!cleanupPending) lease.running(false);
             throw error;
           }
+        };
+      if (property === 'setModel' && target.setModel)
+        return async (...args: Parameters<NonNullable<AgentSessionHandle['setModel']>>) => {
+          if (cleanupPending) throw new Error('Subscription account runtime is closing');
+          return lease.changeModel(args[0], async () => {
+            await target.setModel!(...args);
+            // The runtime already switched even if the lease's final grant check fails.
+            model = args[0];
+          });
         };
       if (property === 'close' || property === 'detach') {
         const method = target[property];
@@ -72,6 +97,8 @@ function wrapHandle(
           for await (const event of target.events()) {
             if (event.type === 'account_usage')
               observeSubscriptionAccountUsage(lease.account, event.data);
+            if (event.type === 'error' && isTerminalTurnEvent(event))
+              lease.observeFailure(event.data, model, 'run');
             if (event.type === 'session_id') await lease.bind([`native:${target.id}`]);
             if (isTerminalTurnEvent(event) && !cleanupPending) lease.running(false);
             if (event.type === 'status' && (event.data as { isRunning?: boolean })?.isRunning)
@@ -180,12 +207,15 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T): T {
           try {
             const provider = providerFor(target, options);
             if (!provider || !readPool(provider)) return startLegacy();
-            if (options.resumeSessionId && !keys.some((key) => readAccountBinding(key, provider))) {
+            const imported = legacyConnectionAccount(options.providerId, keys, target.kind);
+            if (!imported && options.resumeSessionId && !keys.some((key) => readAccountBinding(key, provider))) {
               // Legacy Codex may use Cindy's private home, not ~/.codex. Keep that route.
               if (provider === 'openai') return startLegacy();
               await writeAccountBindings(keys, provider, 'default');
             }
-            lease = await acquireSubscriptionAccount(provider, options.model, keys);
+            lease = await acquireSubscriptionAccount(provider, options.model, keys, false, {
+              remote: !!options.deviceHosted, accountId: imported, resuming: !!options.resumeSessionId,
+            });
             if (!lease) return startLegacy();
             unregister = registerSessionSubscriptionAccount(options.sessionId, lease.account);
           } catch (error) {
@@ -201,8 +231,9 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T): T {
             });
             await lease.bind([...keys, `native:${handle.id}`]);
             lease.running(false);
-            return guardAccountSwitch(wrapHandle(handle, lease, unregister), target, options);
+            return guardAccountSwitch(wrapHandle(handle, lease, unregister, options.model), target, options);
           } catch (error) {
+            lease.observeFailure(error, options.model, 'start');
             const release = () => {
               unregister();
               lease.release();
@@ -229,18 +260,19 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T): T {
           const provider = providerFor(target, options);
           if (!provider || !readPool(provider)) return target.forkSdkSession(options);
           const key = `native:${options.sourceSdkSessionId}`;
-          if (!readAccountBinding(key, provider)) {
+          const imported = legacyConnectionAccount(options.providerId, [key], target.kind);
+          if (!imported && !readAccountBinding(key, provider)) {
             if (provider === 'openai') return target.forkSdkSession(options);
             await writeAccountBindings([key], provider, 'default');
           }
-          const lease = await acquireSubscriptionAccount(provider, options.model, [key], true);
+          const lease = await acquireSubscriptionAccount(provider, options.model, [key], true, { accountId: imported, resuming: true });
           if (!lease) return target.forkSdkSession(options);
           try {
             const result = await target.forkSdkSession({
               ...options,
               [NATIVE_SUBSCRIPTION_ACCOUNT]: lease.account,
             });
-            await lease.bind([`native:${result.newSdkSessionId}`]);
+            await lease.bind([key, `native:${result.newSdkSessionId}`]);
             return result;
           } finally {
             lease.release();

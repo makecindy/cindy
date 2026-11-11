@@ -26,6 +26,7 @@ vi.mock('../../maker-host/model-route-guard-live.js', () => ({
 vi.mock('../../agent-island/service.js', () => ({ getAgentIslandService: () => null }));
 vi.mock('../../notificationService.js', () => ({ getDesktopNotificationsEnabled: () => false }));
 vi.mock('../../maker-ipc/register.js', () => ({
+  bootstrapScheduledSession: vi.fn(),
   ensureSchedulerQueueRestored: mocks.restore,
   findSchedulerUsageLimitWait: mocks.quotaWait,
   getSessionLastUserActionAt: mocks.lastUserActionAt,
@@ -54,7 +55,6 @@ vi.mock('../script-capability-broker.desktop', () => ({ SchedulerScriptCapabilit
 vi.mock('../notifier.desktop', () => ({ DesktopNotifier: class {} }));
 vi.mock('../../im/feishu/notificationOrigin', () => ({ sendFeishuSessionNotification: vi.fn() }));
 vi.mock('../../wecomGroupNotification', () => ({ wecomGroupNotificationService: {} }));
-vi.mock('../../routines/service.js', () => ({ getRoutineEngine: async () => null, stopRoutines: async () => {} }));
 
 import { resetScheduler, startScheduler } from '../index.desktop';
 

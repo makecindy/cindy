@@ -805,8 +805,8 @@ export interface ModelSelectorBaseProps {
   sourceDisconnected?: boolean;
   /** 语义同 ModelSelectorContentProps.actualRoute(仅已建会话传 true)。 */
   actualRoute?: boolean;
-  /** Only new-task composers preview unbound subscription accounts. */
-  previewSubscriptionPool?: boolean;
+  /** Task whose existing subscription binding should be displayed, when browsing its host. */
+  subscriptionTaskId?: string;
   /** 语义同 ModelSelectorContentProps.taskStarted。 */
   taskStarted?: boolean;
   /** Fast Mode 状态 + 回调(从工具栏搬进 Edit 配置列)。不传 → 配置列不显示 Fast 开关。 */
@@ -1010,7 +1010,8 @@ export interface ModelSelectorContentBaseProps {
    * (PR #744 review 第十轮)。
    */
   actualRoute?: boolean;
-  previewSubscriptionPool?: boolean;
+  /** Task whose existing subscription binding should be displayed, when browsing its host. */
+  subscriptionTaskId?: string;
   /**
    * 任务已经运行过(有 Agent 回复)。供应商组在任务第一次运行时选好电脑(provider-groups.md §6),
    * 之后组那一项的用量按任务实际运行的那台显示;草稿与还没运行过的任务不传。
@@ -1265,7 +1266,7 @@ function ModelSelectorContentView({
   excludeChatBridgedCodex,
   onDismiss,
   actualRoute = false,
-  previewSubscriptionPool = false,
+  subscriptionTaskId,
   taskStarted = false,
   maxVisibleModelRows,
   overlayContentClassName,
@@ -1460,8 +1461,9 @@ function ModelSelectorContentView({
   // 订阅用量跟随目录归属:本机目录读本机账号,远程目录读被控端镜像(与会话用量 chip 共用缓存);
   // 外部注入的目录(providersOverride)与 SSH 混合目录归属不明,不显示任何账号用量。
   const providerUsageScope = useMemo<ProviderUsageScope | null>(
-    () => (deviceId ? { deviceId } : mixedCatalog ? null : { deviceId: null, previewSubscriptionPool: previewSubscriptionPool && !actualRoute }),
-    [deviceId, mixedCatalog, previewSubscriptionPool, actualRoute],
+    () => !deviceId && mixedCatalog ? null : ({ deviceId: deviceId ?? null,
+      taskId: (!remoteAgent || !remoteBrowse) ? subscriptionTaskId : undefined }),
+    [deviceId, mixedCatalog, subscriptionTaskId, remoteAgent, remoteBrowse],
   );
   // Old device-link hosts expose capabilities only. Never substitute local routes.
   const unifiedPanel = useUnifiedPanel && !(deviceId && remoteProviders.unsupported);
@@ -4193,7 +4195,7 @@ export function ModelSelector({
   currentProviderId,
   sourceDisconnected = false,
   actualRoute = false,
-  previewSubscriptionPool = false,
+  subscriptionTaskId,
   taskStarted = false,
   onProviderChange,
   onNavigateToProviders,
@@ -5043,7 +5045,7 @@ export function ModelSelector({
       excludeChatBridgedCodex={excludeChatBridgedCodex}
       onDismiss={() => setOpenWithoutAutoRefresh(false)}
       actualRoute={actualRoute}
-      previewSubscriptionPool={previewSubscriptionPool}
+      subscriptionTaskId={subscriptionTaskId}
       taskStarted={taskStarted}
       maxVisibleModelRows={maxVisibleModelRows}
       currentProviderId={currentProviderId}

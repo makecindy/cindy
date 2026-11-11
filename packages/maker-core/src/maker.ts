@@ -108,8 +108,23 @@ export interface SessionLifecycleHooks {
   onStartFailed?: (context: SessionStartFailureContext) => void | Promise<void>;
   /** Failed startup's handle was finally closed after deferred cleanup; no task ownership change. */
   onStartCleanupSucceeded?: (sessionId: string, options: CreateSessionOptions) => void | Promise<void>;
-  /** session 关闭时调用；options 始终属于该次启动，不从当前同 id 的 runtime 取值。 */
-  onClose?: (sessionId: string, options: CreateSessionOptions) => void | Promise<void>;
+  /**
+   * 关闭请求发起时刻同步取样：这次 close 是否为「瞬态重建」——同一任务随后会按 DB
+   * 行重建，worktree 与暂存附件必须留给重建后的 runtime。
+   *
+   * 只在请求入口问一次，结果随 onClose 下发。onClose 是异步的、close 不等待它，
+   * 任何「调用方在关闭期间开一个窗口」的旁路到钩子真正执行时都可能已释放。
+   */
+  isTransientCloseRequest?: (sessionId: string) => boolean;
+  /**
+   * session 关闭时调用；options 始终属于该次启动，不从当前同 id 的 runtime 取值。
+   * close 是 Maker 在请求入口固化的关闭事实，reason 与瞬态标记同批取样。
+   */
+  onClose?: (
+    sessionId: string,
+    options: CreateSessionOptions,
+    close: MakerSessionCloseFacts,
+  ) => void | Promise<void>;
   /**
    * Codex-only: resume 前读取该业务 session 对应 thread history 是否已可靠包含
    * 产品 prompt。读取失败由 Maker 视为 unknown,让 Codex fail toward restore。
@@ -203,6 +218,13 @@ export type MakerSessionCloseReason =
   | 'agent-switch'
   | 'runtime-refresh'
   | 'unexpected';
+
+/** 一次 close 请求固化下来的事实；事后 close 竞态或退出确认失败都不再改写。 */
+export interface MakerSessionCloseFacts {
+  reason: MakerSessionCloseReason;
+  /** 同一任务随后会重建；onClose 据此跳过 worktree 释放与暂存附件清理。 */
+  transient: boolean;
+}
 
 export type MakerEvent =
   | { type: 'session:created'; session: Session }
@@ -538,8 +560,8 @@ export class Maker {
   private readonly sdkSessionPersistenceTails = new Map<string, Promise<void>>();
   /** 已确认失效的 vendor id；用于丢弃 CAS 之后才到达的旧 query session_id 事件。 */
   private readonly invalidSdkSessionIds = new Map<string, Set<string>>();
-  /** Explicit close cause keyed by the exact Session instance that will emit closed. */
-  private readonly closeReasons = new WeakMap<Session, MakerSessionCloseReason>();
+  /** Close facts keyed by the exact Session instance that will emit closed. */
+  private readonly closeFacts = new WeakMap<Session, MakerSessionCloseFacts>();
   /** Host cleanup hooks must settle before Maker.shutdown() releases its process barrier. */
   private readonly pendingLifecycleCloses = new Set<Promise<void>>();
   /** Maker Memory 顶层单例 (可选). undefined 时 maker memory 功能整体禁用. */
@@ -1261,11 +1283,12 @@ export class Maker {
         codexThreadClaim?.release();
         // 不再持久化运行态: 'closed' 是 SDK 子进程的瞬态, 重启即灭, 无意义存盘。
         this.activeSessions.delete(meta.id);
+        const close = this.getSessionCloseFacts(session);
         this.emit({
           type: 'session:closed',
           sessionId: meta.id,
           session,
-          reason: this.closeReasons.get(session) ?? 'unexpected',
+          reason: close.reason,
         });
         // 注入的副作用钩子 (worktree / temp 文件 / image cache 清理等)。
         // fire-and-forget, 异常只记日志, 不影响其他清理。在 storage update / activeSessions
@@ -1273,7 +1296,7 @@ export class Maker {
         // 自己的 invariant 先一致。
         if (this.lifecycleHooks.onClose) {
           const cleanup = Promise.resolve()
-            .then(() => this.lifecycleHooks.onClose!(meta.id, startOpts))
+            .then(() => this.lifecycleHooks.onClose!(meta.id, startOpts, close))
             .catch((err) => {
               this.logger.warn('lifecycleHooks.onClose threw', { sessionId: meta.id, error: String(err) });
             });
@@ -1441,16 +1464,35 @@ export class Maker {
   async closeSessionIfCurrent(
     session: Session,
     reason: Exclude<MakerSessionCloseReason, 'unexpected'> = 'requested',
-    opts?: { afterCurrentTurn?: boolean; failureEvent?: () => AgentEvent },
+    opts?: { afterCurrentTurn?: boolean; failureEvent?: () => AgentEvent; onlyIfIdle?: boolean },
   ): Promise<'closed' | 'deferred' | void> {
     if (this.activeSessions.get(session.id) !== session) return;
+    let idleClose: Promise<boolean> | undefined;
+    if (opts?.onlyIfIdle) {
+      if (session.hasStartedClosing()) return;
+      // closeIfIdle synchronously reserves teardown or refuses it. Record the
+      // cause only for an accepted close, before its first async completion.
+      idleClose = session.closeIfIdle();
+      if (!session.hasStartedClosing()) return;
+    }
     // Deferred internal retirement is only intent. An explicit closer may
     // take ownership until Session actually starts teardown; after that the
     // cause stays fixed even if exit confirmation fails or another close races.
-    const previousReason = this.closeReasons.get(session);
-    if (previousReason === undefined || (
-      previousReason === 'runtime-refresh' && !opts?.afterCurrentTurn && !session.hasStartedClosing()
-    )) this.closeReasons.set(session, reason);
+    const previous = this.closeFacts.get(session);
+    if (previous === undefined || (
+      previous.reason === 'runtime-refresh' && !opts?.afterCurrentTurn && !session.hasStartedClosing()
+    )) {
+      // 原因与瞬态标记必须在同一个请求入口固化:onClose 是异步的,close 不等它,
+      // 调用方的抑制窗口在 close 返回后就释放了,到钩子里再问必然错过。
+      this.closeFacts.set(session, {
+        reason,
+        transient: this.lifecycleHooks.isTransientCloseRequest?.(session.id) ?? false,
+      });
+    }
+    if (idleClose) {
+      await idleClose;
+      return 'closed';
+    }
     if (opts?.afterCurrentTurn) return session.closeAfterCurrentTurn(opts);
     await session.close();
     return 'closed';
@@ -1488,7 +1530,12 @@ export class Maker {
    * created before a late close notification from the old instance arrives.
    */
   getSessionCloseReason(session: Session): MakerSessionCloseReason {
-    return this.closeReasons.get(session) ?? 'unexpected';
+    return this.getSessionCloseFacts(session).reason;
+  }
+
+  /** 关闭事实（原因 + 瞬态标记）；自关闭的 Session 没有显式原因。 */
+  private getSessionCloseFacts(session: Session): MakerSessionCloseFacts {
+    return this.closeFacts.get(session) ?? { reason: 'unexpected', transient: false };
   }
 
   /**
@@ -1533,7 +1580,10 @@ export class Maker {
       phase: 'initial' | 'late',
     ): Array<Promise<void>> => {
       for (const session of sessions) {
-        if (!this.closeReasons.has(session)) this.closeReasons.set(session, 'requested');
+        if (!this.closeFacts.has(session)) {
+          // 退出期不做瞬时取样：onClose 副作用此时已被 shutdown 整体抑制。
+          this.closeFacts.set(session, { reason: 'requested', transient: false });
+        }
       }
       return sessions.map((session) =>
         Promise.resolve()
@@ -1714,6 +1764,8 @@ export class Maker {
   async listAgentSkills(
     agentKind: AgentKind,
     opts: ListAgentSkillsOptions & { sessionId?: string },
+    /** Host-only request-scoped verification; never part of renderer/remote options. */
+    readDisabledSkillPaths?: () => Promise<readonly string[]>,
   ): Promise<ListAgentSkillsResult> {
     const { sessionId, ...agentOpts } = opts;
     const sessionMeta = sessionId ? await this.storage.get(sessionId) : null;
@@ -1725,11 +1777,13 @@ export class Maker {
       ));
     const agent = this.requireAgent(agentKind);
     const session = sessionId ? this.getSession(sessionId) : undefined;
-    const filter = (result: ListAgentSkillsResult) => agent.filterActiveSkillCommands(
-      result, agentOpts.remoteHostId ?? sessionMeta?.remoteHostId ?? undefined,
-      session?.agentKind === agentKind ? session.getDisabledSkillPaths() : undefined,
-    );
-    const result = filter(await agent.listAgentSkills({
+    const filter = async (result: ListAgentSkillsResult) => {
+      const remoteHostId = agentOpts.remoteHostId ?? sessionMeta?.remoteHostId ?? undefined;
+      const snapshot = session?.agentKind === agentKind ? session.getDisabledSkillPaths() : undefined;
+      const current = !remoteHostId && snapshot === undefined ? await readDisabledSkillPaths?.() : undefined;
+      return agent.filterActiveSkillCommands(result, remoteHostId, snapshot, current);
+    };
+    const result = await filter(await agent.listAgentSkills({
       ...agentOpts,
       includeManagedPiPackages,
     }));
@@ -1810,7 +1864,7 @@ export class Maker {
    * 用途: 起标题 / 命名 / 总结摘要 / skillReview 等 "纯文本 → 文本" 任务,
    * 不需要 session 生命周期 / 事件流 / 持久化。
    *
-   * 各 agent 默认模型 (Claude → haiku-4-5, Codex → gpt-5.4-mini), 鉴权与正常 session 同源。
+   * 各 agent 默认模型 (Claude → haiku-4-5, Codex → app-server 自身默认), 鉴权与正常 session 同源。
    * 失败抛 OneShotError (reason: timeout/auth/network/malformed) —— 调用方按 reason
    * 决定 swallow (起标题) 还是上报 (skillReview)。
    */

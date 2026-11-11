@@ -7,7 +7,7 @@ import { configureSessionModelInterfaceStorage, sessionModelInterface } from './
 import { readGeneratedImageEpoch } from '../cindy-media/generatedImageStorage';
 import { resolveHelperSurface } from '../mcp-integrations/helperSurface.js';
 import { readAgentCapabilityCatalog, RUNTIME_MCP_NAMES_KEY, type AgentCapabilityQuery } from './agentCapabilityCatalog.js';
-import { listCindyManagedSkills, prepareCindyCodexSkills } from './managed-skills.js';
+import { listCindyManagedSkills, prepareCindyCodexSkills, markCindyOfficialSkills } from './managed-skills.js';
 import { scanLocalCustomizations } from '../skillhub/customizationScanHost';
 import { createCompanionImportProvider } from '../bot-import/importProvider.js';
 import { COMPANION_CONNECTIONS_MCP_NAME, createCompanionConnectionsProvider, readCompanionConnectionsAvailability } from '../bot-import/connectionProvider.js';
@@ -127,6 +127,7 @@ import {
   migrateLegacyBotProfileFolder,
   readBotProfileFolder,
 } from '../maker-ipc/botProfileFolder.js';
+import { readBotLinkedProjects } from '../maker-ipc/botLinkedProjectStore.js';
 import {
   listBotTeammates,
 } from '../localDb/botHistoryScope.js';
@@ -227,6 +228,7 @@ import {
   resolvePiGatewayDescriptorProviderId,
   resolveVerifiedContextWindow,
   resolveModelDefaultContextWindow,
+  resolveModelMaxOutputTokens,
 } from './catalog-to-descriptors.js';
 import { readModelContextLimit, resolveModelCompactionPct } from './model-context-limit-store.js';
 import { resolveDesktopModelContextProviderId, resolveDesktopModelEfforts, readStoredSessionContextWindowBudget, resolveConfiguredContextWindow, applySessionContextWindowBudgetToCreateOpts } from './model-context-settings.js';
@@ -400,6 +402,7 @@ import { createMemoryReviewOneShot } from './memory-review-one-shot.js';
 import { prepareExternalCodexSessionForResume } from './codex-local-sessions.js';
 import {
   rehydrateCloseSuppression,
+  shouldSkipOnCloseSideEffects,
   withRehydrateCloseSuppressed,
 } from './rehydrateCloseSuppression.js';
 import {
@@ -910,6 +913,7 @@ function createDesktopBotCapabilityService() {
   return createBotCapabilityService({
     getMaker, getPluginRegistry, isBotToolsetAvailable,
     listMcpServers: listBotRuntimeMcpServers,
+    markOfficialSkills: markCindyOfficialSkills,
     readConversationConnections: async (botId) => {
       if (!_readBotConversationConnections) throw new Error('Bot conversation connections reader is not initialized');
       return _readBotConversationConnections(botId);
@@ -1056,11 +1060,6 @@ export function getMaker(): Maker {
       reviewOneShot: createMemoryReviewOneShot(),
     });
 
-    // Plugin registry — 先于 agent 构造, 让 createDesktopMcpProviders 拿 registry
-    // 包进每个 MCP provider 的 isEnabled 闭包里。registry 内部读 <userData>/plugin-prefs.json
-    // 和项目 .claude/settings.json, mtime-based 缓存, 只在 session start 时同步检查。
-    const pluginRegistry = createPluginRegistry();
-
     const makerMemoryProviderDeps = {
       runtimeCapabilities: async (context: import('@cindy/mcps').LiziMcpSessionContext, query: AgentCapabilityQuery) => {
         const session = context.sessionId ? _maker?.getSession(context.sessionId) : undefined;
@@ -1104,7 +1103,9 @@ export function getMaker(): Maker {
       getAppVersion: () => app.getVersion(),
       getMakerMemoryManager: () => makerMemoryManager,
       lspPool: getLspPool(),
-      pluginRegistry,
+      // Maker can initialize before login commits its owner. Resolve on every
+      // read so long-lived providers never retain the no-owner/previous owner registry.
+      get pluginRegistry() { return createPluginRegistry(); },
       invokeRemote: remoteInvoke,
       captureSharedTaskCommand: (sessionId: string, assertCurrent: () => void) => captureSharedTaskAgentCommand(sessionId, assertCurrent, {
         ready: waitForSharedTaskRelay, online: isSharedTaskRelayOnline, available: isSharedTaskAvailable,
@@ -1504,6 +1505,11 @@ export function getMaker(): Maker {
         return source ? readModelContextLimit('claude-code', source, modelId)
           ?? resolveModelDefaultContextWindow(catalog, 'claude-code', source, modelId) : null;
       },
+      resolveModelMaxOutputTokens: (providerId, modelId) => {
+        const catalog = getDesktopSelectableCatalog();
+        const source = resolveDesktopModelContextProviderId(catalog, 'claude-code', providerId, modelId);
+        return resolveModelMaxOutputTokens(catalog, 'claude-code', source, modelId);
+      },
       resolveModelCompactionPct: (providerId, modelId) => {
         const source = resolveDesktopModelContextProviderId(getDesktopSelectableCatalog(), 'claude-code', providerId, modelId);
         return resolveModelCompactionPct(getDesktopSelectableCatalog(), 'claude-code', source, modelId);
@@ -1610,7 +1616,7 @@ export function getMaker(): Maker {
             ensureForward: ensureRemoteMcpForward,
             // collab 全局禁用 (Tier 4) 时整个不注入 — bridge 名单不反映
             // 开关 (codex-connector R20 P2, 与 codex daemon 侧同闸门)。
-            isCollabEnabled: () => pluginRegistry.isEnabled('collab'),
+            isCollabEnabled: () => createPluginRegistry().isEnabled('collab'),
             onOptionalInjectionError: (err) => {
               desktopMakerLogger.warn('cc remote MCP injection skipped', {
                 remoteHostId,
@@ -1919,7 +1925,7 @@ export function getMaker(): Maker {
               buildRemoteCodexSessionMcpConfig(ctx.remoteHostId!, instance, {
                 bridgeInstanceId: getActiveCodexBridgeInstanceId(),
                 serverNames: getActiveCodexBridgeServerNames() ?? [],
-                collabEnabled: pluginRegistry.isEnabled('collab'),
+                collabEnabled: createPluginRegistry().isEnabled('collab'),
                 makerMemoryEnabled: _maker?.makerMemory?.isEnabled() ?? false,
                 vendorOptions: session?.vendorOptions,
               }),
@@ -2560,7 +2566,7 @@ export function getMaker(): Maker {
           remoteHostId,
           forceReload: agentKind === 'codex' && skillLinksChanged,
         });
-        return result.skills;
+        return markCindyOfficialSkills(result.skills, remoteHostId);
       },
       listMcpServers: listBotRuntimeMcpServers,
       // 伙伴绑了哪些平台的机器人(不含凭证): 主任务据此挂渠道原生 API 工具(见 hydrate 内注释)。
@@ -2603,6 +2609,16 @@ export function getMaker(): Maker {
           contentWritableDirs: await ensureBotContentDirs(ownerRoot, botId, legacyUserDataDir),
           systemPromptOverride: folder.systemPromptOverride,
         };
+      },
+      // 项目模式:本机的关联项目作为只读附加目录;另一台电脑上的只是引用,不在这里挂载。
+      listLinkedProjectDirs: async ({ botId }) => {
+        const linked = await readBotLinkedProjects(ownerScopedUserDataPath(), botId);
+        const dirs: string[] = [];
+        for (const project of linked) {
+          if (project.deviceId) continue;
+          if (await fs.stat(project.path).then((value) => value.isDirectory(), () => false)) dirs.push(project.path);
+        }
+        return dirs;
       },
       readMemoryIndex: async (scopeKey) =>
         (await makerMemoryManager.getStore(scopeKey)).getIndex(),
@@ -2697,9 +2713,9 @@ export function getMaker(): Maker {
           const providerReady = await ensureCurrentAccountProviderReadiness();
           if (!providerReady) {
             // 未登录 / 正在切账号时这里恒 false。主机通路只把失败压成 errorCode +
-            // message 两个字符串，所以稳定标记必须写进 message 本身：调用方（如 Bot
-            // 委派）据此把「这不会自愈，得让用户去登录」和「瞬时故障，值得重试」分开，
-            // 而不是无差别重试到天荒地老。见 botDelegationDispatchOutcome.ts。
+            // message 两个字符串，所以稳定标记必须写进 message 本身：调用方据此把
+            // 「这不会自愈，得让用户去登录」和「瞬时故障，值得重试」分开，
+            // 而不是无差别重试到天荒地老。
             throw Object.assign(
               new Error(
                 `${ACCOUNT_PROVIDER_NOT_READY_CODE}: account provider models are not ready `
@@ -2793,7 +2809,8 @@ export function getMaker(): Maker {
           opts.vendorOptions = {
             ...(opts.vendorOptions ?? {}),
             [CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY]: disabledPluginIds,
-            ...(botRuntimeSnapshot
+            // V2 teammates (projectContext) get the ordinary task's MCP and plugin surface.
+            ...(botRuntimeSnapshot && !createOpts.botRuntimeProfile?.projectContext
               ? {
                   [RUNTIME_MCP_NAMES_KEY]: (_mcpProviders[createOpts.agentKind] ?? [])
                     .filter((provider) => isBotMcpServerAllowed(createOpts.botRuntimeProfile?.mcpPolicy, provider.name))
@@ -2885,12 +2902,16 @@ export function getMaker(): Maker {
         onCodexProductPromptDelivery: async ({ sessionId, historyHasProductPrompt }) => {
           await writeCodexHistoryHasProductPrompt(sessionId, historyHasProductPrompt);
         },
-        onClose: async (sessionId, options) => {
-          // 抑制态必须在首个 await 前取样:Maker.close 不等 onClose,调用方(漂移
-          // 回收包裹/任务移动/桌面发送 seam)的抑制窗口会在 close 返回后即释放,
-          // 而本钩子先等 worktree lease 的文件操作才查抑制表 —— 重查会错过窗口,
-          // 让重建期间的 close 照删暂存附件(Greptile P1,2026-11-10)。
-          const rehydrateSuppressedAtClose = rehydrateCloseSuppression.isSuppressed(sessionId);
+        isTransientCloseRequest: (sessionId) => rehydrateCloseSuppression.isSuppressed(sessionId),
+        onClose: async (sessionId, options, close) => {
+          // 瞬态重建（任务移动/桌面发送 seam/漂移回收/切模等）不能释放 worktree、
+          // 不能清暂存附件：重建后的 turn 还要用。走 Maker close 请求的有固化事实；
+          // 自关闭（handle 在 preflight 里自己退出）没有事实，只能靠钩子入口的窗口快照。
+          // 两者都必须在首个 await 前取：close 不等本钩子，窗口随时会释放。
+          const transient = shouldSkipOnCloseSideEffects(
+            close,
+            rehydrateCloseSuppression.isSuppressed(sessionId),
+          );
           clearUsagePricing(sessionId);
           const lease = worktreeRuntimeLeases.get(options);
           if (lease) {
@@ -2910,13 +2931,14 @@ export function getMaker(): Maker {
             // 这)。回收只由会话显式删除/归档驱动,见 localDb/ipc/sessions.ts →
             // worktree/sessionRemovalRecycle.ts。
             await WorktreePool.releaseWorktree(sessionId).catch(() => undefined);
-          }, { forceSkip: rehydrateSuppressedAtClose });
+          }, { skip: transient });
         },
       },
     });
-    // 漂移回收的 close 必须在抑制窗口内:直发链路(IM turnRunner/hook/scheduler/goal)
-    // 回收后立刻按 DB 行重建同一任务,窗口内 onClose 跳过临时附件清理与 worktree
-    // 释放 —— 否则重建后的 turn 会丢转录里引用的暂存附件(Codex P2,2026-11-10)。
+    // 漂移回收的 close 仍在抑制窗口内：直发链路(IM turnRunner/hook/scheduler/goal)
+    // 回收后立刻按 DB 行重建同一任务，窗口内 register 的关闭编排不把它当用户主动
+    // 关闭（输入边界、再续令牌留给重建后的 runtime）。onClose 的重副作用由 close
+    // 事实（runtime-refresh）独立保证，不再依赖这个窗口的时序。
     // 桌面发送事务的同一 close 在 register.ts 的 deps seam 处已各自包裹,此处收口
     // 其余全部直发调用方(getMaker 侧不经过 seam)。
     const baseRecyclePiRuntimeIfResourcesDrifted

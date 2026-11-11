@@ -81,6 +81,7 @@ import {
   customProviderExists,
   deleteCustomProvider,
   getCustomProvider,
+  listCustomProviders,
   updateCustomProvider,
   updateCustomProviderIfUnchanged,
   validateCustomProviderConfig,
@@ -103,7 +104,17 @@ import {
   finishProviderImportConfirm,
   previewProviderImport,
   createProviderImportDraftsFromFile,
+  createLocalProviderImport,
+  editLocalProviderImport,
+  isLocalProviderImport,
+  checkLocalProviderImportSource,
+  localProviderImportDraft,
+  equivalentLocalProvider,
+  completeEquivalentLocalImport,
+  localProviderImportItem,
 } from '../provider-import/providerImport.js';
+import { localSourceContext, readLocalProviderSource, SOURCE_IDS, type LocalSourceContext } from '../provider-import/local/sources.js';
+import type { LocalProviderImportScan, LocalProviderImportItem } from '../../shared/localProviderImport.js';
 import { readProviderImportFile } from '../provider-import/providerImportFile.js';
 import {
   builtinApiKeyStore,
@@ -275,6 +286,8 @@ function oauthRuntimeEndpointSignature(config: CustomProviderConfig | null): str
 
 
 export interface ProviderHandlerDeps {
+  /** Test seam: production reads known locations on this desktop, never renderer paths. */
+  localProviderSourceContext?: () => LocalSourceContext;
   /**
    * 当前供应商视图（含实时连接状态）；见 createDesktopProviderService。
    *
@@ -1340,6 +1353,100 @@ export function registerProviderHandlers(
   const providerImportScope = (): { dataOwnerId: string | null; generation: number } =>
     captureProviderOwnerSession() ?? { dataOwnerId: null, generation: 0 };
 
+  // Different new IDs can describe the same connection. Only local-import final
+  // comparisons/confirmation share this queue; scans and ordinary CRUD do not.
+  let localImportTail: Promise<unknown> = Promise.resolve();
+  const serializeLocalImport = <T,>(task: () => Promise<T>): Promise<T> => {
+    const run = localImportTail.then(task, task);
+    localImportTail = run.catch(() => undefined);
+    return run;
+  };
+  const equivalentStoredLocalImport = async (id: string): Promise<string | undefined> => {
+    const draft = localProviderImportDraft(id, providerImportScope());
+    for (const stored of await listCustomProviders()) {
+      if (stored.auth?.method === 'oauth') continue;
+      // Avoid decrypting unrelated connections while scanning a large saved catalog.
+      if (draft.kind !== 'custom' || Object.keys(draft.config.runtimes).sort().join() !== Object.keys(stored.runtimes).sort().join()
+        || CUSTOM_PROVIDER_RUNTIME_AGENTS.some(agent => {
+          const a = draft.config.runtimes[agent], b = stored.runtimes[agent];
+          return a && b && (a.baseUrl !== b.baseUrl || a.wireProtocol !== b.wireProtocol
+            || a.requestPath !== b.requestPath || a.modelsUrl !== b.modelsUrl);
+        })) continue;
+      // A concurrent settings mutation may have staged keys beside an old config.
+      // Do not classify that transient combination as an existing connection.
+      if (providerConfigMutationCounts.has(stored.id)) continue;
+      const keys: Partial<Record<AgentKind, string>> = {};
+      const config = { ...stored, runtimes: { ...stored.runtimes } };
+      let readable = true;
+      for (const agent of CUSTOM_PROVIDER_RUNTIME_AGENTS) {
+        const runtime = config.runtimes[agent];
+        if (!runtime) continue;
+        try {
+          const key = deps.readCustomProviderKeyForMutation(stored.id, agent);
+          const headers = deps.readCustomProviderHeadersForMutation(stored.id, agent);
+          if ((key !== null && typeof key !== 'string') || (headers !== null && typeof headers !== 'object')) { readable = false; break; }
+          if (typeof key === 'string') keys[agent] = key;
+          config.runtimes[agent] = { ...runtime, ...(headers ? { headers: headers as Record<string, string> } : {}) };
+        } catch { readable = false; break; }
+      }
+      if (readable && !providerConfigMutationCounts.has(stored.id) && equivalentLocalProvider(draft, config, keys)) return stored.id;
+    }
+  };
+
+  let localScanRunning = false;
+  registry.handle(MAKER_INVOKE.PROVIDER_IMPORT_LOCAL_SCAN, async (event, ...args: unknown[]): Promise<LocalProviderImportScan> => {
+    assertTrustedProviderMutationSender(event);
+    if (args.length || localScanRunning) throwIpcError('INVALID_PARAMS', 'local scan is already running or invalid');
+    const owner = providerImportScope();
+    const items: LocalProviderImportItem[] = [];
+    const sources: LocalProviderImportScan['sources'] = [];
+    localScanRunning = true;
+    try {
+      const context = deps.localProviderSourceContext?.() ?? localSourceContext();
+      const snapshot = { ...context, env: { ...context.env } };
+      for (const source of SOURCE_IDS) {
+        const result = await readLocalProviderSource(source, snapshot);
+        assertTrustedProviderMutationSender(event);
+        assertProviderMutationOwner(owner);
+        const added: LocalProviderImportItem[] = [];
+        try {
+          for (const entry of result.entries) {
+            // Capture the stable reference only, never the whole credential-bearing result.
+            const ref = entry.ref;
+            const item = createLocalProviderImport(source, entry, owner, async () => {
+              const fresh = await readLocalProviderSource(source, snapshot);
+              return fresh.issue ? undefined : fresh.entries.find(e => e.ref === ref);
+            });
+            added.push(item);
+            if (!item.issue && await equivalentStoredLocalImport(item.importId)) item.issue = 'duplicate';
+            assertProviderMutationOwner(owner);
+          }
+          items.push(...added);
+          sources.push({ source, ...(result.issue ? { issue: result.issue } : {}) });
+        } catch {
+          for (const item of added) cancelProviderImport(item.importId);
+          assertProviderMutationOwner(owner);
+          sources.push({ source, issue: 'limit' });
+        }
+      }
+      return { items, sources };
+    } catch {
+      for (const item of items) cancelProviderImport(item.importId);
+      throwIpcError('INVALID_PARAMS', 'local scan was cancelled or the active account changed');
+    } finally { localScanRunning = false; }
+  });
+  registry.handle(MAKER_INVOKE.PROVIDER_IMPORT_LOCAL_EDIT, async (event, id: unknown, input: unknown, ...extra: unknown[]) => {
+    assertTrustedProviderMutationSender(event);
+    if (extra.length) throwIpcError('INVALID_PARAMS', 'invalid local edit');
+    const owner = providerImportScope();
+    try {
+      const item = editLocalProviderImport(id, input, owner);
+      if (!item.issue && await equivalentStoredLocalImport(item.importId)) item.issue = 'duplicate';
+      assertProviderMutationOwner(owner);
+      return item;
+    } catch { throwIpcError('INVALID_PARAMS', 'local configuration is invalid or expired'); }
+  });
+
   registry.handle(MAKER_INVOKE.PROVIDER_IMPORT_FILE, async (event, ...args: unknown[]) => {
     assertTrustedProviderMutationSender(event);
     if (args.length) throwIpcError('INVALID_PARAMS', 'file import takes no arguments');
@@ -1396,10 +1503,8 @@ export function registerProviderHandlers(
     return { ok: true };
   });
 
-  registry.handle(
-    MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM,
-    async (
-      event,
+  const confirmProviderImport = async (
+      event: unknown,
       importId: unknown,
       target?: unknown,
       interrupt?: unknown,
@@ -1410,6 +1515,24 @@ export function registerProviderHandlers(
       const ownerAtIngress = providerImportScope();
       let started = false;
       try {
+        if (isLocalProviderImport(importId)) {
+          if (target !== undefined) throwIpcError('INVALID_PARAMS', 'local imports create connections only');
+          let completed: string | undefined;
+          try { completed = await checkLocalProviderImportSource(importId, ownerAtIngress); }
+          catch (error) {
+            assertProviderMutationOwner(ownerAtIngress);
+            if (localProviderImportItem(importId as string, ownerAtIngress).issue === 'changed')
+              throwIpcError('PRECONDITION_FAILED', 'saved API source changed; scan again');
+            throw error;
+          }
+          assertProviderMutationOwner(ownerAtIngress);
+          const existing = completed ?? await equivalentStoredLocalImport(importId as string);
+          assertProviderMutationOwner(ownerAtIngress);
+          if (existing) {
+            if (!completed) completeEquivalentLocalImport(importId as string, existing, ownerAtIngress);
+            return { ok: true, providerId: existing, authMethod: 'apiKey' };
+          }
+        }
         const providers = await deps.listProviders({ allowSideEffects: false });
         assertProviderMutationOwner(ownerAtIngress);
         const { draft, resolution } = beginProviderImportConfirm(
@@ -1513,8 +1636,11 @@ export function registerProviderHandlers(
           'provider import changed, is invalid or expired; preview again',
         );
       }
-    },
-  );
+    };
+  registry.handle(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, (event, id, target, interrupt) =>
+    isLocalProviderImport(id)
+      ? serializeLocalImport(() => confirmProviderImport(event, id, target, interrupt))
+      : confirmProviderImport(event, id, target, interrupt));
 
   function assertTrustedProviderMutationSender(event: unknown): void {
     if (event === MAIN_PROCESS_SENDER) return;

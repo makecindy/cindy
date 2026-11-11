@@ -126,3 +126,27 @@ it('retries the real read path after an initial history failure without reloadin
   expect(makerChatStore.getSnapshot(id).messages.find(m => m.clientId === 'client-1')?.content).toBe('before disconnect');
   leave();
 });
+
+it('恢复的 turn 拿到新时钟，失败不会被当作重复告警', async () => {
+  await load();
+  listeners.event({ sessionId: id, event: { type: 'status', data: { status: 'Running', isRunning: true } } });
+  const previousStartedAt = makerChatStore.getSnapshot(id).agentStatus.startedAt;
+  expect(previousStartedAt).toEqual(expect.any(Number));
+  listeners.event({
+    sessionId: id,
+    event: { type: 'error', source: 'claude-code', data: { isTerminal: true, message: 'previous turn failed' } },
+  });
+  const stopped = makerChatStore.getSnapshot(id);
+  expect(stopped.agentStatus.isRunning).toBe(false);
+  expect(stopped.agentStatus.startedAt).toBeNull();
+  expect(stopped.agentStatus.lastStartedAt).toBe(previousStartedAt);
+  getProjection.mockResolvedValue({ ...projection(), turnInProgress: true });
+  await makerChatStore.reconcileHostConnection(() => true);
+  const recovered = makerChatStore.getSnapshot(id);
+  const turnStartedAt = makerChatStore.getRunningSnapshot().get(id)?.turnStartedAt;
+  expect(recovered.agentStatus.isRunning).toBe(true);
+  expect(recovered.agentStatus.startedAt).toBeGreaterThan(previousStartedAt!);
+  expect(recovered.agentStatus.startedAt).not.toBe(stopped.agentStatus.lastStartedAt);
+  expect(turnStartedAt).toBe(recovered.agentStatus.startedAt);
+  expect(turnStartedAt).toBeGreaterThan(previousStartedAt!);
+});

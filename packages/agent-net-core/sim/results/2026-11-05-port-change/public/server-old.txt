@@ -1,0 +1,79 @@
+listening on 0.0.0.0:47812
+handshake from <公司出口>:51866: down 15000000
+accepted 44858613 from Some(<公司出口>:51866): down 15000000
+44858613 done: delivered=0 seconds=20.32 mbps_per_second=[] longest_gaps=[] path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4279 bandwidth_mbps=11.5 retransmitted=11105 timeouts=433 packets_sent=22055 packets_received=5281 error=None
+handshake from <公司出口>:51894: down 15000000
+accepted f90159d3 from Some(<公司出口>:51894): down 15000000
+f90159d3 peer moved Some(<公司出口>:51894) -> Some(<公司出口>:51897) at 4.01s: path_challenges=1 migrations=1 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=9888 timeouts=511 packets_sent=12181 packets_received=1207
+f90159d3 peer moved Some(<公司出口>:51897) -> Some(<公司出口>:51898) at 6.21s: path_challenges=2 migrations=2 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=12341 timeouts=544 packets_sent=15691 packets_received=2025
+f90159d3 done: delivered=0 seconds=21.38 mbps_per_second=[] longest_gaps=[] path_challenges=2 migrations=2 path_failures=0 silence_pings=0 srtt_us=4454 bandwidth_mbps=7.4 retransmitted=18978 timeouts=578 packets_sent=29935 packets_received=7999 error=None
+handshake from <公司出口>:51936: down 15000000
+accepted 7f440453 from Some(<公司出口>:51936): down 15000000
+7f440453 peer moved Some(<公司出口>:51936) -> Some(<公司出口>:51940) at 3.01s: path_challenges=1 migrations=1 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=8465 timeouts=0 packets_sent=10549 packets_received=1177
+7f440453 peer moved Some(<公司出口>:51940) -> Some(<公司出口>:51945) at 6.01s: path_challenges=2 migrations=2 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=9415 timeouts=17 packets_sent=13003 packets_received=2352
+7f440453 done: delivered=0 seconds=20.82 mbps_per_second=[] longest_gaps=[] path_challenges=2 migrations=2 path_failures=0 silence_pings=0 srtt_us=5629 bandwidth_mbps=7.7 retransmitted=13481 timeouts=75 packets_sent=24435 packets_received=8085 error=None
+handshake from <公司出口>:52228: up 120000000
+accepted 9a7453b1 from Some(<公司出口>:52228): up 120000000
+9a7453b1 done: delivered=120000000 seconds=8.68 mbps_per_second=[194.3 100.0 99.3 100.1 99.5 99.6 99.7 99.4 68.1] longest_gaps=[] path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=17494 packets_received=87967 error=None
+handshake from <公司出口>:52241: up 120000000
+accepted e5fec3ab from Some(<公司出口>:52241): up 120000000
+e5fec3ab peer moved Some(<公司出口>:52241) -> Some(<公司出口>:52242) at 3.01s: path_challenges=1 migrations=1 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=6263 packets_received=36335
+e5fec3ab peer moved Some(<公司出口>:52242) -> Some(<公司出口>:52246) at 6.01s: path_challenges=2 migrations=2 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=12123 packets_received=63574
+e5fec3ab done: delivered=120000000 seconds=8.70 mbps_per_second=[193.8 100.0 98.6 99.7 99.5 99.7 99.3 99.2 70.3] longest_gaps=[] path_challenges=2 migrations=2 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=17369 packets_received=88010 error=None
+handshake from <公司出口>:52260: up 120000000
+accepted b83e6bdc from Some(<公司出口>:52260): up 120000000
+b83e6bdc peer moved Some(<公司出口>:52260) -> Some(<公司出口>:52266) at 3.01s: path_challenges=1 migrations=1 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=6273 packets_received=36446
+b83e6bdc peer moved Some(<公司出口>:52266) -> Some(<公司出口>:52271) at 6.01s: path_challenges=2 migrations=2 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=11954 packets_received=63755
+b83e6bdc done: delivered=120000000 seconds=8.76 mbps_per_second=[194.7 99.3 99.9 96.0 99.5 99.8 94.6 100.3 75.7] longest_gaps=[] path_challenges=2 migrations=2 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=17051 packets_received=88731 error=None
+handshake from <公司出口>:52110: down 15000000
+accepted 5ddbcabe from Some(<公司出口>:52110): down 15000000
+5ddbcabe done: delivered=0 seconds=20.97 mbps_per_second=[] longest_gaps=[] path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5241 bandwidth_mbps=7.1 retransmitted=8913 timeouts=297 packets_sent=19866 packets_received=4872 error=None
+handshake from <公司出口>:52146: down 15000000
+accepted c7594621 from Some(<公司出口>:52146): down 15000000
+c7594621 peer moved Some(<公司出口>:52146) -> Some(<公司出口>:52147) at 4.01s: path_challenges=1 migrations=1 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=8609 timeouts=596 packets_sent=10784 packets_received=1163
+c7594621 peer moved Some(<公司出口>:52147) -> Some(<公司出口>:52149) at 7.01s: path_challenges=2 migrations=2 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=11440 timeouts=1015 packets_sent=14713 packets_received=1938
+c7594621 done: delivered=0 seconds=22.35 mbps_per_second=[] longest_gaps=[] path_challenges=2 migrations=2 path_failures=0 silence_pings=0 srtt_us=3861 bandwidth_mbps=12.4 retransmitted=16726 timeouts=1373 packets_sent=27680 packets_received=5983 error=None
+handshake from <公司出口>:52304: down 15000000
+accepted cc9be42a from Some(<公司出口>:52304): down 15000000
+cc9be42a peer moved Some(<公司出口>:52304) -> Some(<公司出口>:52306) at 3.01s: path_challenges=1 migrations=1 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=8333 timeouts=2 packets_sent=10399 packets_received=1179
+cc9be42a peer moved Some(<公司出口>:52306) -> Some(<公司出口>:52309) at 6.01s: path_challenges=2 migrations=2 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=9511 timeouts=2 packets_sent=13059 packets_received=2350
+cc9be42a done: delivered=0 seconds=20.92 mbps_per_second=[] longest_gaps=[] path_challenges=2 migrations=2 path_failures=0 silence_pings=0 srtt_us=5480 bandwidth_mbps=8.3 retransmitted=13602 timeouts=4 packets_sent=24556 packets_received=8237 error=None
+handshake from <公司出口>:52324: up 120000000
+accepted 5309a0fa from Some(<公司出口>:52324): up 120000000
+5309a0fa done: delivered=120000000 seconds=8.68 mbps_per_second=[195.2 99.6 99.5 98.5 100.4 100.1 99.5 99.6 67.7] longest_gaps=[] path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=16946 packets_received=87931 error=None
+handshake from <公司出口>:52345: up 120000000
+accepted fe64227a from Some(<公司出口>:52345): up 120000000
+fe64227a peer moved Some(<公司出口>:52345) -> Some(<公司出口>:52348) at 3.01s: path_challenges=1 migrations=1 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=6326 packets_received=36220
+fe64227a peer moved Some(<公司出口>:52348) -> Some(<公司出口>:52350) at 6.01s: path_challenges=2 migrations=2 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=12035 packets_received=63041
+fe64227a done: delivered=120000000 seconds=8.82 mbps_per_second=[195.4 98.3 99.0 98.5 96.7 98.3 97.4 97.3 79.0] longest_gaps=[] path_challenges=2 migrations=2 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=17533 packets_received=87923 error=None
+handshake from <公司出口>:52361: up 120000000
+accepted 91d41a2d from Some(<公司出口>:52361): up 120000000
+91d41a2d peer moved Some(<公司出口>:52361) -> Some(<公司出口>:52365) at 3.01s: path_challenges=1 migrations=1 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=6346 packets_received=35973
+91d41a2d peer moved Some(<公司出口>:52365) -> Some(<公司出口>:52367) at 6.01s: path_challenges=2 migrations=2 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=12121 packets_received=62958
+91d41a2d done: delivered=120000000 seconds=8.84 mbps_per_second=[194.2 98.6 95.7 98.4 98.7 98.3 97.0 97.3 81.9] longest_gaps=[] path_challenges=2 migrations=2 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=17605 packets_received=88071 error=None
+handshake from <公司出口>:52369: down 15000000
+accepted d79dcad0 from Some(<公司出口>:52369): down 15000000
+d79dcad0 done: delivered=0 seconds=27.13 mbps_per_second=[] longest_gaps=[] path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3310 bandwidth_mbps=14.3 retransmitted=5699 timeouts=902 packets_sent=16649 packets_received=5100 error=None
+handshake from <公司出口>:52391: down 15000000
+accepted f2572d59 from Some(<公司出口>:52391): down 15000000
+f2572d59 peer moved Some(<公司出口>:52391) -> Some(<公司出口>:52395) at 4.01s: path_challenges=1 migrations=1 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=9713 timeouts=440 packets_sent=11895 packets_received=1066
+f2572d59 peer moved Some(<公司出口>:52395) -> Some(<公司出口>:52403) at 7.01s: path_challenges=2 migrations=2 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=11850 timeouts=873 packets_sent=15112 packets_received=1834
+f2572d59 done: delivered=0 seconds=22.38 mbps_per_second=[] longest_gaps=[] path_challenges=2 migrations=2 path_failures=0 silence_pings=0 srtt_us=5639 bandwidth_mbps=7.7 retransmitted=16735 timeouts=873 packets_sent=27694 packets_received=7684 error=None
+handshake from <公司出口>:52173: down 15000000
+accepted 9f62123a from Some(<公司出口>:52173): down 15000000
+9f62123a peer moved Some(<公司出口>:52173) -> Some(<公司出口>:52174) at 3.02s: path_challenges=1 migrations=1 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=7670 timeouts=693 packets_sent=9690 packets_received=1127
+9f62123a peer moved Some(<公司出口>:52174) -> Some(<公司出口>:52175) at 6.01s: path_challenges=2 migrations=2 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=8374 timeouts=693 packets_sent=11888 packets_received=2280
+9f62123a done: delivered=0 seconds=20.98 mbps_per_second=[] longest_gaps=[] path_challenges=2 migrations=2 path_failures=0 silence_pings=0 srtt_us=4849 bandwidth_mbps=8.8 retransmitted=13576 timeouts=725 packets_sent=24536 packets_received=8439 error=None
+handshake from <公司出口>:52198: up 120000000
+accepted 07c0736b from Some(<公司出口>:52198): up 120000000
+07c0736b done: delivered=120000000 seconds=8.68 mbps_per_second=[195.3 99.6 99.6 99.5 99.9 99.5 99.6 99.6 67.4] longest_gaps=[] path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=17393 packets_received=87857 error=None
+handshake from <公司出口>:52222: up 120000000
+accepted 6717493a from Some(<公司出口>:52222): up 120000000
+6717493a peer moved Some(<公司出口>:52222) -> Some(<公司出口>:52417) at 3.01s: path_challenges=1 migrations=1 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=6483 packets_received=36449
+6717493a peer moved Some(<公司出口>:52417) -> Some(<公司出口>:52419) at 6.01s: path_challenges=2 migrations=2 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=12345 packets_received=63733
+6717493a done: delivered=120000000 seconds=8.69 mbps_per_second=[195.2 99.8 99.4 99.1 99.6 99.2 99.6 99.6 68.5] longest_gaps=[] path_challenges=2 migrations=2 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=17489 packets_received=88068 error=None
+handshake from <公司出口>:52432: up 120000000
+accepted 0ed0e8d6 from Some(<公司出口>:52432): up 120000000
+0ed0e8d6 peer moved Some(<公司出口>:52432) -> Some(<公司出口>:52433) at 3.01s: path_challenges=1 migrations=1 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=6322 packets_received=36422
+0ed0e8d6 peer moved Some(<公司出口>:52433) -> Some(<公司出口>:52436) at 6.01s: path_challenges=2 migrations=2 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=11934 packets_received=63700
+0ed0e8d6 done: delivered=120000000 seconds=8.79 mbps_per_second=[195.1 99.1 100.0 93.5 99.6 99.5 94.7 99.9 78.5] longest_gaps=[] path_challenges=2 migrations=2 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=17125 packets_received=88924 error=None

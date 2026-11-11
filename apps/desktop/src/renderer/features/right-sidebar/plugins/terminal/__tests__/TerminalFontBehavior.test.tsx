@@ -8,7 +8,7 @@ import type { TabKindHostContext } from '../../../types';
 import type { TerminalState } from '../index';
 import type { XtermEntry } from '../lib/xtermPool';
 
-const poolMocks = vi.hoisted(() => ({ getOrCreateXterm: vi.fn() }));
+const poolMocks = vi.hoisted(() => ({ getOrCreateXterm: vi.fn(), detachXterm: vi.fn(), getXtermExit: vi.fn(() => null), setXtermExit: vi.fn(), onXtermExit: vi.fn(() => () => undefined), needsXtermAttach: vi.fn(() => false), restartXterm: (params: Parameters<typeof window.electronAPI.terminal.create>[0]) => window.electronAPI.terminal.restart(params.id), attachXterm: (params: Parameters<typeof window.electronAPI.terminal.create>[0]) => window.electronAPI.terminal.create(params) }));
 vi.mock('../lib/xtermPool', () => poolMocks);
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -226,6 +226,7 @@ afterEach(() => {
 describe('TerminalTabBody terminal font preferences', () => {
   it('keeps the existing defaults and starts the PTY once without a settings provider', async () => {
     const ctx = context();
+    entries.set(ctx.tabId, { ...makeEntry(), ptyAttached: false });
     render(<TerminalTabBody state={{ ...runningState, created: false }} ctx={ctx} active />);
     await flushWork();
 
