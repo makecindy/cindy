@@ -36,6 +36,12 @@ Cindy can take requests and send you DMs through a Feishu or Lark bot that you c
 - `/new` starts a fresh context, `/model` switches the model, `/permission` changes the permission mode, `/ctr` takes over a desktop session (`/exctr` ends the takeover), and `/help` lists the commands.
 - Send `!stop` to stop the current run and clear queued messages. The session is kept, so you can continue it.
 
+**Reading replies:**
+
+- While Cindy works, the reply card shows its latest steps above the answer so far. When the reply is done, the answer stays clean and the steps fold into one line above it (**过程记录 · N 项 · time**). Click that line to review everything Cindy did in this reply; quick answers with no steps don't have it.
+- A long reply is never cut off. When it doesn't fit in one Feishu card, it arrives as several cards in order, each marked with its position (for example `2/3`). Code blocks and tables stay intact across cards.
+- While a long reply is still being written, the card shows the beginning and a note that the rest will follow; the complete reply arrives when it finishes.
+
 **Group chats:**
 
 - In a group, @ the bot to ask a question. The bot opens a new thread (话题) for the reply, so the main chat stays clean and each thread is its own session.

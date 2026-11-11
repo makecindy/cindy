@@ -15,6 +15,7 @@ import {
 } from '@cindy/device-link';
 
 import { getMobileAuthOwner, subscribeMobileAuthOwner } from '@/auth/authOwnerGeneration';
+import { buildAgentNetSharingInvitation, parseAgentNetSharingInvitation } from '@cindy/agent-net/portable';
 
 /** 提示页路由;不带任何参数。 */
 export const PROVIDER_SHARE_LINK_ROUTE = '/provider-share';
@@ -63,6 +64,9 @@ function appHint(path: string): 'cindy' | 'cindycn' | 'cindydev' {
 
 /** 合法链接 → 重建成可以发到电脑上打开的分享网页链接;其余一律 null。 */
 function shareableLink(path: string): string | null {
+  const v2 = parseAgentNetSharingInvitation(path, 'provider-share')
+    ?? parseAgentNetSharingInvitation('cindy://' + path.replace(/^\//, ''), 'provider-share');
+  if (v2) return buildAgentNetSharingInvitation(v2.receipt, v2.server, appHint(path));
   const parts = providerSharePath(path);
   if (!parts || parts.pathname !== `${PROVIDER_SHARE_LINK_ROUTE}/join` || parts.hash) return null;
   const intent = parseProviderShareInvitationIntent(`cindy://provider-share/join?${parts.query}`);

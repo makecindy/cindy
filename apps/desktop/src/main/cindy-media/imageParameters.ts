@@ -5,6 +5,8 @@ export interface ImageParameters {
   size?: string;
   resolution?: string;
   quality?: string;
+  /** Native request-body fields, kept separate from host-owned invocation data. */
+  nativeParameters?: Record<string, unknown>;
 }
 
 const LEGACY_SIZES: Record<string, string> = {
@@ -139,13 +141,43 @@ function aspectSize(model: string, aspect: string): string {
   return size;
 }
 
-/** Reject unsupported explicit options before paying; never silently strip or downscale them. */
+/** Normalize convenience options while retaining native fields for the selected protocol. */
 export function normalizeImageParameters(
   protocol: ImageProtocol | undefined,
   model: string,
   input: ImageParameters,
 ): ImageParameters {
   const result: ImageParameters = {};
+  if (input.nativeParameters && Object.keys(input.nativeParameters).length) {
+    if (!protocol) throw new Error('Native image parameters are not supported by this channel.');
+    const native = input.nativeParameters;
+    for (const key of ['model', 'prompt', 'image', 'image[]', 'images', 'contents', 'imagePaths', 'signal']) {
+      if (Object.hasOwn(native, key))
+        throw new Error(`${key} is host-controlled; use prepare and the prompt/image fields.`);
+    }
+    // The existing delivery path consumes one final JSON image result. Never
+    // charge for a batch/stream whose remaining results would be discarded.
+    if (
+      (native.n !== undefined && native.n !== 1) ||
+      (native.stream !== undefined && native.stream !== false)
+    ) {
+      throw new Error('This channel delivers a single final image; use n: 1 and stream: false.');
+    }
+    if (protocol === 'gemini' && native.generationConfig !== undefined) {
+      const config = native.generationConfig;
+      if (!config || typeof config !== 'object' || Array.isArray(config))
+        throw new Error('Gemini generationConfig must be a JSON object');
+      const { imageConfig, candidateCount } = config as Record<string, unknown>;
+      if (
+        imageConfig !== undefined &&
+        (!imageConfig || typeof imageConfig !== 'object' || Array.isArray(imageConfig))
+      )
+        throw new Error('Gemini imageConfig must be a JSON object');
+      if (candidateCount !== undefined && candidateCount !== 1)
+        throw new Error('This channel delivers a single final image; use candidateCount: 1.');
+    }
+    result.nativeParameters = input.nativeParameters;
+  }
   const schema = imageParameterSchema(protocol, model);
   for (const key of ['aspectRatio', 'size', 'resolution', 'quality'] as const) {
     let value = input[key];

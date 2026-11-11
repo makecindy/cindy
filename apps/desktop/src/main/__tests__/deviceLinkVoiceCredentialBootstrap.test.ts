@@ -84,8 +84,12 @@ const inboundAcceptedRegistration = new Script(ts.transpileModule(inboundAccepte
 }).outputText);
 
 function productionFunction(source: ts.SourceFile, name: string): string {
-  const declaration = source.statements.find((node): node is ts.FunctionDeclaration =>
-    ts.isFunctionDeclaration(node) && node.name?.text === name);
+  let declaration: ts.FunctionDeclaration | undefined;
+  const visit = (node: ts.Node): void => {
+    if (ts.isFunctionDeclaration(node) && node.name?.text === name) declaration = node;
+    else ts.forEachChild(node, visit);
+  };
+  visit(source);
   if (!declaration) throw new Error(`Missing production function: ${name}`);
   return declaration.getText(source).replace(/^export /, '');
 }
@@ -185,9 +189,12 @@ function recoveryDesktop(relay: RecoveryRelay, id: string) {
   });
   const noOp = () => {};
   const context = createContext({
-    client, subscriptions: registry, isProviderSharePeer, isSharedTaskPeer,
+    client, ports: {}, subscriptions: registry, isProviderSharePeer, isSharedTaskPeer,
     cancelLinkAcceptRetry: noOp, readDeviceLinkSettings: () => ({ remoteControlEnabled: true }),
     isControllerRevoked: () => false, resolveControllerName: (_peer: string, name: string) => name,
+    // This recovery-only harness fixes permissions to allowed; bind the new
+    // admission observer so the actual handleLinkOpen can reach its replay callback.
+    noteControllerAccessAllowed: noOp,
     MAX_CONTROLLER_CAPABILITIES: 32, MAX_CONTROLLER_CAPABILITY_LEN: 80,
     topicSubscriptionControllers: new Set(), acceptedLinkControllers: new Set(),
     DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1, DEVICE_LINK_CAPABILITY_GITHUB_READ_V1,
@@ -505,7 +512,9 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
     const dispatch = readFileSync(resolve(mainRoot, 'device-link/dispatch.ts'), 'utf8');
 
     expect(dispatch).toContain('DL_VOICE_DICTIONARY_LEARNING_CHANNEL');
-    expect(dispatch).toContain("import { adviseAndRecordVoiceInputDictionaryLearning } from '../voice-input/index.js';");
+    const desktop = readFileSync(resolve(mainRoot, 'device-link/dispatch.desktop.ts'), 'utf8');
+    expect(desktop).toContain("import { adviseAndRecordVoiceInputDictionaryLearning } from '../voice-input/index.js';");
+    expect(desktop).toContain('adviseAndRecordVoiceInputDictionaryLearning: (...args) => adviseAndRecordVoiceInputDictionaryLearning(...args)');
     expect(dispatch).toContain('if (payload.channel === DL_VOICE_DICTIONARY_LEARNING_CHANNEL)');
     expect(dispatch).toContain('handleMobileVoiceDictionaryLearning(src, (payload.args ?? [])[0])');
   });

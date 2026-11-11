@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { installWindowsTransparentTitleBar } from '../windowsTransparentTitleBar';
 
 import {
   installMainWindowMaximizeRecovery,
@@ -7,6 +8,142 @@ import {
   type DisplayChangeEvent,
   type MaximizeRecoveryNativeWindow,
 } from '../mainWindowMaximizeRecovery';
+import {
+  commitReplacedNormalBounds,
+  manageWindowStatePreservingNormalBounds,
+  planWindowRestore,
+  type PersistableWindow,
+  type WorkAreaRect,
+  type WorkAreaScreen,
+} from '../mainWindowWorkAreaBounds';
+
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：commitReplacedNormalBounds。窗口已按默认尺寸建好、还没最大化时
+ *   调 keeper.saveState，退出记下的是这份尺寸和原来的 x/y；最大化之后再保存只改标记。
+ *   下次启动因此不再把整块工作区当成还原目标。
+ * - Bug／规则依据：PR #9572 最后一条评审。只改 BrowserWindow 构造参数时，keeper 闭包里仍是
+ *   工作区矩形；maximize() 之后它不再改宽高，退出就把旧矩形和 isMaximized=true 存回去。
+ * - 现有覆盖缺口：mainWindowWorkAreaBounds 的假 manage 直接读窗口，没有先保存再最大化
+ *   这条时序；本文件原来只覆盖显示器抖动后的重新最大化。
+ * - 最小失败输入：已保存的合法工作区矩形 + isMaximized=false，窗口先处在替换尺寸，
+ *   不调 saveState 就 maximize，然后关窗。
+ * - tier：unit。不启 Electron。写入规则与 electron-window-state 的 updateState 相同：
+ *   普通窗口才覆盖宽高，已最大化只更新标记。
+ * - 实测耗时：随本文件一起跑，pnpm --dir apps/desktop exec vitest run
+ *   src/main/__tests__/mainWindowMaximizeRecovery.test.ts。
+ */
+
+interface KeeperWindow extends PersistableWindow {
+  on(event: string, listener: () => void): void;
+  maximize(): void;
+  close(): void;
+}
+
+/**
+ * Listeners fire in registration order, the same way Electron does, so a maximize
+ * that happens after manage() is visible to the keeper's resize handler.
+ */
+function createKeeperWindow(initial: {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}): KeeperWindow {
+  let bounds = { ...initial };
+  let maximized = false;
+  const listeners = new Map<string, Array<() => void>>();
+  const emit = (event: string): void => {
+    for (const listener of [...(listeners.get(event) ?? [])]) listener();
+  };
+  return {
+    isMaximized: () => maximized,
+    isMinimized: () => false,
+    isFullScreen: () => false,
+    getBounds: () => bounds,
+    on: (event, listener) => {
+      const list = listeners.get(event) ?? [];
+      list.push(listener);
+      listeners.set(event, list);
+    },
+    maximize: () => {
+      if (maximized) return;
+      maximized = true;
+      bounds = { x: 0, y: 0, width: 1536, height: 864 };
+      emit('maximize');
+      emit('resize');
+    },
+    close: () => {
+      emit('close');
+    },
+  };
+}
+
+interface SavedWindowState extends WorkAreaRect {
+  isMaximized: boolean;
+  isFullScreen: boolean;
+}
+
+/**
+ * The write inside electron-window-state `updateState`: a normal window replaces the
+ * rectangle, a maximized one does not. `saveState` and the `manage` listeners both
+ * end there, which is the whole bug.
+ */
+function applyKeeperUpdate(saved: SavedWindowState, win: PersistableWindow): void {
+  if (!win.isMaximized() && !win.isMinimized() && !win.isFullScreen()) {
+    Object.assign(saved, win.getBounds());
+  }
+  saved.isMaximized = win.isMaximized();
+  saved.isFullScreen = win.isFullScreen();
+}
+
+describe('commitReplacedNormalBounds', () => {
+  const workArea = { x: 1920, y: 40, width: 1536, height: 864 };
+  const keeperScreen: WorkAreaScreen = {
+    getPrimaryDisplay: () => ({ bounds: workArea, workArea }),
+    getDisplayMatching: () => ({ bounds: workArea, workArea }),
+  };
+
+  it('keeps the replaced restore size when launch maximizes and quit never unmaximizes', () => {
+    const saved: SavedWindowState = {
+      x: workArea.x,
+      y: workArea.y,
+      width: workArea.width,
+      height: workArea.height,
+      isMaximized: false,
+      isFullScreen: false,
+    };
+    expect(planWindowRestore(saved, keeperScreen, { platform: 'win32' })).toEqual({
+      restoreMaximized: true,
+      replaceWithDefaultSize: true,
+    });
+
+    const replaced = { x: saved.x, y: saved.y, width: 1280, height: 800 };
+    const win = createKeeperWindow(replaced);
+    const keeper = {
+      saveState: (target: PersistableWindow) => applyKeeperUpdate(saved, target),
+      manage: (target: PersistableWindow) => {
+        target.on?.('resize', () => applyKeeperUpdate(saved, target));
+        target.on?.('close', () => applyKeeperUpdate(saved, target));
+      },
+    };
+
+    manageWindowStatePreservingNormalBounds(keeper, win, keeperScreen, 'win32');
+    commitReplacedNormalBounds(keeper, win);
+    expect(saved).toMatchObject({ ...replaced, isMaximized: false });
+
+    win.maximize();
+    expect(win.isMaximized()).toBe(true);
+    win.close();
+
+    expect(saved).toMatchObject({ ...replaced, isMaximized: true });
+    expect(saved.width).not.toBe(workArea.width);
+    expect(
+      planWindowRestore(saved, keeperScreen, { platform: 'win32' }),
+    ).toEqual({ restoreMaximized: true, replaceWithDefaultSize: false });
+    expect({ x: saved.x, y: saved.y, width: saved.width, height: saved.height }).toEqual(replaced);
+  });
+});
 
 describe('readPersistedWindowMaximized', () => {
   it('reads the flag from the raw window-state file', () => {
@@ -33,6 +170,132 @@ describe('readPersistedWindowMaximized', () => {
 });
 
 type Timer = { callback: () => void; ms: number; cleared: boolean };
+
+// PR #9380 made app windows transparent. Native caption double-clicks then stopped
+// maximizing on Windows. Existing recovery tests only emit state transitions; they
+// cannot cause the missing transition. Exercise the production native adapter here
+// with SC_MAXIMIZE | HTCAPTION (0xf032), captured from an actual caption double-click,
+// including restoration during display recovery. Tier: unit; no Electron startup.
+describe('transparent Windows title bar', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  function titleBarHarness(platform: NodeJS.Platform = 'win32') {
+    const h = createHarness({ armed: false });
+    const hooks = new Map<number, (param: Buffer, position: Buffer) => void>();
+    let close = () => {};
+    let maximizable = true;
+    const win = {
+      ...h.win,
+      isMaximizable: () => maximizable,
+      unmaximize: vi.fn(() => {
+        h.state.maximized = false;
+        h.windowListeners.get('unmaximize')?.();
+      }),
+      hookWindowMessage: (id: number, callback: (p: Buffer, l: Buffer) => void) => {
+        hooks.set(id, callback);
+      },
+      unhookWindowMessage: (id: number) => {
+        hooks.delete(id);
+      },
+      once: vi.fn((_event: string, callback: () => void) => {
+        close = callback;
+      }),
+    };
+    const dispose = installWindowsTransparentTitleBar(
+      win as unknown as Parameters<typeof installWindowsTransparentTitleBar>[0],
+      h.recovery.notifyUserUnmaximizeIntent,
+      platform,
+    );
+    const systemCommand = (command: number) => {
+      const param = Buffer.alloc(8);
+      param.writeUInt32LE(command);
+      hooks.get(0x0112)?.(param, Buffer.alloc(8));
+    };
+    return {
+      ...h,
+      win,
+      hooks,
+      doubleClick: () => systemCommand(0xf032),
+      systemCommand,
+      disposeTitleBar: dispose,
+      close: () => {
+        h.state.destroyed = true;
+        close();
+      },
+      disableMaximize: () => {
+        maximizable = false;
+      },
+    };
+  }
+
+  it('maximizes, then restores without display recovery overriding the second gesture', () => {
+    const h = titleBarHarness();
+    h.doubleClick();
+    expect(h.state.maximized).toBe(false); // never resize inside native message dispatch
+    vi.runAllTimers();
+    expect(h.state.maximized).toBe(true);
+    h.fireDisplay();
+    h.doubleClick();
+    vi.runAllTimers();
+    h.runTimers();
+    expect(h.state.maximized).toBe(false);
+    expect(h.win.maximize).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not toggle twice when native processing already changed the state', () => {
+    const h = titleBarHarness();
+    h.doubleClick();
+    h.win.maximize();
+    vi.runAllTimers();
+    expect(h.state.maximized).toBe(true);
+    expect(h.win.maximize).toHaveBeenCalledTimes(1);
+    h.doubleClick();
+    h.win.unmaximize();
+    vi.runAllTimers();
+    expect(h.state.maximized).toBe(false);
+    expect(h.win.unmaximize).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves native restore intent and does not toggle for other system commands', () => {
+    const h = titleBarHarness();
+    h.win.maximize();
+    h.fireDisplay();
+    h.systemCommand(0xf120);
+    h.win.unmaximize();
+    h.runTimers();
+    expect(h.state.maximized).toBe(false);
+    h.win.maximize();
+    for (const command of [0xf030, 0xf020, 0xf060]) h.systemCommand(command);
+    vi.runAllTimers();
+    expect(h.state.maximized).toBe(true);
+    expect(h.win.unmaximize).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['fullscreen', 'minimized', 'disabled', 'closed', 'disposed'])(
+    'does not resize a window for %s input/state',
+    (scenario) => {
+      const h = titleBarHarness();
+      if (scenario === 'fullscreen') h.state.fullscreen = true;
+      if (scenario === 'minimized') h.state.minimized = true;
+      if (scenario === 'disabled') h.disableMaximize();
+      h.doubleClick();
+      if (scenario === 'closed') h.close();
+      if (scenario === 'disposed') h.disposeTitleBar();
+      vi.runAllTimers();
+      expect(h.state.maximized).toBe(false);
+      expect(h.win.maximize).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['darwin', 'linux'] as const)('keeps %s native title bar behavior', (platform) => {
+    const h = titleBarHarness(platform);
+    h.doubleClick();
+    vi.runAllTimers();
+    expect(h.hooks.size).toBe(0);
+    expect(h.win.maximize).not.toHaveBeenCalled();
+  });
+});
 
 function createHarness(options: { armed?: boolean } = {}) {
   let nowMs = 0;
@@ -423,16 +686,17 @@ describe('installMainWindowNativeRestoreIntent', () => {
     type Listener = (...args: unknown[]) => void;
     const windowListeners = new Map<string, Listener>();
     const webContentsListeners = new Map<string, Listener>();
-    const windowMessageListeners = new Map<number, (wParam: Buffer, lParam: Buffer) => void>();
     const native = { destroyed: false };
     const assertAlive = () => {
       if (native.destroyed) throw new TypeError('Object has been destroyed');
     };
-    const removeListener = vi.fn((event: string) => windowListeners.delete(event));
-    const removeWebContentsListener = vi.fn((event: string) => webContentsListeners.delete(event));
-    const unhookWindowMessage = vi.fn((message: number) => {
+    const removeListener = vi.fn((event: string) => {
       assertAlive();
-      return windowMessageListeners.delete(message);
+      return windowListeners.delete(event);
+    });
+    const removeWebContentsListener = vi.fn((event: string) => {
+      assertAlive();
+      return webContentsListeners.delete(event);
     });
     const win = {
       isDestroyed: () => native.destroyed,
@@ -443,11 +707,6 @@ describe('installMainWindowNativeRestoreIntent', () => {
       maximize: vi.fn(),
       on: vi.fn((event: string, listener: Listener) => windowListeners.set(event, listener)),
       removeListener,
-      hookWindowMessage: vi.fn(
-        (message: number, listener: (wParam: Buffer, lParam: Buffer) => void) =>
-          windowMessageListeners.set(message, listener),
-      ),
-      unhookWindowMessage,
       webContents: {
         on: vi.fn((event: string, listener: Listener) => webContentsListeners.set(event, listener)),
         removeListener: removeWebContentsListener,
@@ -458,10 +717,8 @@ describe('installMainWindowNativeRestoreIntent', () => {
       native,
       windowListeners,
       webContentsListeners,
-      windowMessageListeners,
       removeListener,
       removeWebContentsListener,
-      unhookWindowMessage,
     };
   }
 
@@ -475,7 +732,8 @@ describe('installMainWindowNativeRestoreIntent', () => {
     h.native.destroyed = true;
 
     expect(() => dispose()).not.toThrow();
-    expect(h.unhookWindowMessage).not.toHaveBeenCalled();
+    expect(h.removeListener).not.toHaveBeenCalled();
+    expect(h.removeWebContentsListener).not.toHaveBeenCalled();
   });
 
   it('marks Windows native restore gestures before unmaximize', () => {
@@ -504,11 +762,7 @@ describe('installMainWindowNativeRestoreIntent', () => {
         modifiers: ['meta'],
       },
     );
-    const restoreCommand = Buffer.alloc(8);
-    restoreCommand.writeUInt32LE(0xf120, 0);
-    h.windowMessageListeners.get(0x0112)?.(restoreCommand, Buffer.alloc(8));
-
-    expect(notify).toHaveBeenCalledTimes(5);
+    expect(notify).toHaveBeenCalledTimes(4);
 
     dispose();
     expect(h.removeListener).toHaveBeenCalledWith('will-move', expect.any(Function));
@@ -521,10 +775,8 @@ describe('installMainWindowNativeRestoreIntent', () => {
       'before-input-event',
       expect.any(Function),
     );
-    expect(h.unhookWindowMessage).toHaveBeenCalledWith(0x0112);
     expect(h.windowListeners.size).toBe(0);
     expect(h.webContentsListeners.size).toBe(0);
-    expect(h.windowMessageListeners.size).toBe(0);
   });
 
   it('ignores unrelated input and non-Windows platforms', () => {
@@ -590,9 +842,6 @@ describe('installMainWindowNativeRestoreIntent', () => {
         modifiers: ['meta'],
       },
     );
-    const minimizeCommand = Buffer.alloc(8);
-    minimizeCommand.writeUInt32LE(0xf020, 0);
-    windows.windowMessageListeners.get(0x0112)?.(minimizeCommand, Buffer.alloc(8));
 
     expect(windowsNotify).not.toHaveBeenCalled();
   });

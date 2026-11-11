@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 3,
+  "id": "host-ui-example",
+  "name": "插件界面示例",
+  "version": "1.1.1",
+  "minCindyVersion": "0.1.122-beta",
+  "entry": "main.js",
+  "icon": "assets/cat.png",
+  "tools": [{ "name": "refresh", "description": "刷新示例状态", "parameters": { "type": "object", "properties": {}, "additionalProperties": false } }],
+  "mcpApps": {
+    "ui": {
+      "resources": [{ "uri": "ui://host-ui/example", "file": "ui/page.html", "prefersBorder": true }],
+      "tools": { "refresh": { "visibility": ["app"] } }
+    },
+    "host": {
+      "views": [
+        { "id": "board", "title": "示例工作台", "resourceUri": "ui://host-ui/example", "scope": "global" },
+        { "id": "task-board", "title": "当前任务", "resourceUri": "ui://host-ui/example", "scope": "task" }
+      ],
+      "contributions": [
+        { "id": "compose", "title": "打开任务页面", "position": "composer.toolbar", "view": "task-board" },
+        { "id": "quick", "title": "快捷面板", "position": "composer.toolbar", "view": "task-board", "presentation": "popover" },
+        { "id": "header", "title": "打开工作台", "position": "session.header", "view": "board" },
+        { "id": "progress", "title": "示例已就绪", "position": "statusbar", "kind": "button", "view": "task-board" },
+        { "id": "message", "title": "打开任务页面", "position": "message.actions", "view": "task-board" },
+        { "id": "message-menu", "title": "打开任务页面", "position": "message.menu", "view": "task-board" },
+        { "id": "footer", "title": "刷新示例", "position": "turn.footer", "tool": "refresh" },
+        { "id": "message-body", "title": "示例页面", "position": "message.body", "view": "task-board", "match": { "roles": ["assistant"] } },
+        { "id": "tool-body", "title": "示例页面", "position": "tool.body", "view": "task-board", "match": { "tools": ["refresh"] } }
+      ],
+      "commands": [{ "id": "open-board", "title": "打开示例工作台", "view": "board", "arguments": { "filter": "all" }, "shortcut": "Mod+Alt+Shift+Y" }],
+      "capabilities": ["context", "draft", "appearance", "visibility"],
+      "appearance": {
+        "fields": ["uiFont", "codeFont", "bodyFont", "wallpaper", "theme", "reading", "contentStyle"],
+        "resources": [
+          { "id": "mono", "kind": "font", "path": "assets/JetBrainsMono-Regular.ttf" },
+          { "id": "art", "kind": "image", "path": "assets/cat.png" }
+        ]
+      }
+    }
+  }
+}

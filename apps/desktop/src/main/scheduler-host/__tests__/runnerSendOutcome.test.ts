@@ -55,7 +55,7 @@ vi.mock('../runners/_shared', () => ({
   backfillSessionMeta: mocks.backfillSessionMeta,
 }));
 
-import { MakerScheduleRunner } from '../runner';
+import { MakerScheduleRunner } from '../runner.desktop';
 import { ScheduledModelSelectionBusyError } from '../../maker-ipc/scheduledModelSelection';
 import { isHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface';
 
@@ -173,6 +173,7 @@ function createRunnerHarness(
     getSessionMeta: vi.fn(async () => null),
     isSessionAlive: vi.fn(() => false),
     closeSession: vi.fn(async () => undefined),
+    recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
   } as unknown as Maker;
   const runner = new MakerScheduleRunner({
     maker,
@@ -789,5 +790,53 @@ describe('MakerScheduleRunner send outcome policy', () => {
     await lateOnAccepted?.();
     expect(isHeadlessGhostSetupTurn('scheduler-session')).toBe(false);
     expect(mocks.createMessage).not.toHaveBeenCalled();
+  });
+
+  it('rebuilds a recycled runtime in place and dispatches on the rebuilt instance (direct-send degradation)', async () => {
+    // 回归(MagicLizi P1):直发降级的「漂移回收 → 就地重建 → wireSessionToIpc 重接」
+    // 分支此前零覆盖;换实例不重接会让本轮回复与工具记录不进聊天页(两次踩中的隐性契约)。
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    const rebuilt = createSessionHarness(async () => ({ accepted: true }));
+    const { runner, maker, logger, notifier } = createRunnerHarness(h.session);
+    (maker.recyclePiRuntimeIfResourcesDrifted as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+    let created = 0;
+    (maker.createSession as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      created += 1;
+      return created === 1 ? h.session : rebuilt.session;
+    });
+    const ctx = createFireContext();
+    const firePromise = runner.fire(baseSchedule(), ctx);
+    await vi.waitFor(() => expect(rebuilt.send).toHaveBeenCalled());
+    // accepted 后 fire 等 turn 终态:重建实例上发出 done 收口本轮。
+    rebuilt.emit({ type: 'done', data: {} } as AgentEvent);
+    await firePromise;
+
+    expect(maker.recyclePiRuntimeIfResourcesDrifted).toHaveBeenCalledWith(h.session);
+    expect(logger.info).toHaveBeenCalledWith(
+      '[runner] project resources drifted, recycled runtime before dispatch',
+      { sessionId: 'scheduler-session' },
+    );
+    // 投递必须落在重建实例上;旧实例已关闭,打到它只会得到误导性的失败。
+    expect(mocks.wireSessionToIpc).toHaveBeenCalledWith(rebuilt.session);
+    expect(rebuilt.send).toHaveBeenCalledTimes(1);
+    expect(h.send).not.toHaveBeenCalled();
+    expect(latestNotifiedRun(notifier).status).toBe('success');
+  });
+
+  it('surfaces rebuild failure loudly after a successful recycle instead of sending to a closed instance', async () => {
+    // 回归(fe45afa803 语义):回收成功(旧实例已关)后的重建失败必须上抛原始原因,
+    // 继续用已关闭实例只会把真实原因换成误导性的「会话已关闭」。
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    const { runner, maker, notifier } = createRunnerHarness(h.session);
+    (maker.recyclePiRuntimeIfResourcesDrifted as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+    (maker.createSession as ReturnType<typeof vi.fn>)
+      .mockImplementationOnce(async () => h.session)
+      .mockRejectedValueOnce(new Error('pi startup failed: model catalog unavailable'));
+    const ctx = createFireContext();
+
+    // 重建失败在 run 组装前裸上抛(不产出 failed run):大声失败正是修复语义。
+    await expect(runner.fire(baseSchedule(), ctx)).rejects.toThrow(/pi startup failed/);
+    expect(h.send).not.toHaveBeenCalled();
+    expect(notifier.notify).not.toHaveBeenCalled();
   });
 });

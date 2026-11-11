@@ -1,17 +1,19 @@
 diff --git a/android/src/main/java/expo/modules/pasteinput/ExpoPasteInputView.kt b/android/src/main/java/expo/modules/pasteinput/ExpoPasteInputView.kt
-index 99b0fa68814e57404d4c7f97c7fb47ced5ca59f1..da433256c0690c7369953dd83d616e82707b739b 100644
+index 99b0fa68814e57404d4c7f97c7fb47ced5ca59f1..c7722100c1e9fe01095293b018949cdf0a2ec7b2 100644
 --- a/android/src/main/java/expo/modules/pasteinput/ExpoPasteInputView.kt
 +++ b/android/src/main/java/expo/modules/pasteinput/ExpoPasteInputView.kt
-@@ -6,6 +6,8 @@ import android.graphics.Bitmap
+@@ -6,7 +6,10 @@ import android.graphics.Bitmap
  import android.graphics.BitmapFactory
  import android.net.Uri
  import android.os.Build
 +import android.os.Handler
 +import android.os.Looper
  import android.os.SystemClock
++import android.view.MotionEvent
  import android.view.View
  import android.view.ViewGroup
-@@ -19,8 +21,21 @@ import expo.modules.kotlin.viewevent.EventDispatcher
+ import android.view.ActionMode
+@@ -19,8 +22,24 @@ import expo.modules.kotlin.viewevent.EventDispatcher
  import expo.modules.kotlin.views.ExpoView
  import java.io.File
  import java.io.FileOutputStream
@@ -28,12 +30,79 @@ index 99b0fa68814e57404d4c7f97c7fb47ced5ca59f1..da433256c0690c7369953dd83d616e82
 +      Thread(runnable, "expo-paste-input-media").apply { isDaemon = true }
 +    }
 +    private val MAIN_HANDLER = Handler(Looper.getMainLooper())
++
++    // android.widget.Editor builds the text drag shadow from at most this many selected characters.
++    private const val DRAG_SHADOW_MAX_TEXT_LENGTH = 20
 +  }
 +
    private val onPaste by EventDispatcher()
    private var textInputView: EditText? = null
    private var isMonitoring: Boolean = false
-@@ -413,9 +428,44 @@ class ExpoPasteInputView(context: Context, appContext: AppContext) : ExpoView(co
+@@ -30,6 +49,7 @@ class ExpoPasteInputView(context: Context, appContext: AppContext) : ExpoView(co
+   private var customSelectionActionModeCallback: ActionMode.Callback? = null
+   private var customInsertionActionModeCallback: ActionMode.Callback? = null
+   private var suppressOnReceiveContentUntilMs: Long = 0L
++  private var longPressSuspendedInput: EditText? = null
+   
+   private data class ClipboardPayload(
+     val imageUris: List<Uri>,
+@@ -113,6 +133,46 @@ class ExpoPasteInputView(context: Context, appContext: AppContext) : ExpoView(co
+     }
+   }
+   
++  // Cindy patch: a long press that lands on the current selection makes android.widget.Editor
++  // start a text drag, with a shadow built from the first DRAG_SHADOW_MAX_TEXT_LENGTH selected
++  // characters. When those have no width (only line breaks, for example) the shadow is
++  // zero-sized and View.startDragAndDrop throws "Drag shadow dimensions must be positive" for
++  // apps targeting API 28+, which kills the process. The exception is raised inside
++  // TextView.performLongClick, out of reach from here, so the long press is switched off for
++  // that one gesture instead: taps, cursor placement and the selection handles keep working.
++  override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
++    val action = ev.actionMasked
++    if (action == MotionEvent.ACTION_DOWN) {
++      restoreLongPress()
++      val editText = textInputView
++      if (editText != null && editText.isLongClickable && selectionHasNoDragShadow(editText)) {
++        editText.isLongClickable = false
++        longPressSuspendedInput = editText
++      }
++    }
++    try {
++      return super.dispatchTouchEvent(ev)
++    } finally {
++      if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
++        restoreLongPress()
++      }
++    }
++  }
++
++  private fun restoreLongPress() {
++    longPressSuspendedInput?.isLongClickable = true
++    longPressSuspendedInput = null
++  }
++
++  private fun selectionHasNoDragShadow(editText: EditText): Boolean {
++    val text = editText.text ?: return false
++    val start = minOf(editText.selectionStart, editText.selectionEnd)
++    val end = maxOf(editText.selectionStart, editText.selectionEnd)
++    if (start < 0 || end <= start || end > text.length) return false
++    val shadowText = text.subSequence(start, minOf(end, start + DRAG_SHADOW_MAX_TEXT_LENGTH)).toString()
++    return shadowText.split('\n').all { line -> editText.paint.measureText(line) <= 0f }
++  }
++
+   private fun startMonitoring() {
+     if (isMonitoring) return
+     
+@@ -127,6 +187,8 @@ class ExpoPasteInputView(context: Context, appContext: AppContext) : ExpoView(co
+   }
+   
+   private fun stopMonitoring() {
++    // A gesture can be cut short by a detach; never leave the input without its long press.
++    restoreLongPress()
+     if (!isMonitoring) return
+     
+     val editText = textInputView
+@@ -413,9 +475,44 @@ class ExpoPasteInputView(context: Context, appContext: AppContext) : ExpoView(co
    }
    
    internal fun processMultipleImagePaste(imageUris: List<Uri>, gifUris: List<Uri> = emptyList()) {
@@ -80,7 +149,7 @@ index 99b0fa68814e57404d4c7f97c7fb47ced5ca59f1..da433256c0690c7369953dd83d616e82
        // Process GIFs first - copy them directly without decoding
        for (gifUri in gifUris) {
          val gifPath = copyGifFile(gifUri)
-@@ -423,19 +473,19 @@ class ExpoPasteInputView(context: Context, appContext: AppContext) : ExpoView(co
+@@ -423,19 +520,19 @@ class ExpoPasteInputView(context: Context, appContext: AppContext) : ExpoView(co
            filePaths.add(gifPath)
          }
        }
@@ -104,7 +173,7 @@ index 99b0fa68814e57404d4c7f97c7fb47ced5ca59f1..da433256c0690c7369953dd83d616e82
            // Save to cache directory
            val cacheDir = context.cacheDir
            val usePng = bitmap.hasAlpha()
-@@ -443,7 +493,7 @@ class ExpoPasteInputView(context: Context, appContext: AppContext) : ExpoView(co
+@@ -443,7 +540,7 @@ class ExpoPasteInputView(context: Context, appContext: AppContext) : ExpoView(co
            // Use UUID-like approach for better uniqueness: timestamp + counter
            val fileName = "${System.currentTimeMillis()}_${filePaths.size}.$fileExtension"
            val file = File(cacheDir, fileName)
@@ -113,7 +182,7 @@ index 99b0fa68814e57404d4c7f97c7fb47ced5ca59f1..da433256c0690c7369953dd83d616e82
            FileOutputStream(file).use { outputStream ->
              if (usePng) {
                bitmap.compress(Bitmap.CompressFormat.PNG, 100, outputStream)
-@@ -452,24 +502,15 @@ class ExpoPasteInputView(context: Context, appContext: AppContext) : ExpoView(co
+@@ -452,24 +549,15 @@ class ExpoPasteInputView(context: Context, appContext: AppContext) : ExpoView(co
              }
              outputStream.flush()
            }

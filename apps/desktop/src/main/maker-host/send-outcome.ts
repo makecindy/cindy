@@ -24,6 +24,8 @@ export const HOST_SEND_FAILURE_CODES = [
    */
   'CREDENTIAL_SWITCH_BUSY',
   'SEND_FAILED',
+  'PLUGIN_TURN_SKIPPED',
+  'PLUGIN_TURN_BLOCKED',
 ] as const;
 
 export type HostSendFailureCode = (typeof HOST_SEND_FAILURE_CODES)[number];

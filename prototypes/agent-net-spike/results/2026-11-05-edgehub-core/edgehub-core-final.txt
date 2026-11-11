@@ -1,0 +1,15 @@
+PASS  真实 DeviceLinkClient 在没有中转时进入 online  (selfId=a-phone)
+PASS  在线状态由点对点连接合成
+PASS  link-open / link-accept 与可靠传输协商
+PASS  invoke 往返  (ms {"n":200,"p50":0.4,"p95":0.76,"max":2.87})
+PASS  3 MiB 结果经可靠分片完整送达  (219ms)
+PASS  push 经可靠链路到达控制端
+PASS  名册外的节点被传输层拒绝
+PASS  伪造帧内 src 无效，来源取自已认证连接  (src=c-laptop)
+PASS  远控开关关闭时由目标节点拒绝 invoke  (REMOTE_DISABLED)
+PASS  故障半径：一台控制端静默，另一台零感知  (另一台 invoke ms {"n":100,"p50":1.01,"p95":1.65,"max":5.82})
+PASS  点对点连接断开后重连，请求不重复执行  (总执行 302 次，全部恰好一次)
+PASS  全程没有任何中转连接  (路由帧 出 1283 入 1277)
+PASS  附加：抓到的包里没有业务明文  (3425 个包，3.4 MiB)
+
+传输：core。12/12 通过，附加 1/1

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { resolveRemoteText } from '@cindy/device-link';
 import { i18n } from '@/i18n';
 import { botGroupNewMessageCount } from '@cindy/maker-shared/botGroupPresentation';
@@ -7,6 +7,7 @@ import { chatGroupView, chatRoomRow, chatReadAt, createChatServerClient, type Ch
 import type { ChatHistory } from '@cindy/maker-shared/chat-history';
 import { buildBotGroupCapabilityNotice, botGroupQuoteFromMessage, resolveBotGroupQuote, buildBotGroupQuoteCard, buildBotGroupTaskCard, botGroupProcessCard } from '@cindy/maker-shared/botGroupChat';
 import { orderedBotGroups } from '@/session/botGroupRemote';
+import { createChatInviteShares } from '@/chat/chatInviteShare';
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const room = (n = 1, state = 'joined'): ChatRoom => ({ id: id(n), name: 'Discussion', kind: 'group', state, archived: false,
   revision: 1, created_at: '2026-10-01', updated_at: '2026-10-09', response_mode: 'all', speaking_mode: 'auto' });
@@ -16,6 +17,75 @@ const message = (n: number): ChatMessage => ({ id: id(n), seq: String(9007199254
 const snapshot = (): ChatSnapshot => ({ room: room(), cursor: '9007199254741099', messages: [], members: [
   { id: id(10), kind: 'human', name: 'Other member', state: 'joined', ownerActorId: id(10), ownerName: '', avatar: null, role: 'member' },
 ] });
+
+// Unit: mobile group shares must match #8386's existing Share Server contract.
+// The old suite only covered incoming invitations, not authenticated creation,
+// trusted-origin validation or account changes while publishing a share.
+// Minimal regression: create one invite and receive one opaque web reference.
+describe('mobile invitation share transport', () => {
+  const token = 'A'.repeat(43), shareId = 'b'.repeat(32), base = 'https://share.example.invalid';
+  const response = () => ({ schemaVersion: 1, kind: 'chat-invite', includeAttribution: true,
+    shareId, url: `${base}/chat-invite/${shareId}` });
+  function fixture(region: 'cn' | 'global' = 'global', realm: 'cn' | 'global' = region) {
+    const state = { current: true, base };
+    const apiFetch = vi.fn().mockResolvedValue(response());
+    const shares = createChatInviteShares({ baseUrl: () => state.base, region, realm, current: () => state.current, apiFetch });
+    return { state, apiFetch, shares };
+  }
+  afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
+  it.each(['cn', 'global'] as const)('publishes a %s web link using the captured account realm', async region => {
+    const realm = region === 'cn' ? 'global' : 'cn';
+    const { shares, apiFetch } = fixture(region, realm);
+    expect(await shares.create(id(1), token, id(10))).toBe(response().url);
+    expect(apiFetch).toHaveBeenCalledExactlyOnceWith('/api/shares', expect.objectContaining({
+      baseUrl: base, method: 'POST', cache: 'no-store', redirect: 'error', timeoutMs: 20_000,
+      body: { kind: 'chat-invite', reference: id(1), token, actorId: id(10), region, authRealm: realm,
+        lang: region === 'cn' ? 'zh-CN' : 'en', includeAttribution: true },
+    }));
+  });
+  it.each([
+    { url: `https://another.example.invalid/chat-invite/${shareId}` },
+    { url: `cindy://chat-invite/${token}` }, { shareId: token },
+    { schemaVersion: 2 }, { includeAttribution: false }, { kind: 'other' },
+  ])('rejects a malformed or foreign share response: %j', async invalid => {
+    const { shares, apiFetch } = fixture(); apiFetch.mockResolvedValue({ ...response(), ...invalid });
+    await expect(shares.create(id(1), token, id(10))).rejects.toThrow('CHAT_RESPONSE_INVALID');
+  });
+  it.each(['http://share.example.invalid', 'https://user:password@share.example.invalid',
+    `${base}/other`, `${base}/?query=1`, `${base}/#fragment`])('refuses an invalid configured origin before transport: %s', async configured => {
+    const { shares, apiFetch, state } = fixture(); state.base = configured;
+    await expect(shares.create(id(1), token, id(10))).rejects.toThrow('CHAT_ENDPOINT_UNAVAILABLE');
+    expect(apiFetch).not.toHaveBeenCalled();
+  });
+  it('rejects late share results and prevents old-account authentication retries', async () => {
+    const { shares, apiFetch, state } = fixture();
+    let complete!: (value: unknown) => void;
+    apiFetch.mockReturnValueOnce(new Promise(resolve => { complete = resolve; }));
+    const pending = shares.create(id(1), token, id(10)); state.current = false;
+    complete(response()); await expect(pending).rejects.toThrow('OWNER_CHANGED');
+    expect(() => apiFetch.mock.calls[0][1].assertCurrent()).toThrow('OWNER_CHANGED');
+    await expect(shares.create(id(1), token, id(10))).rejects.toThrow('OWNER_CHANGED');
+    expect(apiFetch).toHaveBeenCalledTimes(1);
+  });
+  it('resolves an opaque id only at the captured configured origin without account credentials', async () => {
+    const { shares, apiFetch } = fixture();
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ token }), { status: 200 }));
+    vi.stubGlobal('fetch', fetch);
+    expect(await shares.resolve(shareId)).toBe(token);
+    expect(fetch).toHaveBeenCalledExactlyOnceWith(`${base}/api/chat-invites/${shareId}/token`, {
+      method: 'POST', redirect: 'error', cache: 'no-store', signal: expect.any(AbortSignal),
+    });
+    expect(apiFetch).not.toHaveBeenCalled();
+  });
+  it('bounds revocation projection retries without undoing a successful Chat Server revocation', async () => {
+    const { shares, apiFetch, state } = fixture(); apiFetch.mockRejectedValue(new Error('offline'));
+    await expect(shares.revoked(shareId)).resolves.toBeUndefined();
+    expect(apiFetch).toHaveBeenCalledTimes(2);
+    expect(apiFetch.mock.calls[0]).toEqual([`/api/chat-invites/${shareId}/revoked`, expect.objectContaining({ body: { authRealm: 'global' } })]);
+    apiFetch.mockClear(); state.current = false;
+    await shares.revoked(shareId); expect(apiFetch).not.toHaveBeenCalled();
+  });
+});
 
 // #5759, unit: the real direct client must retain human-authored plan cards, refresh
 // their server state and use revision/actor authorization. Existing tests only covered
@@ -433,13 +503,13 @@ describe('direct Chat Server client', () => {
     const blankText = { ...onlyMedia, content: [{ type: 'text', text: ' \n' }, ...onlyMedia.content] };
     expect(chatRoomRow(room(), { ...snapshot(), messages: [blankText] }, id(11)).item.display.preview).toBe('a.png, b.pdf');
   });
-  it.each(['AUTH_REQUIRED', 'private diagnostic', undefined])('reads executions and projects a safe notice beside its visible source: %s', async failure_code => {
+  it.each(['AUTH_REQUIRED', 'RUNTIME_TIMEOUT', 'private diagnostic', undefined])('reads executions and projects a safe notice beside its visible source: %s', async failure_code => {
     const source = message(20);
     let status = 'failed';
     const request = vi.fn();
     request.mockImplementation(async (path: string) => path.endsWith('/snapshot') ? snapshot()
       : path.endsWith('/plans') ? []
-      : path.includes('/execution-failures?') ? [{ id: id(30), source_message_id: source.id, bot_id: id(10), epoch: 1, status, failure_code }]
+      : path.includes('/execution-failures?') ? [{ id: id(30), source_message_id: source.id, bot_id: id(10), epoch: 1, status, failure_code, failure_reason: 'unclaimed_timeout' }]
       : [source]);
     const client = createChatServerClient(request);
     const page = await client.load(id(1));
@@ -448,7 +518,8 @@ describe('direct Chat Server client', () => {
     expect(view.messages).toHaveLength(2);
     expect(view.messages[0]).toMatchObject({ id: source.id, kind: 'message' });
     expect(view.messages[1]).toMatchObject({ id: `execution-failure:${id(30)}:1`, sequence: view.messages[0].sequence,
-      kind: 'notice', runtimeFailureCode: failure_code === 'AUTH_REQUIRED' ? failure_code : 'RUNTIME_ERROR' });
+      kind: 'notice', runtimeFailureCode: failure_code === 'AUTH_REQUIRED' || failure_code === 'RUNTIME_TIMEOUT' ? failure_code : 'RUNTIME_ERROR' });
+    expect(view.messages[1].runtimeFailureReason).toBe(failure_code === 'RUNTIME_TIMEOUT' ? 'unclaimed_timeout' : undefined);
     expect(view.lastMessage?.preview).toBe('20');
     expect(JSON.stringify(view.messages)).not.toContain('private diagnostic');
     status = 'queued';
@@ -715,7 +786,7 @@ it('stops my requests and companions without stopping another member’s work', 
   await createChatServerClient(request as any).stop(id(1), 'stop-operation');
   const writes = request.mock.calls.filter(([, method]) => method === 'POST');
   expect(writes).toEqual([
-    [`/conversations/${id(1)}/plans/${planId}`, 'POST', { operationId: `stop-operation:plan:${planId}`, expectedRevision: 7, action: 'stop' }],
+    [`/conversations/${id(1)}/plans/${planId}`, 'POST', { operationId: `stop-operation:plan:${planId}`, expectedRevision: 7, action: 'stop' }, undefined],
     [`/conversations/${id(1)}/executions/${id(30)}/control`, 'POST', { operationId: `stop-operation:execution:${id(30)}`, action: 'stop' }, id(12)],
     [`/conversations/${id(1)}/executions/${id(31)}/control`, 'POST', { operationId: `stop-operation:execution:${id(31)}`, action: 'stop' }, undefined],
   ]);
@@ -745,7 +816,7 @@ it('reads Cindy preset identity without inferring from names and retains known I
   const actors = [1, 2, 3, 4].map(n => ({ id: id(n), externalId: `bot-${n}`, kind: 'bot', name: 'Cindy', avatar: null, homeDeviceId: 'mac' }));
   const ids = await createChatServerClient(request as any).cindyCompanionIds(actors, ['bot-4']);
   expect(ids).toEqual(['bot-1', 'bot-2', 'bot-4']);
-  expect(request.mock.calls.every(call => call[0] === '/preferences' && call[1] === 'GET')).toBe(true);
+  expect(request.mock.calls.every(call => call[0] === '/preferences?key=companion.profile.v1' && call[1] === 'GET')).toBe(true);
 });
 
 // Unit: group and thread projections retain the optional process locator while
@@ -768,6 +839,46 @@ it('keeps process metadata out of the reply and preview, and exposes it only for
 describe('invitation preview and explicit acceptance', () => {
   const token = 'A'.repeat(43);
   const preview = { groupId: id(1), name: 'Weekend', inviterName: 'Lin', joined: false, expiresAt: null, reusable: true };
+  // Unit regression: #8386 covered incoming links only. A phone-created invite
+  // must return the Share Server URL, not expose its raw token in a native link.
+  // Minimal input: one valid reusable invite; existing tests only preview/accept.
+  it('creates a web share and preserves the server invitation lifetime', async () => {
+    const link = `https://share.example.invalid/chat-invite/${'b'.repeat(32)}`;
+    const request = vi.fn().mockResolvedValue({ token, expiresAt: null, reusable: true });
+    const shares = { create: vi.fn().mockResolvedValue(link), resolve: vi.fn(), revoked: vi.fn() };
+    const client = createChatServerClient(request, undefined, undefined, shares);
+    await expect(client.createInvite(id(1), id(10), 'create-operation')).resolves.toEqual({ link, expiresAt: null, reusable: true });
+    expect(shares.create).toHaveBeenCalledExactlyOnceWith(id(1), token, id(10));
+    expect(request).toHaveBeenCalledExactlyOnceWith(`/conversations/${id(1)}/invite-links`, 'POST', { operationId: 'create-operation' }, id(10));
+  });
+  it('does not fall back to a native link when sharing fails', async () => {
+    const request = vi.fn().mockResolvedValue({ token, expiresAt: null, reusable: true });
+    const shares = { create: vi.fn().mockRejectedValue(new Error('offline')), resolve: vi.fn(), revoked: vi.fn() };
+    await expect(createChatServerClient(request, undefined, undefined, shares).createInvite(id(1), id(10), 'op')).rejects.toThrow('offline');
+    await expect(createChatServerClient(request).createInvite(id(1), id(10), 'op')).rejects.toThrow('CHAT_ENDPOINT_UNAVAILABLE');
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+  it('revokes the token behind a web link before notifying the share service', async () => {
+    const request = vi.fn().mockResolvedValue({ revoked: true });
+    const shares = { create: vi.fn(), resolve: vi.fn().mockResolvedValue(token), revoked: vi.fn() };
+    const shareId = 'b'.repeat(32);
+    const client = createChatServerClient(request, undefined, undefined, shares);
+    await client.revokeInvite(id(1), id(10), `https://share.example.invalid/chat-invite/${shareId}`, 'revoke-operation');
+    expect(shares.resolve).toHaveBeenCalledExactlyOnceWith(shareId);
+    expect(request).toHaveBeenCalledExactlyOnceWith(`/conversations/${id(1)}/invite-links/revoke`, 'POST', { token, operationId: 'revoke-operation' }, id(10));
+    expect(shares.revoked).toHaveBeenCalledExactlyOnceWith(shareId);
+    request.mockRejectedValueOnce(new Error('FORBIDDEN')); shares.revoked.mockClear();
+    await expect(client.revokeInvite(id(1), id(10), `https://share.example.invalid/chat-invite/${shareId}`, 'denied')).rejects.toThrow('FORBIDDEN');
+    expect(shares.revoked).not.toHaveBeenCalled();
+    request.mockResolvedValueOnce({});
+    await expect(client.revokeInvite(id(1), id(10), `https://share.example.invalid/chat-invite/${shareId}`, 'invalid-receipt')).rejects.toThrow('CHAT_RESPONSE_INVALID');
+    expect(shares.revoked).not.toHaveBeenCalled();
+  });
+  it.each(['cindy', 'cindycn', 'cindydev'])('still revokes an existing %s native invitation without the share service', async scheme => {
+    const request = vi.fn().mockResolvedValue({ revoked: true });
+    await createChatServerClient(request).revokeInvite(id(1), id(10), `${scheme}://chat-invite/${token}`, 'old-operation');
+    expect(request).toHaveBeenCalledExactlyOnceWith(`/conversations/${id(1)}/invite-links/revoke`, 'POST', { token, operationId: 'old-operation' }, id(10));
+  });
   it('previews only and preserves real optional identity without guessing missing counts', async () => {
     const request = vi.fn().mockResolvedValueOnce({ ...preview, avatar: 'https://images.example.invalid/group.png', memberCount: 8 })
       .mockResolvedValueOnce(preview).mockResolvedValueOnce({ ...preview, memberCount: -1 });
@@ -854,14 +965,17 @@ it.each([{ status: 403, code: 'PERMISSION_DENIED' }, { status: 404, code: 'CONVE
 // root summaries, explicit following, or trustworthy thread-share source resolution.
 it('projects authoritative reply counts, distinct responders, unread mentions and resolved shares', () => {
   const root = { ...message(20), replyCount: 17 };
-  const reply = { ...message(21), threadRootId: root.id, mentions: [id(11)] };
-  const share = { ...message(22), content: [{ type: 'card', namespace: 'cindy.thread-share', schemaRevision: 1,
+  const reply = { ...message(21), threadRootId: root.id, mentions: [id(11)], mentionAudience: 'bots' as const };
+  const share = { ...message(22), mentions: [id(10)], content: [{ type: 'card', namespace: 'cindy.thread-share', schemaRevision: 1,
     data: { messageId: reply.id, threadRootId: root.id }, fallback: 'Untrusted old text' }] };
   const s = { ...snapshot(), messages: [share, reply, root], reads: [] };
   const view = chatGroupView({ snapshot: s, messages: [root, share], before: null }, id(11));
   expect(view.messages[0]).toMatchObject({ replyCount: 17, threadUnread: { count: 1, mentioned: true },
     threadPreview: { responders: [{ authorBotId: reply.authorId }], replies: [{ id: reply.id }] } });
-  expect(view.messages[1]).toMatchObject({ content: '', threadShare: { status: 'available', content: '21', sharedByAuthor: true } });
+  // PR #8818: source identity travels with source text; delivery recipients stay intact.
+  expect(view.messages[1]).toMatchObject({ content: '', mentions: { all: false, botIds: [id(10)] },
+    threadShare: { status: 'available', content: '21', sharedByAuthor: true,
+      mentions: { all: false, allBots: true, botIds: [id(11)] } } });
   expect(chatGroupView({ snapshot: { ...s, reads: undefined }, messages: [root], before: null }, id(11)).messages[0].threadUnread).toBeUndefined();
   expect(chatGroupView({ snapshot: s, messages: [share], before: null, threadSources: { [reply.id]: null } }, id(11)).messages[0])
     .toMatchObject({ content: '', threadShare: { status: 'unavailable', content: '', attachments: [] } });
@@ -1014,4 +1128,72 @@ it.each(['bot', 'human'] as const)('projects a capability notice only from its c
   expect(view.messages[0].kind).toBe(kind === 'bot' ? 'notice' : 'message');
   expect(view.messages[0].capabilityNoticeCode).toBe(kind === 'bot' ? 'ATTACHMENTS_UNAVAILABLE' : undefined);
   expect(view.messages[0].content).toBe('Some attachments were not delivered');
+});
+
+// 测试价值：群聊 §4.0 的默认本人范围和显式 all，以及真实拒绝/收尾竞态。
+// 旧测试只覆盖一次本人 happy path；最小输入是一条他人的执行或一条被拒的本人执行。
+// tier: unit，生产 ChatServerClient 通过内存 request，不连接服务器。
+it.each(['owner', 'admin', 'member'] as const)('authorizes explicit all with a fresh %s role', async role => {
+  const request = vi.fn(async (path: string, method?: string) => {
+    if (path === '/me') return { actor: { id: id(10), kind: 'human' }, capabilities: { groupSingleSpeaker: 1 } };
+    if (path.endsWith('/snapshot')) return { ...snapshot(), members: snapshot().members.map(member => ({ ...member, role })) };
+    if (path.endsWith('/plans')) return [];
+    if (path.endsWith('/executions')) return [{ id: id(30), bot_id: id(12), requester_id: id(99), status: 'running' }];
+    if (method === 'POST') return {};
+    throw new Error(path);
+  });
+  const client = createChatServerClient(request as any);
+  if (role === 'member') {
+    await expect(client.stop(id(1), 'all-op', 'all')).rejects.toThrow('ROLE_REQUIRED');
+    expect(request.mock.calls.some(([, method]) => method === 'POST')).toBe(false);
+  } else {
+    await client.stop(id(1), 'all-op', 'all');
+    expect(request.mock.calls.some(([path, method]) => method === 'POST' && path.includes(id(30)))).toBe(true);
+  }
+});
+it.each(['running', 'stopping', 'cancelled', 'missing'] as const)('preserves a refused stop unless reread explicitly settles it (%s)', async latest => {
+  let reads = 0;
+  const rejection = Object.assign(new Error('FORBIDDEN'), { status: 403 });
+  const request = vi.fn(async (path: string, method?: string) => {
+    if (method === 'POST') throw rejection;
+    if (path === '/me') return { actor: { id: id(10), kind: 'human' } };
+    if (path.endsWith('/snapshot')) return snapshot();
+    if (path.endsWith('/plans')) return [];
+    if (path.endsWith('/executions')) {
+      reads++;
+      return reads > 1 && latest === 'missing' ? [] : [{ id: id(30), bot_id: id(12), requester_id: id(10), status: reads === 1 ? 'running' : latest }];
+    }
+    throw new Error(path);
+  });
+  const action = createChatServerClient(request as any).stop(id(1), 'stop-op');
+  if (latest === 'stopping' || latest === 'cancelled') await expect(action).resolves.toBeUndefined();
+  else await expect(action).rejects.toBe(rejection);
+});
+it('does not send a later stop after its group action owner changes', async () => {
+  let current = true;
+  const request = vi.fn(async (path: string) => {
+    if (path === '/me') return { actor: { id: id(10), kind: 'human' } };
+    current = false;
+    return snapshot();
+  });
+  await expect(createChatServerClient(request as any).stop(id(1), 'stale-op', undefined, () => current)).rejects.toThrow('OWNER_CHANGED');
+  expect(request.mock.calls.map(([path]) => path)).toHaveLength(2);
+});
+
+it('uses my admin companion actor for an explicit all, preserving server plan revision', async () => {
+  const manager = { ...snapshot().members[0], id: id(12), kind: 'bot', ownerActorId: id(10), role: 'admin' };
+  const request = vi.fn(async (path: string, method?: string) => {
+    if (method === 'POST') return {};
+    if (path === '/me') return { actor: { id: id(10), kind: 'human' }, capabilities: { groupSingleSpeaker: 1 } };
+    if (path.endsWith('/snapshot')) return { ...snapshot(), members: [...snapshot().members, manager] };
+    if (path.endsWith('/plans')) return [{ id: id(40), creator_id: id(99), status: 'running', revision: 7 }];
+    if (path.endsWith('/executions')) return [{ id: id(30), bot_id: id(13), requester_id: id(99), status: 'running' }];
+    throw new Error(path);
+  });
+  await createChatServerClient(request as any).stop(id(1), 'all-op', 'all');
+  const writes = request.mock.calls.filter(([, method]) => method === 'POST');
+  expect(writes).toEqual([
+    [`/conversations/${id(1)}/plans/${id(40)}`, 'POST', { operationId: `all-op:plan:${id(40)}`, expectedRevision: 7, action: 'stop' }, id(12)],
+    [`/conversations/${id(1)}/executions/${id(30)}/control`, 'POST', { operationId: `all-op:execution:${id(30)}`, action: 'stop' }, id(12)],
+  ]);
 });

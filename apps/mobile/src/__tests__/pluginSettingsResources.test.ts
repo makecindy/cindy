@@ -43,7 +43,7 @@ vi.mock("expo-file-system", () => ({
       this.name = name;
     }
     create() {}
-    write(value: string | Uint8Array) {
+    writeSync(value: string | Uint8Array) {
       state.files.set(this.name, value);
     }
   },

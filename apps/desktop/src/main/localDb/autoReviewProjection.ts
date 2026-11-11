@@ -38,8 +38,9 @@ export function readAutoReviewProjection(
     sessionAmbiguous: boolean;
     reviewUnverified: boolean;
   };
+  const projector = createProjection();
   const validIntent = (intent: unknown): boolean => {
-    if (typeof intent === 'string') return intent.length <= 2000;
+    if (typeof intent === 'string') return intent.length <= projector.maxIntentChars;
     if (!intent || typeof intent !== 'object' || Array.isArray(intent)) return false;
     const value = intent as Record<string, unknown>;
     return (
@@ -47,7 +48,7 @@ export function readAutoReviewProjection(
       Array.isArray(value.earlierUserMessages) &&
       value.earlierUserMessages.every((x) => typeof x === 'string') &&
       (value.historyOmitted === undefined || value.historyOmitted === true) &&
-      JSON.stringify(value).length <= 2100
+      JSON.stringify(value).length <= projector.maxIntentChars + 100
     );
   };
   const parseState = (raw: unknown): State | null => {
@@ -63,7 +64,6 @@ export function readAutoReviewProjection(
       return null;
     }
   };
-  const projector = createProjection();
   // Durable triggers only invalidate. The connection-local trigger is allowed
   // to call a UDF; older clients can still write, but can never retain a valid
   // stale projection. No user data or function names are stored in migrations.

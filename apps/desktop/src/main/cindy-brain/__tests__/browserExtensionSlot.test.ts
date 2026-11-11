@@ -77,6 +77,9 @@ class FakeBridge {
     this.started = true;
     this.listeningPort = 18810;
   }
+  pauseForUpdate() {
+    return { settled: Promise.resolve(), release: () => undefined };
+  }
   async close() {
     this.closed = true;
   }
@@ -281,6 +284,72 @@ describe('browserExtensionSlot · 桥接随花名册启停', () => {
     await settle();
     expect(bridges).toHaveLength(1);
     expect(slot.getPageControl()?.ghostId).toBe('other-browser');
+  });
+});
+
+// Regression 2026-11-07: receipt commits before market provenance. The transient source
+// must not overwrite pairings; completion must restore the selected provider (unit).
+describe('browserExtensionSlot · 更新来源收敛', () => {
+  it('preserves pairings across unavailable provenance and restores control on completion', async () => {
+    const ghosts = [extGhost({ nativeHost: false })];
+    ghosts[0].publishingSource = { kind: 'public-market', pluginId: 'market-browser' };
+    const h = await makeSlot({}, ghosts);
+    h.slot.reconcile(ghosts);
+    await h.settle();
+    await h.slot.activate('_root__my-browser');
+    const clients = [{ id: 'paired-browser', origin: 'chrome-extension://' + CHROME_ID, extensionId: CHROME_ID, publicKey: 'saved-key' }];
+    await h.slot.handleRequest('_root__my-browser', { kind: 'setTrustedClients', clients });
+    const cache = path.join(h.dir, '_root__my-browser.json');
+    const before = await fs.readFile(cache, 'utf8');
+    const complete = await h.slot.prepareUpdate('_root__my-browser');
+    ghosts[0] = { ...ghosts[0], manifest: { ...ghosts[0].manifest, version: '2.0.0' },
+      publishingSource: { kind: 'unavailable' } };
+    h.slot.reconcile(ghosts);
+    await h.settle();
+    expect(h.bridges).toHaveLength(1);
+    expect(h.slot.getPageControlUnavailableReason()).toBe('plugin-updating');
+    expect(h.slot.getPageControl()).toBeNull();
+    expect(await h.slot.activate('_root__my-browser')).toBe(false);
+    expect(await fs.readFile(cache, 'utf8')).toBe(before);
+    ghosts[0] = { ...ghosts[0], publishingSource: { kind: 'public-market', pluginId: 'market-browser' } };
+    complete();
+    h.slot.reconcile(ghosts);
+    await h.settle();
+    expect(h.slot.getPageControl()?.instanceId).toBe('_root__my-browser');
+    expect(h.bridges.at(-1)?.calls).toContainEqual(['setTrustedClients', [clients]]);
+    await h.slot.dispose();
+  });
+
+  it('keeps the legacy official control end paused during its update instead of falling back to another plugin', async () => {
+    const ghosts = [extGhost({ nativeHost: false }), extGhost({ id: 'other-browser', nativeHost: false })];
+    const h = await makeSlot({}, ghosts);
+    h.slot.reconcile(ghosts);
+    await h.settle();
+    expect(h.slot.getPageControl()?.ghostId).toBe('my-browser');
+    const complete = await h.slot.prepareUpdate('_root__my-browser');
+    expect(h.slot.getPageControl()).toBeNull();
+    complete();
+    h.slot.reconcile(ghosts);
+    await h.settle();
+    expect(h.slot.getPageControl()?.ghostId).toBe('my-browser');
+    await h.slot.dispose();
+  });
+
+  it('does not reuse control or pairings when only the source changes', async () => {
+    const ghosts = [extGhost({ nativeHost: false })];
+    ghosts[0].publishingSource = { kind: 'public-market', pluginId: 'market-browser' };
+    const h = await makeSlot({}, ghosts);
+    h.slot.reconcile(ghosts);
+    await h.settle();
+    await h.slot.activate('_root__my-browser');
+    ghosts[0] = { ...ghosts[0], publishingSource: { kind: 'local', source: 'manual' } };
+    h.slot.reconcile(ghosts);
+    await h.settle();
+    expect(h.slot.getPageControl()).toBeNull();
+    expect(h.bridges[0].closed).toBe(true);
+    expect(await h.slot.activate('_root__my-browser')).toBe(true);
+    expect(h.slot.getPageControl()?.instanceId).toBe('_root__my-browser');
+    await h.slot.dispose();
   });
 });
 

@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { ghostCardSessionLinkId } from '@cindy/maker-shared/ghost-card-form';
+import { useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { prStatusItemKeys, type PrStatusKind, type PrStatusResult } from "@cindy/maker-shared";
 import {
   parseGhostCardForm,
@@ -30,7 +31,9 @@ import {
   Pressable,
   StyleSheet,
   Switch,
+  useWindowDimensions,
   View,
+  type ViewInstance,
 } from "react-native";
 import { useIsFocused } from "expo-router";
 import { useTranslation } from "react-i18next";
@@ -63,8 +66,10 @@ import { pickMobileMailAttachment } from "./mobileMailAttachment";
 import { PluginCardRecipients } from "./PluginCardRecipients";
 import { invokePlugin } from "./pluginClient";
 import { FileTypeIcon } from '@/components/FileTypeIcon';
-import { Check, CircleMinus, CircleX, Clock, ExternalLink } from 'lucide-react-native';
+import { Check, CircleMinus, CircleX, Clock, ExternalLink, Settings, ChevronDown } from 'lucide-react-native';
 import { prStatusVisual } from '@/session/prStatusVisual';
+import { MessageListItemViewableContext } from '@/session/messageListVisibility';
+import { taskAutoArchive } from './taskAutoArchive';
 import { formatByteSize } from '@cindy/maker-shared/file-preview';
 
 interface Action {
@@ -82,6 +87,8 @@ interface Action {
 }
 const PR_STATES: readonly PrStatusKind[] = ["open", "draft", "merged", "closed"];
 interface PrStatusSlot { key: string; fallback: string[]; status?: Extract<PrStatusResult, { ok: true }> }
+/** The host's word that every PR of the task is merged (the card's archive button); `auto`: archive on leaving. */
+interface TaskArchive { auto: boolean }
 
 function isCount(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
@@ -123,6 +130,7 @@ function parse(value: unknown): {
   mailUpload?: boolean;
   live?: string;
   prStatus: PrStatusSlot[];
+  taskArchive?: TaskArchive;
 } | null {
   if (!value || typeof value !== "object") return null;
   const data = value as Record<string, unknown>;
@@ -162,7 +170,11 @@ function parse(value: unknown): {
       typeof data.changeAction === "string" ? data.changeAction : undefined,
     live: typeof data.live === "string" && data.live.length <= 64 ? data.live : undefined,
     prStatus: parsePrStatusSlots(data.prStatus),
+    ...(isTaskArchive(data.taskArchive) ? { taskArchive: { auto: data.taskArchive.auto } } : {}),
   };
+}
+function isTaskArchive(value: unknown): value is TaskArchive {
+  return !!value && typeof value === "object" && typeof (value as { auto?: unknown }).auto === "boolean";
 }
 export function PluginCardActions({
   data,
@@ -170,6 +182,7 @@ export function PluginCardActions({
   sessionId,
   callId,
   onOpenAttachment,
+  onOpenSessionLink,
   text,
 }: {
   data: unknown;
@@ -177,6 +190,7 @@ export function PluginCardActions({
   sessionId: string;
   callId: string;
   onOpenAttachment?: (url: string, name: string) => void;
+  onOpenSessionLink?: (url: string) => void;
   /** The card's projected text; drawn here as the card's title and detail lines. */
   text?: string;
 }) {
@@ -188,6 +202,7 @@ export function PluginCardActions({
       deviceId={deviceId}
       sessionId={sessionId}
       callId={callId}
+      onOpenSessionLink={onOpenSessionLink}
       onOpenAttachment={onOpenAttachment}
       text={text}
     />
@@ -204,15 +219,18 @@ function CardControls({
   items,
   live,
   prStatus,
+  taskArchive,
   deviceId,
   sessionId,
   callId,
   onOpenAttachment,
+  onOpenSessionLink,
   text,
 }: {
   text?: string;
   live?: string;
   prStatus: PrStatusSlot[];
+  taskArchive?: TaskArchive;
   form: GhostCardFormField[] | null;
   changeAction?: string;
   mail?: MailCardData | null;
@@ -225,6 +243,7 @@ function CardControls({
   sessionId: string;
   callId: string;
   onOpenAttachment?: (url: string, name: string) => void;
+  onOpenSessionLink?: (url: string) => void;
 }) {
   const { t } = useTranslation(),
     styles = useThemedStyles(makeStyles);
@@ -233,14 +252,28 @@ function CardControls({
   // Non-mail cards read like Desktop's: a title (the card's own link when it has one), quiet
   // detail lines, and compact buttons. Mail cards keep their editor layout.
   const compact = !mail && !legacyMail;
-  const lines = compact && text ? text.split("\n").map((line) => line.trim()).filter(Boolean) : [];
+  const projectedLines = compact && text ? text.split("\n").map((line) => line.trim()).filter(Boolean) : [];
+  // The GitHub card has a stable action vocabulary. Keep its settings controls together
+  // instead of mixing them into the footer. Unknown/legacy cards retain the generic layout.
+  const hasLegacySettings = items.some(action => ['prset:rename', 'prset:follow', 'prset:archive'].includes(action.id) && !action.toggle);
+  const settingsAction = compact && !hasLegacySettings && projectedLines.length > 0 && pluginId === 'cindy-github'
+    ? items.find(action => action.id === 'prui:settings') : undefined;
+  const settingsOpen = !!settingsAction && items.some(action => action.toggle);
+  const modelChoices = settingsOpen ? items.filter(action => ['prset:modelTask', 'prset:model'].includes(action.id)) : [];
+  const modelPicker = settingsOpen ? items.find(action => action.id === 'prset:modelPick') : undefined;
+  // Rich projection removes control text but retains the panel heading and model description,
+  // in document order after the PR summary. Keep the host's language, including older hosts.
+  const settingsLineCount = settingsOpen ? 1 + (modelChoices.length === 2 ? (modelPicker ? 1 : 2) : 0) : 0;
+  const settingsLines = settingsLineCount && projectedLines.length > settingsLineCount
+    ? projectedLines.slice(-settingsLineCount) : [];
+  const lines = settingsLines.length ? projectedLines.slice(0, -settingsLineCount) : projectedLines;
   const titleLink = lines.length ? items.find((action) => action.url && !action.disabled && action.label === lines[0]) : undefined;
   const titleHost = titleLink?.url ? linkHost(titleLink.url) : undefined;
   // A PR link leads with the app's own PR icon in its status colour (as on the home task row);
   // other links end with a quiet external-link mark.
   const titlePr = titleLink?.url && /^https:\/\/(?:www\.)?github\.com\/[^/]+\/[^/]+\/pull\/\d+/.test(titleLink.url)
     ? prStatusVisual(titleLink.prState ?? prStatus.find((slot) => slot.key === githubPrKeyOfUrl(titleLink.url!))?.status?.status ?? null, colors) : undefined;
-  const buttons = (history ? [] : items).filter((action) => !action.toggle && action !== titleLink);
+  const buttons = (history ? [] : items).filter((action) => !action.toggle && action !== titleLink && action !== settingsAction && !modelChoices.includes(action) && action !== modelPicker);
   const { getAccessToken } = useAuth();
   const readonly = history || ['sent', 'sending', 'unconfirmed', 'deleting', 'deleted'].includes(mail?.state ?? '');
   const [countdownNow, setCountdownNow] = useState(Date.now);
@@ -269,6 +302,40 @@ function CardControls({
   const [foreground, setForeground] = useState(
     AppState.currentState === "active",
   );
+  // Archive button and auto-archive (desktop's card rule): this card arms auto-archive while the host says its PR and the
+  // task's other PRs are merged and the plugin asked for it. Unmounting does not disarm: leaving the task unmounts cards,
+  // which is exactly when the task page archives.
+  const autoArchive = !history && !!taskArchive?.auto;
+  // undefined: nothing reported yet. Every mount reports once, even `false`, so a cancellation kept from an earlier visit
+  // is forgotten when the host no longer allows auto-archive.
+  const armedRef = useRef<boolean | undefined>(undefined);
+  useEffect(() => {
+    if (armedRef.current === autoArchive) return;
+    armedRef.current = autoArchive;
+    taskAutoArchive.setArmed(sessionId, callId, autoArchive);
+  }, [sessionId, callId, autoArchive]);
+  const autoArchiveState = useSyncExternalStore(
+    taskAutoArchive.onChange,
+    () => taskAutoArchive.getState(sessionId),
+  );
+  // "Seen": this armed card was on screen in the focused task page with the app in front, not merely mounted.
+  // The message row is only the first gate (a row can hold several cards and passes at 5%): the notice itself must be
+  // inside the window. A frame that cannot be measured does not count, and neither does one that scrolled into view later
+  // inside a tall row (no event reports it); both only mean no auto-archive, never an archive nobody saw.
+  const viewable = useContext(MessageListItemViewableContext) ?? true;
+  const { height: windowHeight } = useWindowDimensions();
+  const noticeRef = useRef<ViewInstance>(null);
+  const seenGate = useRef({ pending: false, viewable, focused, foreground });
+  seenGate.current = { pending: autoArchive && autoArchiveState === "pending", viewable, focused, foreground };
+  const checkNoticeSeen = useCallback(() => {
+    const gate = seenGate.current;
+    if (!gate.pending || !gate.viewable || !gate.focused || !gate.foreground) return;
+    noticeRef.current?.measureInWindow((_x, y, _width, height) => {
+      if (Number.isFinite(y) && height > 0 && y + height > 0 && y < windowHeight) taskAutoArchive.markSeen(sessionId);
+    });
+  }, [sessionId, windowHeight]);
+  useEffect(checkNoticeSeen, [checkNoticeSeen, autoArchive, autoArchiveState, viewable, focused, foreground]);
+  const archiveHint = autoArchive && autoArchiveState !== "inactive" ? autoArchiveState : undefined;
   const [prompt, setPrompt] = useState<Action>();
   const [draft, setDraft] = useState("");
   const formKey = changeAction ?? JSON.stringify(form);
@@ -481,6 +548,10 @@ function CardControls({
   };
   const choose = (action: Action) => {
     if (action.url) {
+      if (ghostCardSessionLinkId(action.url)) {
+        onOpenSessionLink?.(action.url);
+        return;
+      }
       let url: URL;
       try {
         url = new URL(action.url);
@@ -574,7 +645,8 @@ function CardControls({
   return (
     <View style={[styles.root, mail && !history && styles.mailCard]}>
       {lines.length ? (
-        <View style={styles.cardHeader}>
+        <View style={styles.headerRow}>
+        <View style={[styles.cardHeader, styles.headerContent]}>
           {titleLink && titleHost ? (
             <Pressable
               accessibilityRole="link"
@@ -595,6 +667,19 @@ function CardControls({
           {lines.slice(1).map((line, index) => (
             <Text key={index} selectable style={styles.note}>{line}</Text>
           ))}
+        </View>
+        {settingsAction ? <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={settingsAction.label}
+          accessibilityState={{ expanded: settingsOpen }}
+          disabled={settingsAction.disabled || busy || unknown || status !== "online"}
+          onPress={() => choose(settingsAction)}
+          hitSlop={6}
+          style={({ pressed }) => [styles.settingsButton, pressed && styles.pressed]}
+        >
+          {settingsOpen ? <View pointerEvents="none" style={styles.settingsButtonActive} /> : null}
+          <Settings size={iconSize.md} strokeWidth={iconStroke.regular} color={settingsOpen ? colors.textPrimary : colors.textTertiary} />
+        </Pressable> : null}
         </View>
       ) : null}
       {history ? <Pressable accessibilityRole="button" accessibilityState={{ expanded: historyExpanded }} onPress={() => setHistoryExpanded(!historyExpanded)}>
@@ -696,7 +781,7 @@ function CardControls({
           );
         })}
       </View> : null}
-      {(mail && !history) || prStatus.length || buttons.length || live || items.some((action) => action.toggle) ? <View style={mail && !history ? styles.mailFooter : compact ? styles.compactFooter : undefined}>
+      {(mail && !history) || prStatus.length || buttons.length || live || taskArchive || items.some((action) => action.toggle) ? <View style={mail && !history ? styles.mailFooter : compact ? styles.compactFooter : undefined}>
         {mail && !history ? (
           <View style={styles.mailInfo}>
             <Text style={styles.note}>{mail.fromLabel}: {mail.from}</Text>
@@ -707,8 +792,10 @@ function CardControls({
           </View>
         ) : null}
         {prStatus.map((slot) => <PrStatusRow key={slot.key} slot={slot} />)}
+        {items.some(action => action.toggle) || modelChoices.length ? <View style={settingsOpen ? styles.settingsPanel : styles.root}>
+        {settingsLines[0] ? <Text style={styles.sectionLabel}>{settingsLines[0]}</Text> : null}
         {(history ? [] : items).filter((action) => action.toggle).map((action) => (
-          <View key={action.id} style={styles.toggleRow}>
+          <View key={action.id} style={[styles.toggleRow, settingsOpen && styles.settingRow]}>
             <View style={styles.toggleText}>
               <Text style={styles.label}>{action.toggle!.title}</Text>
               {action.toggle!.hint ? <Text style={styles.note}>{action.toggle!.hint}</Text> : null}
@@ -721,11 +808,44 @@ function CardControls({
             />
           </View>
         ))}
-        {buttons.length || live ? <View style={[styles.actions, compact && styles.compactActions]}>
+        {modelChoices.length ? <View style={styles.modelSection}>
+          {settingsLines[1] ? <Text style={styles.settingLabel}>{settingsLines[1]}</Text> : null}
+          {settingsLines[2] ? <Text style={styles.note}>{settingsLines[2]}</Text> : null}
+          <View style={styles.modelChoices}>
+            {modelChoices.map(action => {
+              const selected = action.id === (modelPicker ? 'prset:model' : 'prset:modelTask');
+              return <Pressable key={action.id} accessibilityRole="radio"
+                accessibilityLabel={action.label} accessibilityState={{ checked: selected }}
+                disabled={action.disabled || busy || unknown || status !== 'online'}
+                onPress={() => choose(action)}
+                style={({ pressed }) => [styles.modelChoice, selected && styles.modelChoiceSelected, pressed && styles.pressed]}>
+                <Text style={[styles.settingLabel, !selected && styles.quietLabel]}>{action.label}</Text>
+              </Pressable>;
+            })}
+          </View>
+          {modelPicker ? <Pressable accessibilityRole="button" accessibilityLabel={modelPicker.label}
+            disabled={modelPicker.disabled || busy || unknown || status !== 'online'}
+            onPress={() => choose(modelPicker)}
+            style={({ pressed }) => [styles.modelPicker, pressed && styles.pressed]}>
+            <Text style={[styles.settingLabel, styles.headerContent]}>{modelPicker.label}</Text>
+            <ChevronDown size={iconSize.sm} strokeWidth={iconStroke.regular} color={colors.textSecondary} />
+          </Pressable> : null}
+        </View> : null}
+        </View> : null}
+        {archiveHint ? <View ref={noticeRef} onLayout={checkNoticeSeen} style={styles.archiveHint} accessibilityLiveRegion="polite">
+          <Text style={styles.note}>{t(archiveHint === "pending" ? "plugins.taskArchive.pending" : "plugins.taskArchive.cancelled")}</Text>
+          {archiveHint === "pending" ? <Pressable accessibilityRole="button" accessibilityLabel={t("plugins.taskArchive.cancel")}
+            hitSlop={{ top: spacing.xs, bottom: spacing.xs }}
+            style={({ pressed }) => [styles.button, styles.compactButton, pressed && styles.pressed]}
+            onPress={() => taskAutoArchive.cancel(sessionId)}>
+            <Text style={[styles.label, styles.compactLabel]}>{t("plugins.taskArchive.cancel")}</Text>
+          </Pressable> : null}
+        </View> : null}
+        {buttons.length || live || (taskArchive && !history) ? <View style={[styles.actions, compact && styles.compactActions]}>
           {buttons.map((action) => {
             const sendNow = !!mail?.pendingSend && action.id === `mail:now:${mail.key}`;
             const primary = action.primary || (!!mail && action.id === `mail:send:${mail.key}`);
-            const host = action.url ? linkHost(action.url) : undefined;
+            const host = action.url && !ghostCardSessionLinkId(action.url) ? linkHost(action.url) : undefined;
             const label = host ? t("plugins.openLinkHost", { host }) : action.label;
             return (
               <Pressable
@@ -746,6 +866,13 @@ function CardControls({
               </Pressable>
             );
           })}
+          {taskArchive && !history ? <Pressable accessibilityRole="button" accessibilityLabel={t("plugins.taskArchive.now")}
+            disabled={status !== "online"}
+            hitSlop={compact ? { top: spacing.xs, bottom: spacing.xs } : undefined}
+            style={({ pressed }) => [styles.button, compact && styles.compactButton, pressed && styles.pressed]}
+            onPress={() => taskAutoArchive.requestArchive(sessionId)}>
+            <Text style={[styles.label, compact && styles.compactLabel]}>{t("plugins.taskArchive.now")}</Text>
+          </Pressable> : null}
           {live ? <View style={compact && styles.liveEnd}><LiveStatus label={live} /></View> : null}
         </View> : null}
       </View> : null}
@@ -955,8 +1082,23 @@ const makeStyles = (c: ThemeColors) =>
     compactButton: { minHeight: 36, paddingVertical: 0, paddingHorizontal: spacing.md },
     compactLabel: { fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall },
     liveEnd: { marginLeft: "auto" },
+    archiveHint: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: spacing.sm, rowGap: spacing.xs },
     compactFooter: { gap: spacing.xs },
-    cardHeader: { gap: 2 },
+    headerRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
+    headerContent: { flex: 1, minWidth: 0 },
+    cardHeader: { gap: spacing.xs },
+    // Match Desktop's 32px gear frame; hitSlop keeps a 44px touch target.
+    settingsButton: { width: 32, height: 32, borderRadius: radius.pill, alignItems: 'center', justifyContent: 'center' },
+    settingsButtonActive: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, borderRadius: radius.pill, backgroundColor: c.textPrimary, opacity: 0.07 },
+    settingsPanel: { borderTopWidth: StyleSheet.hairlineWidth, borderColor: c.border, marginTop: spacing.sm, paddingTop: spacing.md },
+    sectionLabel: { color: c.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.semibold, marginBottom: spacing.xs },
+    settingRow: { paddingVertical: spacing.md, alignItems: 'flex-start', borderBottomWidth: StyleSheet.hairlineWidth, borderColor: c.border },
+    settingLabel: { color: c.textPrimary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, fontWeight: fontWeight.medium },
+    modelSection: { gap: spacing.sm, paddingTop: spacing.md },
+    modelChoices: { flexDirection: 'row', padding: spacing.xs, gap: spacing.xs, backgroundColor: c.surfaceChip, borderRadius: radius.pill },
+    modelChoice: { flex: 1, minWidth: 0, minHeight: 44, padding: spacing.sm, alignItems: 'center', justifyContent: 'center', borderRadius: radius.pill },
+    modelChoiceSelected: { backgroundColor: c.surfaceElevated },
+    modelPicker: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minHeight: 44, padding: spacing.md, borderWidth: StyleSheet.hairlineWidth, borderColor: c.border, borderRadius: radius.pill },
     cardTitle: { color: c.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.semibold },
     titleRow: { flexDirection: "row", alignItems: "flex-start", alignSelf: "flex-start", maxWidth: "100%", gap: 6 },
     titleText: { flexShrink: 1 },

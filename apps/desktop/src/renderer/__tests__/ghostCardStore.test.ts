@@ -17,6 +17,9 @@ import {
   subscribeGhostCards,
 } from '@/cindy-brain/ghostCardStore';
 
+import { markGhostCardSuperseded } from '@cindy/maker-shared/ghost-card-form';
+import { findSessionPrCard, projectPrCard } from '@/cindy-brain/useSessionPrCard';
+
 type GetCardResult = { card: { ghostId: string; html: string; height: number } | null };
 type ListResult = { cards: Array<{ callId: string; ghostId: string; html: string; height: number }> };
 
@@ -190,5 +193,75 @@ describe('ghostCardStore', () => {
       ensureSessionCards('s1');
       expect(getGhostCardEntry('c9')).toMatchObject({ status: 'ready' });
     });
+  });
+});
+
+// The popover must not operate another task's follow-up. Existing store tests did not
+// select cards by task + PR. Unit tier, in-memory inputs.
+describe('PR popover card identity', () => {
+  const html = '<div data-ghost-pr-status="Octo/repo#42">Following</div><button data-ghost-action="prui:settings" aria-label="PR 设置"></button>';
+  it('keeps live updates on the original action identity and excludes other tasks and PRs', () => {
+    ingestCardPush(push('mine', { sessionId: 'task-a', html }));
+    ingestCardPush(push('foreign', { sessionId: 'task-b', html }));
+    ingestCardPush(push('other-pr', { sessionId: 'task-a', html: html.replace('#42', '#43') }));
+    expect(findSessionPrCard(getGhostCardSnapshot(), 'task-a', 'github:github.com/octo/repo#42')?.callId).toBe('mine');
+    expect(findSessionPrCard(getGhostCardSnapshot(), 'task-a', 'github:github.com/octo/repo#42')?.settingsLabel).toBe('PR 设置');
+    ingestCardPush(push('mine', { html: html.replace('Following', 'Stopped') }));
+    expect(findSessionPrCard(getGhostCardSnapshot(), 'task-a', 'github:github.com/octo/repo#42')?.html).toContain('Stopped');
+    expect(findSessionPrCard(getGhostCardSnapshot(), 'task-c', 'github:github.com/octo/repo#42')).toBeNull();
+    ingestCardPush(push('replacement', { sessionId: 'task-a', html }));
+    ingestCardPush(push('mine', { html: markGhostCardSuperseded(html, 'replacement') }));
+    expect(findSessionPrCard(getGhostCardSnapshot(), 'task-a', 'github:github.com/octo/repo#42')?.callId).toBe('replacement');
+  });
+  it('recovers task ownership from history without overwriting a newer pushed card', async () => {
+    mockApi(undefined, async () => ({ cards: [{ callId: 'mine', ghostId: 'g1', html, height: 240 }] }));
+    ingestCardPush(push('mine', { html: html.replace('Following', 'Stopped') }));
+    ensureSessionCards('task-a');
+    await Promise.resolve();
+    expect(findSessionPrCard(getGhostCardSnapshot(), 'task-a', 'github:github.com/octo/repo#42')).toMatchObject({
+      callId: 'mine', html: html.replace('Following', 'Stopped'),
+    });
+  });
+});
+
+// Exercise real sanitized GitHub card markup: footer actions keep their bridge
+// attributes, while native title/CI and the separate settings panel own layout.
+describe('PR popover presentation', () => {
+  it('separates the existing controls from the duplicate card header and CI', async () => {
+    const { default: cards } = await import('../../../scripts/fixtures/pr-popover/cards.json');
+    const following = projectPrCard(cards['on-summary-task']);
+    const footer = document.createElement('div');
+    footer.innerHTML = following.summaryHtml!;
+    expect(footer.querySelector('[data-ghost-action="pr:stop"]')).not.toBeNull();
+    expect(footer.querySelector('[data-ghost-live-label]')).not.toBeNull();
+    expect(footer.querySelector('[data-ghost-pr-status]')).toBeNull();
+    expect(footer.textContent).not.toContain('build(mobile)');
+    expect(following.settingsHtml).toBeNull();
+    const settings = projectPrCard(cards['off-settings-custom']);
+    const panel = document.createElement('div');
+    panel.innerHTML = settings.settingsHtml!;
+    expect(settings.settingsLabel).toBe('PR 设置');
+    expect(panel.querySelector('[data-ghost-action="prset:modelPick"][data-ghost-model-select]')).not.toBeNull();
+    expect(panel.querySelectorAll('[data-ghost-toggle]')).toHaveLength(3);
+    expect(panel.querySelector('[data-ghost-action="pr:follow"]')).toBeNull();
+    expect(settings.summaryHtml).not.toContain('prset:modelPick');
+  });
+  it('keeps a pending action visible even when the plugin temporarily removes buttons', () => {
+    const pending = projectPrCard('<div data-ghost-pr-open-only="octo/repo#42" style="margin-left:auto">正在开启跟进…</div>');
+    expect(pending.summaryHtml).toContain('正在开启跟进…');
+    expect(pending.settingsHtml).toBeNull();
+  });
+  // A PR followed by another task used to leave the popover without any follow state,
+  // which read as a missing feature. Its card has no open-only controls, so the cases
+  // above never reached it. Unit tier, sanitized plugin snapshot as input.
+  it('shows the state and task link of a PR followed by another task', async () => {
+    const { default: cards } = await import('../../../scripts/fixtures/pr-popover/cards.json');
+    const reference = projectPrCard(cards['reference-task']);
+    const row = document.createElement('div');
+    row.innerHTML = reference.summaryHtml!;
+    expect(row.querySelector('.pr-summary-actions')?.textContent).toBe('其他任务正在跟进打开跟进任务 ↗');
+    expect(row.querySelector('[data-ghost-action="pr:open-task"]')?.getAttribute('data-ghost-session-link'))
+      .toBe('cindy://session/follow-task');
+    expect(reference.settingsLabel).toBeNull();
   });
 });

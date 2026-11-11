@@ -7,7 +7,7 @@ import {
   GhostNodeRuntimeBroker,
   type NodeWorkerProcess,
   type GhostNodeRuntimeBrokerDeps,
-} from '../nodeRuntimeBroker';
+} from '../nodeRuntimeBroker.desktop';
 
 class Worker extends EventEmitter {
   stdin = new PassThrough();

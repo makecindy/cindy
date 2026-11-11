@@ -18,7 +18,7 @@
  */
 
 import { app, ipcMain, BrowserWindow, dialog } from 'electron';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -296,6 +296,11 @@ function getSharedHostKeyStore(): FileHostKeyStore {
     );
   }
   return sharedHostKeyStore;
+}
+
+/** New-computer setup reads and seeds trusted fingerprints through the same store the pool uses. */
+export function getRemoteSshHostKeyStore(): FileHostKeyStore {
+  return getSharedHostKeyStore();
 }
 
 const poolLogger = {

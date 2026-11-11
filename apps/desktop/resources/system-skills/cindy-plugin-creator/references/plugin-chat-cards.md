@@ -72,7 +72,25 @@ cindy.onHostMessage(async function (msg) {
   此事件没有 userActionToken，不触发 Agent 或活动呼吸。动作 ID 标识当前编辑版本，自动保存回执保持同一 ID，
   替换草稿/重置编辑时必须换 ID。插件合并频繁编辑，自行保存到业务系统；模型的读取和提交也必须先同步同一份编辑。
   模型工具更新本任务旧卡时，card-update 可带 sourceCallId（当前尚未结束的工具调用 ID）；Host 核对同插件、同任务后重开旧卡。
+  把旧卡挪到当前调用的新卡时，同一个 card-update 可再带 supersededBy：必须同时带 sourceCallId 且取值相同，否则被拒。
+  新版 Host 给旧卡打宿主标记，桌面和新手机整张隐去（插件 html 伪造不了标记）；旧 Host 和旧手机忽略它，显示这次更新的 html，
+  所以仍要给旧卡一段指向新位置的简短文字（如「最新状态在下方」）。
   表单动作活动归原 callId，完成后原地更新；不用额外画空的 spawnCallId 卡片。
+- **卡片内打开已有任务**：声明 `card.externalLinks` 后可写
+  `<a href="cindy://session/<任务ID>">打开原任务</a>`。仅接受 1–128 位字母、数字、
+  下划线或连字符组成的任务 ID，不接受 query、hash、路径穿越或其它 Cindy 命令。
+  宿主将它变成任务导航，鼠标点击、Enter 和空格均可打开；不会交给插件或 Agent，
+  也不会用系统浏览器打开。手机版沿当前任务的原有任务链接导航入口处理。
+  旧版本会保留文字但不能点击。需要兼容旧客户端时，使用带降级动作的按钮：
+  `<button data-ghost-action="open-task" data-ghost-session-link="cindy://session/<任务ID>">打开原任务</button>`。
+  新版 Desktop 和声明 `plugin-card-session-links` 的手机走原生导航，不派发插件动作；
+  旧 Desktop 会忽略新属性，旧手机由宿主投影为原来的 `open-task` 动作。
+  插件收到降级动作后，可通过已有的用户点击 Agent 入口仅请求显示正文 Markdown 任务链接；
+  不要将导航理解为开始任务或跟进。旧端因此会多一步点击，但入口保持可用。
+  新属性仅用于合法动作的 button，不与 prompt、submit 或模型选择器混用；
+  原生导航仍要求 `card.externalLinks`。禁用按钮不可导航。
+  有已验证的降级路径时不必为此增强抬高最低版本；没有降级时需等支持它的实际宿主 release。
+
 - **可放外部链接**(外链 v3,经宿主确认):写 `<a href="https://…">官网</a>`,或在
   任意可用标签上挂 `data-ghost-link="https://…"`(整块可点)。仅收**整串**
   http/https URL(≤2048 字,不合法只丢属性——文字保留、点不动)。用户点击时主机
@@ -102,6 +120,17 @@ cindy.onHostMessage(async function (msg) {
 - **PR 状态位**:`div` 加 `data-ghost-pr-status="owner/repo#123"`,主机用任务标题栏同一份 PR 状态
   (检查、未解决意见、能否合并)实时替换这个 `div` 的内容,并随标题栏定时刷新。`div` 里写你自己的
   状态快照作兜底:旧版主机、手机,或这条 PR 不在本任务的 PR 列表里时原样显示。
+- **只在 PR 开着时成立的部分**:`div` / `span` / `button` 加 `data-ghost-pr-open-only="owner/repo#123"`
+  (如「跟进中」、操作按钮、「开放中」)。卡片是调用时的快照,PR 在卡片之外被合并或关闭后,主机按标题栏
+  同一份状态把这些部分藏起来,手机上也不再显示;状态查不到时原样显示,旧版主机忽略这个属性。
+  手机只在卡片含 PR 状态位或指向该 PR 的链接时定时重读,所以带这个标记的卡片要同时保留其中之一
+  (例如标题链接到 PR),否则手机上的卡片要等重新进入页面才会更新。
+- **PR 结束后的归档任务按钮**:`button` 加 `data-ghost-task-archive="owner/repo#123"`,不要再加
+  `data-ghost-action` / `data-ghost-link`(加了主机就不认这个标记)。写成 `display:none`,按钮名放在
+  `aria-label`,用你自己的样式(如 `::before{content:attr(aria-label)}`)画出文字。主机按标题栏同一份状态在
+  PR 已合并或关闭时露出它(查不到状态时看 `data-ghost-task-archive-state="merged|closed"` 快照),点击由主机
+  走标准归档流程,插件收不到这次点击。用户开了自动归档时再加空值 `data-ghost-task-archive-auto`:主机自己确认
+  已合并、用户看过并离开、且归档不会丢东西时才归档。旧版主机和手机不显示这颗按钮。
 - **手机端呈现提示**(手机不跑卡片 HTML,只收文字和原生按钮;这几个属性让它画得更像卡片):
   - 主操作 `button` 加空值属性 `data-ghost-primary`,手机画成主按钮;
   - 开关型设置的 `button` 加 `data-ghost-toggle="on|off"`,按钮里第一行文字是标题、其余是说明,
@@ -125,7 +154,7 @@ cindy.onHostMessage(async function (msg) {
   消失。不带令牌 = 基座照画,同一首歌出现两个播放器。手机端(无卡片体系)永远
   按 `xdt_audio_tracks` 渲染,该字段照常要发。不合法的值只丢属性(div 与子树
   保留);
-- 体积 ≤32KB/版;height 是**初始估计值**(120–900,缺省 240)——文档与图片
+- 体积 ≤32KB/版;height 是**初始估计值**(1–900,缺省 240;一行提示可以很矮,不会被撑高)——文档与图片
   加载后主机会按实际内容高度自动收敛并记住(同一夹取区间,历史回放零动画),
   所以图片按自然比例放即可,**不要固定高度 + object-fit:cover 裁切作品**;
   推荐通栏出血写法 `width:100%;height:auto`(宽度撑满卡片,文字区自己

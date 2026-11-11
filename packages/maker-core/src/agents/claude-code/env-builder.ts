@@ -12,7 +12,7 @@
  * Anthropic,host 不接管连接,见 ClaudeEnvBuildOptions.nativeCliAuth。
  */
 
-import type { AgentCredentialMode, AuthAdapter } from '../../interfaces/auth-adapter.js';
+import type { AgentCredentialMode, AuthAdapter, NativeSubscriptionAccount } from '../../interfaces/auth-adapter.js';
 import type { AgentRuntimeConfig } from '../../interfaces/runtime-config.js';
 import { applyPlainTextTerminalEnv } from '../shared/terminal-output.js';
 
@@ -31,6 +31,7 @@ interface ModelContextWindowSource {
 }
 
 interface ClaudeEnvBuildOptions {
+  nativeSubscriptionAccount?: NativeSubscriptionAccount;
   /**
    * Host-provided model context windows for provider-routed models.
    *
@@ -477,7 +478,11 @@ export async function buildClaudeEnv(
     : options.authModel
       ? { model: options.authModel }
       : undefined;
-  const authEnv = { ...(await auth.getAuthEnv(authOptions)) };
+  const authEnv = { ...(await auth.getAuthEnv({
+    ...authOptions,
+    ...(mode === 'local' && nativeCliAuth && options.nativeSubscriptionAccount
+      ? { nativeSubscriptionAccount: options.nativeSubscriptionAccount } : {}),
+  })) };
   if (mode === 'remote') {
     // CLAUDE_CONFIG_DIR is a host-local path. If an auth adapter injects one
     // (older Desktop dev sandboxes used a userData path), forwarding that
@@ -568,15 +573,12 @@ export async function buildClaudeEnv(
     )?.contextWindow;
   applyClaudeContextWindow(env, activeContextWindow, runtimeConfig.autoCompactThresholdPct);
 
-  // 关掉 CC SDK 内部的遥测 / 错误上报 / OTEL metrics export。
-  // 我们走自家 compat proxy + xd.inc token, 这些字段都是直打 api.anthropic.com 的
-  // 官方 endpoint, 必然 401 (token 不被认), 只产生日志噪音不影响功能。
-  // 关闭后这三类后台请求都不会发起:
-  //  - DISABLE_TELEMETRY=1       : metrics_enabled / claude_code/metrics 上报
-  //  - DISABLE_ERROR_REPORTING=1 : Sentry 类自动错误样本
-  //  - OTEL_SDK_DISABLED=true    : PeriodicExportingMetricReader 周期导出
-  // 用户 env 没显式覆盖才注入 (留个手动开 telemetry 排 SDK bug 的口子)。
-  if (env.DISABLE_TELEMETRY === undefined) env.DISABLE_TELEMETRY = '1';
+  // 网关凭证不适用于 Anthropic 遥测端点，非原生订阅继续默认关闭遥测。
+  // DISABLE_TELEMETRY 同时关闭 feature-flag 获取，连带让 supportedModels 回退到
+  // 旧清单（2.1.321 会漏掉 Fable 5.2）。原生订阅会话和发现探针都保留 CLI 默认值；
+  // 用户显式设置仍原样传递，不通过删除或改成 '0' 绕过其选择。
+  if (!nativeCliAuth && env.DISABLE_TELEMETRY === undefined) env.DISABLE_TELEMETRY = '1';
+  // 错误上报及 OTEL 周期导出独立于模型发现，继续默认关闭，显式设置优先。
   if (env.DISABLE_ERROR_REPORTING === undefined) env.DISABLE_ERROR_REPORTING = '1';
   if (env.OTEL_SDK_DISABLED === undefined) env.OTEL_SDK_DISABLED = 'true';
 

@@ -44,6 +44,13 @@ export interface ThemeColors {
   surfaceTranslucentSidebar: string;
   /** Chat 顶栏玻璃底色(M3:只给会话页顶部 chrome,不污染侧栏 / sheet) */
   chatHeaderSurface: string;
+  /**
+   * 边缘磨砂(首页 / 任务顶栏、输入框底部)在模糊之上、同一遮罩内的压暗层。深色系统材质比
+   * `surface` 亮,单靠模糊会把空白页面提亮成一条可见的带;压暗后空白处仍是 `surface`,只有背后
+   * 有内容时才看得出磨砂。浅色材质本就贴近页面,不压暗。Layered 用于顶栏三层叠加的每一层。
+   */
+  edgeBlurShade: string;
+  edgeBlurShadeLayered: string;
   /** Chat 顶栏底部分割线(M3:dark 为极弱白线) */
   chatHeaderDivider: string;
   /** 浮层卡 sheet surface 底色(R1 audit 模式3,solid 玻璃感由 backdrop blur 承担,surface 不叠 blur 规避 Android 滚动热路径) */
@@ -114,6 +121,8 @@ export interface ThemeColors {
   borderStrong: string;
   /** 主标题 / 主正文 */
   textPrimary: string;
+  /** 群聊正文点名专用；对齐 Desktop CINDY msg-link，不用于普通链接或状态。 */
+  groupMentionText: string;
   /** 次要文字 / 图标 */
   textSecondary: string;
   /** 三级文字 / metadata(时间、计数等真实信息) */
@@ -434,6 +443,8 @@ export const lightColors: ThemeColors = {
   surfaceTranslucent: 'rgba(249, 249, 246, 0.78)',
   surfaceTranslucentSidebar: 'rgba(255, 255, 252, 0.90)',
   chatHeaderSurface: 'rgba(249, 249, 246, 0.90)',
+  edgeBlurShade: 'transparent',
+  edgeBlurShadeLayered: 'transparent',
   chatHeaderDivider: '#CCCCC8',
   surfaceGlassPanel: '#FFFFFC',
   surfaceListRow: '#FFFFFC',
@@ -464,6 +475,7 @@ export const lightColors: ThemeColors = {
   borderTranslucent: 'rgba(204, 204, 200, 0.62)',
   borderStrong: '#858581',
   textPrimary: '#0F0F0F',
+  groupMentionText: '#1D4ED8',
   textSecondary: '#4D4D4A',
   textTertiary: '#686864',
   textPlaceholder: '#858581',
@@ -530,6 +542,9 @@ export const darkColors: ThemeColors = {
   surfaceTranslucent: 'rgba(18, 18, 18, 0.78)',
   surfaceTranslucentSidebar: 'rgba(10, 10, 10, 0.85)',
   chatHeaderSurface: 'rgba(18, 18, 18, 0.80)',
+  // iOS 27 实测:#121212 上单层(55)提亮到约 21.9、顶栏三层(各 32)约 21.4;压暗后回到 18。
+  edgeBlurShade: 'rgba(0, 0, 0, 0.18)',
+  edgeBlurShadeLayered: 'rgba(0, 0, 0, 0.08)',
   chatHeaderDivider: 'rgba(255, 255, 255, 0.08)',
   surfaceGlassPanel: '#242424',
   surfaceListRow: '#1E1E1E',
@@ -561,6 +576,7 @@ export const darkColors: ThemeColors = {
   borderTranslucent: 'rgba(56, 56, 56, 0.62)',
   borderStrong: '#8A8A8A',
   textPrimary: '#EDEDED',
+  groupMentionText: '#93C5FD',
   textSecondary: '#BDBDBD',
   textTertiary: '#999999',
   textPlaceholder: '#757575',

@@ -1,3 +1,4 @@
+import { wireIMessageOrchestrator } from './imessage/adapter';
 /**
  * main/im/index.ts
  * ---------------------------------------------------------------------------
@@ -57,7 +58,7 @@ import { TELEGRAM_DEFAULT_BEHAVIOR } from '@cindy/im';
 import path from 'node:path';
 
 import { ipcMain, BrowserWindow, dialog, type IpcMainEvent } from 'electron';
-import { and, eq, like, ne, sql } from 'drizzle-orm';
+import { and, eq, ne } from 'drizzle-orm';
 
 import { getDbClient } from '../localDb/client/current';
 import {
@@ -76,11 +77,13 @@ import {
   wecomIm,
   createBotDingTalkIM,
   createBotDiscordIM,
+  createBotIMessageIM,
   createBotFeishuIM,
   createBotTelegramIM,
   createBotWecomIM,
 } from './host';
 import { wireFeishuOrchestrator, type FeishuOrchestratorConfig } from './feishu';
+import { backfillPersonalFeishuSessions } from './feishu/legacySessionBackfill';
 import { wireDiscordOrchestrator } from './discord';
 import { wireTelegramOrchestrator } from './telegram';
 import { listTelegramKnownGroups } from './telegram/groupWindow';
@@ -292,6 +295,11 @@ export function startImOrchestrators(): void {
     },
     create: (record) => {
       const prefix = secretKeyPrefixFor(record.id);
+      if (record.channel === 'imessage') {
+        const im = createBotIMessageIM(prefix, record.id);
+        const orchestrator = wireIMessageOrchestrator(im, DINGTALK_CONFIG, { instanceKey: `imessage#${record.id}`, companionBotId: record.botId, connectionId: record.id });
+        return { kind: 'imessage', im, orchestrator };
+      }
       if (record.channel === 'telegram') {
         // 群参与模式按连接各一份, 每次使用时现读 → 伙伴页改动即生效, 不重启传输层。
         const im = createBotTelegramIM(prefix, {
@@ -331,7 +339,13 @@ export function startImOrchestrators(): void {
         });
         return { kind: 'dingtalk', im, orchestrator };
       }
-      const im = createBotDiscordIM(prefix);
+      // 服务器频道白名单按连接各一份、每次使用时现读连接记录：撤销 / 删除连接即时生效，
+      // 不同连接（不同 connectionId）互不串；存量记录没有该字段 = 不开放任何频道。
+      const im = createBotDiscordIM(prefix, {
+        channelAccess: {
+          read: () => readBotImConnection(record.id)?.discordChannelAccess ?? { channels: [] },
+        },
+      });
       const orchestrator = wireDiscordOrchestrator(im, DISCORD_CONFIG, {
         instanceKey: `discord#${record.id}`,
         companionBotId: record.botId,
@@ -625,19 +639,9 @@ async function initializeImConnection(): Promise<void> {
     const msg = err instanceof Error ? err.message : String(err);
     log.error(`bindingStore.preload failed (non-fatal): ${msg}`);
   }
-  // 存量 feishu 会话行补 workspaceKind='dialogue' —— 2026-07 起 feishu 会话
-  // 进侧边栏「对话」分组(sessionSource.ts 白名单 + feishu adapter 声明),
-  // 此前落库的行还是默认 'project', 不补会以 im-working-dir/{botAppId}
-  // 聚成一个假项目组。幂等一次性 UPDATE; 不 bump updatedAt(避免重排列表)。
-  try {
-    await getDbClient()
-      .drizzle.update(sessions)
-      .set({ workspaceKind: 'dialogue' })
-      .where(and(eq(sessions.source, 'feishu'), ne(sessions.workspaceKind, 'dialogue')));
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    log.warn(`feishu sessions workspaceKind backfill failed (non-fatal): ${msg}`);
-  }
+  // 存量个人飞书会话补「对话」分组与新标题; 官方飞书 hook 任务同为
+  // source='feishu', 由 helper 按 feishuBotAppId 排除。
+  await backfillPersonalFeishuSessions(getDbClient().drizzle, log);
   // Discord personal DM sessions use the same managed dialogue bucket as
   // Feishu/Telegram. Older Discord rows were created before the adapter
   // declared workspaceKind='dialogue' and otherwise remain grouped under the
@@ -651,16 +655,6 @@ async function initializeImConnection(): Promise<void> {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log.warn(`discord sessions workspaceKind backfill failed (non-fatal): ${msg}`);
-  }
-  // 存量 feishu 会话的旧默认标题 `飞书 · {后6位}` 迁到新风格 `[飞书·DM] {后6位}`。
-  try {
-    await getDbClient()
-      .drizzle.update(sessions)
-      .set({ title: sql`'[飞书·DM] ' || substr(${sessions.title}, 6)` })
-      .where(and(eq(sessions.source, 'feishu'), like(sessions.title, '飞书 · %')));
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    log.warn(`feishu sessions title backfill failed (non-fatal): ${msg}`);
   }
   activateImAccountBoundary();
   await im.init();
@@ -704,12 +698,14 @@ async function reconcileOwnerScopedImWorkingDirs(): Promise<void> {
           id: sessions.id,
           workingDir: sessions.workingDir,
           botContextId: sessions.imBotContextId,
+          imUserId: sessions.imUserId,
         })
         .from(sessions)
         .where(eq(sessions.source, 'discord'));
       for (const row of rows) {
         if (!row.botContextId) continue;
-        const scoped = discordAdapter.sessions.ensureWorkingDir(row.botContextId);
+        // 服务器频道 lane 各有独立托管目录, 按 lane id 重算, 不能被改写回私聊目录。
+        const scoped = discordAdapter.sessions.ensureWorkingDir(row.botContextId, row.imUserId ?? undefined);
         if (row.workingDir === scoped) continue;
         await db.update(sessions).set({ workingDir: scoped }).where(eq(sessions.id, row.id));
       }

@@ -1,4 +1,31 @@
 {
+  "pushDiagnostics": {
+    "title": "プッシュ通知の診断",
+    "read": "通知の状態を読み取る",
+    "busy": "読み取り中…",
+    "failed": "通知の状態を読み取れません。もう一度お試しください。",
+    "copyFailed": "トークンをコピーできません。",
+    "copied": "トークンをコピーしました。",
+    "bundle": "アプリ ID",
+    "build": "ビルド",
+    "environment": "APNs 環境",
+    "permission": "システムの許可",
+    "alerts": "バナー通知",
+    "lockScreen": "ロック画面",
+    "notificationCenter": "通知センター",
+    "copy": "APNs トークンをコピー",
+    "hide": "結果を非表示",
+    "unknown": "不明",
+    "on": "オン",
+    "off": "オフ",
+    "hint": "操作したときだけ読み取ります。APNs トークンはこの画面にのみ表示され、診断に保存もアップロードもされません。画面を離れるかバックグラウンドにすると非表示になります。Apple のプッシュ通知コンソール用にのみコピーしてください。コピーした内容はクリップボードに残ります。",
+    "permissions": {
+      "granted": "許可済み",
+      "denied": "拒否",
+      "undetermined": "未要求",
+      "provisional": "静かに配信"
+    }
+  },
   "localLogs": {
     "upload": "ログを送信",
     "uploadResult": {
@@ -135,11 +162,16 @@
     "permissionDenied": "システム設定で Cindy の通知を許可してください。",
     "unregisterQueued": "オフにしました。オンラインになると登録解除が完了します。",
     "preview": "チャット内容をプレビュー",
-    "background": "バックグラウンドで接続を維持",
+    "background": "バックグラウンド通知",
     "backgroundActive": "バックグラウンドでメッセージを受信中",
     "backgroundStop": "受信を停止",
-    "backgroundHint": "Google を使わずに接続し、常駐通知を表示します。通知からいつでも停止できます。",
-    "googleUnavailable": "Google プッシュ通知を利用できません。バックグラウンド接続で受信できます。"
+    "backgroundHint": "Google のプッシュ通知が利用できない可能性がある場合、Cindy が自動で接続を維持します。接続中は常駐通知が表示されます。",
+    "googleUnavailable": "Google のプッシュ通知を利用できません。通知設定に従ってバックグラウンド接続を使用します。",
+    "backgroundModes": {
+      "auto": "自動",
+      "on": "常にオン",
+      "off": "オフ"
+    }
   },
   "about": {
     "sectionTitle": "このスマートフォンについて",
@@ -351,5 +383,44 @@
     "title": "開発者",
     "identity": "識別情報",
     "updateInfo": "更新情報"
+  },
+  "handheld": {
+    "sectionTitle": "携帯ゲーム機",
+    "label": "ハンドヘルドモード",
+    "entryHint": "携帯ゲーム機のコントローラーで Cindy を操作し、音声キーを長押しして話せます。",
+    "on": "オン",
+    "off": "オフ",
+    "openAccessibility": "ハンドヘルドモードの設定を開く",
+    "title": "ハンドヘルドモード",
+    "hint": "コントローラーだけで操作できます。十字キーまたは左スティックでフォーカスを移動し、A で決定、B で戻ります。",
+    "saveFailed": "設定を保存できませんでした。Cindy を閉じるまでは有効です。",
+    "reset": "デフォルトに戻す",
+    "voiceKey": {
+      "title": "音声キー",
+      "hint": "このキーを長押しすると話し始め、離すと止まります。文字は入力欄に残ります。ホーム画面で長押しすると新しいタスクを始めます。A、B、L1、R1 を選ぶと、そのボタン本来の決定・戻る・ページ送りは使えなくなります。",
+      "capture": "コントローラーのボタンを押して設定",
+      "capturing": "使いたいボタンを押してください…"
+    },
+    "display": {
+      "title": "画面",
+      "secondary": "サブ画面に表示",
+      "hint": "Cindy をサブ画面（2 画面の携帯ゲーム機の下画面など）に移動します。ハンドヘルドモードをオフにするとメイン画面に戻ります。",
+      "none": "このデバイスの画面は 1 つです。Cindy は画面サイズに合わせて表示されます。",
+      "current": "現在の画面",
+      "single": "メイン画面"
+    },
+    "controls": {
+      "title": "コントローラー操作",
+      "gamepad": "コントローラー",
+      "noGamepad": "検出されません",
+      "moveKeys": "十字キー / 左スティック",
+      "move": "フォーカス移動",
+      "confirm": "決定",
+      "back": "戻る",
+      "voice": "長押しで話す",
+      "scrollKeys": "右スティック",
+      "scroll": "スクロール",
+      "page": "ページ送り"
+    }
   }
 }

@@ -69,9 +69,15 @@ export class HistoryDiskStore {
       if (!entry || entry.bytes > HISTORY_DISK_ITEM_BYTES) return null;
       const text = await this.io.read(entry.file);
       if (epoch !== this.epoch || !current()) return null;
-      if (text === null) delete this.entries![key];
-      else entry.accessed = Date.now();
-      await this.persist();
+      if (text === null) {
+        delete this.entries![key];
+        await this.persist();
+      } else {
+        entry.accessed = Date.now();
+        // With no eviction quota an access time has no durable meaning. Avoid
+        // rewriting the full index on every conversation hydration.
+        if (Number.isFinite(this.budget)) await this.persist();
+      }
       return text;
     }).catch(() => null);
   }

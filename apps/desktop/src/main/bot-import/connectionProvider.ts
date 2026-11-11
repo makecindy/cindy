@@ -6,6 +6,7 @@ import type { McpProvider } from '@cindy/maker-core';
 import { resolveLiziMcpSessionContext, type LiziMcpSessionContext } from '@cindy/mcps';
 import { readCompanionSessionDiscovery, readCompanionSessionEnvironment, readCompanionSessionScope } from './runtime.js';
 import { IMPORTED_TOOL_LIMIT, listImportedTools, withImportedConnection } from './connections.js';
+import { CompanionImportError } from './types.js';
 import { fingerprint } from './files.js';
 import { continueCompanionImport, getCompanionImportSetupStatus, useCindyImportSettings } from './host.js';
 import { connectionRedactions, importedContentRedactions, publicConnectionName, redactImportedResult, redactImportedTool, restoreImportedArguments } from './connectionCatalog.js';
@@ -85,11 +86,17 @@ export function createCompanionConnectionsProvider(): McpProvider {
           const command = request.params.arguments?.command;
           if (typeof command !== 'string' || !command.trim() || command.length > 32000) throw new Error('Invalid command');
           const cwd = await ensureBotWorkspaceDir(scope.userData, scope.botId);
+          const deadline = Date.now() + 120_000;
+          const assertCommand = () => {
+            scope.assertOwner();
+            if (extra.signal.aborted) throw new CompanionImportError('AUTOMATION_CANCELLED');
+            if (Date.now() >= deadline) throw new CompanionImportError('AUTOMATION_TIMEOUT');
+          };
           // cmd /s strips the outer quotes; its command text must bypass CRT argv escaping.
-          const output = await withImportedSkillResources(scope.environment, scope.assertOwner, env => runImportedProcess({ command: process.platform === 'win32' ? process.env.ComSpec || 'cmd.exe' : '/bin/sh',
+          const output = await withImportedSkillResources(scope.environment, assertCommand, env => runImportedProcess({ command: process.platform === 'win32' ? process.env.ComSpec || 'cmd.exe' : '/bin/sh',
             args: process.platform === 'win32' ? ['/d', '/s', '/c', `"${command}"`] : ['-c', command],
             windowsVerbatimArguments: process.platform === 'win32',
-            cwd, env: importedProcessEnvironment(env), timeoutMs: 120_000,
+            cwd, env: importedProcessEnvironment(env), timeoutMs: Math.max(1, deadline - Date.now()),
             signal: extra.signal, assertOwner: scope.assertOwner }));
           return { content: [{ type: 'text', text: redactEnvironmentValues(output.stdout, importedContentRedactions(scope.environment)) }], isError: output.exitCode !== 0 };
         }

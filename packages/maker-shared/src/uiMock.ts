@@ -13,6 +13,23 @@ export { UI_MOCK_SHOWCASE_PROJECTS };
 /** Every seeded id starts with this prefix, except the Mobile state ids below. */
 export const UI_MOCK_ID_PREFIX = 'ui-mock-';
 
+/** Synthetic Pi diagnostics for the same context panel on Desktop and Mobile. */
+export const UI_MOCK_PI_CONTEXT_USAGE = {
+  model: 'pi-context-demo', totalTokens: 8192, maxTokens: 200000, rawMaxTokens: 200000,
+  percentage: 4.096, categories: [], gridRows: [], memoryFiles: [], mcpTools: [], agents: [],
+  isAutoCompactEnabled: true, apiUsage: null,
+  textEstimate: {
+    method: 'text-heuristic',
+    items: [
+      { source: 'delivery', tokens: 227 }, { source: 'host', tokens: 460 },
+      { source: 'plugins', tokens: 1100 }, { source: 'memoryRules', tokens: 900 },
+      { source: 'memoryIndex', tokens: 180 }, { source: 'native', tokens: 740 },
+      { source: 'skills', tokens: 1480 }, { source: 'project', tokens: 240 },
+      { source: 'tools', tokens: 2860 }, { source: 'messages', tokens: 320 },
+    ],
+  },
+};
+
 /** GitHub 插件 PR 卡片的演示卡位(手机 mock 按这些 id 返回卡片内容)。 */
 export const UI_MOCK_PR_CARD_IDS = {
   ask: `${UI_MOCK_ID_PREFIX}pr-card-ask`,
@@ -112,6 +129,42 @@ const RICH_ANSWER = [
  */
 export const UI_MOCK_TASKS: readonly UiMockTask[] = [
   ...UI_MOCK_SHOWCASE_TASKS,
+  {
+    id: 'visual-issue-confirm',
+    title: '反馈手机上的问题',
+    project: 'cindy-demo',
+    agentKind: 'cc', model: 'claude-sonnet-5', effort: 'medium',
+    status: 'active', source: 'desktop', minutesAgo: 1,
+    messages: [
+      { role: 'user', text: '手机上反馈问题时，确认卡提示只能回电脑处理。' },
+      { role: 'assistant', text: '已整理好反馈，请检查标题、正文和公开署名，确认后提交。' },
+    ],
+  },
+  {
+    id: 'ui-mock-inline-math',
+    title: '行内公式语义验收',
+    project: 'cindy-demo',
+    agentKind: 'codex', model: 'gpt-5.5', effort: 'medium',
+    status: 'active', source: 'desktop', minutesAgo: 1,
+    messages: [
+      { role: 'user', text: '检查行内公式的符号、参数和上下标。' },
+      { role: 'assistant', text: String.raw`单字符参数：$e\in\mathcal E$。
+
+花括号参数：$e\in\mathcal{E}$。
+
+符号边界：$\mathrm{\alpha}x$；嵌套样式：$\mathbf{\mathcal{E}}$。
+
+分数与根号：$\frac\mathrm{12}2$，$\sqrt\mathrm{2}$。
+
+上下标：$x^{\mathrm{12}}+y_\mathrm i$。
+
+字面花括号：$e\in\mathrm{\{E\}}$。
+
+块级公式对照：
+
+$$e\in\mathcal{E},\quad x^{12}+y_i$$` },
+    ],
+  },
   {
     id: 'visual-running',
     title: '重构登录页布局',

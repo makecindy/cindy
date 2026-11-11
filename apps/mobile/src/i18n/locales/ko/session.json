@@ -2,7 +2,7 @@
   "githubPrs": {
     "title": "PR 링크 관리",
     "hint": "상단에 최대 3개 표시하며 고정한 PR이 먼저 표시됩니다",
-    "empty": "GitHub PR 링크를 붙여넣어 추가하세요",
+    "empty": "GitHub PR 또는 GitLab MR 링크를 붙여넣어 추가하세요",
     "removed": "제거됨: {{count}}개",
     "legacy": "미확인 참조: {{count}}",
     "addLabel": "PR 링크 추가",
@@ -18,12 +18,13 @@
     "errors": {
       "duplicate": "이미 연결된 PR입니다. 제거한 링크는 목록에서 복원할 수 있습니다",
       "notFound": "PR을 찾을 수 없거나 접근 권한이 없습니다",
-      "invalidUrl": "유효한 GitHub PR 링크를 입력하세요",
+      "invalidUrl": "유효한 GitHub PR 또는 GitLab MR 링크를 입력하세요",
       "reorderFailed": "순서가 저장되지 않았습니다. 다시 시도하세요.",
-      "verifyFailed": "PR을 확인할 수 없습니다. GitHub 로그인과 접근 권한을 확인하세요",
+      "verifyFailed": "PR을 확인할 수 없습니다. GitHub 또는 GitLab 로그인과 접근 권한을 확인하세요",
       "unsupported": "이 컴퓨터의 버전은 PR 링크 관리를 지원하지 않습니다",
       "failed": "PR 링크를 업데이트할 수 없습니다"
     },
+    "urlPlaceholder": "GitHub PR 또는 GitLab MR 링크",
     "moveUp": "위로 이동"
   },
   "paneResize": {
@@ -72,6 +73,10 @@
     "text": "실패한 자동 실행이 있습니다.",
     "precheck": "자동 확인이 일시적으로 차단되었습니다.",
     "rateLimited": "요청 한도 초과로 자동 확인이 일시적으로 차단되었습니다.",
+    "pluginMissing": "자동 확인이 차단되었습니다: '{{name}}' 플러그인이 설치되어 있지 않습니다. 컴퓨터에서 설치하면 자동으로 재개됩니다.",
+    "pluginMissingUnnamed": "자동 확인이 차단되었습니다: 필요한 플러그인이 설치되어 있지 않습니다. 컴퓨터에서 설치하면 자동으로 재개됩니다.",
+    "pluginDisabled": "자동 확인이 차단되었습니다: '{{name}}' 플러그인이 비활성화되어 있습니다. 컴퓨터에서 활성화하면 자동으로 재개됩니다.",
+    "pluginDisabledUnnamed": "자동 확인이 차단되었습니다: 필요한 플러그인이 비활성화되어 있습니다. 컴퓨터에서 활성화하면 자동으로 재개됩니다.",
     "dismissTitle": "이전 실패 알림 닫기"
   },
   "common": {
@@ -88,6 +93,7 @@
     "context": "컨텍스트",
     "screenshot": "스크린샷",
     "photo": "사진",
+    "photosAndVideos": "사진 및 동영상",
     "takePhoto": "사진 촬영",
     "file": "파일",
     "joinConversation": "대화에 추가 ({{num}}장)",
@@ -223,7 +229,25 @@
       },
       "context": {
         "title": "컨텍스트 사용량",
-        "unavailable": "컨텍스트 데이터 없음"
+        "unavailable": "컨텍스트 데이터 없음",
+        "estimate": {
+          "title": "텍스트 추정치",
+          "delivery": "답변 표시",
+          "host": "Cindy 지침",
+          "plugins": "플러그인 목록",
+          "memoryRules": "메모리 지침",
+          "memoryIndex": "메모리 색인",
+          "profile": "팀원 프로필",
+          "user": "사용자 지침",
+          "directories": "추가 디렉터리",
+          "native": "Pi 지침",
+          "skills": "스킬 목록",
+          "project": "프로젝트 지침",
+          "tools": "도구 정의",
+          "messages": "대화 본문",
+          "other": "기타 지침",
+          "note": "현재 텍스트의 대략적인 추정치이며 모델의 토큰화 결과가 아닙니다. 이미지와 공급업체 형식의 추가 사용량은 제외되므로 합계가 Pi 총량과 일치하지 않습니다."
+        }
       },
       "rateLimit": {
         "plan": "요금제",
@@ -442,6 +466,11 @@
     "worktreeCleanupPending": "이전 worktree가 아직 정리 대기 중입니다. 기기를 다시 연결한 후 재시도하세요."
   },
   "menu": {
+    "moveToProject": "작업 이동",
+    "moveFailed": "작업을 이동하지 못했습니다",
+    "moveRunning": "이 작업은 실행 중입니다. 완료된 후 이동하세요.",
+    "moveWorktree": "이 작업의 작업 디렉터리는 worktree이므로 다른 프로젝트로 이동할 수 없습니다",
+    "moveUnsupported": "작업을 이동하려면 연결된 컴퓨터의 Cindy를 업데이트하세요.",
     "details": "세션 상세 정보",
     "chipPinned": "고정됨",
     "chipArchived": "보관됨",
@@ -583,7 +612,10 @@
     "dismissNotice": "알림 닫기",
     "ignore": "무시",
     "executionResultUnavailable": "실행 결과를 가져오지 못해 자동 계속 진행을 중단했습니다. 어시스턴트에게 기존 실행 결과를 확인하도록 요청하세요.",
-    "outputLimit": "모델이 출력 한도에 도달하여 이번 응답은 불완전할 수 있습니다. 다음 메시지를 보내 계속할 수 있습니다.",
+    "outputLimit": "모델이 출력 한도에 도달하여 이번 응답은 불완전할 수 있습니다. 새 메시지를 보내 계속할 수 있습니다. 반복되면 추론 강도를 낮추거나 먼저 대화 기록을 압축하세요.",
+    "outputLimitReasoning": "추론이 이번 출력 예산의 대부분을 소비하여 응답은 불완전할 수 있습니다. 추론 강도를 낮추거나 대화 기록을 압축한 후 계속하세요.",
+    "outputLimitUsage": "이번 모델 요청의 출력은 {{outputTokens}} 토큰이며, 그중 {{reasoningTokens}} 토큰이 추론에 사용되었습니다.",
+    "outputLimitOutputUsage": "이번 모델 요청의 출력은 {{outputTokens}} 토큰입니다.",
     "toolUseLoopDetected": "모델이 도구 호출을 너무 많이 반복하여 무한 루프를 방지하기 위해 이번 턴을 중지했습니다. 새 메시지를 보내 계속할 수 있습니다.",
     "toolUseLoopDetectedWithCount": "모델이 잘못된 도구 호출을 반복하여 무한 루프를 방지하기 위해 {{count}}회 실패 후 이번 턴을 중지했습니다. 새 메시지를 보내 계속할 수 있습니다.",
     "toolUseLoopDetectedConsecutiveWithCount": "모델이 동일한 도구 호출을 {{count}}회 반복하여 무한 루프를 막기 위해 이번 턴을 중단했습니다. 새 메시지를 보내 계속할 수 있습니다.",
@@ -616,6 +648,8 @@
     "taskAlreadyCreated": "이 세션은 컴퓨터에 이미 생성되어 있습니다. 저장된 메시지는 기존 세션에서 전송을 재개합니다."
   },
   "remoteError": {
+    "REMOTE_AGENT_GROUP_FULL": "이 작업을 실행할 수 있는 계정 또는 컴퓨터가 모두 동시 실행 한도에 도달했습니다. 실행 중인 작업이 끝날 때까지 기다리거나 제공자 설정에서 한도를 올리세요.",
+    "SUBSCRIPTION_ACCOUNTS_FULL": "이 작업을 실행할 수 있는 계정 또는 컴퓨터가 모두 동시 실행 한도에 도달했습니다. 실행 중인 작업이 끝날 때까지 기다리거나 제공자 설정에서 한도를 올리세요.",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "이 SSH 작업에서는 Harness를 전환할 수 없습니다. 현재 Harness의 모델을 선택하거나 필요한 Harness로 새 SSH 작업을 만드세요.",
     "MODEL_SELECTION_UNAVAILABLE": "선택한 제공자의 모델을 더 이상 사용할 수 없습니다. 설정에서 연결을 확인하거나 사용 가능한 모델을 다시 선택하세요.",
     "HARNESS_SWITCH_NOT_READY": "Harness 전환이 완료되지 않았습니다. 오류 세부 정보를 확인하고 Harness가 준비되면 다시 시도하세요.",
@@ -649,8 +683,8 @@
     "REMOTE_AGENT_EXPIRED": "이 세션은 Agent를 실행하는 컴퓨터에서 이미 종료되었습니다. 다시 보내 주세요.",
     "REMOTE_AGENT_NOT_FOUND": "이 세션은 Agent를 실행하는 컴퓨터에서 이미 종료되었습니다. 다시 보내 주세요.",
     "REMOTE_AGENT_BUSY": "상대 컴퓨터에서 실행 중인 세션이 너무 많습니다. 일부를 종료한 뒤 다시 시도하세요.",
-    "REMOTE_AGENT_DEVICE_LIMIT": "이 기기의 원격 세션 수가 한도에 도달했습니다. 사용하지 않는 세션을 보관하거나 제공자에게 원격 및 공유에서 한도를 높여 달라고 요청하세요.",
-    "REMOTE_AGENT_TOTAL_LIMIT": "제공자 컴퓨터의 전체 원격 세션 수가 한도에 도달했습니다. 제공자에게 불필요한 세션을 해제하거나 원격 및 공유에서 한도를 높여 달라고 요청하세요.",
+    "REMOTE_AGENT_DEVICE_LIMIT": "이 기기의 원격 세션 수가 한도에 도달했습니다. 사용하지 않는 세션을 보관하거나 원격 컴퓨터의 소유자에게 원격 및 공유에서 한도를 높여 달라고 요청하세요.",
+    "REMOTE_AGENT_TOTAL_LIMIT": "해당 컴퓨터의 전체 원격 세션 수가 한도에 도달했습니다. 해당 컴퓨터의 소유자에게 불필요한 세션을 해제하거나 원격 및 공유에서 한도를 높여 달라고 요청하세요.",
     "REMOTE_AGENT_RESUME_LOST": "상대 컴퓨터의 이전 대화에 다시 연결하지 못해 Agent가 그 맥락 없이 계속합니다.",
     "REMOTE_AGENT_UNSUPPORTED": "상대 컴퓨터에서는 이 Agent를 사용할 수 없습니다. 그 컴퓨터에서 설치하거나 로그인한 뒤 다시 시도하거나, 다른 Agent를 선택하세요.",
     "REMOTE_AGENT_INVALID": "Agent를 실행하는 컴퓨터와 통신하는 중 오류가 발생했습니다. 다시 시도하고, 계속되면 두 컴퓨터의 Cindy를 모두 최신 버전으로 업데이트하세요.",
@@ -658,6 +692,7 @@
     "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "그 컴퓨터에서 이 제공자의 원격 사용을 허용하지 않았습니다. 그 컴퓨터의 설정 → 모델 제공자에서 원격 사용 허용을 켜거나 다른 모델을 선택하세요.",
     "REMOTE_AGENT_FORK_FAILED": "Agent를 실행하는 컴퓨터에서 여기서 새 세션을 시작하지 못했습니다. 다시 시도하거나 다른 메시지로 시도해 주세요.",
     "REMOTE_AGENT_SHARE_PAUSED": "공유한 사람이 나에 대한 공유를 일시 중지해서 재개될 때까지 이 모델을 사용할 수 없습니다. 다른 모델로 바꿔 계속할 수 있습니다.",
+    "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "기존 방식의 공유라서 'Agent-Net만 사용'이 켜져 있는 동안에는 사용할 수 없습니다. 이 옵션을 끄면 계속할 수 있고, 다른 모델로 바꿀 수도 있습니다.",
     "REMOTE_AGENT_SHARE_REMOVED": "이 공유는 더 이상 사용할 수 없습니다(공유한 사람이 삭제했거나 내가 나갔습니다). 다른 모델로 바꿔 계속할 수 있습니다.",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "공유된 제공자를 일시적으로 사용할 수 없습니다. 공유한 사람의 컴퓨터가 오프라인이거나 공유가 잠시 꺼져 있을 수 있습니다. 나중에 다시 시도하거나 다른 모델로 바꿔 계속할 수 있습니다."
   },
@@ -683,21 +718,34 @@
     "remoteDirPathHint": "실행 기기에서 디렉터리를 확인합니다. 없으면 오류를 표시하며 Lead의 디렉터리로 전환하지 않습니다.",
     "remoteDirInvalid": "실행 기기의 절대 경로를 입력하세요.",
     "roleLabel": "역할 이름",
-    "roleHint": "여러 협업자를 구분하기 위한 이름일 뿐이며 능력은 바뀌지 않습니다",
-    "customRole": "사용자 지정",
-    "customRolePlaceholder": "사용자 지정 역할 이름",
-    "customRolePredefinedError": "사용자 지정 역할 이름에 기본 역할 이름을 쓸 수 없습니다",
+    "taskLabel": "Worker에게 맡길 일",
+    "enableHint": "이 작업이 Lead가 되어 일을 배분하고 결과를 확인합니다. Worker는 별도의 독립된 Agent로, 일을 수행하고 결과를 보고합니다.",
+    "roles": {
+      "reviewer": {
+        "name": "리뷰",
+        "task": "Lead의 작업을 살펴보고 몇 가지 제안을 해 주세요."
+      },
+      "developer": {
+        "name": "개발"
+      },
+      "tester": {
+        "name": "테스트",
+        "task": "Lead가 지금까지 만든 결과물을 테스트하고 실패한 항목과 재현 절차를 보고하세요."
+      }
+    },
+    "addRole": "역할 추가",
+    "removeRoleHint": "길게 눌러 제거",
+    "removeRoleConfirmTitle": "“{{role}}” 역할을 제거할까요?",
+    "removeRoleConfirmDesc": "‘역할 추가’로 언제든 다시 추가할 수 있습니다.",
+    "removeRoleConfirm": "역할 제거",
+    "moreSettings": "추가 설정",
     "agentLabel": "Agent",
-    "modelLabel": "모델",
     "modelDefault": "기본값",
     "modelDefaultHint": "컴퓨터의 Worker 기본 모델을 사용합니다",
-    "permissionLabel": "권한 모드",
     "permissionAuto": "자동 승인",
     "permissionFull": "전체 액세스",
-    "permissionAutoHint": "작업 공간 안에서 읽고 쓰며 권한 상승 요청을 자동 승인합니다. 위험도가 높은 작업은 거부되거나 확인이 필요할 수 있습니다.",
-    "permissionFullHint": "확인 없이 모든 파일을 수정하고 네트워크 명령을 실행할 수 있습니다. 위험도가 가장 높으니 신뢰할 수 있는 작업에만 사용하세요.",
     "initialTaskLabel": "초기 작업(선택)",
-    "initialTaskPlaceholder": "이 Worker에게 줄 선택적 첫 작업",
+    "initialTaskPlaceholder": "처음 맡길 일을 입력하세요. 비워 두면 대기하며 Lead가 배분합니다",
     "workerCountSummary_one": "Worker {{count}}개 · 실행 중 {{running}}",
     "workerCountSummary_other": "Worker {{count}}개 · 실행 중 {{running}}",
     "loading": "Worker를 불러오는 중…",
@@ -773,12 +821,6 @@
     "failed": "저장하지 못했습니다. 다시 시도하세요.",
     "restore": "기본값 복원"
   },
-  "followUp": {
-    "title": "세션 후속 확인을 시작할까요?",
-    "start": "후속 확인 시작",
-    "notNow": "나중에",
-    "saveFailed": "저장하지 못했습니다. 다시 시도하세요"
-  },
   "providerGroupRebalance": {
     "title": "{{label}}(으)로 바꿔서 계속할까요?",
     "body": "각 계정의 할당량을 고르게 쓰기 위해 이 메시지는 {{label}}에서 보내는 것을 권장합니다({{quota}}). 최근 몇 번의 대화와 요약은 이어지지만, 그 이전의 세부 내용은 빠질 수 있습니다.",
@@ -786,7 +828,10 @@
     "quotaReset": "{{left}}% 남음 · {{reset}} 후 초기화",
     "confirm": "전환",
     "remember": "전환하고 앞으로 자동으로(이 작업만)",
-    "cancel": "취소"
+    "cancel": "취소",
+    "disable": "이 작업에서 자동 전환 안 함",
+    "disableFailed": "선택이 저장되었는지 확인하지 못했습니다. 연결을 확인하고 작업이 있는 컴퓨터의 Cindy가 최신 버전인지 확인한 후 다시 시도해 주세요. 이 메시지는 평소대로 전송됩니다.",
+    "moreOptions": "추가 옵션"
   },
   "messageEdit": {
     "editing": "메시지 편집 중",

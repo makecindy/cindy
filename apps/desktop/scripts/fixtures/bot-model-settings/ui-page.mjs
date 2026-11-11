@@ -4,7 +4,7 @@ export default {
   name: 'bot-model-settings',
   entry: './fixture.tsx',
   viewport: { width: 440, height: 880 },
-  real: 'BotModelChainEditor, BotTaskModelEditor, ModelRouteSelector, ModelSelector, themes and all translations',
+  real: 'BotModelChainEditor, ModelRouteSelector, ModelSelector, themes and all translations',
   notCovered: 'Live catalog discovery, remote devices, persistence and model execution; fixture supplies providers and local component state',
   stubs: {
     'src/renderer/hooks/useModelRouteDevices': `export const useModelRouteDevices = ({ leadAgentDeviceId }) => ({
@@ -13,12 +13,11 @@ export default {
     });`,
   },
   cases: {
-    default: { about: 'Unavailable primary, backup and task model; status belongs to the model' },
+    default: { about: 'Unavailable primary and backup; status belongs to the model' },
     available: { about: 'Long available name with reasoning effort; no unavailable status on this model' },
     'four-backups': { about: 'Four visible backups with unbroken IDs and working reorder/remove controls' },
-    inherited: { about: 'Task inherits primary, using the same complete-name presentation' },
     'global-settings': { about: 'Global settings row uses the same wrapped picker' },
-    'shared-only': { about: 'Shared-only Gemini/Terra labels resolve in primary, backup and task triggers' },
+    'shared-only': { about: 'Shared-only Gemini/Terra labels resolve in primary and backup triggers' },
     'shared-same-id': { about: 'Shared labels and effort never fall back to a same-ID local model' },
   },
   async ready(page) {
@@ -31,16 +30,24 @@ export default {
   },
   async check(page, ui) {
     const pickers = page.locator('[data-model-settings-fixture] button[aria-haspopup="listbox"]');
-    const expected = ui.case === 'four-backups' ? 6 : 3;
+    const expected = ui.case === 'four-backups' ? 5 : 2;
     const clipped = await pickers.evaluateAll(buttons => buttons.flatMap(button =>
       [...button.querySelectorAll('span')].filter(span => span.textContent?.trim() &&
         (span.scrollWidth > span.clientWidth + 1 || span.scrollHeight > span.clientHeight + 1))
         .map(span => span.textContent)));
     assert.deepEqual(clipped, [], 'Model text must fit without ellipsis or clipping');
     assert.equal(await pickers.count(), expected, 'Backups are immediately visible');
+    if (ui.case === 'default') {
+      await pickers.first().click();
+      const panel = page.locator('[data-radix-popper-content-wrapper] > *').first();
+      await panel.waitFor();
+      assert.ok(await panel.evaluate((el) => getComputedStyle(el).boxShadow.includes('16px')), 'Field panel carries --shadow-menu');
+      await page.keyboard.press('Escape');
+      await panel.waitFor({ state: 'hidden' });
+    }
     const status = await ui.t('settings.auxiliaryModels.unavailable');
     if (ui.case.startsWith('shared-')) {
-      for (let index = 0; index < 3; index++) {
+      for (let index = 0; index < 2; index++) {
         const picker = pickers.nth(index);
         assert.equal(await picker.getByText(status, { exact: true }).count(), 0);
         assert.equal(await picker.locator('svg.lucide-circle-alert').count(), 0, 'Shared catalog capabilities load successfully');
@@ -61,7 +68,7 @@ export default {
       const add = page.getByRole('button', { name: await ui.t('bots.modelChain.add'), exact: true });
       assert.equal(await add.isDisabled(), true);
       await page.getByRole('button', { name: await ui.t('bots.modelChain.remove'), exact: true }).first().click();
-      assert.equal(await pickers.count(), 5);
+      assert.equal(await pickers.count(), 4);
       assert.equal(await add.isEnabled(), true);
     }
   },

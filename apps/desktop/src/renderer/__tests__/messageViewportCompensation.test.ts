@@ -159,10 +159,11 @@ describe('restored reading position handoff through MessageStream.handleScroll',
       shouldUnpinOnScrollbarDrag: autoFollow.shouldUnpinOnScrollbarDrag,
       shouldUnpinOnUpIntent: autoFollow.shouldUnpinOnUpIntent,
       shouldBumpSendFollowCancelOnScroll: autoFollow.shouldBumpSendFollowCancelOnScroll,
-      TOP_HISTORY_TRIGGER_PX, SCROLL_DIRECTION_DEAD_ZONE_PX: 1, JUMP_DOWN_IDLE_MS: 2000,
+      TOP_HISTORY_TRIGGER_PX, SCROLL_DIRECTION_DEAD_ZONE_PX: 1,
       RENDER_WINDOW_GROWTH_ITEMS: 80, NO_UNREAD_KEYS: new Set<string>(),
       // A restoration that has settled at scrollTop 200 with a measured anchor.
       scrollRef: { current: el },
+      contentRef: { current: null },
       restoringRef: { current: true },
       restoreLoadRef: { current: 'settled' },
       restoredScrollGeometryRef: { current: measureRestoredScrollGeometry(el, anchor) },
@@ -178,7 +179,6 @@ describe('restored reading position handoff through MessageStream.handleScroll',
       focusJumpRef: { current: null },
       chipJumpGenerationRef: { current: null },
       chipJumpInProgressRef: { current: false },
-      jumpDownIdleTimerRef: { current: null },
       saveScrollSnapshot: vi.fn(), clearChipJumpSuppression: vi.fn(),
       // CI 41649027355: handleScroll now delegates jump visibility to this hook.
       setIsNearBottom: vi.fn(), setUnreadKeys: vi.fn(), updateJumpDown: vi.fn(),
@@ -206,6 +206,10 @@ describe('restored reading position handoff through MessageStream.handleScroll',
     scroll();
     expect(bindings.isNearBottomRef.current).toBe(true);
     expect(bindings.setIsNearBottom).toHaveBeenLastCalledWith(true);
+    // #8548: handleScroll feeds every non-restore scroll into the jump-down
+    // visibility hook; both scrolls above take that path (delta 400 / 2800).
+    expect(bindings.updateJumpDown).toHaveBeenCalledTimes(2);
+    expect(bindings.updateJumpDown).toHaveBeenLastCalledWith(2800, true);
   });
 
   it('keeps restoring when the layout moved under the anchor', () => {
