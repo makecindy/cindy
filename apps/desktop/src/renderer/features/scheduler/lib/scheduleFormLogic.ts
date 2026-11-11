@@ -765,6 +765,12 @@ export function scheduleToUserCreateInput(
     workingDir: schedule.workingDir,
     useWorktree: schedule.useWorktree,
     persistentSession: schedule.persistentSession,
+    // 复制/转为个人自动化直接走 create,不经表单。不带这两项会按 false 落库:
+    // 静默检查开始播报,带程序变化门的检查重新每轮启动模型。
+    // 前置脚本/插件不随复制带走:原检查靠它们给信号时不保留门,否则副本永远没有信号、每轮空跳。
+    silentWhenIdle: schedule.silentWhenIdle,
+    programChangeGate:
+      schedule.programChangeGate === true && !schedule.preRunHook?.command?.trim() && !schedule.preRunPlugin,
     notify: schedule.notify,
     ...overrides,
   };

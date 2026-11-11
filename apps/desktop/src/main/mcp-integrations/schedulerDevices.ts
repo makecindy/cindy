@@ -119,9 +119,15 @@ export function createSchedulerRemoteDeps(deps: {
             supportsScheduleAgentDeviceSelection?: boolean;
             supportsRemoteScheduleDirectoryCheck?: boolean;
             supportsScheduleWebhookTrigger?: boolean;
+            supportsScheduleProgramChangeGate?: boolean;
           } | null : null;
           if (op === 'create' && supported?.supportsRemoteScheduleDirectoryCheck !== true) {
             return { ok: false, code: 'REMOTE_UNSUPPORTED', message: '目标电脑的版本不支持远程创建定时任务，请先更新目标电脑' };
+          }
+          // 旧端会丢掉 programChangeGate，检查仍每次启动模型。只有打开门控的创建需要此能力。
+          if (op === 'create' && input?.programChangeGate === true
+            && supported?.supportsScheduleProgramChangeGate !== true) {
+            return { ok: false, code: 'REMOTE_UNSUPPORTED', message: '目标电脑的版本不支持检查任务的程序变化门，请先更新目标电脑' };
           }
           if (needsWebhook && supported?.supportsScheduleWebhookTrigger !== true) {
             return { ok: false, code: 'REMOTE_UNSUPPORTED', message: '目标电脑的版本不支持 Webhook 触发，请先更新目标电脑' };

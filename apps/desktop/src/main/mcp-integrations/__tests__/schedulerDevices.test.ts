@@ -369,6 +369,25 @@ describe('desktop scheduler cross-device transport', () => {
     expect(s.invoke.mock.calls[1].slice(0, 2)).toEqual(['mac', 'maker:schedule:create']);
   });
 
+  // PR #8285 review: a peer that predates the program change gate drops `programChangeGate` and
+  // keeps starting the model for every check. Only a gated create needs the capability; an
+  // explicit model-detected check (false) means the same thing on old and new peers.
+  it.each([
+    { capabilities: { supportsRemoteScheduleDirectoryCheck: true }, gate: true, sent: false },
+    { capabilities: { supportsRemoteScheduleDirectoryCheck: true, supportsScheduleProgramChangeGate: true }, gate: true, sent: true },
+    { capabilities: { supportsRemoteScheduleDirectoryCheck: true }, gate: false, sent: true },
+  ])('creates a gated check remotely only on a peer that keeps the gate: $capabilities / $gate', async ({ capabilities, gate, sent }) => {
+    const s = setup();
+    s.invoke
+      .mockResolvedValueOnce({ ok: true, result: capabilities })
+      .mockResolvedValueOnce({ ok: true, result: { id: 'created' } });
+    const result = await s.remote.invoke('mac', 'create', [{ name: 'radar', silentWhenIdle: true, programChangeGate: gate }]);
+    expect(s.invoke.mock.calls.map((call) => call[1])).toEqual(
+      sent ? ['maker:get-capabilities', 'maker:schedule:create'] : ['maker:get-capabilities'],
+    );
+    expect(result).toMatchObject(sent ? { ok: true } : { ok: false, code: 'REMOTE_UNSUPPORTED' });
+  });
+
   it('rejects a malformed list and never sends after the account changes', async () => {
     const malformed = setup(vi.fn<Invoke>(async () => ({ ok: true, result: { not: 'a list' } })));
     expect(await malformed.remote.invoke('mac', 'list', [undefined])).toMatchObject({

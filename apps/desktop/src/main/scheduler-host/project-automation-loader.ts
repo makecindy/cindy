@@ -63,6 +63,8 @@ export interface ProjectScheduleConfig {
   useWorktree?: boolean;
   persistentSession?: boolean;
   silentWhenIdle?: boolean;
+  /** 程序变化门。省略 = false(旧配置不变)。详见 Schedule.programChangeGate。 */
+  programChangeGate?: boolean;
   /**
    * 前置检查脚本(Pre-run Hook)。省略 = 未启用;reconcile 恒带 key,配置文件里
    * 删掉即清空 DB 里的 hook。与 renderer projectAutomationConfig.ts 同形。
@@ -549,6 +551,7 @@ function scheduleConfigToCreateInput(
     useWorktree: config.useWorktree ?? false,
     persistentSession: config.persistentSession ?? false,
     silentWhenIdle: config.silentWhenIdle ?? false,
+    programChangeGate: config.programChangeGate ?? false,
     // 恒带 key:配置省略 → undefined → update patch 双列写 NULL(清空既有 hook),
     // 与表单 buildScheduleInput 的「关闭前置检查」落库通道同一契约。
     preRunHook: config.preRunHook?.command?.trim()
@@ -593,6 +596,7 @@ export function schedulesDiffer(
     schedule.useWorktree !== expected.useWorktree ||
     schedule.persistentSession !== expected.persistentSession ||
     schedule.silentWhenIdle !== expected.silentWhenIdle ||
+    (schedule.programChangeGate ?? false) !== (expected.programChangeGate ?? false) ||
     (schedule.preRunHook?.command ?? '') !== (expected.preRunHook?.command ?? '') ||
     (schedule.preRunHook?.timeoutMs ?? undefined) !== (expected.preRunHook?.timeoutMs ?? undefined) ||
     schedule.notify.desktop !== expected.notify?.desktop ||
@@ -669,6 +673,7 @@ function isProjectScheduleConfig(value: unknown): value is ProjectScheduleConfig
     optionalBoolean(config.useWorktree) &&
     optionalBoolean(config.persistentSession) &&
     optionalBoolean(config.silentWhenIdle) &&
+    optionalBoolean(config.programChangeGate) &&
     optionalPreRunHook(config.preRunHook) &&
     optionalNotify(config.notify)
   );

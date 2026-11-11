@@ -371,6 +371,48 @@ describe('project automation provider reconciliation', () => {
   });
 });
 
+describe('project automation program change gate reconciliation', () => {
+  // PR #8285 review: the loader dropped programChangeGate, so a promoted check was
+  // stored with the gate off. A file without the field keeps the old default (off).
+  it('persists the gate from the project file and clears it when the field is removed', async () => {
+    const dir = await fs.mkdtemp(path.join(tmpdir(), 'cindy-project-gate-'));
+    try {
+      let saved: Schedule | undefined;
+      const create = vi.fn(async (input: CreateScheduleInput) => {
+        saved = scheduleToCamel(scheduleCreateToRow({
+          ...projectSchedule({ desktop: true, feishu: false }), ...input,
+        } as Schedule) as Parameters<typeof scheduleToCamel>[0]);
+        return saved;
+      });
+      const update = vi.fn(async (_id: string, patch: Partial<Schedule>) => {
+        saved = scheduleToCamel({
+          ...scheduleCreateToRow(saved!), ...schedulePatchToRow(patch),
+        } as Parameters<typeof scheduleToCamel>[0]);
+        return saved;
+      });
+      const loader = new ProjectAutomationLoader({
+        scheduler: { create, update } as unknown as ConstructorParameters<typeof ProjectAutomationLoader>[0]['scheduler'],
+        storage: { list: async () => saved ? [saved] : [] } as ConstructorParameters<typeof ProjectAutomationLoader>[0]['storage'],
+        getDb: () => ({
+          select: () => ({ from: () => ({ where: () => ({ limit: async () => [] }) }) }),
+          insert: () => ({ values: () => ({ onConflictDoUpdate: async () => {} }) }),
+        }) as unknown as ReturnType<ConstructorParameters<typeof ProjectAutomationLoader>[0]['getDb']>,
+        logger: { warn: vi.fn(), debug: vi.fn() },
+      });
+      const config = projectConfig({ silentWhenIdle: true, programChangeGate: true });
+      expect(await loader.upsertSchedule(dir, config)).toMatchObject({ inserted: 1 });
+      expect(saved).toMatchObject({ silentWhenIdle: true, programChangeGate: true });
+      expect(await loader.reconcile(dir)).toMatchObject({ inserted: 0, updated: 0 });
+      expect(await loader.upsertSchedule(dir, { ...config, programChangeGate: undefined }))
+        .toMatchObject({ updated: 1 });
+      expect(saved?.programChangeGate).toBe(false);
+      expect(await loader.reconcile(dir)).toMatchObject({ updated: 0 });
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('project automation explicit Harness reconciliation', () => {
   it('detects marker-only changes, persists them, and clears them without losing the bound task', () => {
     const current: Schedule = { ...projectSchedule({ desktop: true, feishu: false }),

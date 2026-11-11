@@ -683,7 +683,7 @@ export function ScheduleFormDialog({
     }
     if (isProjectAutomationMode && projectWorkingDir) {
       const id = initial?.projectConfigId ?? generateProjectScheduleId();
-      const config = formToProjectConfig(form, id);
+      const config = formToProjectConfig(form, id, initial?.programChangeGate);
       setSubmitting(true);
       try {
         await window.electronAPI.maker.projectAutomation.upsertSchedule({
