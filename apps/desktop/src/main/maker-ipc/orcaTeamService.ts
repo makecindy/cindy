@@ -731,6 +731,9 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     report: OrcaStructuredWorkerReport,
     turnStatus: 'done' | 'error',
   ): Promise<void> {
+    // progress 只描述进度，不是本轮结论：它不能占用映射名额，否则晚到的 waiting /
+    // blocked / dropped 会因 reportApplied 被跳过，永久停在 done 且面板不更新。
+    if (report.state === 'progress') return;
     await deps.setWorkerLatestReport(state.workerId, report);
     state.reportApplied = true;
     switch (report.state) {
@@ -748,7 +751,6 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         await deps.updateWorkerStatus(state.workerId, 'error', report);
         break;
       case 'ready':
-      case 'progress':
       default:
         await deps.updateWorkerStatus(state.workerId, turnStatus, report);
         break;
@@ -2212,9 +2214,10 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
             const ownsState = autoBridge.get(sessionId) === state
               || provisional?.previousPendingIdentity === state;
             if (report && ownsState) {
+              const isProgress = report.state === 'progress';
               state.structuredReport = report;
               // 终态先到、回报后到：由回报侧补做映射，否则晚到的 waiting / blocked 会永久停在 done。
-              if (state.terminalObserved && !state.reportApplied) {
+              if (state.terminalObserved && !state.reportApplied && !isProgress) {
                 // 用真实终态：晚到的 ready 不能把已判 error 的轮次洗成成功。
                 await applyWorkerReportState(state, report, state.terminalStatus ?? 'done');
               } else if (!state.terminalObserved) {
@@ -2410,7 +2413,9 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
           // 结构化回报的六态映射只在一处做（applyWorkerReportState）；已映射过的
           // （终态先到、回报后到时由回报侧补映射）不再覆盖。无结构化回报时保持旧路径。
           if (state) state.terminalStatus = params.status;
-          const structured = state && !state.reportApplied ? state.structuredReport : undefined;
+          const structured = state && !state.reportApplied && state.structuredReport?.state !== 'progress'
+            ? state.structuredReport
+            : undefined;
           if (state && structured) {
             await applyWorkerReportState(state, structured, params.status);
           } else {

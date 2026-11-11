@@ -361,7 +361,12 @@ function createDeps(overrides: Partial<OrcaTeamServiceDeps> = {}) {
     ),
     getLiveSession: vi.fn(() => null),
     resumeWorkerSession: vi.fn(async () => {}),
-    setWorkerLatestReport: vi.fn(async () => {}),
+    // 与真实 store 同语义：只改回报，不动状态。
+    setWorkerLatestReport: vi.fn(async (workerId: string, latestReport: OrcaStructuredWorkerReport | null) => {
+      workers = workers.map((worker) =>
+        worker.id === workerId ? { ...worker, latestReport } : worker,
+      );
+    }),
     updateWorkerStatus: vi.fn(async (workerId, status, latestReport?: OrcaStructuredWorkerReport | null) => {
       calls.push(`updateWorkerStatus:${status}`);
       workers = workers.map((worker) =>
@@ -1846,6 +1851,24 @@ describe('OrcaTeamService', () => {
 
     expect(getWorker().status).toBe('idle');
     expect(deps.setWorkerLatestReport).toHaveBeenCalledWith('worker-1', expect.objectContaining({ state: 'waiting' }));
+  });
+
+  // progress 只是进度，不是本轮结论：终态不得拿它做映射，否则后续报的结论会被跳过。
+  it('never maps a progress report into the worker status at the terminal', async () => {
+    const { deps, getWorker, service } = createDeps();
+    await service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '长任务' });
+    await service.recordWorkerReport('worker-session-1', { state: 'progress', summary: '做到一半' });
+    expect(getWorker().latestReport).toMatchObject({ state: 'progress' });
+
+    await service.handleWorkerTerminalTurn({ sessionId: 'worker-session-1', status: 'done', finalText: '结果' });
+
+    // 守卫：没有任何状态写入携带 progress 回报（否则 reportApplied 会吃掉本轮结论）。
+    const progressWrites = (deps.updateWorkerStatus as unknown as { mock: { calls: unknown[][] } })
+      .mock.calls.filter((call) => {
+        const report = call[2] as { state?: string } | null | undefined;
+        return report?.state === 'progress';
+      });
+    expect(progressWrites).toEqual([]);
   });
 
   // 派活会清空上一轮回报；发送失败回滚必须把它还回去，否则用户看过的结论消失。
