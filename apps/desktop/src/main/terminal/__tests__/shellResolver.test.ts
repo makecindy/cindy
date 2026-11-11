@@ -12,19 +12,30 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import path from 'node:path';
 
 // Mock fs 必须在 shellResolver 被加载之前；用 vi.hoisted 拿一个共享的 fixture handle。
 const fixture = vi.hoisted(() => ({
   existing: new Set<string>(),
   files: new Set<string>(),
+  statErrors: new Map<string, string>(),
+  links: new Map<string, string>(),
 }));
 
 vi.mock('node:fs', () => {
   return {
     existsSync: (p: string) => fixture.existing.has(p),
     statSync: (p: string) => {
+      const code = fixture.statErrors.get(p);
+      if (code) throw Object.assign(new Error(code), { code });
       if (fixture.files.has(p)) return { isFile: () => true } as { isFile: () => boolean };
       return { isFile: () => false } as { isFile: () => boolean };
+    },
+    lstatSync: (p: string) => ({ isSymbolicLink: () => fixture.links.has(p) }),
+    readlinkSync: (p: string) => {
+      const target = fixture.links.get(p);
+      if (!target) throw Object.assign(new Error('EINVAL'), { code: 'EINVAL' });
+      return target;
     },
   };
 });
@@ -66,6 +77,8 @@ afterEach(() => {
   for (const k of Object.keys(process.env)) delete process.env[k];
   Object.assign(process.env, ORIGINAL_ENV);
   setExistingFiles([]);
+  fixture.statErrors.clear();
+  fixture.links.clear();
 });
 
 describe('resolveAutoDetectShell — macOS', () => {
@@ -158,6 +171,137 @@ describe('resolveAutoDetectShell — Windows', () => {
     process.env.PATH = '';
     setExistingFiles([]);
     expect(resolveAutoDetectShell()).toMatchObject({ id: 'cmd', command: 'cmd.exe' });
+  });
+});
+
+// #9902: unit coverage through the settings probe and terminal creation entry points.
+// The old fs fixture only represented ordinary files. AppExecLink aliases can fail
+// exists/stat while lstat/readlink and the executable target remain accessible.
+describe('Windows Store PowerShell execution aliases', () => {
+  const localAppData = path.win32.join('C:\\Users', 'test', 'AppData', 'Local');
+  const windowsApps = path.win32.join(localAppData, 'Microsoft', 'WindowsApps');
+  const target = path.win32.join(
+    'C:\\Program Files',
+    'WindowsApps',
+    'Microsoft.PowerShell_7.6.7.0_x64__8wekyb3d8bbwe',
+    'pwsh.exe',
+  );
+  const msi = path.win32.join('C:\\Program Files', 'PowerShell', '7', 'pwsh.exe');
+
+  beforeEach(() => {
+    setPlatform('win32');
+    process.env.LOCALAPPDATA = localAppData;
+    process.env.PATH = windowsApps;
+    process.env.COMSPEC = path.win32.join('C:\\Windows', 'System32', 'cmd.exe');
+  });
+
+  it.each([
+    { directory: windowsApps, code: 'EACCES', exists: false },
+    {
+      directory: path.win32.join(windowsApps, 'Microsoft.PowerShell_8wekyb3d8bbwe'),
+      code: 'EPERM',
+      exists: true,
+    },
+  ])(
+    'lists a valid alias for explicit selection when stat fails with $code (exists=$exists)',
+    ({ directory, code, exists }) => {
+      const alias = path.win32.join(directory, 'pwsh.exe');
+      process.env.PATH = directory;
+      setExistingFiles([target]);
+      if (exists) fixture.existing.add(alias);
+      fixture.statErrors.set(alias, code);
+      fixture.links.set(alias, target);
+
+      expect(probeAvailableShells()).toContainEqual({
+        id: 'pwsh',
+        command: alias,
+        displayName: 'PowerShell',
+        isAutoDetectTarget: false,
+      });
+      expect(resolveShellById('pwsh')).toMatchObject({ id: 'pwsh', command: alias });
+      expect(resolveShellForCreate('pwsh')).toMatchObject({ id: 'pwsh', command: alias });
+      expect(resolveShellForCreate('auto')).toMatchObject({
+        id: 'cmd',
+        command: process.env.COMSPEC,
+      });
+    },
+  );
+
+  it('keeps Windows PowerShell as the auto target when Store PowerShell is available', () => {
+    const alias = path.win32.join(windowsApps, 'pwsh.exe');
+    const powershell = path.win32.join(
+      'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe',
+    );
+    process.env.PATH = `${windowsApps};${path.win32.dirname(powershell)}`;
+    setExistingFiles([target, powershell]);
+    fixture.statErrors.set(alias, 'EACCES');
+    fixture.links.set(alias, target);
+
+    expect(probeAvailableShells().find((shell) => shell.isAutoDetectTarget)?.id).toBe('powershell');
+    expect(resolveShellForCreate('pwsh').command).toBe(alias);
+    expect(resolveShellForCreate('auto')).toMatchObject({ id: 'powershell', command: powershell });
+  });
+
+  it.each([
+    'missing alias',
+    'missing target',
+    'directory target',
+    'denied target',
+    'ordinary denied file',
+    'outside WindowsApps',
+  ])('rejects %s and keeps the terminal fallback', (scenario) => {
+    const directory = scenario === 'outside WindowsApps' ? localAppData : windowsApps;
+    const alias = path.win32.join(directory, 'pwsh.exe');
+    process.env.PATH = directory;
+    setExistingFiles([target]);
+    fixture.statErrors.set(alias, scenario === 'missing alias' ? 'ENOENT' : 'EACCES');
+    if (scenario !== 'missing alias' && scenario !== 'ordinary denied file')
+      fixture.links.set(alias, target);
+    if (scenario === 'missing target') {
+      fixture.files.delete(target);
+      fixture.statErrors.set(target, 'ENOENT');
+    }
+    if (scenario === 'directory target') fixture.files.delete(target);
+    if (scenario === 'denied target') fixture.statErrors.set(target, 'EACCES');
+
+    expect(probeAvailableShells().map((shell) => shell.id)).toEqual(['cmd']);
+    expect(resolveShellById('pwsh')).toBeNull();
+    expect(resolveShellForCreate('pwsh')).toMatchObject({
+      id: 'cmd',
+      command: process.env.COMSPEC,
+    });
+  });
+
+  it('prefers an ordinary MSI executable over an alias regardless of PATH order', () => {
+    const alias = path.win32.join(windowsApps, 'pwsh.exe');
+    setExistingFiles([msi, target]);
+    fixture.statErrors.set(alias, 'EACCES');
+    fixture.links.set(alias, target);
+    process.env.PATH = `${path.win32.dirname(msi)};${windowsApps}`;
+    expect(resolveShellForCreate('pwsh').command).toBe(msi);
+
+    process.env.PATH = `${windowsApps};${path.win32.dirname(msi)}`;
+    expect(resolveShellForCreate('pwsh').command).toBe(msi);
+    expect(probeAvailableShells().find((shell) => shell.id === 'pwsh')?.command).toBe(msi);
+    expect(resolveShellForCreate('auto').command).toBe(msi);
+    fixture.statErrors.set(target, 'ENOENT');
+    expect(resolveShellForCreate('pwsh').command).toBe(msi);
+  });
+
+  it('uses the first valid alias in PATH when no ordinary executable is available', () => {
+    const alias = path.win32.join(windowsApps, 'pwsh.exe');
+    const packageDir = path.win32.join(windowsApps, 'Microsoft.PowerShell_8wekyb3d8bbwe');
+    const packageAlias = path.win32.join(packageDir, 'pwsh.exe');
+    process.env.PATH = `${windowsApps};${packageDir}`;
+    setExistingFiles([target]);
+    fixture.statErrors.set(alias, 'EACCES');
+    fixture.statErrors.set(packageAlias, 'EACCES');
+    fixture.links.set(alias, target);
+    fixture.links.set(packageAlias, target);
+
+    expect(resolveShellForCreate('pwsh').command).toBe(alias);
+    fixture.links.delete(alias);
+    expect(resolveShellForCreate('pwsh').command).toBe(packageAlias);
   });
 });
 

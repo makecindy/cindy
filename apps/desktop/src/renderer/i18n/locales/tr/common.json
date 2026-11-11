@@ -3799,7 +3799,11 @@
           "headerNamePlaceholder": "Header-Name",
           "headerValuePlaceholder": "değer",
           "addHeader": "Üstbilgi ekle",
-          "removeRow": "Satırı kaldır"
+          "removeRow": "Satırı kaldır",
+          "minimaxVideos": "MiniMax uyumlu Videos API kullan",
+          "minimaxVideosHint": "MiniMax-H3 gibi MiniMax video görevlerini göndermek ve durumlarını sorgulamak için bu bağlantının adresini ve API anahtarını kullanır. Bir sağlayıcı yalnızca bir video API'si kullanabilir. Eksik model kimliklerini ekleyin, ardından model ayrıntılarında video yeteneğini belirtin.",
+          "openaiVideos": "OpenAI uyumlu Videos API kullan (/v1/videos)",
+          "openaiVideosHint": "Görevleri POST /v1/videos ile göndermek ve durumlarını sorgulamak için bu bağlantının adresini ve API anahtarını kullanır; tu-zi gibi çoğu aktarıcı bu biçimi kullanır ve MiniMax-H3 gibi modeller bunun üzerinden çalışır. Bir sağlayıcı yalnızca bir video API'si kullanabilir. Eksik model kimliklerini ekleyin, ardından model ayrıntılarında video yeteneğini belirtin."
         },
         "wireProtocol": {
           "responses": "OpenAI Responses (yerel)",
@@ -6600,7 +6604,26 @@
             "hint": "Veya bu kodu Feishu / Lark'ta Cindy botuna doğrudan mesaj olarak gönderin"
           },
           "setWorkingDevice": "Çalışma bilgisayarı olarak ayarla",
-          "workingDeviceSet": "Çalışma bilgisayarı ayarlandı"
+          "workingDeviceSet": "Çalışma bilgisayarı ayarlandı",
+          "linkedAccounts": "Bağlı hesaplar: {{count}}",
+          "connectionTenant": "Şirket: {{tenant}}",
+          "appType": {
+            "self_built": "Kuruluş uygulaması",
+            "store": "Mağaza uygulaması"
+          },
+          "linkedBotsSummary": "Bağlı botlar: {{bots}} · hesaplar: {{accounts}}",
+          "chooseBot": "Bağlamak için bir bot seçin. Aynı anda birden fazla bot kullanabilirsiniz.",
+          "connectBot": "Bu botu bağla",
+          "linkAnotherAccount": "Başka bir Feishu hesabı bağla",
+          "botFallback": "Cindy botu",
+          "bridgeTitle": "Feishu / Lark botları",
+          "bridgeDescription": "Botlar Feishu / Lark mesajlarınızı yalnızca Cindy'ye iletir. Bağlı her hesabın mesajları kendi çalışma bilgisayarına gider ve görevler her bot ve hesap için ayrı kalır.",
+          "settingsTitle": "Çalışma dizinleri ve modeller",
+          "settingsDescription": "Bunlar bir bota veya Feishu / Lark hesabına değil, bu bilgisayardaki Cindy hesabınıza aittir; bu nedenle tüm Feishu / Lark botları aynı ayarları kullanır. Dizin listesi diğer kanallarla da paylaşılır.",
+          "workingDeviceLabel": "Çalışma bilgisayarı: {{name}}",
+          "workingDeviceThisComputer": "Bu bilgisayar",
+          "workingDeviceUnknown": "Çalışma bilgisayarı henüz eşitlenmedi",
+          "workingDeviceUnnamed": "Adsız bilgisayar"
         }
       },
       "summary": {
@@ -8084,7 +8107,7 @@
         "subscribeRoutineRun": "Seçilen ekip arkadaşı rutinlerini çalışmadan önce kontrol edebilir",
         "subscribeRoutineRunDetail": "Çalıştırma öncesi kontrol altında bu eklentiyi seçtiğiniz rutinler önce ona danışır. Rutinin talimatlarını ve onu tetikleyen olayları görür; o çalıştırmayı atlayabilir veya durdurabilir, ancak sizin yerinize hiçbir şeyi onaylayamaz.",
         "subscribeStartTask": "Yeni görevler için model seçebilir",
-        "subscribeStartTaskDetail": "Yeni bir görev bu eklentinin sağladığı bir modeli kullandığında ilk mesajı okur ve bağlı modellerinizden birini seçer. Kararı bir kez verir; model görev sırasında değişmez.",
+        "subscribeStartTaskDetail": "Yeni bir görev bu eklentinin sağladığı bir modeli kullandığında ilk mesajı okur ve bağlı modellerinizden birini seçer. Bu giriş noktası yalnızca ilk mesajdan önce çalışır.",
         "card": "Mesaj kartlarını işler",
         "cardExternalLink": "Kartlar, onaylandıktan sonra tarayıcınızı açan harici bağlantılar bildirebilir",
         "cardExternalLinkDetail": "Bir kart bağlantısına tıklamak bir onay iletişim kutusu gösterir; URL yalnızca siz onayladıktan sonra sistem tarayıcınızda açılır. Yalnızca http/https adreslerine izin verilir.",
@@ -8146,7 +8169,17 @@
         "agentCompanionsDetail": "Diğer bilgisayarlarınızda çalışanlar dahil tüm takım arkadaşlarınızı görüntüleyebilir: ad, açıklama, profil resmi, durum (çalışıyor, sizi bekliyor, boşta, çevrimdışı), her birinin hangi adımda olduğu (düşünme veya araç çalıştırma gibi), kartlarının gösterdiği şekilde sizi bekleyen istekler (sorular, çalıştırılacak komutlar, planlar) ve her takım arkadaşının ana sohbetindeki son konuşmalar (araç adımları hariç, 50 adede kadar iletiniz ve yanıtları); ayrıca ana pencerede bir takım arkadaşının konuşmasını açabilir. Mesaj iletim izniyle birlikte eklentide verdiğiniz yanıtları da iletebilir: soruları yanıtlama, istekleri reddetme ve planlar hakkında geri bildirim verme. Bir adıma izin vermek yine de Cindy'nin kendi onay penceresindeki tıklamanızı gerektirir. Dosyaları, araç adımlarını veya düşünme sürecini okuyamaz.",
         "agentCompanionsRequest": "Takım arkadaşı görüntüleme iznini inceleyin",
         "liveScreen": "Telefonunuzda cihaz ekranlarını görüntüleyin ve kontrol edin",
-        "liveScreenDetail": "Uzak masaüstü aracılığıyla telefonunuz, sağladığı cihaz ekranlarını (simülatörler gibi) gösterebilir ve bunlara dokunma, düğme ve metin gönderebilir. Yalnızca telefonunuzdan açtığınızda bağlanır ve bu bilgisayarda başka hiçbir şey göstermez."
+        "liveScreenDetail": "Uzak masaüstü aracılığıyla telefonunuz, sağladığı cihaz ekranlarını (simülatörler gibi) gösterebilir ve bunlara dokunma, düğme ve metin gönderebilir. Yalnızca telefonunuzdan açtığınızda bağlanır ve bu bilgisayarda başka hiçbir şey göstermez.",
+        "systemPrompt": "Seçilen görevlere sistem talimatları ekleyebilir",
+        "systemPromptDetail": "Aşağıdaki statik parçalar yalnızca bu eklentiyi seçtiğiniz görevlerde Cindy'nin sabit talimatlarından sonra eklenir. Sıra ve motor kapsamı paketten gelir. Değişiklikler bir sonraki mesajdan itibaren geçerli olur; hatalar görevin ayarına uyar.",
+        "subscribeComposeContext": "Seçilen görevlerde yanıtlardan önce referans materyali ekleyebilir",
+        "subscribeComposeContextDetail": "Yalnızca seçilen görevler geçerli mesajlarını bu eklentiyle paylaşır. Eklentinin sonuçları sıradan referans materyalidir; sistem talimatı veya onay değildir. Hatalar görevin ayarına uyar.",
+        "subscribeSearchMemory": "Seçilen görevler için anılar sağlayabilir",
+        "subscribeSearchMemoryDetail": "Mevcut memory_search aracına bu eklentinin adıyla satır içi sonuçlar ekler. Bellek araması etkin olmalıdır. Yalnızca seçilen görevin sorgusu paylaşılır; başarısız olursa Cindy'nin sonuçları kalır.",
+        "subscribeStartTurn": "Seçilen görevlerde her yanıttan önce model seçebilir",
+        "subscribeStartTurnDetail": "Yalnızca bu eklentiyi seçtiğiniz görevler geçerli mesajı onunla paylaşır. Bağlı bir model, akıl yürütme yoğunluğu ve Hızlı mod seçebilir. Hatalar o görevin ayarına uyar; sizin adınıza işlem onaylayamaz.",
+        "subscribeModelRequest": "Seçilen görevlerde her model isteğini işleyebilir",
+        "subscribeModelRequestDetail": "Yalnızca bu eklentiyi seçtiğiniz görevler model isteklerini onunla paylaşır. Modelleri, parametreleri ve istek içeriğini ayarlayabilir. Şu anda yalnızca yerel Pi için desteklenir; hatalar görevin ayarına uyar. Bağlantı kimlik bilgileri dahil edilmez."
       },
       "connections": {
         "confirmTitle": "Bağlantı adresi ekle",
@@ -9412,7 +9445,10 @@
     "paceTrendFast": "Mevcut ortalama hızda hızlı tüketim eğilimi (kaba tahmin)",
     "paceTrendNormal": "Mevcut ortalama hızda normal tüketim eğilimi (kaba tahmin)",
     "paceTrendSlow": "Mevcut ortalama hızda yavaş tüketim eğilimi (kaba tahmin)",
-    "includedLabel": "{{name}} dahil"
+    "includedLabel": "{{name}} dahil",
+    "codexRefreshFailed": "ChatGPT kotası güncellenemedi. Okumayı yeniden deneyin; diğer kullanım bilgileri korunur.",
+    "retryQuota": "Kota okumayı yeniden dene",
+    "retryingQuota": "Kota okunuyor…"
   },
   "usageDetails": {
     "durationSeconds": "{{value}}s",
@@ -11805,7 +11841,7 @@
       "remove": "Kaldır",
       "removeAria": "{{platform}} platformunu kaldır",
       "empty": "Zaten sahip olduğunuz bir botu ekleyin veya aşağıdan kişisel WeChat hesabınızı bağlayın; {{name}} orada yanıt verir.",
-      "externalNote": "Bu bota mesaj gönderen herkes {{name}} ile konuşur. Kendi mesajlarınız {{name}} adlı ekip arkadaşının izinleriyle çalışır; diğer herkes için kısıtlı izinlere sahip ayrı bir gizli görev açılır.",
+      "externalNote": "Bağlandıktan sonra Telegram ve Feishu/Lark yalnızca sahibinden gelen özel mesajları kabul eder. Gruplar her platformun katılım ayarlarına ve {{name}} adlı ekip arkadaşının araç izinlerine uyar. Ayrı görevler dosyaları ve belleği paylaşır.",
       "sharedMemoryNote": "{{name}}, buradaki ve diğer konuşmalardaki bilgileri birlikte kullanır. Anıları ayrı tutmak için başka bir ekip arkadaşı kullanın.",
       "groups": {
         "title": "Gruplar",
@@ -20012,5 +20048,13 @@
     "detail": "İstekte bulunan cihaz: {{device}}\nAmaç: {{purpose}}\n\nBu ayarı etkinleştirmek, hesabınızdaki cihazların görev çalıştırma ve dosyalara erişme dâhil bu bilgisayarı kontrol etmesine izin verir. Ayarlar'dan kapatana kadar etkin kalır.",
     "decline": "Şimdi değil",
     "enable": "Uzaktan kontrolü etkinleştir"
+  },
+  "runtimePlugins": {
+    "save": "Kaydet",
+    "promptUnsupported": "Bu Pi çalıştırma konumu sistem istemi parçalarını desteklemiyor.",
+    "title": "Görev eklentileri",
+    "description": "Bu görev için eklenti seçin. Değişiklikler bir sonraki mesajınızdan itibaren geçerli olur.",
+    "unsupported": "İstek başına işleme yalnızca yerel Pi için desteklenir. Bu görevin motoru bunu desteklemiyor.",
+    "failed": "Bu ayarlar yüklenemedi veya kaydedilemedi. Yeniden denemek için bu paneli tekrar açın."
   }
 }

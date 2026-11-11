@@ -230,7 +230,7 @@
     "eslint": "^9.0.0",
     "eslint-config-prettier": "^9.1.0",
     "jsdom": "^29.1.1",
-    "playwright-core": "1.60.0",
+    "playwright-core": "1.63.0",
     "postcss": "^8.4.49",
     "prettier": "^3.4.2",
     "remark-parse": "11.0.0",

@@ -493,7 +493,7 @@
           "provenance": {
             "locator": "newChat.createAgent.quickStarts.explore",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json",
-            "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015"
+            "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502"
           }
         }
       }
@@ -617,7 +617,7 @@
           "provenance": {
             "locator": "newChat.createAgent.quickStarts.build",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json",
-            "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015"
+            "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502"
           }
         }
       }
@@ -741,7 +741,7 @@
           "provenance": {
             "locator": "newChat.createAgent.quickStarts.review",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json",
-            "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015"
+            "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502"
           }
         }
       }
@@ -865,7 +865,7 @@
           "provenance": {
             "locator": "newChat.createAgent.quickStarts.fix",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json",
-            "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015"
+            "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502"
           }
         }
       }
@@ -1190,7 +1190,7 @@
         "provenance": {
           "locator": "newChat.createAgent.quickStart",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json",
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015"
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502"
         }
       }
     }

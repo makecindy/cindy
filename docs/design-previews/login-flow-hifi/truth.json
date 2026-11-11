@@ -4997,7 +4997,7 @@
     "tr": {
       "back": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.back",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5005,7 +5005,7 @@
       },
       "binding.emailSubtitle": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.binding.emailSubtitle",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5013,7 +5013,7 @@
       },
       "binding.emailTitle": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.binding.emailTitle",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5021,7 +5021,7 @@
       },
       "binding.phoneSubtitle": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.binding.phoneSubtitle",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5029,7 +5029,7 @@
       },
       "binding.phoneTitle": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.binding.phoneTitle",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5037,7 +5037,7 @@
       },
       "browserWaiting": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.browserWaiting",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5045,7 +5045,7 @@
       },
       "cancel": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.cancel",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5053,7 +5053,7 @@
       },
       "chooseAccount": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.chooseAccount",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5061,7 +5061,7 @@
       },
       "chooseAccountSubtitle": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.chooseAccountSubtitle",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5069,7 +5069,7 @@
       },
       "chooseMethod": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.chooseMethod",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5077,7 +5077,7 @@
       },
       "codePlaceholder": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.codePlaceholder",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5085,7 +5085,7 @@
       },
       "codeSentTo": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.codeSentTo",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5093,7 +5093,7 @@
       },
       "completeSignIn": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.completeSignIn",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5101,7 +5101,7 @@
       },
       "consentDialog.agree": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.consentDialog.agree",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5109,7 +5109,7 @@
       },
       "consentDialog.body": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.consentDialog.body",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5117,7 +5117,7 @@
       },
       "consentDialog.disagree": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.consentDialog.disagree",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5125,7 +5125,7 @@
       },
       "consentDialog.title": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.consentDialog.title",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5133,7 +5133,7 @@
       },
       "consentStatement": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.consentStatement",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5141,7 +5141,7 @@
       },
       "continue": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.continue",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5149,7 +5149,7 @@
       },
       "emailPlaceholder": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.emailPlaceholder",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5157,7 +5157,7 @@
       },
       "enterCode": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.enterCode",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5165,7 +5165,7 @@
       },
       "enterpriseLogin": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.enterpriseLogin",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5173,7 +5173,7 @@
       },
       "enterpriseVia": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.enterpriseVia",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5181,7 +5181,7 @@
       },
       "errors.AUTH_SERVICE_UNAVAILABLE": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.errors.AUTH_SERVICE_UNAVAILABLE",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5189,7 +5189,7 @@
       },
       "errors.INVALID_CODE": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.errors.INVALID_CODE",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5197,7 +5197,7 @@
       },
       "errors.fallback": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.errors.fallback",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5205,7 +5205,7 @@
       },
       "invalidEmail": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.invalidEmail",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5213,7 +5213,7 @@
       },
       "invalidPhone": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.invalidPhone",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5221,7 +5221,7 @@
       },
       "localModeDescription": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.localModeDescription",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5229,7 +5229,7 @@
       },
       "localModeEntry": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.localModeEntry",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5237,7 +5237,7 @@
       },
       "orgDetected": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.orgDetected",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5245,7 +5245,7 @@
       },
       "personalAccount": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.personalAccount",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5253,7 +5253,7 @@
       },
       "personalDesc": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.personalDesc",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5261,7 +5261,7 @@
       },
       "personalLogin": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.personalLogin",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5269,7 +5269,7 @@
       },
       "phonePlaceholder": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.phonePlaceholder",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5277,7 +5277,7 @@
       },
       "preparing": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.preparing",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5285,7 +5285,7 @@
       },
       "preparingSubtitle": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.preparingSubtitle",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5293,7 +5293,7 @@
       },
       "regionPill.cn": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.regionPill.cn",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5301,7 +5301,7 @@
       },
       "regionPill.dev": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.regionPill.dev",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5309,7 +5309,7 @@
       },
       "resendCode": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.resendCode",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5317,7 +5317,7 @@
       },
       "resendCountdown": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.resendCountdown",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5325,7 +5325,7 @@
       },
       "retry": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.retry",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5333,7 +5333,7 @@
       },
       "sendCode": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.sendCode",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5341,7 +5341,7 @@
       },
       "signIn": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.signIn",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5349,7 +5349,7 @@
       },
       "social.apple": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.social.apple",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5357,7 +5357,7 @@
       },
       "social.google": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.social.google",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5365,7 +5365,7 @@
       },
       "social.wechat": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.social.wechat",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5373,7 +5373,7 @@
       },
       "ssoEntry": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.ssoEntry",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5381,7 +5381,7 @@
       },
       "ssoOrgDetected": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.ssoOrgDetected",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5389,7 +5389,7 @@
       },
       "ssoOrgHint": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.ssoOrgHint",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5397,7 +5397,7 @@
       },
       "ssoOrgPlaceholder": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.ssoOrgPlaceholder",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5405,7 +5405,7 @@
       },
       "ssoOrgSubtitle": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.ssoOrgSubtitle",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5413,7 +5413,7 @@
       },
       "ssoOrgTitle": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.ssoOrgTitle",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5421,7 +5421,7 @@
       },
       "ssoRequired": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.ssoRequired",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5429,7 +5429,7 @@
       },
       "ssoVerificationSubtitle": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.ssoVerificationSubtitle",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5437,7 +5437,7 @@
       },
       "ssoVerificationTitle": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.ssoVerificationTitle",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5445,7 +5445,7 @@
       },
       "subtitle": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.subtitle",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5453,7 +5453,7 @@
       },
       "title": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.title",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5461,7 +5461,7 @@
       },
       "unavailable": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.unavailable",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5469,7 +5469,7 @@
       },
       "verifying": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.verifying",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
@@ -5477,7 +5477,7 @@
       },
       "working": {
         "provenance": {
-          "hash": "sha256:805c242aa1135d76b77199f66825a23847723d6bc89090fa2388b462dde12015",
+          "hash": "sha256:218eed11f21ff94bbe7cf6aa06bc759f1b5e8c6faa10719c27388d1556490502",
           "locator": "login.working",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json"
         },
