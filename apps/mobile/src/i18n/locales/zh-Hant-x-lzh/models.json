@@ -74,6 +74,9 @@
     "cancel": "仍舊"
   },
   "unified": {
+    "accountUnassigned": "帳號待定",
+    "accountCount_other": "{{count}} 個名籍",
+    "accountFallback": "名籍 {{index}}",
     "favoriteConfiguration": "藏此設定",
     "savedConfiguration": "已藏 · 點之則去",
     "currentConfiguration": "今之設定",
@@ -113,6 +116,12 @@
       "hour": "時",
       "minute": "分",
       "second": "秒"
-    }
+    },
+    "quotaAverage": "平均餘量 {{percent}}%",
+    "quotaUpdating": "餘量待新",
+    "quotaResetSoon": "將重置",
+    "quotaResetIn": "{{duration}}後復初",
+    "quotaAverageHint": "週限額 · 諸帳號等權均值",
+    "quotaResetHint": "依今耗速，重置或尚有餘：距二十四時以內示黃，六時以內示紅。"
   }
 }

@@ -236,6 +236,16 @@ Codex 原生图片恢复（#6412）在既有 `maker:remote-agent:v1` 上追加�
   命令。此增量不修改 channel、relay、协议版本或服务器，也不是 OS 虚拟化。
   本机 MCP 的 snake_case / camelCase 路径参数（含工作目录、插件目录交接、文档输入输出）在 A 执行前还原；
   参数复用结果侧的路径字段判据，覆盖 `output_dir`、`screenshot_out_file`、`out_file`、`absPath` 等已有字段，并兼容 `debug_image_out`；还原后的路径仍由各本机工具执行原有的目录范围与权限检查。
+  MCP／插件的 `message`、`commit_message`（含 camelCase）、`body`、`content`、`text`、`description`
+  在 A 转发到真实工具前还原已知路径别名，覆盖 `ghost_call → call_tool → args`（对象或 JSON 字符串）及嵌套数组。
+  复用事件正文的 JSON／文件链接／源码分隔符处理，HTTP 与媒体 URL、未知业务字符串保持原样；
+  含 NUL 的正文及显式非文本 `encoding` 载荷不改写、不解码（缺省、`text`、`utf8`、`utf-8` 为文本）。
+  有 `content` 时编码只约束它，否则约束 `message`／`body`／`text`；同级 `commit_message` 等正文仍还原。
+  序列化正文（含嵌套 JSON／逐行 JSON）发现 NUL 或非文本编码时整段保留，包括其中的普通文字，不猜测内部载荷 schema。
+  原有仅保留正文的策略会使插件写入影子路径，而 JSON／SSE 读回又掩盖错误（#9718）；回归直接核对工具边界与存储字节。
+  指定派活服务的 `message`／`initial_task` 与 `prompt` 仍优先按任务交接规则还原；其它服务的 `initial_task` 不套用该规则。
+  不新增路径别名、权限、插件声明或线上字段；存量插件无需重装或重新确认。官方／自建中转仍透传既有 HTTP 请求字节，
+  还原只发生在任务所在电脑的 MCP 转发入口，不改变中转、握手或连接恢复。旧版任务电脑继续沿用旧行为。
   `get_current_session_id` 等工具的 JSON 文本及 Skill/命令的 JSON 输出先解码字符串再投影，保持合法转义与原有格式。
   MCP 的 JSON/SSE 结构化结果保留路径字段语义，并传给路径字段内嵌的数组；普通正文仍逐路径 token 投影，避免空格后的分隔符漏转或正文被当成完整路径。
   已明确为路径的参数、路径字段内嵌的数组与命令内的完整路径保留中文和空格，空格之后的子路径也必须转换成目标电脑的分隔符。

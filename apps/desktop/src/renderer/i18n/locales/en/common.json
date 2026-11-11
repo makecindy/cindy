@@ -868,6 +868,7 @@
       "assignLocalAria": "Allow {{name}} to accept new tasks from other computers",
       "moreAria": "More actions for {{name}}",
       "remove": "Remove from Group",
+      "removeLocalBlocked": "The computer that hosts the group can't be removed",
       "status": {
         "checking": "Checking…",
         "idle": "Idle",
@@ -3627,6 +3628,36 @@
           "invalid": "Preview unavailable; check the configuration or select the file again",
           "skipped": "Skipped; select the file again to import this entry",
           "authorizationPending": "Connection added; complete authorization in provider settings"
+        },
+        "local": {
+          "title": "Import from local apps",
+          "note": "Read saved API configurations on this computer without changing source apps. Claude Code: user settings.json only, including CLAUDE_CONFIG_DIR. Shell variables, project and managed settings are not read.",
+          "review": "Review and import ({{count}})",
+          "scanning": "Reading saved configurations…",
+          "empty": "No saved API configurations found.",
+          "failed": "Could not finish reading. Please retry.",
+          "edit": "Edit",
+          "editFailed": "Check the URL, protocol and key, then retry.",
+          "editNote": "Leave the key blank to keep the saved credential. A changed URL or protocol requires a new key.",
+          "name": "Display name",
+          "baseUrl": "Base URL",
+          "protocol": "API protocol",
+          "chooseProtocol": "Choose a protocol",
+          "apiKey": "API key",
+          "keepKey": "Leave blank to keep the saved key",
+          "missingUrl": "URL required",
+          "status": {
+            "missing": "No configuration found",
+            "readFailed": "Could not read; check permissions or retry",
+            "invalid": "Unrecognized format; check or edit the configuration",
+            "limit": "Limit reached; this source was not fully read",
+            "unsupported": "This configuration cannot be imported automatically. Commands and apiKeyHelper are not run; add the API configuration manually.",
+            "needsInput": "Configuration needs completion",
+            "changed": "Source changed; scan again",
+            "duplicate": "An identical connection already exists"
+          },
+          "rescan": "Scan again",
+          "sourceDisabled": "Turned off in the source app"
         }
       },
       "order": {
@@ -12618,47 +12649,47 @@
         "claude-code": {
           "ask": {
             "label": "Default permissions",
-            "description": "Allows read/write access inside the workspace and asks before using higher permissions, network access, or paths outside the workspace."
+            "description": "You approve actions when needed."
           },
           "acceptEdits": {
             "label": "Auto accept edits",
-            "description": "Automatically accepts file edit requests to reduce repeated confirmations. Higher-risk commands or permissions still follow the underlying permission policy."
+            "description": "File edits are allowed directly; you approve other actions when needed."
           },
           "auto": {
             "label": "Auto-review",
-            "description": "Allows read/write access inside the workspace and automatically reviews escalation requests; high-risk actions may still be denied or require confirmation. This reduces interruptions, but can make mistakes."
+            "description": "An AI model approves actions, which may take extra time; you confirm when needed."
           },
           "bypassPermissions": {
             "label": "Full access",
-            "description": "Allows editing any file and running networked commands without another confirmation. Highest risk; use only for trusted tasks."
+            "description": "Routine actions are allowed directly, including files outside the workspace and network commands."
           }
         },
         "codex": {
           "ask": {
             "label": "Default permissions",
-            "description": "Allows read/write access inside the workspace and asks before using higher permissions, network access, or paths outside the workspace."
+            "description": "You approve actions when needed."
           },
           "auto": {
             "label": "Auto-review",
-            "description": "Runs commands automatically inside the protected workspace sandbox. Actions that cross the sandbox boundary go to an automatic reviewer; high-risk actions may still be denied or require confirmation."
+            "description": "An AI model approves actions, which may take extra time; you confirm when needed."
           },
           "bypassPermissions": {
             "label": "Full access",
-            "description": "Allows editing any file and running networked commands without another confirmation. Highest risk; use only for trusted tasks."
+            "description": "Routine actions are allowed directly, including files outside the workspace and network commands."
           }
         },
         "pi": {
           "ask": {
             "label": "Default permissions",
-            "description": "Read-only tools run directly; writing files, running commands, and MCP tools ask each time."
+            "description": "You approve actions when needed."
           },
           "auto": {
             "label": "Auto-review",
-            "description": "In-workspace writes and safe commands run automatically; out-of-workspace writes, risky commands, and MCP tools still ask."
+            "description": "An AI model approves actions, which may take extra time; you confirm when needed."
           },
           "bypassPermissions": {
             "label": "Full access",
-            "description": "Allows editing any file and running networked commands without another confirmation. Highest risk; use only for trusted tasks."
+            "description": "Routine actions are allowed directly, including files outside the workspace and network commands."
           }
         }
       }
@@ -13543,8 +13574,8 @@
       "dismissTitle": "Dismiss past failure notice"
     },
     "worktreeRestoreBanner": {
-      "text": "This session's worktree has been cleaned up (directory missing).",
-      "textPendingSnapshot": "This session has an unapplied change snapshot.",
+      "text": "This session's worktree “{{name}}” has been cleaned up (directory missing).",
+      "textPendingSnapshot": "This session's worktree “{{name}}” has an unapplied change snapshot.",
       "restoreAction": "Restore worktree",
       "applySnapshotAction": "Apply changes",
       "restoring": "Restoring…",
@@ -14136,7 +14167,7 @@
       "errors": {
         "noPriorAssistantPreview": "Please rewind from a question that follows an AI reply (this one has no prior assistant reply)",
         "sessionRunning": "The task did not stop in time — retry the rewind",
-        "noLiveQuery": "Session is inactive — send any message first (even just \"ok\") to wake the SDK before rewinding",
+        "noLiveQuery": "The task runtime could not be restored, so rewind was not completed.",
         "noPriorAssistantCommit": "Please rewind from a question that follows an AI reply",
         "commitGeneric": "Rewind failed, please retry",
         "remoteNotSupported": "Remote Claude Code sessions do not support rewind yet"
@@ -19868,7 +19899,12 @@
     "openDirectory": "Open account folder",
     "openDirectoryFailed": "Couldn’t open the account folder. It may have been moved or deleted.",
     "loginAgain": "Sign in again",
-    "login": "Sign in"
+    "login": "Sign in",
+    "quotaAverage": "Average remaining {{percent}}%",
+    "quotaUpdating": "Quota updating",
+    "quotaResetSoon": "Resets soon",
+    "quotaAverageHint": "Weekly quota · Equal weight per account",
+    "quotaResetHint": "At the current pace, quota may remain at reset: yellow within 24 hours, red within 6 hours."
   },
   "sessionNotify": {
     "finished": "This task finished its turn. Its final answer:",
