@@ -67,6 +67,7 @@ interface FakeEndpoint {
 class FakeServer {
   github: { available: boolean; login: string; endpointId: string; repositories: string[]; unavailable?: string[];
     prSubscriptions?: boolean; dailyQuotaExempt?: boolean; automationSubscriptions?: boolean; deliveryHealthy?: boolean } | null = null;
+  githubUnavailable = false;
   githubSubscriptionBodies: Record<string, unknown>[] = [];
   readonly releases = new Map<string, string>();
   accountManagement = false;
@@ -156,7 +157,7 @@ class FakeServer {
           return reply(201, endpoint);
         }
       }
-      if (this.github && route === 'GET /api/v1/github') return reply(200, this.github);
+      if (this.github && route === 'GET /api/v1/github') return reply(this.githubUnavailable ? 500 : 200, this.githubUnavailable ? {} : this.github);
       if (this.github && route === 'PUT /api/v1/github/repositories') {
         this.githubSubscriptionBodies.push(body()); this.github.repositories = body().repositories as string[]; return reply(200, this.github);
       }
@@ -243,6 +244,7 @@ describe('ScheduleWebhookHost 服务器通道', () => {
   let signedIn: boolean;
   let token: string;
   let serverUrl: string;
+  const batchWarning = vi.fn();
   let refresh: ReturnType<typeof vi.fn<() => Promise<boolean>>>;
 
   async function start(
@@ -253,7 +255,7 @@ describe('ScheduleWebhookHost 服务器通道', () => {
     scheduler.schedules = schedules;
     const baseUrl = baseUrlOverride ?? (await server.listen());
     serverUrl = baseUrl;
-    host = new ScheduleWebhookHost(scheduler as unknown as Scheduler, {}, {
+    host = new ScheduleWebhookHost(scheduler as unknown as Scheduler, { warn: batchWarning }, {
       ...(onQuotaExhausted ? { onQuotaExhausted } : {}),
       remote: {
         isSignedIn: () => signedIn,
@@ -262,7 +264,7 @@ describe('ScheduleWebhookHost 服务器通道', () => {
         refreshAccessToken: refresh,
         fetch,
         socketOptions: async () => ({}),
-        logger: {},
+        logger: { warn: batchWarning },
       },
     });
     await host.start();
@@ -319,6 +321,46 @@ describe('ScheduleWebhookHost 服务器通道', () => {
       await vi.advanceTimersByTimeAsync(300_000);
       expect(scheduler.runNow).toHaveBeenCalledTimes(1);
     } finally { await host.stop(); vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
+  // PR #9378: a transient status failure cannot ACK an automation event
+  // that was never persisted. Real Host + HTTP/WS + disk queue, unit tier.
+  it('retries App automation batches after a transient status failure without ACKing lost events', async () => {
+    server.github = { available: true, login: 'example-user', endpointId: 'whk-github', repositories: [], automationSubscriptions: true };
+    const task = schedule('app-retry', ['issue_comment.created'], { preset: 'github-app', repositories: ['example/project'] });
+    await start([task]);
+    await vi.waitFor(() => expect(host.status(task)?.connected).toBe(true));
+    server.githubUnavailable = true;
+    await expect(host.githubStatus()).rejects.toThrow();
+    batchWarning.mockClear();
+    const batch = { batchId: 'retry-app', endpointId: 'whk-github', scheduleId: '__github_pr_watch__', omitted: 0,
+      events: [{ deliveryId: 'retry-comment', event: 'issue_comment', action: 'created', repository: 'example/project', receivedAt: Date.now() }] };
+    server.push(batch);
+    await vi.waitFor(() => expect(batchWarning).toHaveBeenCalledWith('[schedule-webhook] batch not stored', expect.anything()));
+    expect(server.frames).not.toContainEqual({ type: 'ack', batchId: batch.batchId });
+    expect(host.status(task)?.received).toBe(0);
+    server.githubUnavailable = false;
+    await host.githubStatus();
+    server.push(batch);
+    await vi.waitFor(() => expect(server.frames).toContainEqual({ type: 'ack', batchId: batch.batchId }));
+    expect(host.status(task)?.received).toBe(1);
+  });
+
+  // Overflow has no repository/event provenance. It must not wake scripts or
+  // agents outside their selected filters; known matching details still persist.
+  it('does not widen App task filters for shared overflow metadata', async () => {
+    server.github = { available: true, login: 'example-user', endpointId: 'whk-github', repositories: [], automationSubscriptions: true };
+    const release = schedule('release', ['release.published'], { preset: 'github-app', repositories: ['example/project'] });
+    const other = schedule('other', ['issue_comment'], { preset: 'github-app', repositories: ['other/project'] });
+    const matching = schedule('matching', ['issue_comment.created'], { preset: 'github-app', repositories: ['example/project'] });
+    await start([release, other, matching]);
+    await vi.waitFor(() => expect(host.status(matching)?.connected).toBe(true));
+    server.push({ batchId: 'unscoped-overflow', endpointId: 'whk-github', scheduleId: '__github_pr_watch__', omitted: 100,
+      events: [{ deliveryId: 'overflow-comment', event: 'issue_comment', action: 'created', repository: 'example/project', receivedAt: Date.now() }] });
+    await vi.waitFor(() => expect(server.frames).toContainEqual({ type: 'ack', batchId: 'unscoped-overflow' }));
+    expect(host.status(release)?.received).toBe(0);
+    expect(host.status(other)?.received).toBe(0);
+    expect(host.status(matching)?.received).toBe(1);
   });
 
   // PR #8470: disabling while disconnected, then enabling with a new trigger

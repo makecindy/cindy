@@ -10,6 +10,7 @@ import path from 'node:path';
 import { safeStorage } from 'electron';
 import {
   ScheduleWebhookQueue,
+  scheduleWebhookEventMatches,
   isValidWebhookSecret,
   resolveScheduleWebhookFormat,
   webhookSecretKind,
@@ -444,17 +445,15 @@ export class ScheduleWebhookHost {
     for (const schedule of await this.scheduler.list({ status: 'active' })) {
       if (!isCurrent() || this.stopped) return;
       const trigger = schedule.webhookTrigger;
-      if (trigger?.source?.preset !== 'github-app' || !this.remote?.canDeliverGithub(schedule.id)) continue;
+      if (trigger?.source?.preset !== 'github-app') continue;
       const repositories = new Set(trigger.source.repositories.map(repo => repo.toLowerCase()));
-      const events = batch.events.filter(event => event.repository && repositories.has(event.repository.toLowerCase()));
-      if (batch.omitted && batch.batchId) {
-        // Lost details cannot be filtered reliably. Wake once to re-read facts;
-        // this is an explicit recovery marker, never a fabricated GitHub event.
-        events.push({ deliveryId: `github-reconcile:${batch.batchId}`, event: 'github.reconcile', receivedAt: Date.now() });
-      }
-      if (events.length || batch.omitted) {
-        await this.queue.acceptBatch(schedule.id, events, batch.omitted, trigger.endpointId, { reconcileGithub: batch.omitted > 0 });
-      }
+      const events = batch.events.filter(event => event.repository && repositories.has(event.repository.toLowerCase())
+        && scheduleWebhookEventMatches(trigger.events, event));
+      if (!events.length) continue;
+      // A transient status failure is not a mismatch: don't ACK unstored work.
+      if (!this.remote?.canDeliverGithub(schedule.id)) throw new Error('GitHub automation subscription is not reconciled');
+      // Unscoped omissions cannot authorize another repository/event's task.
+      await this.queue.acceptBatch(schedule.id, events, batch.omitted, trigger.endpointId);
     }
   }
 

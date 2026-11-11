@@ -45,7 +45,7 @@ describe('ScheduleWebhookQueue', () => {
   beforeEach(() => vi.useFakeTimers({ now: 1_000_000 }));
   afterEach(() => vi.useRealTimers());
 
-  it('admits selected GitHub App events once and recovers omitted details without inventing a comment', async () => {
+  it('admits selected GitHub App events once without authorizing unscoped omissions', async () => {
     const h = setup();
     const schedule = { id: 's1', status: 'active', webhookTrigger: { endpointId: 'e1', events: ['issue_comment.created'],
       source: { preset: 'github-app', repositories: ['example/project'] } } } as Schedule;
@@ -59,15 +59,34 @@ describe('ScheduleWebhookQueue', () => {
     expect(h.fire).toHaveBeenCalledTimes(1);
     expect(h.fire.mock.calls[0]![1].events).toEqual([comment]);
     const recovery = event('overflow', 'github.reconcile');
-    expect(await h.queue.acceptBatch('s1', [recovery], 5, 'e1', { reconcileGithub: true })).toEqual(['queued']);
+    expect(await h.queue.acceptBatch('s1', [recovery], 5, 'e1')).toEqual(['filtered']);
     await vi.advanceTimersByTimeAsync(LIMITS.minGapMs);
-    expect(h.fire.mock.calls[1]![1]).toEqual({ events: [recovery], omitted: 5 });
+    expect(h.fire).toHaveBeenCalledTimes(1);
     h.setSchedule({ ...schedule, status: 'paused' });
-    expect(await h.queue.acceptBatch('s1', [event('paused', 'github.reconcile')], 1, 'e1', { reconcileGithub: true })).toEqual(['ignored']);
+    expect(await h.queue.acceptBatch('s1', [{ ...comment, deliveryId: 'paused' }], 1, 'e1')).toEqual(['ignored']);
     h.setSchedule({ ...schedule, webhookTrigger: { ...schedule.webhookTrigger!, endpointId: 'new-scope' } });
     expect(await h.queue.acceptBatch('s1', [comment], 0, 'e1')).toEqual(['ignored']);
     await vi.advanceTimersByTimeAsync(LIMITS.minGapMs);
-    expect(h.fire).toHaveBeenCalledTimes(2);
+    expect(h.fire).toHaveBeenCalledTimes(1);
+    h.queue.stop();
+  });
+
+  // PR #9378 / security review: old on-disk recovery markers carry no scope.
+  // Exercise restart through the real queue, including interrupted preparation.
+  it.each(['pending', 'preparing'] as const)('filters legacy unscoped recovery markers from restored %s', async where => {
+    const marker = event('legacy', 'github.reconcile');
+    const initial: ScheduleWebhookQueueState = { endpoints: { s1: {
+      endpointId: 'e1', pending: where === 'pending' ? [marker] : [],
+      ...(where === 'preparing' ? { preparing: { events: [marker], omitted: 4 } } : {}),
+      omitted: where === 'pending' ? 4 : 0, received: 1, ignored: 0, receipts: {},
+    } } };
+    const h = setup(initial);
+    h.setSchedule({ id: 's1', status: 'active', webhookTrigger: { endpointId: 'e1', events: ['release.published'],
+      source: { preset: 'github-app', repositories: ['example/project'] } } } as Schedule);
+    await h.queue.start();
+    await vi.advanceTimersByTimeAsync(LIMITS.debounceMs);
+    expect(h.fire).not.toHaveBeenCalled();
+    expect(h.saved().endpoints.s1?.pending).toEqual([]);
     h.queue.stop();
   });
 
