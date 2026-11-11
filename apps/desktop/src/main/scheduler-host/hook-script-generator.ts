@@ -56,6 +56,8 @@ export interface HookScriptGeneratorDeps {
   /** 无 workingDir 时的落盘目录(userData/schedule-hooks),由 IPC 层注入。 */
   fallbackDir: string;
   logger?: { info?: (msg: string, meta?: unknown) => void; warn?: (msg: string, meta?: unknown) => void };
+  /** Optional caller approval after preparation, before any overwrite or self-test. */
+  beforeInstall?: (script: GenerateHookScriptResult & { workingDir?: string }) => Promise<void>;
   /** 测试注入;缺省走 requestUtilityText。 */
   requestText?: (
     maker: Maker,
@@ -518,11 +520,11 @@ export async function generateHookScript(
     reusePath,
     exists: existsSync,
   });
-  mkdirSync(path.dirname(filePath), { recursive: true });
-  writeFileSync(filePath, content.endsWith('\n') ? content : `${content}\n`, 'utf8');
-
   // Persist an absolute path so a later session/workdir rebind cannot retarget the script.
   const command = buildHookCommand(filePath, undefined, await resolveRunner(deps));
+  if (deps.beforeInstall) await deps.beforeInstall({ command, filePath, content, workingDir: input.workingDir });
+  mkdirSync(path.dirname(filePath), { recursive: true });
+  writeFileSync(filePath, content.endsWith('\n') ? content : `${content}\n`, 'utf8');
   deps.logger?.info?.('[hook-script-generator] script written', {
     filePath,
     command,
@@ -584,8 +586,6 @@ export async function installHookScript(
       reusePath,
       exists: existsSync,
     });
-    mkdirSync(path.dirname(filePath), { recursive: true });
-    writeFileSync(filePath, script.endsWith('\n') ? script : `${script}\n`, 'utf8');
     // script 模式内容同为 Node ESM(工具契约),执行方同样按探测结果选
     written = {
       // Persist an absolute path so a later session/workdir rebind cannot retarget the script.
@@ -593,6 +593,9 @@ export async function installHookScript(
       filePath,
       content: script,
     };
+    if (deps.beforeInstall) await deps.beforeInstall({ ...written, workingDir: input.workingDir });
+    mkdirSync(path.dirname(filePath), { recursive: true });
+    writeFileSync(filePath, script.endsWith('\n') ? script : `${script}\n`, 'utf8');
     deps.logger?.info?.('[hook-script-generator] agent-authored script installed', {
       filePath,
       command: written.command,

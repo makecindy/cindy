@@ -15,6 +15,7 @@ export type SchedulerToolErrorCode =
   | 'NOT_FOUND'
   | 'INVALID_PARAMS'
   | 'INTERNAL'
+  | 'PERMISSION_DENIED'
   | 'SCHEDULER_NOT_READY'
   | 'UTILITY_MODEL_NO_CANDIDATE'
   | 'UTILITY_MODEL_ALL_CANDIDATES_FAILED'
@@ -32,6 +33,8 @@ export interface SchedulerToolError {
  */
 export function classifySchedulerError(err: unknown): SchedulerToolError {
   const message = err instanceof Error ? err.message : String(err);
+  if (err && typeof err === 'object' && (err as { code?: unknown }).code === 'PERMISSION_DENIED')
+    return { code: 'PERMISSION_DENIED', message };
   const utilityCode = /^\[(UTILITY_MODEL_(?:NO_CANDIDATE|ALL_CANDIDATES_FAILED|EMPTY_RESPONSE|TIMEOUT))\]/
     .exec(message)?.[1];
   if (utilityCode) {

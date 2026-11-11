@@ -103,7 +103,7 @@ export function createGhostProductionCallbacks<Result>(options: {
   return (deps) => {
     const merged = { ...productionIdentityDeps, ...instanceLookupDeps(deps), ...deps };
     return new Function(
-      'deps', 'const {' + Object.keys(merged).join(',') + '} = deps;' + compiled +
+      'deps', 'const {' + Object.keys(merged).filter(name => !names.includes(name)).join(',') + '} = deps;' + compiled +
         ';return {' + names.join(',') + '};',
     )(merged) as Result;
   };

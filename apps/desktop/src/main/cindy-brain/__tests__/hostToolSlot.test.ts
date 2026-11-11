@@ -6,6 +6,10 @@ import { createTaskToolCallAuthorizer } from '../../maker-ipc/taskToolCallAuthor
 import { captureTaskActionSyncGuard, captureTaskActionDeliveryGuard, hasTaskActionAuthorization } from '../../maker-ipc/taskActionAuthorization.js';
 import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixture.js';
 import { createGhostPageBridge } from '../../../shared/ghostPageBridge.js';
+import { createSchedulerMcpServer } from '@cindy/mcps';
+import { getDesktopMcpToolApprovalPolicy } from '../../maker-host/mcp-tool-approval-policy.js';
+import { withPluginSchedulerApproval, getApprovedPluginScheduleGuard, getPluginPreparedHookApproval } from '../pluginSchedulerApproval.js';
+import { Scheduler } from '@cindy/maker-scheduler';
 
 const uiPipe = createGhostProductionCallbacks<{
   send(event: { sender: { id: number; isDestroyed(): boolean } }, payload: unknown): Promise<unknown>;
@@ -135,5 +139,107 @@ describe('plugin Host tool entry', () => {
     const f = fixture();
     f.invoke.mockImplementationOnce(async () => { f.changeOwner(); return f.result; });
     expect(code(await f.call())).toBe('PERMISSION_DENIED');
+  });
+});
+
+// Unit, #9801 security: use the production UI/Node gateway and real scheduler
+// registry. Earlier tests covered group approval but never shell-bearing inputs.
+describe('plugin scheduler command boundary', () => {
+  const command = "printf 'complete command'";
+  const production = createGhostProductionCallbacks<{
+    requestPluginHostToolCall(id: string, payload: unknown, current: () => boolean): Promise<unknown>;
+  }>({ functions: ['requestPluginHostToolCall'] });
+  function schedulerFixture(node = false, allow = true, script = true) {
+    const f = fixture();
+    if (node) f.ghost.manifest.node = { entry: 'node.cjs', protocol: 'json-rpc-stdio' };
+    let schedule = { id: 'automation', name: 'Automation', workingDir: '/fixture/project',
+      executionMode: script ? 'script' : 'agent', scriptConfig: script ? { command, capabilities: [] } : undefined };
+    const create = vi.fn(async () => schedule);
+    const update = vi.fn(async (_id: string, patch: (current: typeof schedule) => Promise<unknown>) =>
+      ({ ...schedule, ...await patch(structuredClone(schedule)) as object }));
+    const runNow = vi.fn(async () => 'run'), resume = vi.fn(async () => schedule);
+    const get = vi.fn(async () => structuredClone(schedule));
+    const installed = vi.fn();
+    const install = vi.fn(async () => {
+      const prepared = { command: 'node /fixture/project/precheck.mjs', filePath: '/fixture/project/precheck.mjs', content: 'process.exit(0)' };
+      const approval = getPluginPreparedHookApproval();
+      if (approval) await approval(prepared);
+      installed();
+      return { ...prepared, test: { decision: 'run' as const, exitCode: 0, durationMs: 0, stdout: '', stderr: '' } };
+    });
+    let actualScheduler: Scheduler | undefined;
+    const dialog = { showMessageBox: vi.fn(async (_parent: unknown, _options: Record<string, unknown>) => ({ response: allow ? 0 : 1 })) };
+    const entry = production({
+      handlePluginHostToolRequest, withPluginSchedulerApproval, getDesktopMcpToolApprovalPolicy,
+      findGhostForInstanceId: () => f.ghost, getActiveDataOwnerPushStamp: f.ports.owner,
+      createHostToolRuntime: (_server: string, caller: NonNullable<Parameters<typeof createSchedulerMcpServer>[1]>['hostCaller']) =>
+        createSchedulerMcpServer({ getScheduler: () => actualScheduler ?? ({ create, updateFromCurrent: update, runNow, resume, get }) as never,
+          authorizeCall: authorizePluginHostToolCall, getApprovedScheduleGuard: getApprovedPluginScheduleGuard,
+          hookScript: { install } },
+        { agentKind: 'codex', workingDir: '', hostCaller: caller }).hostTools,
+      requestPluginTaskApproval: (id: string, active: () => boolean, _confirm: unknown, _explicit: boolean, capability: string) =>
+        f.ports.approveGroup(id, capability.split(':')[1] as 'scheduler', active),
+      getDeepLinkMainWindow: () => ({ isDestroyed: () => false }), isTrustedAppRendererWindow: () => true,
+      createWindowGhostInstallConsentPrompt: vi.fn(), dialog, t: (key: string) => key, log: { info: vi.fn() },
+      getPluginHostToolCaller,
+    });
+    const call = (tool: string, args: Record<string, unknown>) => entry.requestPluginHostToolCall('dashboard',
+      { type: 'host-tool-request', server: 'cindy_scheduler', tool, args }, () => true);
+    return { ...f, call, dialog, create, update, runNow, resume, get, installed,
+      useScheduler: (scheduler: Scheduler) => { actualScheduler = scheduler; },
+      setCommand: (value: string) => { schedule = { ...schedule, scriptConfig: { command: value, capabilities: [] } }; } };
+  }
+
+  it.each(['schedule_create', 'schedule_update', 'schedule_run_now', 'schedule_resume'] as const)('asks before browser plugin %s and refuses denied execution', async tool => {
+    for (const allow of [false, true]) {
+      const f = schedulerFixture(false, allow);
+      const args = tool === 'schedule_create' ? { name: 'Automation', executionMode: 'script', workingDir: '/fixture/project',
+        cronExpr: '0 9 * * *', timezone: 'UTC', recurring: true, agentKind: 'codex', notify: { desktop: false, feishu: false }, scriptConfig: { command } }
+        : tool === 'schedule_update' ? { id: 'automation', scriptConfig: { command } } : { id: 'automation' };
+      await f.call(tool, args);
+      expect(f.dialog.showMessageBox).toHaveBeenCalledOnce();
+      expect(f.dialog.showMessageBox.mock.calls[0]![1]).toMatchObject({ detail: expect.stringContaining(command) });
+      expect({ schedule_create: f.create, schedule_update: f.update, schedule_run_now: f.runNow, schedule_resume: f.resume }[tool]!)
+        .toHaveBeenCalledTimes(allow ? 1 : 0);
+    }
+  });
+
+  it.each(['schedule_create', 'schedule_run_now'] as const)('preserves approved node plugin %s without extra confirmation', async tool => {
+    const f = schedulerFixture(true);
+    await f.call(tool, tool === 'schedule_create' ? { name: 'Automation', executionMode: 'script', workingDir: '/fixture/project',
+      cronExpr: '0 9 * * *', timezone: 'UTC', recurring: true, agentKind: 'codex', notify: { desktop: false, feishu: false }, scriptConfig: { command } } : { id: 'automation' });
+    expect(f.dialog.showMessageBox).not.toHaveBeenCalled();
+    expect(f.get).not.toHaveBeenCalled();
+    expect(tool === 'schedule_create' ? f.create : f.runNow).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a non-shell browser run quiet while binding its existing mutation guard', async () => {
+    const f = schedulerFixture(false, true, false);
+    await f.call('schedule_run_now', { id: 'automation' });
+    expect(f.dialog.showMessageBox).not.toHaveBeenCalled();
+    expect(f.runNow).toHaveBeenCalledWith('automation', { expectedSchedule: expect.objectContaining({ executionMode: 'agent' }) });
+  });
+
+  it('rejects a script changed during native confirmation through the real engine guard', async () => {
+    const f = schedulerFixture();
+    const insertRun = vi.fn(), fire = vi.fn();
+    f.useScheduler(new Scheduler({ storage: { get: f.get, insertRun } as never, runner: { fire } as never }));
+    f.dialog.showMessageBox.mockImplementationOnce(async () => { f.setCommand('printf changed'); return { response: 0 }; });
+    const result = await f.call('schedule_run_now', { id: 'automation' }) as { isError?: boolean; content: Array<{ text: string }> };
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(result.content[0]!.text).message).toContain('Schedule changed');
+    expect(insertRun).not.toHaveBeenCalled();
+    expect(fire).not.toHaveBeenCalled();
+  });
+
+  it('declines a prepared hook before installation and preserves the permission error', async () => {
+    const f = schedulerFixture();
+    f.dialog.showMessageBox.mockResolvedValueOnce({ response: 0 }).mockResolvedValueOnce({ response: 1 });
+    const result = await f.call('schedule_set_pre_run_hook', { script: 'process.exit(0)', workingDir: '/fixture/project' }) as { isError?: boolean; content: Array<{ text: string }> };
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(result.content[0]!.text).code).toBe('PERMISSION_DENIED');
+    expect(f.installed).not.toHaveBeenCalled();
+    expect(f.dialog.showMessageBox.mock.calls[1]![1]).toMatchObject({ detail: expect.stringContaining('node /fixture/project/precheck.mjs') });
+    expect(f.dialog.showMessageBox.mock.calls[1]![1]).toMatchObject({ detail: expect.stringContaining('process.exit(0)') });
   });
 });

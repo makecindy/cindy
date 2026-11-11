@@ -49,6 +49,10 @@ const archived = await cindy.host.call('cindy_helper', 'archive_sessions', {
 需要绑定时显式传 `targetSessionId`。运行记录由 `schedule_list_runs({scheduleId})` 读取。
 删除及其它由宿主判为逐次确认的调用须等待原生确认；回执不明时先查询，不自动重试写操作。
 
+没有已批准 `node` 能力的插件，提交脚本命令、运行或恢复带脚本的调度，以及安装前置检查脚本时，
+还须逐次原生确认完整命令；前置检查在覆盖文件和立即自测前展示准备好的完整代码与命令。
+确认期间任务配置变化会使操作失效。已有 `node` 批准的插件沿用原共享风险规则；Agent 的工具分类与权限档保持原行为。
+
 `settings` 组使用 `list_app_settings` 发现分类，再用 `get_app_settings({section})` 读取当前值和修改 schema，
 最后调用 `update_app_settings({section,patch})`。省略的字段保持原值，写入复用设置页的保存与生效路径；
 秘密值不返回，也不能通过此工具提交密码或密钥。插件自己的偏好设置仍由插件设置界面管理。

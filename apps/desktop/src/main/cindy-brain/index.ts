@@ -158,7 +158,7 @@ function requestPluginTaskApproval(id: string, isCurrent: () => boolean, confirm
 
 /** UI and Node requests share this exact gateway, including first-use and per-call approval. */
 function requestPluginHostToolCall(id: string, payload: unknown, current: () => boolean) {
-  return handlePluginHostToolRequest(id, payload, current, {
+  return handlePluginHostToolRequest(id, payload, current, withPluginSchedulerApproval(id, {
     getGhost: findGhostForInstanceId, owner: getActiveDataOwnerPushStamp, createRuntime: createHostToolRuntime,
     approveGroup: (pluginId, group, active) => requestPluginTaskApproval(pluginId, active, facts => {
       const window = getDeepLinkMainWindow();
@@ -179,7 +179,7 @@ function requestPluginHostToolCall(id: string, payload: unknown, current: () => 
       return decision.response === 0;
     },
     recordCall: (pluginId, server, tool) => log.info('plugin host tool returned', { source: `插件 ${pluginId}`, server, tool }),
-  });
+  }));
 }
 
 /** Same Main approval boundary for local dialogs and negotiated remote management receipts. */
@@ -718,6 +718,7 @@ import { guardedOutboundFetch, outboundFetch } from '../maker-host/outbound-fetc
 import { getDesktopMcpToolApprovalPolicy, setGhostToolApprovalResolver } from '../maker-host/mcp-tool-approval-policy.js';
 import { createHostToolRuntime } from '../mcp-integrations/hostToolCaller.js';
 import { handlePluginHostToolRequest } from './hostToolSlot.js';
+import { withPluginSchedulerApproval } from './pluginSchedulerApproval.js';
 import { getSharedGhCliTokenSource } from '../git-context/ghCliTokenSource.js';
 import { bindingStore } from '../im/binding.js';
 import { copyPrivateDeviceCode } from '../plugin-oauth/deviceCodeClipboard.js';

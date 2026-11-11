@@ -200,6 +200,8 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   receipt 的可选 `approvedHostToolGroups` 仅记录显式批准；旧记录缺失时首次调用复用现有确认，拒绝后由详情页手动重试。
   新增组算扩权，同来源更新只保留仍声明的已批准组，移除或卸载即失效，不改变旧插件其它能力。
   `cindy.host.call(server, tool, args)` 的 UI 与 Node 请求共用 `hostToolSlot`，通过同一 provider / registry 调用 Agent 工具处理器，禁止另写插件业务实现。
+  插件没有已批准的 `node` 能力时，调度中提交或执行 shell 必须逐次原生确认完整命令；前置检查安装在覆写文件、自测前再确认准备好的代码。
+  复用调度的配置快照守卫，确认后配置变化拒绝执行。已有 `node` 的插件与 Agent 的原共享策略分类保持，不能用 `scheduler` 组批准替代本机命令执行批准。
   调用方显式为插件实例与请求时 owner 快照，不绑定任务；组批准与共享风险规则的原生逐次确认替代任务权限档，执行前及返回前复核账号和安装版本，现有写入钩子同样复核。
   依赖当前任务的工具必须显式指定目标，缺省保留 `NO_SESSION_CONTEXT`；插件管理、主人代输入、应用更新、反馈不经此入口开放。
   作者契约见 [宿主工具调用](../../apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-host-tools.md)。
