@@ -14224,7 +14224,7 @@
       "errors": {
         "noPriorAssistantPreview": "Recue a partir de uma pergunta que se siga a uma resposta da IA (esta não tem uma resposta anterior do assistente)",
         "sessionRunning": "A tarefa não parou a tempo — tente recuar novamente",
-        "noLiveQuery": "A sessão está inativa — envie primeiro uma mensagem (mesmo apenas \"ok\") para ativar o SDK antes de recuar",
+        "noLiveQuery": "Não foi possível restaurar o ambiente de execução da tarefa. O recuo não foi concluído.",
         "noPriorAssistantCommit": "Recue a partir de uma pergunta que se siga a uma resposta da IA",
         "commitGeneric": "Não foi possível recuar; tente novamente",
         "remoteNotSupported": "As sessões remotas do Claude Code ainda não permitem recuar"

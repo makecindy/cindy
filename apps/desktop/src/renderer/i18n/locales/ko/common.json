@@ -14079,7 +14079,7 @@
       "errors": {
         "noPriorAssistantPreview": "AI 응답 뒤의 질문에서 rewind 하세요(이전에 assistant 응답이 없습니다)",
         "sessionRunning": "작업 중지 대기 시간이 초과되었습니다. 다시 되돌리세요",
-        "noLiveQuery": "세션이 비활성 상태입니다 — 아무 메시지(예: \"ok\")라도 보내 SDK를 깨운 뒤 rewind 하세요",
+        "noLiveQuery": "작업 실행 환경을 복원하지 못해 되돌리기를 완료하지 못했습니다.",
         "noPriorAssistantCommit": "AI 응답 뒤의 질문에서 rewind 하세요",
         "commitGeneric": "rewind 실패, 다시 시도하세요",
         "remoteNotSupported": "원격 Claude Code 세션은 아직 rewind를 지원하지 않습니다"

@@ -6,8 +6,10 @@ const mocks = vi.hoisted(() => ({
   previewRewindAtMessage: vi.fn(),
   commitRewindAtMessage: vi.fn(),
   drainPersistQueue: vi.fn(),
+  prepareSessionForHistoryAction: vi.fn(),
   withSessionInputStoppedForRewind: vi.fn(),
   ownerScope: { ownerScopeKey: 'owner-1' },
+  isOwnerCurrent: vi.fn(() => true),
   broadcastSubagentRunsInvalidated: vi.fn(),
   beginSubagentRewindFence: vi.fn(),
   finishSubagentRewindFence: vi.fn(),
@@ -33,6 +35,7 @@ vi.mock('../../messagePersistBroadcaster.desktop.js', () => ({
 }));
 
 vi.mock('../register.js', () => ({
+  prepareSessionForHistoryAction: mocks.prepareSessionForHistoryAction,
   withSessionInputStoppedForRewind: mocks.withSessionInputStoppedForRewind,
 }));
 
@@ -42,6 +45,7 @@ vi.mock('../../goal-host/index.js', () => ({
 
 vi.mock('../../device-link/broadcast-tap.js', () => ({
   captureDataOwnerBroadcastScope: () => mocks.ownerScope,
+  isDataOwnerBroadcastScopeCurrent: mocks.isOwnerCurrent,
 }));
 
 vi.mock('../../localDb/ipc/subagentRuns.js', () => ({
@@ -74,7 +78,9 @@ describe('maker rewind IPC stop-then-rewind', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.handlers.clear();
+    mocks.isOwnerCurrent.mockReturnValue(true);
     mocks.drainPersistQueue.mockResolvedValue(undefined);
+    mocks.prepareSessionForHistoryAction.mockReset().mockResolvedValue(undefined);
     mocks.withSessionInputStoppedForRewind.mockImplementation(
       async (_sessionId: string, action: () => Promise<unknown>) => action(),
     );
@@ -84,6 +90,40 @@ describe('maker rewind IPC stop-then-rewind', () => {
     });
     mocks.listVisibleSubagentObservationIdentities.mockResolvedValue([]);
     registerMakerRewindIpc();
+  });
+
+  // Regression: a cold task used to fail NO_LIVE_QUERY until the user sent "ok".
+  // Real IPC entry, unit tier; existing stop/fence cases only exercised live tasks.
+  it.each([MAKER_INVOKE.REWIND_PREVIEW, MAKER_INVOKE.REWIND_COMMIT])(
+    'restores native history before %s, without another message', async (channel) => {
+      let ready = false;
+      mocks.prepareSessionForHistoryAction.mockImplementation(async () => { ready = true; });
+      const operation = channel === MAKER_INVOKE.REWIND_PREVIEW
+        ? mocks.previewRewindAtMessage : mocks.commitRewindAtMessage;
+      operation.mockImplementationOnce(async () => {
+        if (!ready) throw Object.assign(new Error('cold'), { code: 'NO_LIVE_QUERY' });
+        return { id: 'session-1' };
+      });
+      await expect(mocks.handlers.get(channel)!({}, 'session-1', 'message-1'))
+        .resolves.toEqual({ id: 'session-1' });
+      expect(mocks.prepareSessionForHistoryAction).toHaveBeenCalledWith('session-1', 'rewind');
+    },
+  );
+
+  it('does not rewind after account changes during restoration', async () => {
+    mocks.prepareSessionForHistoryAction.mockImplementationOnce(async () => {
+      mocks.isOwnerCurrent.mockReturnValue(false);
+    });
+    await expect(mocks.handlers.get(MAKER_INVOKE.REWIND_COMMIT)!({}, 'session-1', 'message-1'))
+      .rejects.toThrow('Account changed');
+    expect(mocks.commitRewindAtMessage).not.toHaveBeenCalled();
+  });
+
+  it('leaves rewind untouched when native restore fails', async () => {
+    mocks.prepareSessionForHistoryAction.mockRejectedValueOnce(new Error('native history unavailable'));
+    await expect(mocks.handlers.get(MAKER_INVOKE.REWIND_COMMIT)!({}, 'session-1', 'message-1'))
+      .rejects.toThrow('native history unavailable');
+    expect(mocks.commitRewindAtMessage).not.toHaveBeenCalled();
   });
 
   it('does not commit rewind while authorization owns the session send boundary', async () => {

@@ -14099,7 +14099,7 @@
       "errors": {
         "noPriorAssistantPreview": "Setze bitte von einer Frage aus zurück, die auf eine KI-Antwort folgt (vor dieser gibt es keine Assistentenantwort)",
         "sessionRunning": "Die Aufgabe wurde nicht rechtzeitig beendet – versuche das Zurücksetzen erneut",
-        "noLiveQuery": "Die Sitzung ist inaktiv – sende zuerst eine Nachricht (auch nur „ok“), um das SDK vor dem Zurücksetzen zu aktivieren",
+        "noLiveQuery": "Die Laufzeitumgebung der Aufgabe konnte nicht wiederhergestellt werden. Das Zurücksetzen wurde nicht abgeschlossen.",
         "noPriorAssistantCommit": "Setze bitte von einer Frage aus zurück, die auf eine KI-Antwort folgt",
         "commitGeneric": "Zurücksetzen fehlgeschlagen. Versuch es erneut",
         "remoteNotSupported": "Remote-Sitzungen mit Claude Code unterstützen das Zurücksetzen noch nicht"

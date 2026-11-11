@@ -51,3 +51,24 @@ pnpm --filter desktop exec vitest run src/main/maker-ipc/__tests__/sessionPermis
 遇到新的复现，优先补在表中已有行为测试里，并写出触发条件和用户结果；只有出现新的业务边界时再建模块。本文只链接测试，不复制测试断言，不维护通过次数或临时任务状态。
 
 Windows 审查页的辅助功能回归须在隔离 Electron 中分别检查首次打开、切出再切回、焦点刷新和滚动，覆盖统一／分栏视图。先确认面板真正可见并通过原生 API 读取其内容，再记录主进程的 `BrowserAccessibilityManager::OnAccessibilityEvents`／`NotifyWinEvent`；仅测 renderer 帧率或读取 `accessibilitySupportEnabled` 不能证明 Windows 通知路径没有阻塞。`get_window_state` 等树读取自身可能改变事件生成条件，重启前后的测量不能直接当成同条件对照。
+
+
+## 冷任务的历史操作无需发送消息（2026-11-11）
+
+回退预览、回退提交（含编辑重发）在既有发送锁内恢复持久化原生会话，再执行操作。
+Pi 会话树、HTML 导出，以及 Pi / Codex 手动压缩共用 `sessionActionRuntime`；恢复只
+启动运行环境，不发送占位消息、不触发模型回答。手动压缩本身仍是用户主动请求的模型操作。
+任务状态必须为 active，保留供应商的 null 语义、执行设备、SSH 主机、权限与目录授权，
+恢复期间账号代次变化即停止。Claude 首轮回退后没有原生 ID 的任务继续走既有 DB-only 回退。
+
+历史操作通过 `_cindyRequireNativeResume` 禁用缺失历史时的新会话兜底；Codex / Pi 原生
+历史不可用时不清旧绑定、不执行后续回退。普通发送仍保留原先的 fresh fallback。
+故障半径：① 只表示当前任务的内存实例不存在；② 只恢复该任务、复用其原生历史；
+③ 不重启应用、不拆共享连接、不恢复已归档或删除的任务，也不重放发送。
+
+同类入口排查：上下文用量查询已有懒恢复；模型/权限设置已有持久化路径；插话必须确有
+运行中的轮次，不能通过隐式发消息来制造。没有把这些不同语义改成一律启动 Agent。
+
+回归入口：Desktop `sessionActionRuntime.test.ts`（冷启动、并发、状态、账号切换），
+`rewind-ipc.test.ts`（预览/提交接线与恢复失败不提交）、`rewind.test.ts`（历史与文件回退）；
+maker-core `codex/index.test.ts` 与 Pi `pi-auto-review-dispatch.test.ts` 的 strict resume 用例。

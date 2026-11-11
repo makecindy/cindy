@@ -14224,7 +14224,7 @@
       "errors": {
         "noPriorAssistantPreview": "Volte a partir de uma pergunta que venha após uma resposta da IA (esta não tem uma resposta anterior do assistente)",
         "sessionRunning": "A tarefa não parou a tempo — tente voltar novamente",
-        "noLiveQuery": "A sessão está inativa — envie qualquer mensagem primeiro (até mesmo \"ok\") para ativar o SDK antes de voltar",
+        "noLiveQuery": "Não foi possível restaurar o ambiente de execução da tarefa. A reversão não foi concluída.",
         "noPriorAssistantCommit": "Volte a partir de uma pergunta que venha após uma resposta da IA",
         "commitGeneric": "Falha ao voltar. Tente novamente",
         "remoteNotSupported": "As sessões remotas do Claude Code ainda não permitem voltar"

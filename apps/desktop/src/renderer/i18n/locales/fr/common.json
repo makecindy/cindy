@@ -14224,7 +14224,7 @@
       "errors": {
         "noPriorAssistantPreview": "Veuillez revenir en arrière à partir d'une question qui suit une réponse de l'IA (celle-ci n'a aucune réponse précédente de l'assistant)",
         "sessionRunning": "La tâche ne s'est pas arrêtée à temps : réessayez le retour en arrière",
-        "noLiveQuery": "La session est inactive : envoyez d'abord un message (même juste « ok ») pour réveiller le SDK avant de revenir en arrière",
+        "noLiveQuery": "L’environnement d’exécution de la tâche n’a pas pu être restauré. Le retour en arrière n’a pas été effectué.",
         "noPriorAssistantCommit": "Veuillez revenir en arrière à partir d'une question qui suit une réponse de l'IA",
         "commitGeneric": "Échec du retour en arrière, veuillez réessayer",
         "remoteNotSupported": "Les sessions Claude Code distantes ne prennent pas encore en charge le retour en arrière"

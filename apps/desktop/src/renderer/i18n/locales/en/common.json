@@ -14136,7 +14136,7 @@
       "errors": {
         "noPriorAssistantPreview": "Please rewind from a question that follows an AI reply (this one has no prior assistant reply)",
         "sessionRunning": "The task did not stop in time — retry the rewind",
-        "noLiveQuery": "Session is inactive — send any message first (even just \"ok\") to wake the SDK before rewinding",
+        "noLiveQuery": "The task runtime could not be restored, so rewind was not completed.",
         "noPriorAssistantCommit": "Please rewind from a question that follows an AI reply",
         "commitGeneric": "Rewind failed, please retry",
         "remoteNotSupported": "Remote Claude Code sessions do not support rewind yet"

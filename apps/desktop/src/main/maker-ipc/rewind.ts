@@ -15,7 +15,7 @@ import { createLogger } from '../logger.js';
 import { previewRewindAtMessage, commitRewindAtMessage, type RewindCommitOptions } from '../maker-orchestration/rewind.js';
 import { drainPersistQueue } from '../messagePersistBroadcaster.desktop.js';
 import { getGoalController } from '../goal-host/index.js';
-import { captureDataOwnerBroadcastScope } from '../device-link/broadcast-tap.js';
+import { captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent } from '../device-link/broadcast-tap.js';
 import { broadcastSubagentRunsInvalidated } from '../localDb/ipc/subagentRuns.js';
 import {
   listVisibleSubagentObservationIdentities,
@@ -31,12 +31,18 @@ import { isIpcError, type IpcErrorCode } from '../../shared/ipc-errors.js';
 import { requireString, throwIpcError } from '../utils/ipcValidate.js';
 
 import { MAKER_INVOKE } from './channels.js';
-import { withSessionInputStoppedForRewind } from './register.js';
+import { withSessionInputStoppedForRewind, prepareSessionForHistoryAction } from './register.js';
 import { agentHandoffPending } from './agentHandoffPendingSingleton.js';
 
 const log = createLogger('maker-ipc/rewind');
 const STOPPED_REWIND_RETRY_MS = 100;
 const STOPPED_REWIND_TIMEOUT_MS = 15_000;
+
+function assertRewindOwner(scope: RewindCommitOptions['ownerScope']) {
+  if (scope && !isDataOwnerBroadcastScopeCurrent(scope)) {
+    throwIpcError('PRECONDITION_FAILED', 'Account changed while preparing rewind');
+  }
+}
 
 async function commitAfterStopping(
   sessionId: string,
@@ -68,6 +74,9 @@ async function commitAfterPersistBarrier(
   // reload its target and transaction boundary from the durable store.
   await drainPersistQueue();
   return withSendToSessionLock(sessionId, async () => {
+    assertRewindOwner(opts.ownerScope);
+    await prepareSessionForHistoryAction(sessionId, 'rewind');
+    assertRewindOwner(opts.ownerScope);
     const result = await commitRewindAtMessage(sessionId, clientId, opts);
     advanceSessionRewindGeneration(sessionId);
     return result;
@@ -90,8 +99,14 @@ export function registerMakerRewindIpc(): void {
     ) => {
       const sid = requireString(sessionId, 'sessionId');
       const cid = requireString(clientId, 'clientId');
+      const ownerScope = captureDataOwnerBroadcastScope();
       try {
-        return await previewRewindAtMessage(sid, cid);
+        return await withSendToSessionLock(sid, async () => {
+          assertRewindOwner(ownerScope);
+          await prepareSessionForHistoryAction(sid, 'rewind');
+          assertRewindOwner(ownerScope);
+          return previewRewindAtMessage(sid, cid);
+        });
       } catch (err) {
         log.warn('rewind:preview failed', { sid, cid, error: String(err) });
         wrapErr(err);

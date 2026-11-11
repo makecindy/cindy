@@ -14224,7 +14224,7 @@
       "errors": {
         "noPriorAssistantPreview": "Retrocede desde una pregunta que siga a una respuesta de la IA (esta no tiene una respuesta previa del asistente)",
         "sessionRunning": "La tarea no se detuvo a tiempo. Vuelve a intentar retroceder",
-        "noLiveQuery": "La sesión está inactiva. Envía primero cualquier mensaje (incluso solo \"ok\") para activar el SDK antes de retroceder",
+        "noLiveQuery": "No se pudo restaurar el entorno de ejecución de la tarea. No se completó el retroceso.",
         "noPriorAssistantCommit": "Retrocede desde una pregunta que siga a una respuesta de la IA",
         "commitGeneric": "No se pudo retroceder. Vuelve a intentarlo",
         "remoteNotSupported": "Las sesiones remotas de Claude Code aún no permiten retroceder"
