@@ -14190,6 +14190,7 @@
       "botSentNamed": "Enviado por el compañero \"{{name}}\"",
       "orcaFromLead": "Mensaje de Lead",
       "orcaFromWorker": "Mensaje de Worker",
+      "orcaFromWorkerBatch": "Informe del sistema: {{count}} resultados de Worker",
       "orcaFromWorkerNamed": "Mensaje del Worker \"{{role}}\"",
       "hookChannelFrom": "De {{channel}}",
       "deviceSentMobileNamed": "Enviado desde el teléfono \"{{name}}\"",

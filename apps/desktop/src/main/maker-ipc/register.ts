@@ -16333,6 +16333,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         source: 'worker',
         senderLabel: 'Worker',
         workerId,
+        autoBridge: true,
         meta: {
           source: 'maker-ipc/auto-bridge',
           context: `worker_auto_bridge/${leadSessionId}/${workerId}`,
@@ -21324,6 +21325,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       throwIpcError('INVALID_PARAMS', 'queued.createOpts.agentKind invalid');
     }
     const normalized: AgentInputQueuedMessage = { ...msg };
+    if (normalized.origin?.kind === 'orca') {
+      // 系统兜底合批标记只由 main 的 auto-bridge 入口盖章；wire 自报一律剥掉。
+      const origin = { ...normalized.origin };
+      delete origin.autoBridge;
+      delete origin.autoBridgeBatchCount;
+      normalized.origin = origin;
+    }
     delete normalized.sharedTaskAuthor;
     delete normalized.autoReviewUserText;
     delete normalized.botTaskCoordination;

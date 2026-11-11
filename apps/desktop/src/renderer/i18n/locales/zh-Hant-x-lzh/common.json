@@ -14036,6 +14036,7 @@
       "botSentNamed": "同僚「{{name}}」所遣",
       "orcaFromLead": "Lead 之訊",
       "orcaFromWorker": "Worker 之訊",
+      "orcaFromWorkerBatch": "系統所報 Worker 結果凡 {{count}}",
       "orcaFromWorkerNamed": "Worker「{{role}}」之訊",
       "hookChannelFrom": "自 {{channel}} 來",
       "deviceSentMobileNamed": "自手機「{{name}}」所遣",

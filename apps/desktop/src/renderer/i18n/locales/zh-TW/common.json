@@ -14044,6 +14044,7 @@
       "botSentNamed": "由夥伴「{{name}}」傳送",
       "orcaFromLead": "來自 Lead 的訊息",
       "orcaFromWorker": "來自 Worker 的訊息",
+      "orcaFromWorkerBatch": "系統回傳的 {{count}} 條 Worker 結果",
       "orcaFromWorkerNamed": "來自 Worker「{{role}}」的訊息",
       "hookChannelFrom": "來自 {{channel}}",
       "deviceSentMobileNamed": "從手機「{{name}}」傳送",
