@@ -27,6 +27,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
 
+import { createXdtHelperMcpServer } from '../../../../../lizi-mcps/src/lizi_xdtHelperMcpServer.js';
 import { createWorkerSpecSchema } from '../../../../../lizi-mcps/src/xdt-helper/create_worker.js';
 
 import { PiAgent } from '../index.js';
@@ -37,7 +38,7 @@ import type { Logger } from '../../../interfaces/logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '../../../../../..');
-const PI_BINARY = path.join(
+const PI_BINARY = process.env.CINDY_PI_MCP_TEST_BINARY || path.join(
   REPO_ROOT,
   'apps',
   'pi-bin',
@@ -184,6 +185,47 @@ function latestToolResultContent(request: Record<string, unknown>): string {
 
 function scriptedAnthropicTurn(requestBody: string): string {
   const toolResultCount = countToolResults(requestBody);
+  if (requestBody.includes('hand off simulator QR directly')) {
+    return toolResultCount === 0
+      ? anthropicToolTurn(1, 'request_input_handoff', { purpose: 'Scan to sign in', image: 'simulator-qr.png' })
+      : anthropicTextTurn(2, 'Handoff requested');
+  }
+  if (requestBody.includes('discover Cindy controls')) {
+    const call = (tool: string, args: Record<string, unknown>) => ({ name: 'cindy_mcp_call_tool', input: { server: 'cindy_helper', tool, args } });
+    const calls = [
+      { name: 'cindy_mcp_list_tools', input: { server: 'cindy_helper', tool: 'list_tools' } },
+      call('list_tools', { query: '壁纸' }),
+      call('list_tools', { key: 'appearance.wallpaper' }),
+      { name: 'cindy_mcp_list_tools', input: { server: 'cindy_helper', tool: 'call_tool' } },
+      call('call_tool', { name: 'get_capabilities', args: { scope: 'control', key: 'appearance.wallpaper', operation: 'update_app_settings' } }),
+      call('call_tool', { name: 'update_app_settings', args: { section: 'appearance', patch: { uiSize: 17 } } }),
+      call('call_tool', { name: 'get_app_settings', args: { section: 'appearance' } }),
+    ];
+    const step = calls[toolResultCount];
+    return step ? anthropicToolTurn(toolResultCount + 1, step.name, step.input) : anthropicTextTurn(8, 'Controls verified');
+  }
+  if (requestBody.includes('verify MCP structured result')) {
+    const scenario = requestBody.includes('structured failure') ? 'failure'
+      : requestBody.includes('rich failure') ? 'rich-failure' : 'success';
+    const calls = [
+      { name: 'cindy_mcp_list_tools', input: { server: 'cindy_workspace', tool: 'result_payload' } },
+      { name: 'cindy_mcp_call_tool', input: { server: 'cindy_workspace', tool: 'result_payload', args: { scenario } } },
+    ];
+    const call = calls[toolResultCount];
+    return call ? anthropicToolTurn(toolResultCount + 1, call.name, call.input)
+      : anthropicTextTurn(3, 'Result received');
+  }
+  if (requestBody.includes('recover MCP transport')) {
+    const calls = [
+      { name: 'cindy_mcp_list_tools', input: { server: 'recovery', tool: 'echo' } },
+      { name: 'cindy_mcp_call_tool', input: { server: 'recovery', tool: 'echo', args: { text: 'write' } } },
+      { name: 'cindy_mcp_list_tools', input: { server: 'recovery', tool: 'echo' } },
+      { name: 'cindy_mcp_call_tool', input: { server: 'recovery', tool: 'echo', args: { text: 'inspect' } } },
+    ];
+    const call = calls[toolResultCount];
+    return call ? anthropicToolTurn(toolResultCount + 1, call.name, call.input)
+      : anthropicTextTurn(5, 'Recovery complete');
+  }
   if (requestBody.includes('local host tool isolation')) {
     const calls = [
       { name: 'cindy_mcp_list_tools', input: {} },
@@ -192,19 +234,6 @@ function scriptedAnthropicTurn(requestBody: string): string {
     ];
     const call = calls[toolResultCount];
     return call ? anthropicToolTurn(toolResultCount + 1, call.name, call.input) : anthropicTextTurn(4, 'Client tool complete');
-  }
-  if (requestBody.includes('exercise task control modes')) {
-    const calls = [
-      { name: 'message_session_task', input: { task_id: 'task-fixture', mode: 'steer', message: 'new direction' } },
-      { name: 'stop_session_task', input: { task_id: 'task-fixture', mode: 'pause' } },
-      { name: 'message_session_task', input: { task_id: 'task-fixture', mode: 'resume' } },
-      { name: 'message_session_task', input: { task_id: 'task-fixture', mode: 'edit', queued_message_id: 'mine', message: 'revised' } },
-      { name: 'message_session_task', input: { task_id: 'task-fixture', mode: 'withdraw', queued_message_id: 'mine' } },
-      { name: 'stop_session_task', input: { task_id: 'task-fixture', mode: 'request-stop' } },
-    ];
-    const call = calls[toolResultCount];
-    return call ? anthropicToolTurn(toolResultCount + 1, call.name, call.input)
-      : anthropicTextTurn(5, 'Task controls complete');
   }
   if (requestBody.includes('create an Orca worktree worker')) {
     const turns = [
@@ -255,22 +284,10 @@ function scriptedAnthropicTurn(requestBody: string): string {
           'workflow complete: READY, SUM[16], CONFIGURED[2:safe,fast], WORKSPACE[release-notes], CONTACT[Ada]',
         );
   }
-  if (requestBody.includes("direct agent message")) {
+  if (requestBody.includes("direct teammate lookup")) {
     return toolResultCount === 0
-      ? anthropicToolTurn(1, "send_to_agent", {
-          target_id: 'bot-b',
-          message: "Please review the release risk.",
-        })
-      : anthropicTextTurn(2, "message delivered");
-  }
-  if (requestBody.includes('direct Session task')) {
-    return toolResultCount === 0
-      ? anthropicToolTurn(1, 'start_session_task', {
-          title: 'Build the demo',
-          working_dir: '/repo',
-          instruction: 'Build and verify a standalone HTML demo.',
-        })
-      : anthropicTextTurn(2, 'independent Session task started');
+      ? anthropicToolTurn(1, "list_agents", {})
+      : anthropicTextTurn(2, "teammates listed");
   }
   if (requestBody.includes('direct Bot memory')) {
     return toolResultCount === 0
@@ -389,15 +406,16 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
   const REMOTE_ERROR_CANARY = 'remote-error-body-secret-canary';
   let agentHome = '';
   const orcaCalls: Array<Record<string, unknown>> = [];
+  const controlCalls: Array<Record<string, unknown>> = [];
+  const handoffCalls: Array<Record<string, unknown>> = [];
+  let controlSize = 16;
   const echoCalls: Array<{ text: unknown }> = [];
   const statusCalls: Array<Record<string, never>> = [];
   const sumCalls: Array<{ values: number[] }> = [];
   const configureCalls: Array<{ options: { retries: number; flags: string[] } }> = [];
   const workspaceLookupCalls: Array<{ query: string }> = [];
   const contactsLookupCalls: Array<{ query: string }> = [];
-  const agentMessageCalls: Array<Record<string, unknown>> = [];
-  const sessionTaskCalls: Array<Record<string, unknown>> = [];
-  const taskControlCalls: Array<{ name: string; args: unknown }> = [];
+  const teammateLookupCalls: Array<Record<string, unknown>> = [];
   const botMemoryCalls: Array<Record<string, unknown>> = [];
   // 记录假 MCP server 收到的请求 URL —— 断言真 pi(经 cindy-bridge fetch)把
   // host 下发的 `?session=<id>` 原样带到每个 MCP 请求上(orca 身份路由的 pi 侧半)。
@@ -408,6 +426,10 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
   const modelRequestBodies: string[] = [];
   const modelRequests: Array<Record<string, unknown>> = [];
   const opaqueTurnCaptures: Array<{ sessionId: string; provider: string; cwd: string }> = [];
+  let recoveryMode: 'disconnect' | 'expired' | 'sse-eof' = 'disconnect';
+  let recoveryWrites = 0;
+  const recoveryCalls: string[] = [];
+  const recoveryHandshakes: Array<string | string[] | undefined> = [];
 
   beforeAll(async () => {
     agentHome = mkdtempSync(path.join(tmpdir(), 'pi-mcp-int-'));
@@ -428,6 +450,38 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
     mcpHttp = createServer(async (req: IncomingMessage, res: ServerResponse) => {
       seenMcpUrls.push(req.url ?? '');
       const auth = req.headers.authorization ?? '';
+      if (req.url?.includes('/recovery')) {
+        if (auth !== `Bearer ${MCP_TOKEN}`) { res.writeHead(401).end(); return; }
+        const body = JSON.parse(await readBody(req));
+        if (body.id === undefined) { res.writeHead(202).end(); return; }
+        let result: unknown = {};
+        if (body.method === 'initialize') {
+          recoveryHandshakes.push(req.headers['mcp-session-id']);
+          res.setHeader('mcp-session-id', 'session-' + recoveryHandshakes.length);
+          result = { protocolVersion: '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: 'recovery', version: '1' } };
+        } else if (body.method === 'tools/list') {
+          result = { tools: [{ name: 'echo', description: 'Recovery fixture', inputSchema: {
+            type: 'object', properties: { text: { type: 'string' } }, required: ['text'],
+          } }] };
+        } else if (body.method === 'tools/call') {
+          recoveryCalls.push(body.params.arguments.text);
+          if (body.params.arguments.text === 'write') {
+            if (recoveryMode === 'expired') { res.writeHead(404).end(); return; }
+            recoveryWrites++;
+            if (recoveryMode === 'sse-eof') {
+              res.writeHead(200, { 'content-type': 'text/event-stream' });
+              res.end('data: {"method":"notifications/progress"}\n\n');
+              return;
+            }
+            res.destroy();
+            return;
+          }
+          result = { content: [{ type: 'text', text: 'writes=' + recoveryWrites }] };
+        }
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ jsonrpc: '2.0', id: body.id, result }));
+        return;
+      }
       const apiKey = Array.isArray(req.headers['x-api-key'])
         ? req.headers['x-api-key'][0]
         : req.headers['x-api-key'];
@@ -597,6 +651,28 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
         res.writeHead(401).end('unauthorized');
         return;
       }
+      if (req.url?.includes('/controls')) {
+        const server = createXdtHelperMcpServer({ inputHandoff: {
+          start: async () => ({ ok: true, requestId: 'window-handoff' }),
+          startImage: async (_context, input) => {
+            handoffCalls.push({ ...input });
+            return { ok: true, requestId: 'image-handoff' };
+          },
+        }, appSettings: { call: async input => {
+          controlCalls.push(input);
+          if (input.operation === 'update') controlSize = Number(input.patch?.uiSize);
+          return { state: { uiSize: controlSize } };
+        } } }, { agentKind: 'pi', workingDir: '/fixture', sessionId: 'control-owner',
+          getSessionContext: () => ({ agentKind: 'pi', workingDir: '/fixture', sessionId: 'control-owner',
+            sessionInstanceId: 'control-instance', mcpCallerKind: 'root', mcpCallerAttested: true }),
+        });
+        const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+        res.on('close', () => { void transport.close(); void server.close(); });
+        await server.connect(transport);
+        const body = await readBody(req);
+        await transport.handleRequest(req, res, body ? JSON.parse(body) : undefined);
+        return;
+      }
       const isOrca = req.url?.includes('/orca') ?? false;
       const isWorkspace = req.url?.includes('/workspace') ?? false;
       const isContacts = req.url?.includes('/contacts') ?? false;
@@ -625,6 +701,19 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
           })}]};
         });
       } else if (isWorkspace) {
+        server.registerTool('result_payload', {
+          description: 'Return structured workspace data', inputSchema: { scenario: z.enum(['success', 'failure', 'rich-failure']) },
+        }, async ({ scenario }) => ({
+          content: scenario === 'rich-failure' ? [
+            { type: 'text' as const, text: 'Screenshot of the failing input' },
+            { type: 'image' as const, mimeType: 'image/png',
+              data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aifoAAAAASUVORK5CYII=' },
+            { type: 'text' as const, text: 'Correct the highlighted field' },
+          ] : [],
+          structuredContent: { status: scenario, resultCanary: 'MCP_STRUCTURED_MODEL_CANARY' },
+          ...(scenario !== 'success' ? { isError: true } : {}),
+          _meta: { privateCanary: 'MCP_CLIENT_ONLY_CANARY' },
+        }));
         server.registerTool(
           'status',
           { description: 'Read the workspace status', inputSchema: {} },
@@ -675,53 +764,18 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
         );
       } else if (isHelper) {
         server.registerTool(
-          'start_session_task',
-          {
-            description: 'Start a real independent Cindy Session task',
-            inputSchema: {
-              instruction: z.string(),
-              title: z.string().optional(),
-              working_dir: z.string().optional(),
-            },
-          },
-          async (args) => {
-            sessionTaskCalls.push(args);
-            return { content: [{ type: 'text', text: 'SESSION_TASK[running]' }] };
-          },
-        );
-        server.registerTool(
-              "send_to_agent",
+              "list_agents",
               {
-            description: "Send one asynchronous message to a teammate",
-                inputSchema: {
-                  target_id: z.string(),
-                  message: z.string(),
-                },
+            description: "Discover teammates and their main chats",
+                inputSchema: {},
               },
               async (args) => {
-                agentMessageCalls.push(args);
+                teammateLookupCalls.push(args);
                 return {
-                  content: [{ type: "text", text: "MESSAGE[bot-b:delivered]" }],
+                  content: [{ type: "text", text: "TEAMMATES[bot-b:b-main]" }],
                 };
               },
             );
-            for (const name of [
-              "check_session_task",
-              "message_session_task",
-              "stop_session_task",
-            ]) {
-              server.registerTool(
-                name,
-                {
-                  description: name,
-                  inputSchema: { task_id: z.string(), mode: z.string().optional(), message: z.string().optional(), queued_message_id: z.string().optional() },
-                },
-                async (args) => {
-                  taskControlCalls.push({ name, args });
-                  return { content: [{ type: 'text', text: 'OK' }] };
-                },
-              );
-            }
           } else if (isMemory) {
         server.registerTool(
           'call_tool',
@@ -766,7 +820,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
 
   function buildDeps(
     bridgeMode:
-        | 'local' | 'orca' | 'local-multi' | 'bot-memory' | 'remote' | 'remote-sse' | 'remote-paginated' | 'remote-failures' = 'local',
+        | 'controls' | 'local' | 'orca' | 'local-multi' | 'bot-memory' | 'remote' | 'remote-sse' | 'remote-paginated' | 'remote-failures' | 'recovery' = 'local',
     logger: Logger = noopLogger,
   ): AgentDeps {
     return {
@@ -800,6 +854,12 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
       // `?session=` —— 既验 PiAgent.startSession 把 opts.sessionId 透传进 ctx,
       // 又让假 server 能观察到真 pi 是否原样转发该 query(见 seenMcpUrls 断言)。
       preparePiExtraSpawnConfig: async (_providers, ctx): Promise<PiExtraSpawnConfig> => {
+        if (bridgeMode === 'controls') return {
+          mcpBridge: { token: MCP_TOKEN, servers: [{ name: 'cindy_helper', url: mcpUrl + '/controls' }] },
+        };
+        if (bridgeMode === 'recovery') {
+          return { mcpBridge: { token: MCP_TOKEN, servers: [{ name: 'recovery', url: mcpUrl + '/recovery' }] } };
+        }
         if (bridgeMode === 'remote') {
           return {
             mcpBridge: {
@@ -967,7 +1027,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
     permissionMode: 'ask' | 'bypassPermissions',
     resolver: (req: InteractionRequest) => Promise<InteractionDecision>,
     bridgeMode:
-        | 'local' | 'orca' | 'local-multi' | 'bot-memory' | 'remote' | 'remote-sse' | 'remote-paginated' = 'local',
+        | 'controls' | 'local' | 'orca' | 'local-multi' | 'bot-memory' | 'remote' | 'remote-sse' | 'remote-paginated' | 'recovery' = 'local',
     prompt = 'call the echo tool',
     localHostOnly: boolean | 'native' = false,
     // 披露记录按 sessionId 落盘，所以要真正走到「首次未披露」必须给独立会话；
@@ -1022,6 +1082,62 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
       rmSync(cwd, { recursive: true, force: true });
     }
   }
+
+  // Integration: the real Pi binary must traverse both discovery layers with
+  // the production helper schemas. Scripted model only; no claim of model choice quality.
+  it('discovers and calls Cindy controls through the real Pi gateway', { timeout: 90_000 }, async () => {
+    controlCalls.length = 0; controlSize = 16;
+    const approvals: string[] = [];
+    const { requests, events } = await runOneTurn('ask', async request => {
+      if (request.kind === 'permission') approvals.push(request.toolName);
+      return { kind: 'permission', behavior: 'allow' };
+    }, 'controls', 'discover Cindy controls', false, 'controls-first-use');
+    const firstSchema = JSON.parse(latestToolResultContent(requests[1]));
+    expect(firstSchema.tools[0].inputSchema.properties).toHaveProperty('query');
+    const search = JSON.parse(latestToolResultContent(requests[2]));
+    expect(search.items).toContainEqual(expect.objectContaining({ key: 'appearance.wallpaper', availability: 'available' }));
+    expect(controlCalls).toEqual([
+      { callerSessionId: 'control-owner', operation: 'update', section: 'appearance', patch: { uiSize: 17 } },
+      { callerSessionId: 'control-owner', operation: 'get', section: 'appearance' },
+    ]);
+    expect(latestToolResultContent(requests.at(-1)!)).toContain('17');
+    expect(approvals).toContain('mcp__cindy_helper__call_tool');
+    expect(events.some(event => event.type === 'text' && (event.data as { text?: string }).text?.includes('Controls verified'))).toBe(true);
+  });
+
+  // Integration: production helper -> real Pi bridge -> host callback. The old
+  // gateway-only entry required discovery and had no image schema; verify direct
+  // discovery and real permission identity, not online model selection quality.
+  it('calls screenshot handoff directly with its real MCP permission identity', { timeout: 90_000 }, async () => {
+    handoffCalls.length = 0;
+    const approvals: string[] = [];
+    const { requests } = await runOneTurn('ask', async request => {
+      if (request.kind === 'permission') approvals.push(request.toolName);
+      return { kind: 'permission', behavior: 'allow' };
+    }, 'controls', 'hand off simulator QR directly', false, 'input-handoff-first-use');
+    expect(handoffCalls).toEqual([{ purpose: 'Scan to sign in', image: 'simulator-qr.png' }]);
+    expect(approvals).toEqual(['mcp__cindy_helper__request_input_handoff']);
+    expect(latestToolResultContent(requests.at(-1)!)).toContain('image-handoff');
+    expect(requests).toHaveLength(2);
+  });
+
+  it.each(['disconnect', 'expired', 'sse-eof'] as const)('recovers MCP %s through real Pi without replaying a write', { timeout: 90_000 }, async (mode) => {
+    recoveryMode = mode;
+    recoveryWrites = 0;
+    recoveryCalls.length = 0;
+    recoveryHandshakes.length = 0;
+    const approvals: string[] = [];
+    const { requestBodies } = await runOneTurn('ask', async (req) => {
+      if (req.kind === 'permission') approvals.push(req.toolName);
+      return { kind: 'permission', behavior: 'allow' };
+    }, 'recovery', 'recover MCP transport', false, 'recovery-' + mode);
+    expect(recoveryCalls).toEqual(['write', 'inspect']);
+    expect(recoveryHandshakes).toEqual([undefined, undefined]);
+    expect(recoveryWrites).toBe(mode === 'expired' ? 0 : 1);
+    expect(approvals.filter(name => name === 'mcp__recovery__echo')).toHaveLength(2);
+    expect(requestBodies.at(-1)).toContain('not replayed');
+    expect(requestBodies.at(-1)).toContain('writes=' + recoveryWrites);
+  });
 
   // PR2 integration: Pi has no private Worker schema. Exercise the real shared schema through
   // tools/list, schema disclosure, approval identity, tools/call, and the resulting model input.
@@ -1133,11 +1249,50 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
     },
   );
 
+  it.each(['success', 'failure', 'rich-failure'] as const)(
+    'preserves MCP structured %s data in the real Pi model request',
+    { timeout: 90_000 },
+    async (scenario) => {
+      const { requests, events } = await runOneTurn('bypassPermissions',
+        async () => ({ kind: 'permission', behavior: 'allow' }), 'local-multi',
+        'verify MCP structured result ' + (scenario === 'failure' ? 'structured failure'
+          : scenario === 'rich-failure' ? 'rich failure' : 'success'));
+      expect(requests).toHaveLength(3);
+      const messages = requests.at(-1)!.messages as Array<{ content: Array<Record<string, unknown>> }>;
+      const result = messages.flatMap(message => message.content).filter(block => block.type === 'tool_result').at(-1)!;
+      expect(JSON.stringify(result.content)).toContain('MCP_STRUCTURED_MODEL_CANARY');
+      expect(Boolean(result.is_error)).toBe(scenario !== 'success');
+      const toolResult = events.filter(event => event.type === 'tool_result_full').at(-1)!;
+      expect((toolResult.data as { isError: boolean }).isError).toBe(scenario !== 'success');
+      if (scenario === 'rich-failure') {
+        if (Array.isArray(result.content)) {
+          const blocks = result.content as Array<Record<string, unknown>>;
+          expect(blocks.map(block => block.type)).toEqual(['text', 'image', 'text', 'text']);
+          expect(blocks[0].text).toBe('Screenshot of the failing input');
+          expect(blocks[1].source).toMatchObject({ type: 'base64', media_type: 'image/png' });
+          expect(blocks[2].text).toBe('Correct the highlighted field');
+        } else {
+          // Pi 1.4 moves images after tool results in the same user message.
+          // Assert the actual image still reaches the model, not just a marker.
+          expect(result.content).toContain('Screenshot of the failing input');
+          expect(result.content).toContain('Correct the highlighted field');
+          const containing = messages.find(message => message.content.includes(result))!;
+          const images = containing.content.slice(containing.content.indexOf(result) + 1)
+            .filter(block => block.type === 'image');
+          expect(images).toHaveLength(1);
+          expect(images[0].source).toMatchObject({ type: 'base64', media_type: 'image/png',
+            data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aifoAAAAASUVORK5CYII=' });
+        }
+      }
+      expect(JSON.stringify(requests)).not.toContain('MCP_CLIENT_ONLY_CANARY');
+    },
+  );
+
   it(
-      "sends a typed teammate message directly without MCP discovery",
+      "finds teammates through a typed tool directly without MCP discovery",
       { timeout: 90_000 },
     async () => {
-        agentMessageCalls.length = 0;
+        teammateLookupCalls.length = 0;
       const permissions: Array<{ toolName: string; input: unknown }> = [];
       const { events, requests } = await runOneTurn(
         'ask',
@@ -1148,23 +1303,14 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
           return { kind: 'permission', behavior: 'allow' };
         },
         'local-multi',
-          "run direct agent message",
+          "run direct teammate lookup",
         );
 
-      expect(agentMessageCalls).toEqual([{
-            target_id: 'bot-b',
-            message: "Please review the release risk.",
-          }]);
-      expect(permissions).toEqual([{
-        toolName: "mcp__cindy_helper__send_to_agent",
-            input: {
-              target_id: 'bot-b',
-              message: "Please review the release risk.",
-            },
-      }]);
+      expect(teammateLookupCalls).toEqual([{}]);
+      expect(permissions).toEqual([{ toolName: "mcp__cindy_helper__list_agents", input: {} }]);
       const startupToolNames = (requests[0]?.tools as Array<{ name?: string }> | undefined)
         ?.map((tool) => tool.name) ?? [];
-      expect(startupToolNames).toContain("send_to_agent");
+      expect(startupToolNames).toContain("list_agents");
       expect(startupToolNames).toContain('cindy_mcp_list_tools');
       expect(requests).toHaveLength(2);
       const finalText = events
@@ -1173,82 +1319,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
         .filter((data) => data.isFinal)
         .map((data) => data.text)
         .join('');
-      expect(finalText).toContain("message delivered");
-    },
-  );
-
-  it('passes control modes through the real Pi facade and permission identity', { timeout: 90_000 }, async () => {
-    taskControlCalls.length = 0;
-    const permissions: Array<{ toolName: string; input: unknown }> = [];
-    const { requests } = await runOneTurn('ask', async (req) => {
-      if (req.kind === 'permission') permissions.push({ toolName: req.toolName, input: req.input });
-      return { kind: 'permission', behavior: 'allow' };
-    }, 'local-multi', 'exercise task control modes');
-    expect(taskControlCalls).toEqual([
-      { name: 'message_session_task', args: { task_id: 'task-fixture', mode: 'steer', message: 'new direction' } },
-      { name: 'stop_session_task', args: { task_id: 'task-fixture', mode: 'pause' } },
-      { name: 'message_session_task', args: { task_id: 'task-fixture', mode: 'resume' } },
-      { name: 'message_session_task', args: { task_id: 'task-fixture', mode: 'edit', queued_message_id: 'mine', message: 'revised' } },
-      { name: 'message_session_task', args: { task_id: 'task-fixture', mode: 'withdraw', queued_message_id: 'mine' } },
-      { name: 'stop_session_task', args: { task_id: 'task-fixture', mode: 'request-stop' } },
-    ]);
-    expect(permissions).toEqual(taskControlCalls.map(({ name, args }) => ({
-      toolName: `mcp__cindy_helper__${name}`, input: args,
-    })));
-    expect(requests).toHaveLength(7);
-  });
-
-  it(
-    'starts a typed independent Session task without selecting a Bot',
-    { timeout: 90_000 },
-    async () => {
-      sessionTaskCalls.length = 0;
-      const permissions: Array<{ toolName: string; input: unknown }> = [];
-      const { events, requests } = await runOneTurn(
-        'ask',
-        async (req) => {
-          if (req.kind === 'permission') {
-            permissions.push({ toolName: req.toolName, input: req.input });
-          }
-          return { kind: 'permission', behavior: 'allow' };
-        },
-        'local-multi',
-        'run direct Session task',
-      );
-
-      expect(sessionTaskCalls).toEqual([{
-        title: 'Build the demo',
-        working_dir: '/repo',
-        instruction: 'Build and verify a standalone HTML demo.',
-      }]);
-      expect(permissions).toEqual([{
-        toolName: 'mcp__cindy_helper__start_session_task',
-        input: {
-          title: 'Build the demo',
-          working_dir: '/repo',
-          instruction: 'Build and verify a standalone HTML demo.',
-        },
-      }]);
-      const startupToolNames = (requests[0]?.tools as Array<{ name?: string }> | undefined)
-        ?.map((tool) => tool.name) ?? [];
-      expect(startupToolNames).toContain('start_session_task');
-      expect(startupToolNames).toEqual(
-          expect.arrayContaining([
-            "check_session_task",
-            "message_session_task",
-            "stop_session_task",
-            "send_to_agent",
-          ]),
-        );
-        expect(startupToolNames).not.toContain('collaborate_with_bot');
-      expect(requests).toHaveLength(2);
-      const finalText = events
-        .filter((event) => event.type === 'text')
-        .map((event) => event.data as { text: string; isFinal?: boolean })
-        .filter((data) => data.isFinal)
-        .map((data) => data.text)
-        .join('');
-      expect(finalText).toContain('independent Session task started');
+      expect(finalText).toContain("teammates listed");
     },
   );
 
@@ -1577,13 +1648,43 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
     },
   );
 
-  it(
-    'direct remote HTTP: uses env-backed bearer/custom headers instead of the localhost bridge token',
-    { timeout: 90_000 },
-    async () => {
+  // #7632 integration regression: PiAgent.startSession -> real Pi -> authenticated IPv6 MCP
+  // must bypass HTTP_PROXY. The previous real-Pi test covered only 127.0.0.1; an empty
+  // inherited NO_PROXY plus http://[::1] is the minimal case that could leak credentials
+  // after removing the bracketed token from Pi's automatic NO_PROXY additions.
+  for (const loopbackHost of ['127.0.0.1', '::1'] as const) {
+    it(
+      `direct remote HTTP on ${loopbackHost}: keeps authenticated MCP traffic out of HTTP_PROXY`,
+      { timeout: 90_000 },
+      async (context) => {
       echoCalls.length = 0;
       seenMcpUrls.length = 0;
       seenRemoteHeaders.length = 0;
+      const previousMcpUrl = mcpUrl;
+      const ipv6Mcp = loopbackHost === '::1'
+        ? createServer((req, res) => { mcpHttp.emit('request', req, res); })
+        : undefined;
+      if (ipv6Mcp) {
+        try {
+          await new Promise<void>((resolve, reject) => {
+            ipv6Mcp.once('error', reject);
+            ipv6Mcp.listen(0, '::1', () => {
+              ipv6Mcp.off('error', reject);
+              resolve();
+            });
+          });
+        } catch (error) {
+          // IPv6 loopback is optional on CI hosts; other bind failures remain test failures.
+          if (['EAFNOSUPPORT', 'EADDRNOTAVAIL', 'EPROTONOSUPPORT'].includes((error as NodeJS.ErrnoException).code ?? '')) {
+            context.skip();
+            return;
+          }
+          throw error;
+        }
+        const address = ipv6Mcp.address();
+        if (typeof address !== 'object' || !address) throw new Error('IPv6 MCP did not listen');
+        mcpUrl = `http://[::1]:${address.port}/mcp`;
+      }
       let proxyHits = 0;
       const proxy = createServer((_req, res) => {
         proxyHits += 1;
@@ -1610,11 +1711,13 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
           'remote',
         );
       } finally {
+        mcpUrl = previousMcpUrl;
         for (const name of Object.keys(previous)) delete process.env[name];
         for (const [name, value] of Object.entries(previous)) {
           if (value !== undefined) process.env[name] = value;
         }
         await new Promise<void>((resolve) => proxy.close(() => resolve()));
+        if (ipv6Mcp) await new Promise<void>((resolve) => ipv6Mcp.close(() => resolve()));
       }
 
       expect(turn).toBeDefined();
@@ -1635,7 +1738,8 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
         .join('');
       expect(finalText).toContain('ECHO[hello-pi]');
     },
-  );
+    );
+  }
 
   it(
     'persistent SSE: registers on the matching event without waiting for stream close, then uses the long tool timeout',

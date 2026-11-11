@@ -23,6 +23,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { BaseIM } from '../BaseIM.js';
+import { ConnectionBackoff, ConnectionRetry } from '../connectionRetry.js';
 import type { ChannelIM } from '../channelIM.js';
 import type {
   IMAttachment,
@@ -50,6 +51,7 @@ import { decodeLaneUserId, decodeMessageId, encodeLaneUserId, encodeMessageId } 
 import { buildCardPayload, hasLiveCallbackToken, parseCallbackQuery } from './components.js';
 import {
   collectGroupHistoryMedia,
+  fetchTelegramFileBytes,
   detectGroupTrigger,
   displayNameOf,
   groupWindowEntryOf,
@@ -116,8 +118,6 @@ const GROUP_MEDIA_POOL_TTL_MS = 24 * 60 * 60 * 1_000;
  * 用户早已不在等, 逐条回答只会刷屏并派出过期任务。
  */
 const STALE_MESSAGE_MS = 60 * 60 * 1_000;
-const POLL_RETRY_BASE_MS = 1_000;
-const POLL_RETRY_MAX_MS = 30_000;
 /** 409 = 另一个进程在对同一 token 轮询 — 低频探测等它退出。 */
 const POLL_CONFLICT_RETRY_MS = 30_000;
 const MAX_OUTBOUND_FILE_BYTES = 50 * 1024 * 1024;
@@ -318,11 +318,6 @@ export interface TelegramIMOptions {
    * 同进程第二份实例必须关掉, 由宿主自己的 IPC 按实例分发。
    */
   ipc?: boolean;
-  /**
-   * 非主人私聊是否进业务层(缺省 false = 只回一句礼貌提示)。伙伴自有连接对外
-   * 开放时打开: 陌生人私聊带 `speaker.isOwner=false` 进业务层, 命令仍只认主人。
-   */
-  guestDm?: boolean;
 }
 
 /** 宿主 Agent 工具可直接发出的媒体种类 → Bot API 方法与字段名。 */
@@ -395,6 +390,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
    */
   private lifetimeAbort = new AbortController();
   private pollLoop: Promise<void> | null = null;
+  private readonly connectionRetry = new ConnectionRetry();
   private disposing = false;
   /** sendRichMessage 方法不可用(404)后的永久 latch(本实例生命周期内)。 */
   private richSendDisabled = false;
@@ -684,7 +680,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
         return configResult();
       }
-      const connected = await this.connect(token);
+      const connected = await this.connect(token, false);
       if (!connected) {
         const failedStatus = this.status;
         const restored = await this.rollbackConfigOrFailClosed(
@@ -1295,7 +1291,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
 
   // ── connect / polling ──────────────────────────────────────────────────────
 
-  private async connect(token: string): Promise<boolean> {
+  private async connect(token: string, autoRetry = true): Promise<boolean> {
     const api = (this.opts.apiFactory ?? createTelegramApiClient)(token);
     // getMe 是网络请求, 这段窗口里另一台设备可能远程下线、用户可能本地下线或
     // 登出。这些路径都只递增 configVersion + 停当前 poll —— 尚未创建 poll 的
@@ -1310,6 +1306,15 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     } catch (err) {
       if (this.configVersion !== generation || this.disposing) return false;
       this.setStatus(mapConnectErrorToStatus(err));
+      const retryable = !(err instanceof TelegramApiError)
+        || err.errorCode === 429 || err.errorCode >= 500;
+      if (autoRetry && retryable) {
+        this.connectionRetry.schedule(() => {
+          if (this.configVersion !== generation || this.disposing) return;
+          if (this.offlineFlagState() !== 'absent') return;
+          void this.connect(token);
+        }, { minimumDelayMs: err instanceof TelegramApiError ? (err.retryAfterSec ?? 0) * 1_000 : 0 });
+      }
       return false;
     }
     // 世代变了(被下线/登出/换 token)或已 dispose → 本次连接结果作废。offline
@@ -1329,6 +1334,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       this.log.info('connect result discarded: offline flag is set or unreadable after getMe');
       return false;
     }
+    this.connectionRetry.reset();
     this.api = api;
     this.botId = me.id;
     this.botUsername = me.username ?? '';
@@ -1395,7 +1401,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   ): Promise<void> {
     let offset = this.readPersistedOffset();
     this.lastSeenOffset = offset;
-    let retryDelay = POLL_RETRY_BASE_MS;
+    const backoff = new ConnectionBackoff({ jitterMinRatio: 1 });
     while (!abort.signal.aborted && this.configVersion === generation) {
       try {
         const updates = await api.call<TgUpdate[]>(
@@ -1407,7 +1413,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
           },
           abort.signal,
         );
-        retryDelay = POLL_RETRY_BASE_MS;
+        backoff.reset();
         if (this.status.kind !== 'connected') {
           this.setStatus({ kind: 'connected', appId: String(this.botId) });
         }
@@ -1436,13 +1442,14 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         }
         // 网络抖动/超时: connecting + 指数退避重试。
         if (this.status.kind === 'connected') this.setStatus({ kind: 'connecting' });
-        await sleep(retryDelay, abort.signal);
-        retryDelay = Math.min(retryDelay * 2, POLL_RETRY_MAX_MS);
+        await sleep(backoff.nextDelay(err instanceof TelegramApiError
+          ? (err.retryAfterSec ?? 0) * 1_000 : 0), abort.signal);
       }
     }
   }
 
   private async stopPolling(): Promise<void> {
+    this.connectionRetry.reset();
     this.clearPendingAlbums();
     this.pollAbort?.abort();
     this.pollAbort = null;
@@ -1603,6 +1610,18 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     }
   }
 
+  /** Host calls this only after resolving an exact, authorized history row. */
+  async readGroupHistoryImage(fileId: string): Promise<Buffer | null> {
+    const api = this.api;
+    if (!api || this.disposing) return null;
+    const generation = this.configVersion;
+    const bytes = await fetchTelegramFileBytes(
+      { api, contextId: String(this.botId), history: true },
+      fileId,
+    );
+    return !this.disposing && generation === this.configVersion ? bytes : null;
+  }
+
   /**
    * 下载群窗口里这些消息(本轮群上下文实际纳入的行)带的媒体 — 「先发视频、再单独
    * @bot」场景的补齐。只认池里还在的消息: 已随某轮附件送达、超龄、重启前收到或
@@ -1613,25 +1632,32 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     messageIds: readonly string[],
     /** 本轮触发消息(event.raw): 它的相册成员与被引消息已随本轮附件送达, 不重复补。 */
     trigger?: Pick<TgMessage, 'media_group_id' | 'reply_to_message'>,
+    options?: { attachmentMessageIds?: readonly string[]; provided?: readonly IMAttachment[] },
   ): Promise<{ attachments: Array<IMAttachment & { author: string }>; unavailable: string[] }> {
     const api = this.api;
-    if (!api || messageIds.length === 0) return { attachments: [], unavailable: [] };
+    if (messageIds.length === 0) return { attachments: [], unavailable: [] };
+    if (!api) return { attachments: [], unavailable: (options?.attachmentMessageIds ?? []).map((id) => `历史消息 ${id}：连接不可用，未提供附件原件`) };
     const cutoff = Date.now() - GROUP_MEDIA_POOL_TTL_MS;
     const repliedId = trigger?.reply_to_message?.message_id;
-    const messages = messageIds
+    const cached = messageIds
       .map((id) => this.groupMediaPool.get(this.groupMediaKey(chatId, id)))
-      .filter((m): m is TgMessage => m !== undefined && m.date * 1_000 >= cutoff)
-      .filter(
+      .filter((m): m is TgMessage => m !== undefined && m.date * 1_000 >= cutoff);
+    const messages = cached.filter(
         (m) =>
           m.message_id !== repliedId &&
           (trigger?.media_group_id === undefined || m.media_group_id !== trigger.media_group_id),
       )
       .sort((a, b) => a.message_id - b.message_id);
-    if (messages.length === 0) return { attachments: [], unavailable: [] };
+    // Cached quote/album members were already supplied by the current message.
+    const availableIds = new Set(cached.map((m) => String(m.message_id)));
+    const missing = (options?.attachmentMessageIds ?? []).filter((id) => id !== String(repliedId) && !availableIds.has(id))
+      .map((id) => `历史消息 ${id}：附件原件不在可用缓存中，仅提供历史记录`);
+    if (messages.length === 0) return { attachments: [], unavailable: missing };
     const generation = this.configVersion;
     const stagedDiscards: Array<() => Promise<void>> = [];
     const collected = await collectGroupHistoryMedia(messages, {
       api,
+      provided: options?.provided,
       stagedDiscards,
       ...(this.host.media ? { media: this.host.media } : {}),
       ...(this.host.files ? { files: this.host.files } : {}),
@@ -1640,7 +1666,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       await this.discardStagedMedia(stagedDiscards);
       return { attachments: [], unavailable: [] };
     }
-    return collected;
+    return { ...collected, unavailable: [...collected.unavailable, ...missing] };
   }
 
   /** 下载期间配置换代: 回滚本次暂存进媒体总仓的音视频(尽力而为, 失败只记日志)。 */
@@ -1696,18 +1722,11 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         this.logStaleSkip(staleFor, 'private', m.message_id);
         return;
       }
-      const isOwnerDm = String(m.from.id) === this.ownerUserId;
-      if (!isOwnerDm) {
-        if (!this.opts.guestDm) {
-          // 非 owner 私聊: 礼貌回应一句(官方 bot unbound 提示的个人版语义),
-          // per-user 冷却防刷屏; 不进任何业务链路。
-          this.maybeSendStrangerNotice(String(m.from.id), String(m.chat.id), m.message_id);
-          return;
-        }
-        // 对外开放的私聊: 命令永远 owner 专属, 陌生人的命令静默丢(与群成员同口径,
-        // 不可被探测); 普通消息带非主人标记进业务层。
-        const probe = (m.text ?? '').trimStart();
-        if (probe.startsWith('/') || probe.startsWith('!')) return;
+      if (String(m.from.id) !== this.ownerUserId) {
+        // 个人与伙伴 bot 的私聊都只认已绑定主人。必须在附件下载、typing、
+        // emitMessage 之前返回；独立访客任务和模型身份提示不是隐私边界。
+        this.maybeSendStrangerNotice(String(m.from.id), String(m.chat.id), m.message_id);
+        return;
       }
       // 附件下载可达数秒 — 快照受理时的配置, 完成后配置已换代就丢弃
       // (与 Discord 的 acceptedContext 模式同口径)。
@@ -1731,21 +1750,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       // DM 也要 typing: 首条真实消息落地前, 聊天列表/标题栏的「正在输入…」
       // 是唯一反馈, 靠 sendChatAction(Chris 2026-07-30 实测点名缺失)。
       this.startTypingLoop(String(m.chat.id));
-      this.emitMessage(
-        isOwnerDm
-          ? event
-          : {
-              ...event,
-              speaker: {
-                id: String(m.from.id),
-                name:
-                  [m.from.first_name, m.from.last_name].filter(Boolean).join(' ') ||
-                  String(m.from.id),
-                ...(m.from.username ? { username: m.from.username } : {}),
-                isOwner: false,
-              },
-            },
-      );
+      this.emitMessage(event);
       return;
     }
 

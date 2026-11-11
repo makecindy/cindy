@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CindyMakeSessionGate } from '../CindyMakeSessionGate';
@@ -7,9 +7,11 @@ import { SessionRouteOriginGate } from '../SessionRouteOriginGate';
 import { sideChatTaskRoute } from '../../right-sidebar/plugins/side-chat/state';
 import { StrictMode } from 'react';
 
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+
 const state = vi.hoisted(() => ({
   remote: [] as Array<{ id: string; source: string; model?: string; workingDir?: string }>,
-  localSource: undefined as string | undefined,
+  localSource: undefined as string | null | undefined,
   getSession: vi.fn(),
   localListeners: new Set<() => void>(),
   origins: new Map<string, string>(),
@@ -29,7 +31,7 @@ vi.mock('@/lib/sessionsStore', () => ({ sessionsStore: {
     state.localListeners.add(listener);
     return () => { state.localListeners.delete(listener); };
   },
-  findById: () => state.localSource ? { source: state.localSource } : null,
+  findById: () => state.localSource !== undefined ? { source: state.localSource } : null,
 } }));
 vi.mock('@/lib/makerTransport', () => ({ getSessionFor: state.getSession }));
 afterEach(cleanup);
@@ -39,6 +41,13 @@ beforeEach(() => {
   state.getSession.mockReset().mockResolvedValue(null);
   state.origins.clear();
   state.readCurrent = true;
+});
+
+it('opens a legacy cached task with null source instead of waiting forever', () => {
+  state.localSource = null;
+  render(<MemoryRouter><CindyMakeSessionGate sessionId="legacy"><div>Legacy task</div></CindyMakeSessionGate></MemoryRouter>);
+  expect(screen.getByText('Legacy task')).toBeTruthy();
+  expect(state.getSession).not.toHaveBeenCalled();
 });
 
 // Unit #6529: the old hidden-task tests only covered warm origins. A route
@@ -83,6 +92,8 @@ describe('remote task route origin', () => {
       return result;
     });
     await act(async () => { mountRoute(sideChatTaskRoute('child', 'host')); });
+    expect(screen.getByRole('alert')).toBeTruthy();
+    fireEvent.click(screen.getByText('ccAgent.sessionEntry.back'));
     expect(screen.getByText('Task list')).toBeTruthy();
     expect(screen.queryByText('Remote composer')).toBeNull();
   });
@@ -112,7 +123,7 @@ describe('remote task route origin', () => {
   it('rejects a conflicting route host without reading or changing its known owner', async () => {
     state.origins.set('child', 'real-host');
     await act(async () => { mountRoute(sideChatTaskRoute('child', 'wrong-host')); });
-    expect(screen.getByText('Task list')).toBeTruthy();
+    expect(screen.getByText('ccAgent.sessionEntry.denied')).toBeTruthy();
     expect(state.origins.get('child')).toBe('real-host');
     expect(state.getSession).not.toHaveBeenCalled();
     expect(screen.queryByText('Remote composer')).toBeNull();
@@ -177,6 +188,9 @@ describe('old Cindy Make links', () => {
     await act(async () => { mount(<Composer />); });
     expect(Composer).not.toHaveBeenCalled();
     expect(screen.queryByText('Task list')).toBeNull();
+    expect(screen.getByRole('alert')).toBeTruthy();
+    fireEvent.click(screen.getByText('ccAgent.sessionEntry.back'));
+    expect(screen.getByText('Task list')).toBeTruthy();
   });
 
   it.each([undefined, null, 'desktop'])('opens matching ordinary metadata with source %s', async (source) => {

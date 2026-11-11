@@ -1,4 +1,32 @@
 {
+  "githubPrs": {
+    "title": "管理 PR 連結",
+    "hint": "頂列最多顯示 3 個，固定的 PR 優先顯示",
+    "empty": "貼上 GitHub PR 或 GitLab MR 連結即可新增",
+    "removed": "已移除 {{count}} 個",
+    "legacy": "未確認的歷史引用：{{count}}",
+    "addLabel": "新增 PR 連結",
+    "add": "新增 PR",
+    "loading": "正在讀取…",
+    "restore": "還原 PR",
+    "pin": "固定至頂列",
+    "unpin": "取消固定",
+    "pinLimit": "最多固定 3 個 PR",
+    "reorderHint": "按 Alt+↑/↓ 在已固定或未固定群組內調整順序。",
+    "dragHandle": "拖曳排序 {{repo}} #{{number}}",
+    "remove": "移除 PR",
+    "errors": {
+      "duplicate": "此 PR 已關聯；已移除的連結可在清單中還原",
+      "notFound": "找不到此 PR，或沒有存取權限",
+      "invalidUrl": "請輸入有效的 GitHub PR 或 GitLab MR 連結",
+      "reorderFailed": "順序未儲存，請重試",
+      "verifyFailed": "無法驗證 PR，請檢查 GitHub 或 GitLab 登入與存取權限",
+      "unsupported": "這台電腦的版本暫不支援管理 PR 連結",
+      "failed": "無法更新 PR 連結"
+    },
+    "urlPlaceholder": "GitHub PR 或 GitLab MR 連結",
+    "moveUp": "上移"
+  },
   "paneResize": {
     "label": "分欄寬度",
     "hint": "左右拖動可調整兩欄寬度"
@@ -45,6 +73,10 @@
     "text": "先前有自動執行失敗。",
     "precheck": "自動檢查暫時受阻。",
     "rateLimited": "自動檢查暫時受阻：請求限流。",
+    "pluginMissing": "自動檢查暫時受阻：「{{name}}」插件未安裝，在電腦上裝好後自動恢復。",
+    "pluginMissingUnnamed": "自動檢查暫時受阻：需要的插件未安裝，在電腦上裝好後自動恢復。",
+    "pluginDisabled": "自動檢查暫時受阻：「{{name}}」插件未啟用，在電腦上啟用後自動恢復。",
+    "pluginDisabledUnnamed": "自動檢查暫時受阻：需要的插件未啟用，在電腦上啟用後自動恢復。",
     "dismissTitle": "關閉歷史失敗提示"
   },
   "common": {
@@ -61,6 +93,7 @@
     "context": "上下文",
     "screenshot": "截圖",
     "photo": "照片",
+    "photosAndVideos": "照片與影片",
     "takePhoto": "拍照",
     "file": "檔案",
     "joinConversation": "加入對話（{{num}} 張）",
@@ -185,7 +218,7 @@
       },
       "actionCopy": {
         "pending": "請先處理待處理請求，完成後輸入區會恢復。",
-        "archived": "任務已封存，還原後才能繼續傳送。",
+        "archived": "任務已封存，傳送訊息會自動取消封存。",
         "deleted": "任務已刪除，無法繼續操作。",
         "queuePaused": "佇列已暫停，可在佇列面板繼續執行。"
       }
@@ -200,7 +233,25 @@
       },
       "context": {
         "title": "上下文用量",
-        "unavailable": "暫無上下文資料"
+        "unavailable": "暫無上下文資料",
+        "estimate": {
+          "title": "文字估算",
+          "delivery": "答案交付",
+          "host": "Cindy 規則",
+          "plugins": "插件目錄",
+          "memoryRules": "記憶規則",
+          "memoryIndex": "記憶索引",
+          "profile": "夥伴資料",
+          "user": "使用者指令",
+          "directories": "附加目錄",
+          "native": "Pi 原生規則",
+          "skills": "技能目錄",
+          "project": "專案指令",
+          "tools": "工具定義",
+          "messages": "對話正文",
+          "other": "其他指令",
+          "note": "依目前文字粗估，並非模型分詞結果。不含圖片與供應商格式開銷，分項總和不等於原生總量。"
+        }
       },
       "rateLimit": {
         "plan": "方案",
@@ -261,6 +312,7 @@
     "voiceSenderNotReady": "訊息暫時無法傳送，請返回後重新進入任務。",
     "voiceStopAndSend": "結束語音輸入並傳送",
     "sendMessage": "傳送遠端訊息",
+    "inputSyncFailed": "未能讀取完整輸入，內容已保留，請重試。",
     "voiceStartInput": "開始語音輸入",
     "stopSession": "停止遠端任務",
     "sessionNotFoundResync": "未找到當前遠端任務，請重新同步後再傳送。",
@@ -418,16 +470,22 @@
     "worktreeCleanupPending": "上一次 worktree 仍待回收，請重新連線裝置後再試。"
   },
   "menu": {
+    "moveToProject": "移動任務",
+    "moveFailed": "移動任務失敗",
+    "moveRunning": "任務正在執行，結束後再移動",
+    "moveWorktree": "此任務的工作目錄是 worktree，暫不支援移動到其他專案",
+    "moveUnsupported": "請更新所連接電腦上的 Cindy 後再移動任務。",
     "details": "任務詳情",
     "chipPinned": "已置頂",
     "chipArchived": "已歸檔",
     "titleFallback": "遠端任務",
     "unnamedTitle": "未命名任務",
+    "openSection": "開啟",
     "renameAction": "重新命名任務",
     "copyLinkAction": "複製任務連結",
     "unpin": "取消置頂",
     "pin": "置頂",
-    "restore": "恢復",
+    "restore": "取消歸檔",
     "archive": "歸檔",
     "deleteAction": "刪除任務",
     "deleteConversation": "刪除任務",
@@ -558,13 +616,17 @@
     "dismissNotice": "關閉提示",
     "ignore": "忽略",
     "executionResultUnavailable": "未能取得執行結果，已停止自動接續。可以請助手檢查既有的執行結果。",
-    "outputLimit": "模型已達到輸出長度上限，本輪回覆可能不完整。可以直接傳送下一則訊息繼續。",
+    "outputLimit": "模型已達到輸出長度上限，本輪回覆可能不完整。可以傳送新訊息繼續；若反覆觸發，請降低推理強度或先壓縮對話記錄。",
+    "outputLimitReasoning": "思考已消耗本次輸出的大部分預算，回覆可能不完整。建議降低推理強度，或先壓縮對話記錄，再繼續。",
+    "outputLimitUsage": "本次模型請求已輸出 {{outputTokens}} tokens，其中 {{reasoningTokens}} tokens 用於思考。",
+    "outputLimitOutputUsage": "本次模型請求已輸出 {{outputTokens}} tokens。",
     "toolUseLoopDetected": "模型重複呼叫工具次數過多，Cindy 已停止這一輪以避免無限迴圈。可以傳送新訊息繼續。",
     "toolUseLoopDetectedWithCount": "模型連續觸發無效的工具呼叫，Cindy 已在 {{count}} 次失敗後停止本輪，以避免無限迴圈。可以傳送新訊息繼續。",
     "toolUseLoopDetectedConsecutiveWithCount": "模型重複呼叫同一個工具 {{count}} 次，Cindy 已停止本輪以避免無限迴圈。可以傳送新訊息繼續。",
     "toolUseLoopDetectedPingPongWithCount": "模型在多個工具呼叫之間來回循環，Cindy 偵測到本輪已有 {{count}} 次呼叫後停止了本輪。可以傳送新訊息繼續。",
     "toolUseLoopDetectedRotationWithCount": "模型持續輪轉呼叫多個工具，Cindy 偵測到本輪已有 {{count}} 次呼叫後停止了本輪。可以傳送新訊息繼續。",
     "codexThreadLost": "Codex 鑑權模式已切換，當前任務無法繼續，請新建任務。",
+    "remoteCompactEncryptedContent": "整理上下文失敗：模型無法讀取歷史中的加密內容。自動接續未完成，可重試恢復。",
     "encryptedContentInvalid": "由於更換供應商導致加密不可用，本任務只能在原供應商下使用；請回到電腦端處理（可以用「從這裡開啟新任務」丟棄協議加密內容，在新任務裡繼續）。"
   },
   "row": {
@@ -590,6 +652,8 @@
     "taskAlreadyCreated": "電腦上已建立這個任務，已保存的訊息會在原任務中繼續傳送。"
   },
   "remoteError": {
+    "REMOTE_AGENT_GROUP_FULL": "能執行這個任務的帳號或電腦都已達到並行上限。請等正在執行的任務結束，或在供應商設定中調高上限。",
+    "SUBSCRIPTION_ACCOUNTS_FULL": "能執行這個任務的帳號或電腦都已達到並行上限。請等正在執行的任務結束，或在供應商設定中調高上限。",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 任務暫不支援切換 Harness。請選擇目前 Harness 下的模型，或使用所需 Harness 建立新的 SSH 任務。",
     "MODEL_SELECTION_UNAVAILABLE": "所選模型在該供應商下已無法使用。請在設定中檢查連線，或重新選擇可用模型。",
     "HARNESS_SWITCH_NOT_READY": "Harness 尚未完成切換。請查看錯誤詳細資訊，待 Harness 就緒後重試。",
@@ -618,7 +682,7 @@
     "REMOTE_PROVIDER_UPDATING": "這個模型供應商的憑證正在更新。請稍後再試。",
     "REMOTE_WORKDIR_UNAVAILABLE": "遠端工作目錄現在無法使用。請確認那台電腦上的目錄還在，然後重試。",
     "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "電腦端暫時無法確認這則訊息是否已經送出。請稍後再試，不要重複傳送同一則。",
-    "REMOTE_AGENT_UNAVAILABLE": "暫時連不上執行 Agent 的電腦。確認那臺電腦在線並允許遠端控制後重試。",
+    "REMOTE_AGENT_UNAVAILABLE": "和執行 Agent 的電腦斷開了連線。請重試；如果反覆出現，再確認那臺電腦在線並允許遠端控制。",
     "REMOTE_AGENT_PEER_TOO_OLD": "那臺電腦上的 Cindy 版本過舊，還不能替這臺電腦執行 Agent。請先在那臺電腦上更新 Cindy。",
     "REMOTE_AGENT_EXPIRED": "這個任務在執行 Agent 的電腦上已經結束。請重新傳送。",
     "REMOTE_AGENT_NOT_FOUND": "這個任務在執行 Agent 的電腦上已經結束。請重新傳送。",
@@ -628,9 +692,11 @@
     "REMOTE_AGENT_RESUME_LOST": "之前在那台電腦上的對話沒能接上，Agent 會在沒有之前上下文的情況下繼續。",
     "REMOTE_AGENT_UNSUPPORTED": "那臺電腦上這個 Agent 無法使用。在那臺電腦上安裝或登入後再試，或換一個 Agent。",
     "REMOTE_AGENT_INVALID": "與執行 Agent 的電腦通訊時出錯。請重試；如果持續出現，請把兩臺電腦上的 Cindy 都更新到最新版。",
+    "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "此模型已達到分享者設定的模型占比上限。請選擇其他可用模型繼續。",
     "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "那臺電腦沒有允許遠端呼叫這個供應商。請在那臺電腦的「設定 → 模型供應商」裡開啟「允許遠端呼叫」，或換一個模型。",
     "REMOTE_AGENT_FORK_FAILED": "執行 Agent 的電腦沒能從這裡開啟新任務。請重試，或換一則訊息再試。",
     "REMOTE_AGENT_SHARE_PAUSED": "對方已暫停對你的分享，恢復前不能使用這些模型。可以換成其他模型繼續。",
+    "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "這是舊版分享，開啟「僅使用 Agent-Net」後暫時無法使用。關閉這個開關就能繼續，也可以換成其他模型。",
     "REMOTE_AGENT_SHARE_REMOVED": "這個分享已無法使用（對方刪除了分享或你已退出）。可以換成其他模型繼續。",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "分享的供應商暫時無法使用：對方電腦可能不在線，或對方暫時關閉了分享。可以稍後再試，或換成其他模型繼續。"
   },
@@ -656,21 +722,34 @@
     "remoteDirPathHint": "在執行裝置上檢查目錄；不存在時報錯，不會改用 Lead 所在電腦的目錄。",
     "remoteDirInvalid": "請輸入執行裝置上的絕對路徑。",
     "roleLabel": "角色名稱",
-    "roleHint": "只是一個名稱，方便多個協作者時分辨角色，不改變能力",
-    "customRole": "自訂",
-    "customRolePlaceholder": "自訂角色名稱",
-    "customRolePredefinedError": "自訂角色名稱不能使用預設角色名稱",
+    "taskLabel": "讓 Worker 做什麼",
+    "enableHint": "目前任務作為 Lead 分派與驗收，另一個 Agent 作為 Worker 執行並回報。",
+    "roles": {
+      "reviewer": {
+        "name": "審查",
+        "task": "看一下 Lead 的工作，給出一些建議。"
+      },
+      "developer": {
+        "name": "開發"
+      },
+      "tester": {
+        "name": "測試",
+        "task": "測試 Lead 目前的成果，回報未通過的地方與重現步驟。"
+      }
+    },
+    "addRole": "新增角色",
+    "removeRoleHint": "長按可移除",
+    "removeRoleConfirmTitle": "移除「{{role}}」？",
+    "removeRoleConfirmDesc": "隨時可以用「新增角色」加回來。",
+    "removeRoleConfirm": "移除角色",
+    "moreSettings": "更多設定",
     "agentLabel": "Agent",
-    "modelLabel": "模型",
     "modelDefault": "預設",
     "modelDefaultHint": "沿用電腦端的 Worker 預設模型",
-    "permissionLabel": "權限模式",
     "permissionAuto": "自動審批",
     "permissionFull": "完全存取",
-    "permissionAutoHint": "允許在工作區內讀寫，並自動審批提權請求；高風險操作可能被拒絕或要求確認。",
-    "permissionFullHint": "允許修改任意檔案並執行連網指令，無需再次確認。風險最高，只適合可信任務。",
     "initialTaskLabel": "初始任務（選填）",
-    "initialTaskPlaceholder": "給這個 Worker 的選填第一則任務",
+    "initialTaskPlaceholder": "寫下交給它的第一件事；留空則先待命，由 Lead 分派",
     "workerCountSummary_one": "{{count}} 個 Worker · {{running}} 執行中",
     "workerCountSummary_other": "{{count}} 個 Worker · {{running}} 執行中",
     "loading": "正在讀取 Worker…",
@@ -746,12 +825,6 @@
     "failed": "儲存失敗，請重試。",
     "restore": "恢復預設"
   },
-  "followUp": {
-    "title": "要我幫你跟進任務嗎？",
-    "start": "開始跟進",
-    "notNow": "暫不開啟",
-    "saveFailed": "沒能儲存，請重試"
-  },
   "providerGroupRebalance": {
     "title": "換到 {{label}} 繼續？",
     "body": "為了平均用完各帳號的配額，建議這則訊息換到 {{label}} 傳送（{{quota}}）。換過去會帶上最近幾輪對話和摘要，更早的細節可能記不全。",
@@ -759,6 +832,21 @@
     "quotaReset": "還剩 {{left}}%，{{reset}}後重置",
     "confirm": "換過去",
     "remember": "換過去，以後自動換（僅此任務）",
-    "cancel": "取消"
+    "cancel": "取消",
+    "disable": "不自動切換（僅本任務）",
+    "disableFailed": "無法確認選擇是否已儲存。請檢查連線，並確認任務所在電腦上的 Cindy 已更新後重試。這則訊息仍會照常傳送。",
+    "moreOptions": "更多選項"
+  },
+  "messageEdit": {
+    "editing": "正在編輯訊息",
+    "discard": "放棄編輯訊息",
+    "stopTimeout": "等待任務停止超時，請稍後重試",
+    "queueNotEmpty": "任務有排隊中的訊息，先傳送或移除佇列內容後再編輯",
+    "notLast": "任務裡已有更新的訊息，這條不再是最後一條，無法編輯重發",
+    "failed": "編輯重發失敗，請重試",
+    "noPriorAssistant": "這條訊息前面還沒有 AI 回覆，電腦端目前版本暫不支援編輯；更新電腦端 Cindy 後再試。",
+    "uploadsPending": "還有附件正在上傳，等上傳完成後再編輯訊息。",
+    "rollbackHint": "傳送將撤銷上一輪對 {{count}} 個檔案的改動",
+    "conversationOnlyHint": "傳送不會恢復專案檔案，上一輪的檔案改動會保留"
   }
 }

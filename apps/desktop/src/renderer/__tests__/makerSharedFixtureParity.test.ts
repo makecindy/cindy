@@ -69,6 +69,9 @@ function toDesktopScheduleFormState(schedule: RemoteSchedule): ScheduleFormState
     agentKind: schedule.agentKind ?? 'claude-code',
     model: schedule.model ?? '',
     // RemoteSchedule 没有 provider 概念,parity fixture 取桌面空默认(provider 同 model 成对)
+    preRunSource: 'script',
+    preRunPluginId: '',
+    preRunPluginOnFailure: 'block',
     providerId: '',
     effort: asDesktopEffort(schedule.effort),
     fastMode: !!schedule.fastMode,

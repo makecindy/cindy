@@ -42,7 +42,7 @@ The creation UI reuses the existing teammate dialog/sheet and portrait picker.
 Without source artwork, Desktop import follows normal creation: one random pick
 from the existing 17 portraits per form, with subsequent user choices preserved.
 After creation, personality, memory, skills and model management use the existing
-teammate screens; routine management follows the desktop-only product contract.
+teammate screens; imported jobs are managed as the teammate project's automations.
 Mobile can select automations during import and request host-owned takeover.
 Reopening creation after dismissing import starts with the normal creation form;
 reconnecting an open import preserves its current selection and request.
@@ -105,17 +105,39 @@ omitting it retains normal companion defaults, and a rejected request can be cor
   These files remain individually deselectable; deselecting a subtree dependency
   prevents that automation's takeover, leaving its source running. Helper code
   contributes environment dependencies and bounded verification planning text.
-  A shared 128 MiB read budget bounds each source snapshot, including
-  config includes, documents, credentials, scripts and all referenced skill trees.
-  Additional selected skill resources use the same cumulative limit before any
-  import writes. An unreadable/oversized selected resource retains a per-item failure
-  for retry; healthy items and the conversation are saved. No item is truncated. Fingerprints hash raw
-  file bytes, and encrypted checkpoints use base64 while still reading legacy
-  numeric-array checkpoints.
-  Skill count, source entry count, resource file count and cron row count have no
-  fixed quota. Imported SKILL.md files preserve their full body rather than using
-  the interactive skill editor's 64 KiB authoring limit. Individual file and total
-  in-memory snapshot byte bounds remain; this is not an unlimited-byte importer.
+  Skill resource bytes no longer count against the 128 MiB in-memory metadata
+  snapshot budget. Preview reads only the SKILL.md header; selected Skill bodies,
+  scripts, .venv, node_modules and resources stream into a private encrypted
+  archive per Skill. No fixed per-resource or aggregate Skill byte quota applies;
+  available disk space remains necessary. Files are classified and hashed with
+  32 KiB reads, then captured in bounded authenticated records. Checkpoints and
+  environments retain archive references rather than base64 copies of resources.
+  Config/documents and parsed YAML headers retain their 16 MiB parsing bound;
+  other buffered source metadata/documents still share the 128 MiB memory budget.
+  These are parser/memory protections, not an aggregate Skill migration quota.
+  Credential-safe readable copies are streamed into private staging directories
+  and published only after archive integrity verification. Originals remain in
+  the account vault and are streamed into a temporary directory for authorized
+  commands only when their published copy required masking or interpreter links.
+  Failed/unpublished Skills never enter the executable environment; their
+  archive references stay in the retry checkpoint. The executable reference is
+  saved before the copied receipt, so crash recovery preserves this distinction.
+  Resource restoration shares command cancellation and its 120-second deadline.
+  Automation verification reads authenticated redacted excerpts directly from
+  archives (32,000 characters per file, 96,000 total including names), without
+  materializing the resource tree; incomplete excerpts are marked as such.
+  The entry point has a reserved allowance within that same budget regardless
+  of archive order. `.venv`, `venv`, and `node_modules` remain fully migrated but
+  are excluded from planning excerpts, including for legacy inline snapshots.
+  UTF-8 and BOM-marked UTF-16 redaction preserves chunk boundaries;
+  binary files keep exact bytes. Retry works without the source after capture,
+  compares existing files incrementally, and refuses to overwrite user edits.
+  The resource directory follows companion deletion/failed-import cleanup.
+  Legacy inline files and encrypted snapshots remain readable. Buffered legacy
+  reads release only their own failed reservations; healthy siblings retain room.
+  Unreadable resources fail individually without truncation or silent omission.
+  Desktop and Mobile distinguish file, item and snapshot bounds for the remaining
+  buffered paths without exposing raw exceptions or private paths.
   Skill-root discovery charges each streamed directory entry before retaining it.
   Native alphabetical precedence uses 256 KiB sort batches, 64 KiB merge I/O and
   a logarithmic set of runs instead of a whole-directory Dirent array. Large
@@ -219,7 +241,7 @@ omitting it retains normal companion defaults, and a rejected request can be cor
   replacement labels. URL paths use an explicit transport-route allowlist; unknown segments are
   private regardless of length or case, including encoded forms and subsequent
   route-looking values. Named local endpoints are exempt only as single loopback
-  paths; explicit credential fields always take precedence. Routine publication happens before createOnce persists the definition,
+  paths; explicit credential fields always take precedence. Routine publication happens before the project automation persists the definition,
   and activation compares that same projection so masking does not block takeover.
   The encrypted checkpoint retains only masks actually matching selected source
   content, with stable labels for restart. These values were already embedded in
@@ -346,28 +368,25 @@ omitting it retains normal companion defaults, and a rejected request can be cor
   still included even when they equal a locale value. Numeric data and schema
   types remain intact. Discovery, dispatch and verification share paginated tool
   listing with the same 100-page and 1000-tool catalog budgets.
-- Cron/timezone, anchored intervals, one-time triggers, paused state and selected
-  Hermes scripts/monitors/repeat counters feed the existing routine engine.
-  Scheduler/companion `routine_save` schemas and the Pi direct facade retain
-  `once.at` and `interval.anchorMs`, so editing a name or prompt preserves timing.
+- Imported jobs become ordinary automations of the teammate's project (2026-11-08;
+  `maker-ipc/botRoutineAutomations.ts`, the same conversion as the V2 upgrade): cron/
+  timezone, whole-minute intervals and future one-time triggers keep their timing; a
+  trigger a five-field cron cannot express leaves a paused manual automation. The
+  teammate first becomes a V2 project if it is not one yet. Automation config ids derive
+  from the stable creation ID (`routine-<base>`), so a replayed batch keeps what exists,
+  including the owner's edits. A project automation only runs its prompt on a schedule:
+  jobs that relied on the removed import runtime (an OpenClaw `command` payload, a Hermes
+  `script`, `monitor_script` or `monitor_url`, `no_agent`, or a finite `repeat.times` on a
+  recurring schedule) get `AUTOMATION_CONTEXT_NEEDS_MAPPING`, their source keeps running,
+  and checkpoints saved before this change are refused the same way before any source
+  pause (a handover already pausing the source gives it back first).
   Source-wide Hermes models and OpenClaw agent/default models use the existing
   model-mapping issue, just like a model specified on the job itself. Their
-  routines remain disabled and the source keeps running until mapped; the import
+  automations remain paused and the source keeps running until mapped; the import
   never silently substitutes Cindy's model during takeover.
-  Finite-repeat routines stop after their last successful execution and delivery:
-  disabling, clearing future triggers and cancelling queued followers commit
-  with the final successful history entry. Failed result saves retry persistence
-  without rerunning; recovery of an already exhausted counter also disables the
-  routine. Ordinary unchanged-monitor skips remain eligible for the next trigger.
-  All newly imported output goes to the canonical teammate chat. Source delivery
-  channels and failure delivery destinations do not gate selection or verification.
-  Existing imported bindings that already carry Telegram destinations retain their
-  legacy delivery behavior; no existing routine is silently rerouted.
-  Each confirmed target/message chunk advances progress in the same encrypted
-  automation binding. A retry or next occurrence resumes the captured output and
-  destinations before rerunning the model/script; counters commit only after all
-  sends finish. This does not guarantee exactly-once delivery if Telegram accepts
-  a message but its response or the subsequent local checkpoint is lost.
+  Results stay in the automation's own task. Source delivery channels do not gate
+  selection, verification or takeover; destinations saved by older checkpoints are
+  kept in the encrypted binding but no longer probed or used.
 
 Copying and field conversion do not call a model. The optional takeover check
 uses the teammate's current model to plan bounded read-only probes, then the
@@ -549,11 +568,14 @@ acknowledgements; cleanup failures remain recoverable at startup or on retry.
 Desktop and Mobile clear their immutable request/result on that rejection so the
 existing name field can submit a corrected new request. A committed profile or
 an uncertain database outcome never triggers this cleanup.
-The target routine starts disabled. Actual target reads must pass before the
-source's native CLI pauses its task; only then is the target enabled. Source
-configuration changes invalidate handover. In-flight source execution is allowed
-to finish before enabling the target. Lost acknowledgements are reconciled from
-actual state; an ambiguous target enable never resumes the source as well.
+The target automations start paused. Actual target reads must pass before the
+source's native CLI pauses its task; only then are the target automations resumed.
+Source configuration changes invalidate handover. In-flight source execution is allowed
+to finish before resuming the target. Lost acknowledgements are reconciled from
+actual state; an ambiguous target resume never resumes the source as well. An
+automation whose name or prompt the owner changed in the project meanwhile
+(`TARGET_AUTOMATION_CHANGED`), or whose one-time trigger has passed
+(`AUTOMATION_TIME_PASSED`), is not resumed, and its source gets the task back.
 Pause/resume first resolves the native CLI from absolute host PATH entries and
 existing host installation locations; Windows batch launch resolves its interpreter
 from host COMSPEC/SystemRoot. Selected PATH/COMSPEC cannot choose either executable.
@@ -562,18 +584,18 @@ captured source directory/configuration. The shared child runner checks ownershi
 throughout execution and terminates the process tree on owner loss. An interrupted
 pause retains its durable phase for reconciliation when the original owner returns;
 it cannot enable the target under a different account.
-An encrypted handover marker is installed before the target routine is published.
+An encrypted handover marker is installed before the target automations are written.
 For active source tasks it becomes ready only after verification, source pause and
-confirmed target activation. Ordinary editors and manual runs cannot bypass a
-pending handover; already queued work defers without executing. Explicit enable
-or run through the existing routine controls retries a transient failed takeover
-from its saved selection, verifies again and reconciles the updated revision.
+confirmed target resume; deletion uses it to give back only sources this import paused.
+The project automation editor does not consult it: resuming a paused imported
+automation by hand while its source still runs runs both. Explicit retry of the import
+retries a transient failed takeover from its saved selection and verifies again.
 Changed definitions, missing dependencies and adapter requirements remain explicit
 failures; an originally unrequested takeover is not silently authorized. Lost marker writes
-keep the source paused for recovery. Already-paused source tasks remain disabled
+keep the source paused for recovery. Already-paused source tasks remain paused
 but retain normal later management. Earlier completed receipts can restore missing
 markers; failed checks or a skipped takeover of an active source cannot.
-Retries preserve edits, reuse the same teammate/routines, and do not recopy
+Retries preserve edits, reuse the same teammate/automations, and do not recopy
 unselected items. Pending selected checkpoints are encrypted and recover after
 restart; handover reconciliation continues if the dialog/device link closes.
 A reconciliation batch makes at most three passes. Definitive failed verification
@@ -581,15 +603,12 @@ is not retried by background passes, status polling or startup; after the bound,
 the result needs attention and requires an explicit retry. Current receipts avoid
 decrypting full environments on status/startup reads; legacy marker upgrades run
 once. This bounds repeated model calls and Ask prompts.
-Deletion first pauses target routines, then uses the original native CLI to restore
-only source tasks this import paused, persisting each acknowledgement. Failed
-restoration or cleanup staging aborts deletion before routines, run history or the
-profile/vault are removed, so retry retains the necessary data and credentials.
-Target routines and run history are purged only after profile deletion commits;
-a failed database write retains them paused for retry. If post-commit cleanup is
-interrupted, existing startup reconciliation purges the deleted companion's
-routines and backing schedules. Originally paused or non-taken-over source tasks
-stay as-is.
+Deletion first pauses this import's project automations (from the receipt's routine
+IDs), then uses the original native CLI to restore only source tasks this import paused,
+persisting each acknowledgement. Failed restoration or cleanup staging aborts deletion
+before the profile/vault are removed, so retry retains the necessary data and
+credentials. The paused automations stay until the profile deletion commits.
+Originally paused or non-taken-over source tasks stay as-is.
 Definitive host input rejections keep their stable error through the Mobile
 Remote Resource boundary so the existing form can be edited and resubmitted.
 Expired or changed previews clear the frozen intent and refresh the existing
@@ -648,12 +667,10 @@ private format; hand automations back before downgrade and retain the current
 build/data for recovery.
 
 Native OpenClaw `payload.kind=command` jobs retain argv, cwd, stdin, environment,
-wall-clock/idle timeouts and output limits in the encrypted definition. They are
-saved disabled and execute as literal subprocess argv only after the existing
-verification and handover gates. They never start a model turn or inherit model/tool
-policy requirements. Read-only verification must verify their actual dependencies;
-it cannot accept a command as a simple local reminder. Native `heartbeat` payloads
-are preserved disabled with their schedule and original definition; native context
+wall-clock/idle timeouts and output limits in the encrypted definition. Since imported
+jobs became project automations they are not executed by Cindy: the paused automation
+keeps the job's name and the source keeps running it. Native `heartbeat` payloads
+are preserved paused with their schedule and original definition; native context
 semantics remain explicitly pending, rather than being silently reduced to a reminder.
 
 Ordinary content/routine progress uses indexed checks and batches by serialized
@@ -663,7 +680,7 @@ therefore save progressively less often instead of rewriting every name/check
 roughly 100 times; measuring a change never scans the accumulated receipt. The
 host returns the byte count from its single serialization. Phase boundaries and
 terminal results still save complete, backward-compatible atomic receipts.
-An interrupted batch replays idempotent writes and `createOnce` under the same
+An interrupted batch replays idempotent writes and automation creation under the same
 IDs; a large name index can mean replaying a larger unsaved batch. Handover intent,
 source pause, target enable and rollback milestones still persist immediately.
 

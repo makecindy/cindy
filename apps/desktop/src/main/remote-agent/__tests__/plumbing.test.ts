@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { MAIN_OWNED_SEND_CONTEXT, type InteractionDecision } from '@cindy/maker-core';
+import { LOCAL_AGENT_CLIENT, MAIN_OWNED_SEND_CONTEXT, type AgentEvent, type InteractionDecision } from '@cindy/maker-core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -12,7 +12,7 @@ import WebSocket from 'ws';
 import { mapClaudeHostedEvent } from '../controller/eventMap';
 import { execServerActions, execServerCommand } from '../controller/execServerRelay';
 import { collectProjectInstructionFiles } from '../controller/projectFiles';
-import { approvalActionsFor, createRemoteAgentHandle, innerShellScript } from '../controller/proxyHandle';
+import { approvalActionsFor, createRemoteAgentHandle, innerShellScript, parseStartedInfo } from '../controller/proxyHandle';
 import type { RemoteAgentRunClient } from '../controller/runClient';
 import { credentialConfirmation, takeGroupSwitchState } from '../controller/startRemote';
 import { EventLog, LineSplitter } from '../eventLog';
@@ -22,9 +22,20 @@ import { handleExecMcpRequest } from '../executor/ccMcp';
 import { ExecutorWorkspace } from '../executor/workspace';
 import { createRunTunnel } from '../host/tunnel';
 import { PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL } from '../../../shared/providerShareCredentialConsent';
-import { decodeOpenPayload, decodeSendOptions, encodeSendOptions, isSafeProjectFilePath } from '../wire';
+import { decodeOpenPayload, decodeStartOptions, encodeStartOptions, decodeSendOptions, encodeSendOptions, isSafeProjectFilePath } from '../wire';
 
 let root: string;
+
+it('encodes only application isolation, never its private URL, token, path or target', () => {
+  const encoded = encodeStartOptions({ sessionId: 'client', workingDir: '/workspace', model: 'm', [LOCAL_AGENT_CLIENT]: {
+    url: 'http://127.0.0.1:12345/private', token: 'private-token', storageDirectory: '/private-history', agentDeviceId: 'share:private', mcpName: 'hhh', hostToolsOnly: true,
+  } });
+  expect(decodeStartOptions(JSON.parse(JSON.stringify(encoded)))).toEqual(encoded);
+  expect(JSON.stringify(encoded)).not.toMatch(/private|127\.0\.0\.1/);
+  for (const patch of [{ storageKey: '../escape' }, { mcpName: 'cindy_exec' }, { hostToolsOnly: 'false' }]) {
+    expect(() => decodeStartOptions({ ...encoded, localApplication: { ...encoded.localApplication, ...patch } })).toThrow('REMOTE_AGENT_INVALID');
+  }
+});
 
 beforeEach(() => {
   root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-ra-plumbing-')));
@@ -353,6 +364,68 @@ describe('tunnel', () => {
 });
 
 describe('remote AgentSessionHandle close', () => {
+  // #9985 unit: close classification must use the foreground terminal and local
+  // teardown intent. Existing idle cleanup tests never sent a turn before close.
+  it.each(['idle', 'done', 'terminal-error', 'abort', 'close', 'detach'] as const)(
+    'keeps an intentional or settled %s quiet when the remote stream closes', async settlement => {
+      const dispose = vi.fn(async () => undefined);
+      const controller = createRemoteAgentHandle({
+        client: {
+          callWithId: async () => undefined,
+          call: async () => undefined,
+          close: async () => {
+            // A delayed busy snapshot must not undo our local close/detach intent.
+            controller.onState({ turnRunning: true });
+            controller.onClosed('superseded');
+          },
+        } as unknown as RemoteAgentRunClient,
+        started: { id: 'sdk-1', agentKind: 'claude-code', model: 'm', shadowDir: '', methods: [], state: {} },
+        workspace: new ExecutorWorkspace({ workingDir: root }),
+        recordApproval() {}, newId: () => 'req', dispose,
+      });
+      if (settlement !== 'idle') await controller.handle.send({ type: 'user', content: 'work' });
+      const terminal: AgentEvent = settlement === 'terminal-error'
+        ? { type: 'error', source: 'claude-code', data: { message: 'quota reached', usageResetAt: 1794400000000, isTerminal: true } }
+        : { type: 'done', source: 'claude-code', data: {} };
+      if (settlement === 'done' || settlement === 'terminal-error') controller.onEvent(terminal);
+      if (settlement === 'abort') await controller.handle.abort();
+      if (settlement === 'close' || settlement === 'detach') await controller.handle[settlement]!({ reason: 'navigation' });
+      controller.onClosed('ended');
+      controller.onClosed('error', 'late duplicate close');
+      const seen: AgentEvent[] = [];
+      for await (const event of controller.handle.events()) seen.push(event);
+      expect(seen).toEqual(settlement === 'done' || settlement === 'terminal-error' ? [terminal] : []);
+      expect(dispose).toHaveBeenCalledOnce();
+    },
+  );
+
+  // #9263 unit: old execution hosts silently strip iMessage permissions. Check
+  // send/steer before dispatch, including a reconnect that changes host version.
+  it('requires current executor support before sending iMessage context', async () => {
+    const callWithId = vi.fn(async () => undefined);
+    const started = { id: 'remote', model: 'm', shadowDir: '', methods: [], state: {} };
+    const controller = createRemoteAgentHandle({
+      client: { callWithId } as unknown as RemoteAgentRunClient,
+      started: parseStartedInfo(started, 'pi'),
+      workspace: new ExecutorWorkspace({ workingDir: root }),
+      recordApproval() {}, newId: () => 'req', dispose: async () => undefined,
+    });
+    const origin = { kind: 'im', channel: 'imessage', taskId: 'guest-task' } as const;
+    const policy = { origin, confirmationSurface: 'desktop' as const, forceConfirmToolCall: () => true };
+    const message = { type: 'user' as const, content: 'work' };
+    await expect(controller.handle.send(message, { turnPermissionPolicy: policy })).rejects.toThrow('REMOTE_AGENT_PEER_TOO_OLD');
+    await expect(controller.handle.steer!(message, { [MAIN_OWNED_SEND_CONTEXT]: { origin } })).rejects.toThrow('REMOTE_AGENT_PEER_TOO_OLD');
+    expect(callWithId).not.toHaveBeenCalled();
+    // Existing Desktop turns still work with an old peer.
+    await controller.handle.send(message, { [MAIN_OWNED_SEND_CONTEXT]: { origin: { kind: 'desktop' } } });
+    controller.onReconnected(parseStartedInfo({ ...started, imessageSendContext: true }, 'pi'));
+    await controller.handle.send(message, { turnPermissionPolicy: policy, [MAIN_OWNED_SEND_CONTEXT]: { origin } });
+    expect(callWithId).toHaveBeenCalledTimes(2);
+    controller.onReconnected(parseStartedInfo(started, 'pi'));
+    await expect(controller.handle.send(message, { turnPermissionPolicy: policy })).rejects.toThrow('REMOTE_AGENT_PEER_TOO_OLD');
+    expect(callWithId).toHaveBeenCalledTimes(2);
+  });
+
   // #6921 unit: the production handle must distinguish remote notification failure
   // from local cleanup failure. The navigation-only test below missed this boundary.
   // Minimal inputs: a pending/rejected close and an onClosed cleanup still in flight.
@@ -424,8 +497,11 @@ describe('remote AgentSessionHandle close', () => {
     }
   });
 
-  it('propagates a DEVICE_LINK close failure after disposing local resources', async () => {
+  // Offline Stop must retire the local handle even when the provider cannot
+  // acknowledge close; real Session recovery is covered by connectionPool.
+  it('finishes local close when the offline provider cannot acknowledge it', async () => {
     let disposed = 0;
+    const warn = vi.fn();
     const client = {
       async close() {
         throw Object.assign(new Error('[REMOTE_AGENT_UNAVAILABLE] [DEVICE_LINK_DEVICE_OFFLINE] target offline'), {
@@ -440,9 +516,14 @@ describe('remote AgentSessionHandle close', () => {
       recordApproval: () => undefined,
       newId: () => 'req',
       dispose: async () => { disposed += 1; },
+      log: { warn },
     });
-    await expect(controller.handle.close({ reason: 'navigation' })).rejects.toThrow(/DEVICE_LINK_DEVICE_OFFLINE/);
+    await expect(controller.handle.close({ reason: 'navigation' })).resolves.toBeUndefined();
     expect(disposed).toBe(1);
+    expect(warn).toHaveBeenCalledWith('remote agent: close notification failed', {
+      reason: 'navigation', error: expect.stringContaining('DEVICE_LINK_DEVICE_OFFLINE'),
+    });
+    expect(await controller.handle.events()[Symbol.asyncIterator]().next()).toMatchObject({ done: true });
   });
 });
 
@@ -696,6 +777,25 @@ describe('wire payloads', () => {
       writeAttachment: async () => '',
     });
     expect(decoded.turnPermissionPolicy?.forceConfirmToolCall('Read', {})).toBe(true);
+  });
+
+  // #9263 unit: no previous wire roundtrip included the new IM origin. Both
+  // policy and Main-owned identity must survive; unknown origins must reject.
+  it('preserves iMessage permission and identity and rejects undecodable origins', async () => {
+    const callbacks = { onTranscriptUserEntry: async () => {}, onInteractionStateChange() {}, writeAttachment: async () => '' };
+    const origin = { kind: 'im', channel: 'imessage', taskId: 'guest-task' } as const;
+    const encoded = await encodeSendOptions({
+      turnPermissionPolicy: { origin, confirmationSurface: 'desktop', forceConfirmToolCall: () => true },
+      [MAIN_OWNED_SEND_CONTEXT]: { origin, rawChannelText: 'work' },
+    }, async () => Buffer.alloc(0));
+    const decoded = await decodeSendOptions(JSON.parse(JSON.stringify(encoded.wire)), callbacks);
+    expect(decoded.turnPermissionPolicy?.origin).toEqual(origin);
+    expect(decoded.turnPermissionPolicy?.forceConfirmToolCall('Bash', {})).toBe(true);
+    expect(decoded[MAIN_OWNED_SEND_CONTEXT]).toEqual({ origin, rawChannelText: 'work' });
+    for (const value of [
+      { turnPolicy: { origin: { kind: 'im', channel: 'future-channel' } } },
+      { cindy: { mainOwned: { origin: { kind: 'im', channel: 'future-channel' } } } },
+    ]) await expect(decodeSendOptions(value, callbacks)).rejects.toThrow('REMOTE_AGENT_INVALID');
   });
 
   it('carries Auto-review references in Main context and re-projects them on decode', async () => {

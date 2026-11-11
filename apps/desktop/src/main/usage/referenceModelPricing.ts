@@ -6,6 +6,7 @@
  */
 
 import { BrowserWindow } from 'electron';
+import { notifyUsagePricingChanged } from './pricingChanges.js';
 import type { AgentKind } from '@cindy/model-providers';
 
 import {
@@ -29,11 +30,19 @@ export { readModelPriceOverridesSnapshot } from './modelPriceOverrideStore.js';
 
 export const REFERENCE_MODEL_PRICING_CHANGED_CHANNEL = 'usage:reference-model-pricing-changed';
 
-/** Catalog 刷新只重建非 XD 参考价；registryPricingCatalog 本身也会过滤 XD route。 */
-export function getReferenceModelPricing(): ModelPricingCatalog {
+/**
+ * Catalog 刷新只重建非 XD 参考价；registryPricingCatalog 本身也会过滤 XD route。
+ *
+ * `at` 按那一天生效的注册表价目解析(历史用量估价)，与今天的目录同一套取价规则；连接自带的价格
+ * 与 BYOK 价格不带生效期，照常加入。批量按天取价的调用方传同一份 `overrides` 快照。
+ */
+export function getReferenceModelPricing(
+  options: { at?: string | Date; overrides?: ModelPriceOverridesSnapshot } = {},
+): ModelPricingCatalog {
+  const { at } = options;
   const catalog = getActiveCatalog();
   const registry = catalog.modelRegistry;
-  const pricing = registryPricingCatalog(registry);
+  const pricing = registryPricingCatalog(registry, at);
   for (const provider of catalog.providers) {
     // Connection-local prices belong to this account and engine, including OAuth
     // discovery quotes. Publishing only Registry routes dropped them all.
@@ -56,15 +65,19 @@ export function getReferenceModelPricing(): ModelPricingCatalog {
     if (provider.auth?.method !== 'oauth' || !provider.auth.native) continue;
     for (const [agent, models] of Object.entries(provider.models)) {
       for (const model of models ?? []) {
-        const quote = providerReferencePriceQuote(provider.id, model.id, registry, { agent: agent as AgentKind, officialOnly: true });
+        const quote = providerReferencePriceQuote(provider.id, model.id, registry, { agent: agent as AgentKind, at, officialOnly: true });
         if (quote) (pricing[provider.id] ??= {})[modelPricingKey(model.id, agent as AgentKind)] = quote;
       }
     }
   }
-  return { ...applyModelPriceOverrides(pricing, registry), ...getByokPricing() };
+  return {
+    ...applyModelPriceOverrides(pricing, registry, undefined, { at, entries: options.overrides }),
+    ...getByokPricing(),
+  };
 }
 
 export function broadcastReferenceModelPricing(): void {
+  notifyUsagePricingChanged();
   const pricing = getReferenceModelPricing();
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {

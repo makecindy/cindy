@@ -108,6 +108,12 @@ export const MAKER_INVOKE = {
    */
   LIST_SESSION_BACKGROUND_ACTIVITY: 'maker:session-background-activity:list',
   /**
+   * 列出「回合已结束但后台命令仍在工作」的全部会话 id（会自己结束的后台命令，不含长驻服务）。
+   * 只读；任务列表全局 store 挂载时的初始快照，后续靠 SESSION_BACKGROUND_WORK_CHANGED 增量维护。
+   * 只覆盖本机 Claude Code 任务；maker 未 init → { sessionIds: [] }。
+   */
+  LIST_SESSION_BACKGROUND_WORK: 'maker:session-background-work:list',
+  /**
    * 一键停止指定会话的全部任务:关闭该会话的常驻 agent 进程(maker.closeSession)，
    * 当前 turn 与进程内后台子 agent 一并终止。会话本身可续 —— 下次发消息按 resume 自动重建。
    * 这是 renderer/main 运行态不一致时仍须可用的最终止损入口，不受 isTurnRunning 限制。
@@ -289,6 +295,7 @@ export const MAKER_INVOKE = {
   MODEL_DISABLE_SET: 'maker:model-disable:set',
   /** 本机供应商是否允许同账号另一台电脑的远程 Agent 调用；仅本机可信 renderer 可写。 */
   PROVIDER_REMOTE_ACCESS_SET: 'maker:provider:remote-access:set',
+  PROVIDER_RUN_LOCATION_SET: 'maker:provider:run-location:set',
   /**
    * Owner-scoped provider display-order override.
    * Input = { dataOwnerId: string | null; ownerGeneration: number; providerIds: string[] }.
@@ -309,6 +316,9 @@ export const MAKER_INVOKE = {
    * (远程改被控端全局设置越权)。
    */
   MODEL_CONTEXT_LIMIT_GET: 'maker:model-context-limit:get',
+  MODEL_IMAGE_INPUT_GET: 'maker:model-image-input:get',
+  MODEL_IMAGE_INPUT_SET: 'maker:model-image-input:set',
+  MODEL_COMPACTION_SET: 'maker:model-compaction:set',
   MODEL_CONTEXT_LIMIT_SET: 'maker:model-context-limit:set',
   MODEL_CONTEXT_LIMIT_RESET: 'maker:model-context-limit:reset',
   // 附加只读引用目录 — 走 closure 推送; DB 持久化由 renderer 同步调
@@ -479,46 +489,6 @@ export const MAKER_INVOKE = {
   GIT_SAFETY_GET: 'maker:git-safety:get',
   GIT_SAFETY_SET: 'maker:git-safety:set',
   GIT_SAFETY_RESET: 'maker:git-safety:reset',
-  /**
-   * 智能通讯录(maker-contacts) ——
-   *  - SETTINGS_GET/SET: 功能开关(<userData>/contacts-settings.json), 只 gate agent 侧
-   *    cindy_contacts MCP(新 session 生效); 下面的数据 CRUD 通道不受 gate, 设置页
-   *    管理 UI 关着开关也能浏览/清理。
-   *  - 数据通道: 实体/身份/事件/分组 CRUD + resolve/search/stats, 直达全局
-   *    MakerContactsManager(maker-core), 与 session 无关。
-   */
-  CONTACTS_SETTINGS_GET: 'maker:contacts:settings:get',
-  CONTACTS_SETTINGS_SET: 'maker:contacts:settings:set',
-  CONTACTS_SYNC_STATUS_GET: 'maker:contacts:sync:status:get',
-  CONTACTS_SYNC_ENABLED_SET: 'maker:contacts:sync:enabled:set',
-  CONTACTS_SYNC_NOW: 'maker:contacts:sync:now',
-  CONTACTS_LIST: 'maker:contacts:list',
-  CONTACTS_GET: 'maker:contacts:get',
-  CONTACTS_CREATE: 'maker:contacts:create',
-  CONTACTS_UPDATE: 'maker:contacts:update',
-  CONTACTS_DELETE: 'maker:contacts:delete',
-  CONTACTS_MERGE: 'maker:contacts:merge',
-  CONTACTS_RESOLVE: 'maker:contacts:resolve',
-  CONTACTS_SEARCH: 'maker:contacts:search',
-  CONTACTS_STATS: 'maker:contacts:stats',
-  CONTACTS_ADD_IDENTITY: 'maker:contacts:add-identity',
-  CONTACTS_REMOVE_IDENTITY: 'maker:contacts:remove-identity',
-  CONTACTS_APPEND_EVENT: 'maker:contacts:append-event',
-  CONTACTS_ADD_RELATION: 'maker:contacts:add-relation',
-  CONTACTS_REMOVE_RELATION: 'maker:contacts:remove-relation',
-  CONTACTS_DELETE_EVENT: 'maker:contacts:delete-event',
-  CONTACTS_GROUPS_LIST: 'maker:contacts:groups:list',
-  CONTACTS_GROUPS_CREATE: 'maker:contacts:groups:create',
-  CONTACTS_GROUPS_UPDATE: 'maker:contacts:groups:update',
-  CONTACTS_GROUPS_DELETE: 'maker:contacts:groups:delete',
-  CONTACTS_GROUPS_SET_MEMBERS: 'maker:contacts:groups:set-members',
-  CONTACTS_RESET_ALL: 'maker:contacts:reset-all',
-  /** macOS 系统通讯录只读拉取(JXA); 非 darwin 抛 UNSUPPORTED_CAPABILITY */
-  CONTACTS_SYSTEM_READ: 'maker:contacts:system-read',
-  /** vCard 文本解析(renderer 禁止 runtime import maker-core, 解析必须在 main 做) */
-  CONTACTS_PARSE_VCF: 'maker:contacts:parse-vcf',
-  /** 批量导入(系统通讯录/vCard 共用管道: identity 撞档自动并入, 名字相似进 needsReview) */
-  CONTACTS_IMPORT: 'maker:contacts:import',
   /** Codex app-server 当前进程启动时固定下来的鉴权注入方式(oauth-bearer / env-key)。 */
   CODEX_RUNTIME_ROUTE_GET: 'maker:codex-runtime-route:get',
   /**
@@ -592,6 +562,9 @@ export const MAKER_INVOKE = {
   LLAMACPP_STOP: 'maker:llamacpp:stop',
   LLAMACPP_CANCEL: 'maker:llamacpp:cancel',
   PROVIDER_IMPORT_PREVIEW: 'maker:provider:import:preview',
+  PROVIDER_IMPORT_FILE: 'maker:provider:import:file',
+  PROVIDER_IMPORT_LOCAL_SCAN: 'maker:provider:import:local-scan',
+  PROVIDER_IMPORT_LOCAL_EDIT: 'maker:provider:import:local-edit',
   PROVIDER_IMPORT_CONFIRM: 'maker:provider:import:confirm',
   PROVIDER_IMPORT_CANCEL: 'maker:provider:import:cancel',
   /**
@@ -600,6 +573,8 @@ export const MAKER_INVOKE = {
    * 成功后 main 刷新两个 agent 的 mcpProviders 数组并广播 MCP_CHANGED（见 MAKER_PUSH）。
    */
   MCP_CUSTOM_LIST: 'maker:mcp:custom:list',
+  MCP_DUPLICATES_LIST: 'maker:mcp:duplicates:list',
+  MCP_DUPLICATES_CHOOSE: 'maker:mcp:duplicates:choose',
   MCP_CUSTOM_CREATE: 'maker:mcp:custom:create',
   MCP_CUSTOM_UPDATE: 'maker:mcp:custom:update',
   MCP_CUSTOM_DELETE: 'maker:mcp:custom:delete',
@@ -621,6 +596,14 @@ export const MAKER_INVOKE = {
    * renderer 需要 code 渲染分类文案与修复引导）。
    */
   PROVIDER_TEST_CONNECTION: 'maker:provider:test-connection',
+  /**
+   * 供应商账户余额查询（API Key 计费连接的余额卡,见 maker-host/provider-account-usage）。
+   * 入参 ProviderAccountUsageRequest（{providerId, forceRefresh?}）,端点在 main 硬编码
+   * 官方清单里,renderer 不传 URL;返回查询型结构化结果 ProviderAccountUsageResult（规则 13
+   * 例外条款:renderer 需要 error 渲染分类文案与重试入口）。快照不含密钥材料;虽只读,
+   * 但会把该供应商已存 key 发往其官方端点,不进 device-link 白名单（口径同 test-connection）。
+   */
+  PROVIDER_ACCOUNT_USAGE: 'maker:provider:account-usage',
   /**
    * 供应商「获取模型列表」—— 用表单值（baseUrl / modelsUrl / key / headers 内存透传）GET
    * 该供应商的列模型端点（见 maker-host/provider-model-fetch）。返回查询型结构化结果
@@ -693,7 +676,16 @@ export const MAKER_INVOKE = {
   SCHEDULE_CREATE_FROM_TEMPLATE: 'maker:schedule:create-from-template',
   /** script 任务能力选择器的运行时可用性探测(意识装入/唤醒态);只做提示,不过滤清单。 */
   SCHEDULE_SCRIPT_CAPABILITY_STATUS: 'maker:schedule:script-capability-status',
+  SCHEDULE_WEBHOOK_STATUS: 'maker:schedule:webhook-status',
+  /** 这台电脑现在能不能接收 Webhook：决定是否显示开关。 */
+  SCHEDULE_WEBHOOK_RECEIVER: 'maker:schedule:webhook-receiver',
+  SCHEDULE_WEBHOOK_SET_SECRET: 'maker:schedule:webhook-set-secret',
+  SCHEDULE_WEBHOOK_ROTATE_URL: 'maker:schedule:webhook-rotate-url',
+  SCHEDULE_WEBHOOK_ACCOUNT: 'maker:schedule:webhook-account',
+  SCHEDULE_WEBHOOK_RELEASE: 'maker:schedule:webhook-release',
+  SCHEDULE_WEBHOOK_RESTORE: 'maker:schedule:webhook-restore',
   PROJECT_AUTOMATION_RECONCILE: 'maker:project-automation:reconcile',
+  PROJECT_AUTOMATION_PENDING_IMPORTS: 'maker:project-automation:pending-imports',
   PROJECT_AUTOMATION_LIST_CONSENTS: 'maker:project-automation:list-consents',
   PROJECT_AUTOMATION_REVOKE_CONSENT: 'maker:project-automation:revoke-consent',
   PROJECT_AUTOMATION_UPSERT_SCHEDULE: 'maker:project-automation:upsert-schedule',
@@ -786,7 +778,6 @@ export const MAKER_INVOKE = {
   RSB_WINDOW_CLOSE: 'maker:rsb-window:close',
   RSB_WINDOW_SET_DETACHED: 'maker:rsb-window:set-detached',
   RSB_WINDOW_GET_CONTEXT: 'maker:rsb-window:get-context',
-  RSB_WINDOW_ALLOW_BOT_WORKBENCH_PERMISSION: 'maker:rsb-window:allow-bot-workbench-permission',
   RSB_WINDOW_READY: 'maker:rsb-window:ready',
   RSB_WINDOW_SEND_COMMAND: 'maker:rsb-window:send-command',
   /**
@@ -818,19 +809,16 @@ export const MAKER_INVOKE = {
   GOAL_PAUSE: 'maker:goal:pause',
   GOAL_RESUME: 'maker:goal:resume',
   GOAL_UPDATE: 'maker:goal:update',
-  /** Cindy Bot 父任务列出自己发起的 Bot 间委派。 */
+  /** Read-only: the V1 background tasks (delegations) a teammate conversation started, for old task cards. */
   BOT_DELEGATIONS_LIST: 'maker:bot-delegations:list',
-  /** Cindy Bot 父任务取消仍在运行或等待中的委派。 */
+  /** Kept for older controllers over device-link; answers UNSUPPORTED_CAPABILITY. */
   BOT_DELEGATION_CANCEL: 'maker:bot-delegation:cancel',
-  /**
-   * 主人在伙伴聊天的任务卡上「补一句」后，给伙伴聊天留一条「已告诉后台任务：「…」」。
-   * 消息本身由渲染端以主人身份发进子任务；只本机可用，不进 device-link 白名单。
-   */
-  BOT_DELEGATION_NOTE_TRACE: 'maker:bot-delegation:note-trace',
   /** Read one hidden Bot-to-Bot conversation after a timeline trace is opened. */
   BOT_DIRECT_MESSAGE_THREAD_GET: 'maker:bot-direct-message-thread:get',
   /** 伙伴群聊：列表、详情、创建、修改、成员、删除、发言、继续讨论与停止。 */
   CHAT_SERVER_MANAGE: 'maker:chat-server:manage',
+  CHAT_SERVER_MASK: 'maker:chat-server:mask',
+  CHAT_SERVER_MENTIONS: 'maker:chat-server:mentions',
   CHAT_SERVER_OWNEDBOTS: 'maker:chat-server:ownedBots',
   CHAT_SERVER_REFRESHPROFILE: 'maker:chat-server:refreshProfile',
   CHAT_SERVER_STATUS: 'maker:chat-server:status',
@@ -840,6 +828,7 @@ export const MAKER_INVOKE = {
   CHAT_SERVER_SHARETOMAIN: 'maker:chat-server:shareToMain',
   CHAT_SERVER_REACT: 'maker:chat-server:react',
   CHAT_SERVER_REACTORS: 'maker:chat-server:reactors',
+  CHAT_SERVER_READERS: 'maker:chat-server:readers',
   CHAT_SERVER_CREATEINVITE: 'maker:chat-server:createInvite',
   CHAT_SERVER_REVOKEINVITE: 'maker:chat-server:revokeInvite',
   CHAT_SERVER_PREVIEWINVITE: 'maker:chat-server:previewInvite',
@@ -851,6 +840,10 @@ export const MAKER_INVOKE = {
   BOT_GROUP_SET_MEMBERS: 'maker:bot-group:set-members',
   BOT_GROUP_DELETE: 'maker:bot-group:delete',
   BOT_GROUP_SEND: 'maker:bot-group:send',
+  CHAT_DISPLAY_CACHE: 'maker:chat:display-cache',
+  BOT_GROUP_OUTBOX: 'maker:bot-group:outbox',
+  BOT_GROUP_OUTBOX_COMMAND: 'maker:bot-group:outbox-command',
+  BOT_READ_STATE: 'maker:bot-read-state',
   BOT_GROUP_CONTINUE: 'maker:bot-group:continue',
   BOT_GROUP_STOP: 'maker:bot-group:stop',
   BOT_GROUP_PLAN_START: 'maker:bot-group:plan-start',
@@ -1011,6 +1004,11 @@ export const MAKER_PUSH = {
    */
   SESSION_BACKGROUND_ACTIVITY_CHANGED: 'maker:session-background-activity-changed',
   /**
+   * 「回合已结束但后台命令仍在工作」翻转广播（payload = { sessionId, active }）。任务列表据此把
+   * 该任务显示为运行中；只影响展示，不代表回合在跑，不改完成提醒、发送排队与停止语义。
+   */
+  SESSION_BACKGROUND_WORK_CHANGED: 'maker:session-background-work-changed',
+  /**
    * Scheduler (Phase 4) — 单一 channel 承载 'fired' / 'completed' / 'failed' / 'changed'
    * 4 个事件类型；renderer 按 payload.type 分支。
    */
@@ -1027,21 +1025,18 @@ export const MAKER_PUSH = {
   CINDY_MAKE_STATE_CHANGED: 'maker:cindy-make:state-changed',
   /** multi-worker: worker 增删改 / focus 切换时 broadcast, renderer useWorkers hook 订阅刷新。 */
   ORCA_WORKER_CHANGED: 'maker:orca:worker-changed',
-  /** Bot 间委派状态改变；payload 带父/子任务 id，广播自动附 owner generation。 */
-  BOT_DELEGATION_CHANGED: 'maker:bot-delegation:changed',
-  /** Hidden Bot pair conversation accepted another message or reached its limit. */
-  BOT_DIRECT_MESSAGE_CHANGED: 'maker:bot-direct-message:changed',
   /** A Bot group, its members, messages or running round changed. */
   BOT_GROUP_CHANGED: 'maker:bot-group:changed',
+  /** Local complete-app windows only; never forwarded to Device Link. */
+  BOT_GROUP_OUTBOX_CHANGED: 'maker:bot-group:outbox-changed',
+  BOT_READ_STATE_CHANGED: 'maker:bot-read-state:changed',
   /** Companion homes changed; payload is the full CompanionCloudSnapshot. */
   COMPANION_CLOUD_CHANGED: 'maker:companion-cloud:changed',
   /** Bot 档案经主进程创建或更新后变化；renderer 收到后重拉伙伴列表。 */
   BOT_PROFILE_CHANGED: 'maker:bot-profile:changed',
-  /** 伙伴工作台已接手的项目变化(payload: { botId });renderer 收到后重读项目列表。 */
+  /** A teammate's linked projects or the tasks it opened changed (payload: { botId }); the name is kept from the V1 workbench. */
   BOT_WORKBENCH_CHANGED: 'maker:bot-workbench:changed',
   BOT_LIFECYCLE_CHANGED: 'maker:bot-lifecycle:changed',
-  /** 伙伴自主跟进状态表或「自动跟进所有任务」设置变化（节流 ≤1 次/秒，payload: { botIds?: string[] }，缺省 = 全部伙伴）；renderer 重读「一眼」。 */
-  BOT_AUTONOMY_CHANGED: 'maker:bot-autonomy:changed',
   /**
    * 被控端「当前 New Maker 草稿」全量变更广播。SYNC_NEW_MAKER_DRAFT 落 main 缓存后随即发,
    * 经 device-link tap 转发给控制端(account 级 → sessions topic),控制端刷新远程草稿显示镜像。
@@ -1078,6 +1073,11 @@ export const MAKER_PUSH = {
    * workerCreationPrefs localStorage。只在本机消费，不进入 device-link 转发。
    */
   WORKER_CREATION_PREFS_APPLY: 'maker:worker-creation-prefs:apply',
+  /**
+   * 手机或远程控制的电脑改了这台电脑的协同角色清单(记下一次创建 / 移除一个角色)：交给本机
+   * renderer 写回 workerCreationPrefs localStorage。只在本机消费，不进入 device-link 转发。
+   */
+  WORKER_ROLES_APPLY_REQUEST: 'maker:worker-roles:apply-request',
   /**
    * 被控端本地 main → 自身 renderer:把控制端写穿的会话 pref 交给 renderer,renderer 调它原来的
    * 本地 setter 写真实会话记忆。仅本地窗口消费(不转发)。payload = SET_SESSION_MODEL_PREF 入参。

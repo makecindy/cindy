@@ -11,7 +11,7 @@ import { GhostFsSlot } from '../../cindy-brain/fsSlot.js';
 import { GhostPipeDispatcher } from '../../cindy-brain/pipeDispatcher.js';
 import type { GhostPipeToolCall, InstalledGhost } from '../../../shared/ghost.js';
 import { installedGhostStoragePart, resolveInstalledGhost } from '../../../shared/pluginIdentity.js';
-import { SchedulerScriptCapabilityBroker } from '../script-capability-broker';
+import { SchedulerScriptCapabilityBroker } from '../script-capability-broker.desktop';
 
 const sendToSessionMock = vi.hoisted(() => vi.fn());
 const restoreArchivedSessionForSend = vi.hoisted(() => vi.fn());
@@ -474,7 +474,8 @@ describe('SchedulerScriptCapabilityBroker', () => {
     expect(byMethod.get('feishu.recent_messages')).toBe(false);
     expect(byMethod.get('sessions.dispatch')).toBe(false);
     expect(byMethod.get('jira.search_jql')).toBe(true);
-    expect(result.methods).toHaveLength(7);
+    expect(result.methods).toHaveLength(10);
+    expect(byMethod.get('github.get_pr_status')).toBe(false);
   });
 
   it('rejects missing task grants and unknown methods', async () => {
@@ -597,6 +598,37 @@ describe('SchedulerScriptCapabilityBroker', () => {
       },
     });
     expect(result).toMatchObject({ target_session_id: 'session-1', wake_kind: 'created' });
+  });
+
+  // PR #6830 / unit: MCP may persist a different model Harness. Exercise the
+  // actual dispatch entry, which previously paired this Codex model with Claude.
+  it('dispatches a new task with the explicit model Harness', async () => {
+    sendToSessionMock.mockResolvedValue({ ok: true, targetSessionId: 'new', agentKind: 'codex', wakeKind: 'created' });
+    await new SchedulerScriptCapabilityBroker().call(
+      { method: 'sessions.dispatch', params: { message: 'run task' } },
+      new Set(['sessions.dispatch']),
+      { schedule: schedule({ agentKind: 'claude-code', modelAgentKind: 'codex', modelAgentDeviceId: '' }) },
+    );
+    expect(sendToSessionMock).toHaveBeenCalledWith(expect.objectContaining({
+      createDefaults: expect.objectContaining({ agentKind: 'codex', model: 'gpt-5.5', providerId: 'provider-1' }),
+    }));
+  });
+
+  // Integration regression: a persisted remote route must never become local
+  // create defaults merely because sessions.dispatch omits a target task.
+  it.each([
+    { modelAgentDeviceId: 'shared:owner', modelAgentKind: 'codex' as const },
+    { agentDeviceId: 'studio' },
+  ])('rejects remote script-dispatch defaults before opening a local session (%j)', async (location) => {
+    await expect(new SchedulerScriptCapabilityBroker().call(
+      { method: 'sessions.dispatch', params: { message: 'run task' } },
+      new Set(['sessions.dispatch']),
+      { schedule: schedule(location) },
+    )).rejects.toMatchObject({
+      code: 'PRECONDITION_FAILED',
+      message: expect.stringContaining('script execution does not support remote model sources'),
+    });
+    expect(sendToSessionMock).not.toHaveBeenCalled();
   });
 
   it('resolves blank Pi script-dispatch defaults as one model/provider route', async () => {
@@ -1095,3 +1127,15 @@ function wireRealChannel(tmp: string, installed = makeInstalledGhost('xd-atlassi
   finalizeCallMock.mockImplementation((callId: string) => cardService.finalizeCall(callId));
   return { cardService, fsSlot };
 }
+
+// Unit: retry after a lost receipt must retain the same Host delivery identity, scoped to schedule and target.
+it('keeps dispatch retry keys stable and separates different schedules', async () => {
+  sendToSessionMock.mockResolvedValue({ ok: true, targetSessionId: 'owner', agentKind: 'codex', wakeKind: 'queued' });
+  const broker = new SchedulerScriptCapabilityBroker();
+  const request = { method: 'sessions.dispatch', params: { message: 'update', idempotency_key: 'event-1' } };
+  const run = (id: string) => broker.call(request, new Set(['sessions.dispatch']), { schedule: schedule({ id, targetSessionId: 'owner' }) });
+  const a = await run('one'); const b = await run('one'); const c = await run('two');
+  expect(a).toMatchObject({ delivery_id: expect.stringMatching(/^schedule-delivery:/) });
+  expect(b).toEqual(a); expect(c).not.toEqual(a);
+  expect(sendToSessionMock.mock.calls.at(-1)?.[0]).toMatchObject({ targetSessionId: 'owner', deliveryClientId: (c as { delivery_id: string }).delivery_id });
+});

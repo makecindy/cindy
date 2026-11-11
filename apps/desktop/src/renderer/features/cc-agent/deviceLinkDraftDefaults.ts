@@ -85,6 +85,43 @@ export function shouldReseedDeviceLinkDraftDefaults(input: {
   );
 }
 
+/** worktree 勾选镜像的一帧输入:当前草稿目标设备 + 当时的远端草稿快照(按引用比较)。 */
+export interface DeviceLinkWorktreeEnabledFrame {
+  deviceId: string | null;
+  remoteDraftState: {
+    status: 'idle' | 'loading' | 'ready' | 'error';
+    value: Pick<RemoteDraftDefaults, 'worktreeEnabled'> | null;
+  };
+}
+
+/**
+ * device-link 草稿的 worktree 勾选 = 被控端勾选记忆的镜像。返回要写入的勾选值,
+ * null = 保持当前显示不变。
+ *
+ *   - 切设备:先回到默认未勾选;若这一帧的快照对象仍是上一帧那份(属于上一台设备),
+ *     不得用它播种新设备,等新设备自己的快照到达。
+ *   - 切设备时同一批更新里就带来了新设备快照(设备域浏览器 inline 拉取后直接 seed,
+ *     且会跳过 hook 的再次拉取):必须立刻采用,否则此后再无快照变化能把勾选恢复,
+ *     被控端已勾选 worktree 却静默按普通会话建在默认分支上。
+ *   - 同设备:快照 ready 且带明确 boolean 才采用;缺字段 / 拉取中保留最后镜像。
+ */
+export function resolveDeviceLinkWorktreeEnabled(
+  previous: DeviceLinkWorktreeEnabledFrame | null,
+  current: DeviceLinkWorktreeEnabledFrame,
+): boolean | null {
+  const deviceChanged = !previous || previous.deviceId !== current.deviceId;
+  const snapshotFromPreviousDevice =
+    deviceChanged && previous?.remoteDraftState === current.remoteDraftState;
+  const remotePreference =
+    current.remoteDraftState.status === 'ready'
+      ? current.remoteDraftState.value?.worktreeEnabled
+      : undefined;
+  if (!snapshotFromPreviousDevice && typeof remotePreference === 'boolean') {
+    return remotePreference;
+  }
+  return deviceChanged ? false : null;
+}
+
 /**
  * 把被控端草稿值(或 null=回落)按被控端 capabilities 校准成可 seed 的选择。
  *   - model:要解析的模型 = targetModel(用户在草稿里切模型)优先,否则 remoteDraft.model(初始 seed);

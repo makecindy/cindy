@@ -1,13 +1,17 @@
+import { TRUSTED_DESKTOP_QUEUE_ORIGIN, type TrustedDesktopQueueOriginReceipt } from './queuedInputOrigin.js';
+export { TRUSTED_DESKTOP_QUEUE_ORIGIN, TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT, stampTrustedDesktopQueuedOrigin, stampTrustedDeviceLinkQueuedOrigin, restoreTrustedDesktopQueuedOrigin, revokeTrustedDesktopQueuedOrigin } from './queuedInputOrigin.js';
 import { FORWARDED_REQUEST_RECEIPT } from '../../shared/forwardedRequest.js';
 import { teammateRoutineReviewIntent } from '../../shared/botAutonomy.js';
 import type { AutoReviewUserIntent } from '@cindy/maker-core';
 import {
   PI_CACHE_RECOVERY_EXPECTATION,
+  MODEL_REQUEST_CONTROL,
   CodexResumePreparationBlockedError,
   AUTO_REVIEW_SOURCE_CONTENT,
   AUTO_REVIEW_USER_INTENT,
   INHERITED_CAPABILITY_SELECTION,
   MAIN_OWNED_SEND_CONTEXT,
+  ASYNC_QUESTION_ANSWER,
   PINNED_SKILL_INVOCATION,
   LIBRARY_READ_ROOT,
   type AgentKind,
@@ -40,6 +44,8 @@ import {
   type HandoffWireMessage,
 } from './agentHandoff.js';
 import type { MessageSourceDevice, MessageSourceHostDevice } from '@cindy/maker-shared/message-source';
+import { RuntimePluginControlError } from '../cindy-brain/runtimeControl.js';
+import { appendRuntimePluginContext, runtimePluginInputText } from './runtimePlugins.js';
 import {
   buildClientEnvironmentNote,
   shouldPrependMobileClientPromptNote,
@@ -47,8 +53,13 @@ import {
 import { buildWireMessageSourceNote, readWireSourceDevice, readWireSourcePlugin } from './messageSourceNote.js';
 import { buildCindyMakeTaskNote } from '../cindy-make/taskNote.js';
 import { SIDE_CHAT_CONTEXT } from './sideChatContext.js';
-import { getResolvedMainLocale } from '../i18n.js';
-import { buildUiLanguageErrorNote, turnUiLanguageFromSendOpts } from './uiLanguageErrorNote.js';
+import type { ClassicalReplyStyleId } from '@cindy/maker-shared/classical-reply';
+import type { SupportedLocale } from '../../shared/locale.js';
+import {
+  buildUiLanguageErrorNote,
+  turnClassicalStyleFromSendOpts,
+  turnUiLanguageFromSendOpts,
+} from './uiLanguageErrorNote.js';
 import type { RepeatableWireNotes, WireNotePlan } from './wireNoteMemory.js';
 import {
   excludeDirectoryGrantConflicts,
@@ -61,8 +72,8 @@ import {
 import type { MakerSessionCreateOpts } from './sessionRequest.js';
 import { channelTurnSourceFor, withChannelTurnSource } from './channelTurnSignal.js';
 import type { CindyLearnInvocationGrant } from '../learn-host/invocationGrant.js';
-import { AUTO_REVIEW_DELEGATED_CONTINUATION, currentAutoReviewResourceIntent, readAutoReviewUserText, restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from './autoReviewUserIntent.js';
-import { mcpAppModelContext } from '../mcp-apps/runtime.js';
+import { AUTO_REVIEW_DELEGATED_CONTINUATION, restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from './autoReviewUserIntent.js';
+import type { McpAppModelContext } from '../mcp-apps/host.js';
 import { MCP_APP_MESSAGE_GUARD, type McpAppMessageGuard } from '../mcp-apps/message.js';
 
 type CreateOpts = MakerSessionCreateOpts;
@@ -126,134 +137,9 @@ export async function prepareDirectoryGrantsForBootstrap(
 type IpcUserMessage =
   string | { type: 'user'; content: string | Array<{ type: string; [k: string]: unknown }> };
 
-export const TRUSTED_DESKTOP_QUEUE_ORIGIN = Symbol('trusted-desktop-queue-origin');
-export const TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT = 'trustedDesktopPiCommandAuthorization';
-interface TrustedDesktopQueueOriginReceipt {
-  clientId: string;
-  persistedContent: string;
-  text: string;
-}
-interface TrustedDesktopPiCommandSnapshot extends TrustedDesktopQueueOriginReceipt {
-  version: 1;
-}
-type QueuedMessageWithDesktopAuthorization = AgentInputQueuedMessage & {
-  [TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT]?: TrustedDesktopPiCommandSnapshot;
-};
-
-function isExactPiPackageCommand(text: string): boolean {
-  const original = text.trim();
-  if (!original || /[\r\n\0]/.test(original)) return false;
-  const match = original.match(/^\/?pi\s+(install|update|remove)\s+(.+)$/i);
-  return Boolean(match?.[1] && match[2]);
-}
-
-function canTrustDesktopPiCommand(item: AgentInputQueuedMessage): boolean {
-  const semanticOrigin = item.origin as { kind?: unknown } | undefined;
-  return isExactPiPackageCommand(item.text)
-    && extractPlainText(item.persistedContent) === item.text
-    && (item.files?.length ?? 0) === 0
-    && (item.mentions?.length ?? 0) === 0
-    && (item.sessionRefs?.length ?? 0) === 0
-    && (item.agentReferences?.length ?? 0) === 0
-    && item.fromMobileClient !== true
-    && item.autoResume !== true
-    && item.originalSyntheticTrigger === undefined
-    && (semanticOrigin === undefined || semanticOrigin.kind === 'desktop');
-}
-
-function withoutDesktopAuthorization(
-  item: AgentInputQueuedMessage,
-  preserveSemanticOrigin = false,
-): QueuedMessageWithDesktopAuthorization {
-  const explicitUserItem = { ...item } as QueuedMessageWithDesktopAuthorization;
-  if (!preserveSemanticOrigin
-    || (item.origin as { kind?: unknown } | undefined)?.kind === 'desktop') delete explicitUserItem.origin;
-  delete explicitUserItem[TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT];
-  return explicitUserItem;
-}
-
-export function stampTrustedDesktopQueuedOrigin(
-  item: AgentInputQueuedMessage,
-  deviceLinkInvoke: boolean,
-  preserveSemanticOrigin = false,
-): AgentInputQueuedMessage {
-  const explicitUserItem = withoutDesktopAuthorization(item, preserveSemanticOrigin);
-  // This function is called only after trusted input IPC validation, including queue edits.
-  // Preserve the user's text independently of any later plugin rewrite, without granting
-  // mobile inputs the separate Pi desktop-command privilege.
-  delete explicitUserItem.autoReviewUserText;
-  const ordinary = !item.autoResume && item.originalSyntheticTrigger === undefined
-    && (!item.origin || (item.origin as { kind: string }).kind === 'desktop');
-  // Keep the complete input until the shared atomic history budget is applied.
-  // Pre-compacting a revocation would leave older grants beside an omission marker.
-  if (ordinary) explicitUserItem.autoReviewUserText =
-    readAutoReviewUserText(item.persistedContent) ?? currentAutoReviewResourceIntent(item.persistedContent, item.text);
-  if (deviceLinkInvoke || !canTrustDesktopPiCommand(item)) return explicitUserItem;
-  const receipt: TrustedDesktopPiCommandSnapshot = {
-    version: 1,
-    clientId: explicitUserItem.clientId,
-    persistedContent: explicitUserItem.persistedContent,
-    text: explicitUserItem.text,
-  };
-  explicitUserItem[TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT] = receipt;
-  return {
-    ...explicitUserItem,
-    origin: {
-      kind: 'desktop',
-      [TRUSTED_DESKTOP_QUEUE_ORIGIN]: receipt,
-    },
-  } as unknown as AgentInputQueuedMessage;
-}
-
-/**
- * Stamp device-link provenance at the trusted input IPC boundary.  The queue
- * drains after that AsyncLocalStorage context has ended, so the marker must
- * travel with the main-owned item into the send transaction.
- *
- * 消息来源字段同样在这里无条件覆盖:wire 带来的 `sourceDevice` / `sourcePlugin` /
- * `agentOmitsTriggerPrefix` 一律剥掉,`sourceDevice` 只写入 main 从 invoke context
- * 读到的同账号控制端(共享任务访客、未知平台、本机输入都不写)。
- */
-export function stampTrustedDeviceLinkQueuedOrigin(
-  item: AgentInputQueuedMessage,
-  deviceLinkInvoke: boolean,
-  sourceDevice?: MessageSourceDevice,
-): AgentInputQueuedMessage {
-  const stamped = { ...item };
-  if (deviceLinkInvoke) stamped.fromDeviceLinkClient = true;
-  else delete stamped.fromDeviceLinkClient;
-  delete stamped.sourceDevice;
-  delete stamped.sourcePlugin;
-  delete stamped.agentOmitsTriggerPrefix;
-  delete stamped.botTaskCoordination;
-  if (deviceLinkInvoke && sourceDevice) stamped.sourceDevice = { ...sourceDevice };
-  return stamped;
-}
-
-export function restoreTrustedDesktopQueuedOrigin(item: AgentInputQueuedMessage): AgentInputQueuedMessage {
-  const queued = item as QueuedMessageWithDesktopAuthorization;
-  const receipt = queued[TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT];
-  if (receipt?.version !== 1
-    || receipt.clientId !== item.clientId
-    || receipt.persistedContent !== item.persistedContent
-    || receipt.text !== item.text
-    || !canTrustDesktopPiCommand(item)) return withoutDesktopAuthorization(item, true);
-  return {
-    ...item,
-    origin: {
-      kind: 'desktop',
-      [TRUSTED_DESKTOP_QUEUE_ORIGIN]: receipt,
-    },
-  } as unknown as AgentInputQueuedMessage;
-}
-
-export function revokeTrustedDesktopQueuedOrigin(item: AgentInputQueuedMessage): void {
-  const queued = item as QueuedMessageWithDesktopAuthorization;
-  delete queued[TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT];
-  if ((item.origin as { kind?: unknown } | undefined)?.kind === 'desktop') delete item.origin;
-}
 
 type MakerSendOptions = {
+  readonly [MODEL_REQUEST_CONTROL]?: import('@cindy/maker-core').ModelRequestControl;
   readonly [PI_CACHE_RECOVERY_EXPECTATION]?: import('@cindy/maker-core').SendOptions[typeof PI_CACHE_RECOVERY_EXPECTATION];
   /** Main-only live card guard, never serialized to queue history or provider options. */
   readonly [MCP_APP_MESSAGE_GUARD]?: McpAppMessageGuard;
@@ -265,16 +151,16 @@ type MakerSendOptions = {
   readonly [AUTO_REVIEW_USER_INTENT]?: AutoReviewUserIntent;
   readonly [INHERITED_CAPABILITY_SELECTION]?: string;
   readonly [MAIN_OWNED_SEND_CONTEXT]?: MainOwnedSendContext;
+  readonly [ASYNC_QUESTION_ANSWER]?: true;
   messageUuid?: string;
   userName?: string;
   throwOnStartFailure?: boolean;
   /** Host-owned per-turn lifecycle correlation; maker-core stamps it on AgentEvent. */
   turnAttemptToken?: number;
   /**
-   * Direct Continue fallback only: acknowledge the interrupted marker on the
-   * executor after vendor dispatch is irreversible. The executor must own the
-   * timestamp so device-link controller/controlled clock skew cannot corrupt
-   * active_turn_started_at > last_turn_ended_at ordering.
+   * Legacy Continue hint retained for older controllers. Every accepted send now
+   * acknowledges the old interrupted marker on the executor, including ordinary
+   * input; controllers must never supply the acknowledgement timestamp.
    */
   ackInterruptedTurnOnDispatch?: boolean;
   signal?: AbortSignal;
@@ -295,6 +181,8 @@ type MakerSendOptions = {
   fromMobileClient?: boolean;
   /** Coordinator-stamped interface language. Direct wire values are stripped. */
   uiLanguage?: string;
+  /** Classical output style stamped with uiLanguage. Direct wire values are stripped. */
+  classicalStyle?: string;
   /** Coordinator-transmitted provenance for device-link input.enqueue. */
   fromDeviceLinkClient?: boolean;
   /**
@@ -376,6 +264,8 @@ export interface MakerSendTransactionSession {
   /** Codex host-owned evidence: a provider turn crossed acceptance on this runtime. */
   codexThreadMayHaveRollout?: boolean;
   isTurnRunning(): boolean;
+  /** 项目资源漂移且满足回收空闲口径(仅 pi 本地根任务实现;其余会话缺省,永不回收)。 */
+  hasRecyclableProjectResourceDrift?(): boolean;
   send(message: UserMessage | string, opts?: SessionSendOptions): Promise<SessionSendResult>;
 }
 
@@ -385,13 +275,29 @@ export interface MakerSendTransactionLog {
 }
 
 export interface MakerSendTransactionDeps {
+  /** Read launcher preferences at dispatch time, not at module initialization. */
+  /** Null when the launcher has no interface-language preference. */
+  getResolvedMainLocale(): SupportedLocale | null;
+  getMainClassicalStyle(): ClassicalReplyStyleId;
+  /** Use the launcher's existing App registry; never create a parallel registry. */
+  readMcpAppModelContext(sessionId: string): Promise<McpAppModelContext>;
+  prepareRuntimePrompt?(sessionId: string): Promise<void> | undefined;
+  composeRuntimeContext?(sessionId: string, readText: () => string, signal?: AbortSignal): Promise<string> | undefined;
+  prepareRuntimeTurn?(sessionId: string, message: unknown, signal?: AbortSignal): Promise<{
+    options?: Partial<SessionSendOptions>; failure?: DesktopMakerSendResult;
+  }> | undefined;
   getSession(sessionId: string): MakerSendTransactionSession | undefined | null;
   closeSession(sessionId: string): Promise<void>;
+  /** 资源漂移回收必须走 Maker 的 runtime-refresh 原因(直接 Session.close 会被
+   * IM runner 当 unexpected 丢弃排队回合);内部用 closeSessionIfCurrent 幂等。 */
+  closeSessionIfCurrent(sessionId: string): Promise<void>;
   preflightBotRuntimeResources(opts: CreateOpts): Promise<void>;
   getSessionMeta(sessionId: string): Promise<{ title?: string } | null>;
   /** The same clear/rewind-filtered transcript used for native context handoffs. */
   readAutoReviewHistory?(sessionId: string): Promise<AutoReviewHistoryMessage[]>;
   readScheduledPermissions?(sessionId: string): Promise<{ permissionMode: unknown; planModeEnabled: unknown } | null>;
+  /** Scheduler-only final route check, after asynchronous send preparation. */
+  assertScheduledDispatchRoute?(sessionId: string): Promise<void>;
   ensureRemoteReadyForSessionStart(params: {
     session?: { agentKind: AgentKind; remoteHostId: string | null } | null;
     createOpts?: unknown;
@@ -488,11 +394,15 @@ export interface MakerSendTransactionDeps {
   /** 把 Pi 原生 user entry id 补到已落库的 Cindy user 行，供会话树恢复附件。 */
   linkPiUserEntry?(sessionId: string, clientId: string, piEntryId: string): Promise<boolean | void>;
   readPiUserEntry?(sessionId: string, clientId: string): Promise<string | undefined>;
-  beforeDispatchDirectUserTurn?: (sessionId: string) => void | Promise<void>;
+  beforeDispatchDirectUserTurn?: (sessionId: string, signal?: AbortSignal) => void | Promise<void>;
   /** Capture product lifecycle state before async preparation; commit only at vendor dispatch. */
   prepareProductTurn?: (sessionId: string) => (() => void) | undefined;
   /** Synchronous final fence immediately before Session.send enters vendor code. */
   assertBeforeVendorDispatch?: (sessionId: string, sendOpts: unknown) => void;
+  /** Launcher-owned durable startup fence. A failed write must prevent provider
+   * startup so an uncertain turn cannot be replayed after a Host restart.
+   * Desktop omits this port and retains its existing event-driven lifecycle. */
+  beforeProviderStart?: (sessionId: string, sendOpts: unknown) => Promise<void>;
   onUndispatchedDirectUserTurn?: (sessionId: string) => void;
   ackInterruptedTurnDispatched?: (sessionId: string, endedAt: number) => void | Promise<void>;
   previewUserPrompt?(
@@ -525,26 +435,21 @@ export interface MakerSendTransactionDeps {
    * 随后本事务按空 session 走 lazy-create,避免 peek 之后对已关闭对象 send。
    */
   prepareUnhealthySession?(sessionId: string): Promise<boolean | void>;
+  /** Retire external ownership before selecting a runtime or applying a route. */
+  prepareExternalInput?(sessionId: string): Promise<void>;
   /** Restore durable task status before route changes or native session resume. */
   restoreArchivedSessionForSend?(sessionId: string): Promise<void>;
   /**
    * session-agent-switch:pending 交接读取(agentHandoff 注册表)。命中时把交接
    * 文本前置进 wire payload(不影响 persistUserMessage 落库显示内容),并在
    * dispatch 跨过不可逆边界(accepted)后 consume;未 accepted / 抛错保留 pending。
+   * 原生命令不附带交接，也不消费；留到下一条可注入上下文的消息。
    */
   peekPendingHandoff?(sessionId: string): Promise<string | null>;
   consumePendingHandoff?(sessionId: string): void;
   peekWorkingDirectoryRecoveryNote?(sessionId: string, workingDir: string): string | null;
   readWorkingDirectoryRecoveryCreateOpts(sessionId: string): Promise<CreateOpts>;
   consumeWorkingDirectoryRecoveryNote?(sessionId: string, note: string): void;
-  /**
-   * 伙伴工作记忆刷新(botWorkingMemory):原生自动压缩之后的下一次发送前置一次账本,
-   * 只进 wire payload;交接首条(pending handoff)已含账本时不重复。
-   * 返回 null = 没有待刷新;`note` 为 null = 有标记但该会话没有账本(仍要消费)。
-   * accepted 后只消费当时读到的 `generation`:发送在途时再来一次压缩边界,新一代留给下次。
-   */
-  peekWorkingMemoryRefresh?(sessionId: string): Promise<{ generation: number; note: string | null } | null>;
-  consumeWorkingMemoryRefresh?(sessionId: string, generation: number): void;
   /**
    * 计划对账:会话里若有待处理计划,返回一段只进 wire payload 的指示文本。
    * sealedTurnId 只用于已完成计划的一次性保护,跨过 accepted 后才消费。
@@ -591,6 +496,9 @@ export interface MakerSendTransactionDeps {
    * 与 `[客户端说明]` 同层,只进 wire 消息。
    */
   readBotThreadNote?(sessionId: string): Promise<string | null>;
+  /** The owner's message closed a waiting 代输入 card: the agent hears it here, with no turn of its own. */
+  readInputHandoffOwnerNote?(sessionId: string): string | null;
+  inputHandoffOwnerNoteDelivered?(sessionId: string): void;
   /**
    * 逐轮环境说明去重(见 wireNoteMemory.ts):返回本轮真正要前置的段;与上一次已被
    * 引擎接受的内容相同的段不再重复。`force` 在交接首条(原生上下文刚重建)时整体重发。
@@ -619,6 +527,14 @@ export interface MakerSendTransaction {
    * the next send then follows its normal path.
    */
   prewarmSession(sessionId: string, createOpts: CreateOpts): Promise<boolean>;
+  /**
+   * Main-side senders that reach an idle live session without this transaction (Orca
+   * inter-agent delivery) call this first, so a session that became an Orca Lead/Worker
+   * while its runtime was already up starts the turn with its Orca instructions and
+   * tools, as a user send would. Returns true only when the runtime was rebuilt; on
+   * false the caller re-reads the live session and continues.
+   */
+  hydrateActiveOrcaSession(sessionId: string, createOpts: CreateOpts): Promise<boolean>;
 }
 
 type ResolveSessionResult =
@@ -641,7 +557,7 @@ function readPersistUserMessageOption(sendOpts: MakerSendOptions): {
   origin?: Record<string, unknown>;
   shouldBroadcast?: () => boolean;
   onPersisting?: () => void;
-  onPersisted?: () => void | Promise<void>;
+  onPersisted?: (signal?: AbortSignal) => void | Promise<void>;
   onPersistFailed?: () => void;
   expectedClearBoundaryMs?: number | null;
   expectedInputGeneration?: number;
@@ -680,7 +596,7 @@ function readPersistUserMessageOption(sendOpts: MakerSendOptions): {
       ? { onPersisting: persist.onPersisting as () => void }
       : {}),
     ...(typeof persist.onPersisted === 'function'
-      ? { onPersisted: persist.onPersisted as () => void | Promise<void> }
+      ? { onPersisted: persist.onPersisted as (signal?: AbortSignal) => void | Promise<void> }
       : {}),
     ...(typeof persist.onPersistFailed === 'function'
       ? { onPersistFailed: persist.onPersistFailed as () => void }
@@ -1043,6 +959,37 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
     return session?.codexThreadMayHaveRollout;
   }
 
+  /**
+   * A live session that became an Orca Lead/Worker after its runtime started has neither
+   * the Orca instructions nor the Orca MCP context yet. Rebuild it before its next turn.
+   * Returns null when nothing had to change (already hydrated, not an Orca session, or a
+   * turn is running — the caller's running guard owns that case).
+   */
+  async function hydrateActiveOrcaSessionIfNeeded(
+    sess: MakerSendTransactionSession,
+    createOpts: CreateOpts,
+    fromDeviceLinkClient: boolean,
+  ): Promise<ResolveSessionResult | null> {
+    const sessionId = sess.id;
+    if (deps.isOrcaMcpHydrated(sessionId)) return null;
+    // Launch-only preferences (custom prompt, memory, reasoning display) live only on the
+    // running handle; callers that rebuild createOpts from the DB do not carry them.
+    const startupPreferences = Object.fromEntries(
+      Object.entries(sess.hostStartupPreferences ?? {})
+        .filter(([key]) => createOpts[key as keyof typeof createOpts] === undefined),
+    );
+    const co = deps.buildCreateOptsWithStderr({ ...createOpts, ...startupPreferences, id: sessionId });
+    const shouldHydrateOrcaMcp = await deps.synthesizeOrcaVendorOptionsFromDb(sessionId, co);
+    if (!shouldHydrateOrcaMcp) return null;
+    if (sess.isTurnRunning()) {
+      deps.log.warn('send: active Orca session needs MCP rehydrate but turn is running', {
+        sessionId,
+      });
+      return null;
+    }
+    return rehydrateActiveSession(sessionId, co, fromDeviceLinkClient);
+  }
+
   async function lazyCreateSession(
     sessionId: string,
     createOpts: CreateOpts,
@@ -1128,6 +1075,12 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       const lazy = await lazyCreateSession(sessionId, createOpts);
       return lazy.kind === 'session';
     },
+    async hydrateActiveOrcaSession(sessionId, createOpts) {
+      const sess = deps.getSession(sessionId);
+      if (!sess) return false;
+      const hydrated = await hydrateActiveOrcaSessionIfNeeded(sess, createOpts, false);
+      return hydrated?.kind === 'session';
+    },
     async sendToAgentAccepted(
       sessionId,
       message,
@@ -1135,10 +1088,19 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       sendOpts,
     ): Promise<DesktopMakerSendResult> {
       if (typeof sessionId !== 'string') throwIpcError('INVALID_PARAMS', 'sessionId required');
+      if (deps.prepareExternalInput) await deps.prepareExternalInput(sessionId);
       const dispatchProductTurn = deps.prepareProductTurn?.(sessionId);
-      const requestedSendOpts = (sendOpts ?? {}) as MakerSendOptions;
+      const requestedSendOpts = { ...((sendOpts ?? {}) as MakerSendOptions) };
       if (!requestedSendOpts.signal?.aborted) {
         await deps.restoreArchivedSessionForSend?.(sessionId);
+      }
+      const runtimePreparation = deps.prepareRuntimeTurn?.(sessionId,
+        requestedSendOpts[AUTO_REVIEW_SOURCE_CONTENT] ?? requestedSendOpts[MAIN_OWNED_SEND_CONTEXT]?.rawChannelText ?? message,
+        requestedSendOpts.signal);
+      if (runtimePreparation) {
+        const runtime = await runtimePreparation;
+        if (runtime.failure && !requestedSendOpts.signal?.aborted) return runtime.failure;
+        Object.assign(requestedSendOpts, runtime.options);
       }
       // session-agent-switch:pending 切换在发送时刻生效(用户语义:「消息真正发出
       // 去时才切」)。必须在 getSession 之前——apply 会 close 旧引擎的 live session,
@@ -1156,6 +1118,14 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           ...(clientId ? { clientId } : {}),
         } : undefined,
       );
+      try {
+        const promptPreparation = deps.prepareRuntimePrompt?.(sessionId);
+        if (promptPreparation) await promptPreparation;
+      } catch (error) {
+        if (!(error instanceof RuntimePluginControlError) || requestedSendOpts.signal?.aborted) throw error;
+        return toCompatibleMakerSendResult(createHostSendFailure(error.action === 'skip' ? 'PLUGIN_TURN_SKIPPED' : 'PLUGIN_TURN_BLOCKED',
+          'The selected system prompt provider is unavailable.'));
+      }
       // 发送前的准备期间就被停止(如供应商组正在等原电脑恢复)：不再打开会话、不再派发，与 Session 在派发前
       // 收到取消是同一个结果，由调用方按「派发前取消」收尾。
       if (requestedSendOpts.signal?.aborted) {
@@ -1174,6 +1144,17 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       // and rebuild the handle before dispatching the message.
       if (sess?.getStatus?.() === 'error') {
         deps.log.info('send: error session requires recovery before dispatch', { sessionId });
+        sess = undefined;
+      }
+      // 会话中途新增的项目资源(如 openspec init):空闲时经 Maker 以
+      // 'runtime-refresh' 回收运行时(session:closed 带刷新原因,IM runner 保留
+      // 排队回合),下面的 lazy bootstrap 会重扫重算 argv 后再投递
+      // (见 Session.hasRecyclableProjectResourceDrift 的空闲口径说明)。
+      // 无 createOpts 的直发/老链路调用无法走 lazy-create 重建,跳过回收按
+      // 原运行时投递(维持回收前行为,不把触发消息拒成 NOT_FOUND)。
+      if (createOpts && sess?.hasRecyclableProjectResourceDrift?.()) {
+        await deps.closeSessionIfCurrent(sessionId);
+        deps.log.info('send: project resources drifted, recycling runtime before dispatch', { sessionId });
         sess = undefined;
       }
       if (sess?.isTurnRunning()) {
@@ -1310,28 +1291,14 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
             ),
           );
         }
-        if (!deps.isOrcaMcpHydrated(sessionId) && createOpts) {
-          const co = deps.buildCreateOptsWithStderr({
-            ...(createOpts as CreateOpts),
-            id: sessionId,
-          });
-          const shouldHydrateOrcaMcp = await deps.synthesizeOrcaVendorOptionsFromDb(sessionId, co);
-          if (shouldHydrateOrcaMcp) {
-            if (sess.isTurnRunning()) {
-              // 仍交给下方统一 running guard 抛 SESSION_RUNNING，避免重复分支。
-              deps.log.warn('send: active Orca session needs MCP rehydrate but turn is running', {
-                sessionId,
-              });
-            } else {
-              const rehydrated = await rehydrateActiveSession(
-                sessionId,
-                co,
-                requestedSendOpts.fromDeviceLinkClient === true,
-              );
-              if (rehydrated.kind === 'failure') return rehydrated.result;
-              sess = rehydrated.session;
-            }
-          }
+        if (createOpts) {
+          const hydrated = await hydrateActiveOrcaSessionIfNeeded(
+            sess,
+            createOpts as CreateOpts,
+            requestedSendOpts.fromDeviceLinkClient === true,
+          );
+          if (hydrated?.kind === 'failure') return hydrated.result;
+          if (hydrated) sess = hydrated.session;
         }
       }
 
@@ -1355,7 +1322,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         throwIpcError('INVALID_PARAMS', 'ackInterruptedTurnOnDispatch must be a boolean');
       }
       let outgoingMessage = message;
-      let outgoingSendOpts = sendOpts;
+      let outgoingSendOpts: unknown = requestedSendOpts;
       let cleanupAfterAcceptance: (() => void) | undefined;
       let cleanupBeforeAcceptance: (() => void | Promise<void>) | undefined;
       let cleanupLocalMaterialization: (() => void | Promise<void>) | undefined;
@@ -1429,7 +1396,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         await cleanupRejectedMaterialization();
         throw err;
       }
-      // session-agent-switch:切换后的首条消息把交接前缀拼进 wire payload。
+      // session-agent-switch:切换后首条可附带上下文的消息注入交接。
       // 落库/显示内容(persistUserMessage.content)不含交接段——display 与 sent 分离。
       const workdirRecoveryNote = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
         ? deps.peekWorkingDirectoryRecoveryNote?.(sessionId, sess.workDir) ?? null
@@ -1437,18 +1404,14 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       const withRecoveryNote = workdirRecoveryNote
         ? prependNoteToWireUserMessage(normalized as HandoffWireMessage, workdirRecoveryNote)
         : normalized;
-      const pendingHandoff = (await deps.peekPendingHandoff?.(sessionId)) ?? null;
-      // 原生压缩后的账本刷新:交接首条已含账本时不重复(但同样在 accepted 后消费当时那一代)。
-      const workingMemoryRefresh = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
-        ? ((await deps.peekWorkingMemoryRefresh?.(sessionId).catch(() => null)) ?? null)
+      // Native commands must lead the provider input. Defer the handoff rather
+      // than discarding it or consuming it when only the command is accepted.
+      const pendingHandoff = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
+        ? (await deps.peekPendingHandoff?.(sessionId)) ?? null
         : null;
-      const workingMemoryRefreshNote = !pendingHandoff ? workingMemoryRefresh?.note ?? null : null;
-      const withWorkingMemoryRefresh = workingMemoryRefreshNote
-        ? prependNoteToWireUserMessage(withRecoveryNote as HandoffWireMessage, workingMemoryRefreshNote)
-        : withRecoveryNote;
       const withHandoff = pendingHandoff
-        ? prependHandoffToUserMessage(withWorkingMemoryRefresh as HandoffWireMessage, pendingHandoff)
-        : withWorkingMemoryRefresh;
+        ? prependHandoffToUserMessage(withRecoveryNote as HandoffWireMessage, pendingHandoff)
+        : withRecoveryNote;
       // 计划对账:旧的未收口计划让 agent 顺手交代(更新/修订/清掉)。位置在交接段
       // 之前——两段各自带"以下是用户的新消息"式结束标记,对账在外层不破坏交接正文。
       // 只对"用户真的开口"的普通新轮次注入,判定用白名单而非枚举内部来源
@@ -1580,8 +1543,12 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         allowsEnvironmentNotes
           ? buildCindyMakeTaskNote()
           : null;
-      const uiLanguageNote = allowsEnvironmentNotes
-        ? buildUiLanguageErrorNote(turnUiLanguageFromSendOpts(so, getResolvedMainLocale()))
+      const uiLanguage = allowsEnvironmentNotes
+        ? turnUiLanguageFromSendOpts(so, deps.getResolvedMainLocale()) : null;
+      const uiLanguageNote = allowsEnvironmentNotes && uiLanguage
+        ? buildUiLanguageErrorNote(uiLanguage, {
+            classicalStyle: turnClassicalStyleFromSendOpts(so, deps.getMainClassicalStyle()),
+          })
         : null;
       // 这三段是"环境说明":同一原生上下文里内容没变就不重复发(wireNoteMemory)。交接首条
       // (原生上下文刚重建)整体重发;只有引擎接受后才记为已发送。斜杠命令轮次本来就不带
@@ -1616,11 +1583,38 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       if (plannedNotes['bot-thread']) {
         outgoing = prependNoteToWireUserMessage(outgoing as HandoffWireMessage, plannedNotes['bot-thread']);
       }
+      // The note belongs to the message that closed the card. A native command (a slash input) keeps its
+      // first characters, so it carries no note and the note is dropped rather than left for the next message.
+      const pendingOwnerNote = deps.readInputHandoffOwnerNote?.(sessionId) ?? null;
+      const inputHandoffOwnerNote = allowsEnvironmentNotes ? pendingOwnerNote : null;
+      if (pendingOwnerNote && !allowsEnvironmentNotes) deps.inputHandoffOwnerNoteDelivered?.(sessionId);
+      if (inputHandoffOwnerNote) {
+        outgoing = prependNoteToWireUserMessage(outgoing as HandoffWireMessage, inputHandoffOwnerNote);
+      }
       const appContext = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
-        ? await mcpAppModelContext(sessionId)
+        ? await deps.readMcpAppModelContext(sessionId)
         : undefined;
       if (appContext?.text) {
         outgoing = prependNoteToWireUserMessage(outgoing as HandoffWireMessage, appContext.text);
+      }
+      if (allowsEnvironmentNotes) {
+        try {
+          const pending = deps.composeRuntimeContext?.(sessionId,
+            () => runtimePluginInputText(so[AUTO_REVIEW_SOURCE_CONTENT] ?? so[MAIN_OWNED_SEND_CONTEXT]?.rawChannelText ?? message), so.signal);
+          const context = pending ? await pending : undefined;
+          if (context) outgoing = appendRuntimePluginContext(outgoing as HandoffWireMessage, context);
+        } catch (error) {
+          await cleanupRejectedMaterialization();
+          if (so.signal?.aborted) {
+            return toCompatibleMakerSendResult(toDesktopSessionDispatchOutcome(
+              { accepted: false, reason: 'cancelled-before-dispatch' },
+              { source: 'maker-ipc', context: `SEND/${sessionId}/runtime-context` },
+            ));
+          }
+          if (!(error instanceof RuntimePluginControlError)) throw error;
+          const code = error.action === 'skip' ? 'PLUGIN_TURN_SKIPPED' : 'PLUGIN_TURN_BLOCKED';
+          return toCompatibleMakerSendResult(createHostSendFailure(code, 'The selected runtime plugin stopped this reply.'));
+        }
       }
       const assertAppCurrent = so[MCP_APP_MESSAGE_GUARD] || appContext?.text
         ? async () => {
@@ -1788,10 +1782,6 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       let userPromptPreviewSessionId: string | null = null;
       let userPromptPreviewClientId: string | null = null;
       try {
-        if (directPreDispatchHook) {
-          await directPreDispatchHook(sessionId);
-          directPreDispatchHookStarted = true;
-        }
         let cindyLearnInvocation: CindyLearnInvocationGrant | null = null;
         // Every Cindy harness consumes this exact-path pin at its provider
         // boundary: Codex sends a structured Skill item, Pi validates the live
@@ -1817,9 +1807,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         // Capture on the executor immediately before vendor code. sess.send may
         // synchronously publish the continuation's new started marker before it
         // resolves, so the old-turn ack must use this strictly earlier value.
-        const interruptedAckAt = so.ackInterruptedTurnOnDispatch
-          ? Math.max(0, Date.now() - 1)
-          : null;
+        const interruptedAckAt = Math.max(0, Date.now() - 1);
         const retryTranscriptUserEntryId = sess.agentKind === 'pi' && so.retryUserClientId
           ? await deps.readPiUserEntry?.(sessionId, so.retryUserClientId)
           : undefined;
@@ -1827,15 +1815,25 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         // another Cindy row. Keep later manual Retry attached to the active entry.
         const transcriptUserClientId = persistUserMessage?.clientId
           ?? (so[PI_CACHE_RECOVERY_EXPECTATION] ? so.retryUserClientId : undefined);
+        const beforeProviderStart = deps.beforeProviderStart
+          ? async () => {
+              so.signal?.throwIfAborted();
+              await assertAppCurrent?.();
+              await deps.beforeProviderStart!(sessionId, finalFenceSendOpts);
+              so.signal?.throwIfAborted();
+              // The launcher's durable write can yield while an App is revoked.
+              await assertAppCurrent?.();
+            }
+          : assertAppCurrent;
         // Other-task mail is the only non-scheduler turn whose reply IM relays (channelTurnSignal).
         const sendResult = await withChannelTurnSource(sess.id, channelTurnSourceFor(
           persistUserMessage?.origin,
           persistUserMessage?.botTaskCoordination !== undefined,
         ), () => sess.send(outgoing as never, {
           ...(retryTranscriptUserEntryId ? { retryTranscriptUserEntryId } : {}),
+          ...(beforeProviderStart ? { beforeProviderStart } : {}),
           ...(assertAppCurrent
             ? {
-                beforeProviderStart: assertAppCurrent,
                 resolveAutoReviewUserIntent: async () => {
                   const intent = resolveScheduledIntent
                     ? await resolveScheduledIntent()
@@ -1844,11 +1842,16 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                       : undefined);
                   // Session awaits this existing authorization hook after all
                   // preparation (including vision), immediately before dispatch.
+                  if (scheduledOrigin) await deps.assertScheduledDispatchRoute?.(sessionId);
                   await assertAppCurrent();
                   return intent;
                 },
               }
-            : resolveScheduledIntent ? { resolveAutoReviewUserIntent: resolveScheduledIntent } : {}),
+            : resolveScheduledIntent ? { resolveAutoReviewUserIntent: async () => {
+                const intent = await resolveScheduledIntent();
+                await deps.assertScheduledDispatchRoute?.(sessionId);
+                return intent;
+              } } : {}),
           [AUTO_REVIEW_SOURCE_CONTENT]: autoReviewSourceContent,
           ...(so[AUTO_REVIEW_DELEGATED_CONTINUATION] ? { [AUTO_REVIEW_DELEGATED_CONTINUATION]: true as const } : {}),
           ...(so[INHERITED_CAPABILITY_SELECTION] !== undefined
@@ -1872,7 +1875,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           ...(so.toolsDisabled === true ? { toolsDisabled: true } : {}),
           turnAttemptToken: so.turnAttemptToken,
           signal: so.signal,
+          [ASYNC_QUESTION_ANSWER]: so[ASYNC_QUESTION_ANSWER],
           [PI_CACHE_RECOVERY_EXPECTATION]: so[PI_CACHE_RECOVERY_EXPECTATION],
+          ...(so[MODEL_REQUEST_CONTROL] ? { [MODEL_REQUEST_CONTROL]: so[MODEL_REQUEST_CONTROL] } : {}),
           ...(so.onVendorTurnReserved ? { onTurnReserved: so.onVendorTurnReserved } : {}),
           // scheduler 排队消息:origin 打到本轮 turnOrigin(IM 转播识别自动 turn),
           // 与 runner 直发路径的 session.send({ origin }) 语义对齐。
@@ -1918,7 +1923,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
               }
             : {}),
           onAccepted: persistUserMessage
-            ? async () => {
+            ? async (signal) => {
                 persistUserMessage.onPersisting?.();
                 if (!persistUserMessage.botTaskCoordination) {
                   deps.previewUserPrompt?.(sess, persistUserMessage.content, {
@@ -1997,9 +2002,12 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                 await rewindPersistedUserMessageAfterClearIfStale();
                 // onPersisted 里可能挂着排队 orca 消息的 accepted 副作用(置 running /
                 // autoBridgePending), 必须 await 完再放行 turn(同直发路径语义)。
-                await persistUserMessage.onPersisted?.();
+                await persistUserMessage.onPersisted?.(signal);
               }
-            : undefined,
+            : directPreDispatchHook ? async (signal) => {
+                await directPreDispatchHook(sessionId, signal);
+                directPreDispatchHookStarted = true;
+              } : undefined,
           onDispatching: () => {
             if (resolveScheduledIntent) assertScheduledModes();
             if (persistUserMessage?.shouldBroadcast && !persistUserMessage.shouldBroadcast()) {
@@ -2021,6 +2029,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
             }
           },
         }));
+        if (inputHandoffOwnerNote && sendResult.accepted) deps.inputHandoffOwnerNoteDelivered?.(sessionId);
         sendAccepted = sendResult.accepted;
         if (sendAccepted) {
           appContext?.consume();
@@ -2030,7 +2039,10 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           await rewindPersistedUserMessageAfterClearIfStale();
           await cleanupRejectedMaterialization();
         }
-        if (sendResult.accepted && interruptedAckAt !== null) {
+        // Ordinary input (queued, direct, or remote) also replaces the previous
+        // interruption. onAccepted alone is insufficient: dispatch can still be
+        // cancelled before the vendor actually starts.
+        if (sendResult.accepted) {
           try {
             await deps.ackInterruptedTurnDispatched?.(sessionId, interruptedAckAt);
           } catch (err) {
@@ -2050,11 +2062,6 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         if (sendResult.accepted) wireNotePlan?.commit();
         if (workdirRecoveryNote && sendResult.accepted) {
           deps.consumeWorkingDirectoryRecoveryNote?.(sessionId, workdirRecoveryNote);
-        }
-        // 只消费构造本次说明时读到的那一代;交接首条已带账本时同样消费。发送期间新来的
-        // 压缩边界代次不同,留给下一次发送。
-        if (workingMemoryRefresh && sendResult.accepted) {
-          deps.consumeWorkingMemoryRefresh?.(sessionId, workingMemoryRefresh.generation);
         }
         if (planReconcile?.sealedTurnId && sendResult.accepted) {
           try {

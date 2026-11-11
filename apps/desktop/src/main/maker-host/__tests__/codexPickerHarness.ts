@@ -1,3 +1,5 @@
+import { getMainClassicalStyle, getResolvedMainLocale } from '../../i18n.desktop.js';
+import { mcpAppModelContext } from '../../mcp-apps/runtime.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
@@ -106,8 +108,11 @@ export function createCodexPickerHarness(input: {
   env.agentSwitchDeps = switchDeps;
   const beforeSend = vm.runInContext(closure('pendingAgentSwitchApplyHolder'), context) as (id: string) => Promise<{ release(): void }>;
   const transactionDeps: MakerSendTransactionDeps = {
+    getMainClassicalStyle, getResolvedMainLocale, readMcpAppModelContext: id => mcpAppModelContext(id),
     statDirectory: async () => ({ isDirectory: () => true }),
-    getSession: id => maker.getSession(id), closeSession: id => maker.closeSession(id), getSessionMeta: id => maker.getSessionMeta(id),
+    getSession: id => maker.getSession(id), closeSession: id => maker.closeSession(id),
+    closeSessionIfCurrent: async id => { const s = maker.getSession(id); if (s) await maker.closeSessionIfCurrent(s, 'runtime-refresh'); },
+    getSessionMeta: id => maker.getSessionMeta(id),
     preflightBotRuntimeResources: asyncNoop, ensureRemoteReadyForSessionStart: asyncNoop,
     checkWorkDirExists: async () => true, readSessionWorkingDirFromDb: async () => workingDir,
     readWorkingDirectoryRecoveryCreateOpts: async id => {

@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/device-link/deviceName';
 /**
  * 云端伙伴（docs/product-rules/cloud-companions.md §3.1）在手机上的纯逻辑：哪一行能在主力电脑离线时
  * 打开云端对话、同一伙伴只在主力电脑名下列一行（没见过的主力电脑补一行离线入口）、换电脑后的等待与超时。
@@ -51,7 +52,7 @@ export function cloudCompanionRows(items: readonly HostedRemoteCollectionItem[],
     const deviceId = actor.homeDeviceId!;
     if (listed.some(row => row.item.ref.kind === 'bot' && row.item.ref.id === actor.externalId && row.host.deviceId === deviceId)) return [];
     const ref = { collectionId: TEAMMATES, kind: 'bot', id: actor.externalId };
-    return [{ key: JSON.stringify([deviceId, ref.collectionId, ref.kind, ref.id]), host: { deviceId, deviceName: deviceNames.get(deviceId) ?? deviceId },
+    return [{ key: JSON.stringify([deviceId, ref.collectionId, ref.kind, ref.id]), host: { deviceId, deviceName: deviceDisplayName(deviceId, deviceNames.get(deviceId)) },
       item: { ref, display: { title: actor.name, avatar: cloudAvatar(actor) }, links: [], revision: CLOUD_ROW_REVISION } }];
   });
   return [...listed, ...added];
@@ -68,7 +69,10 @@ export function cloudSwitchCandidates(
     .map(row => ({ deviceId: row.device.deviceId, name: row.device.name }));
 }
 
-/** Computers the home offers for the companion (its own view), never the home or this phone. */
+/**
+ * Computers the home offers for the companion (its own view), never the home or this phone. One the
+ * home marks `outdated` (an older Cindy) is offered too: the companion runs there the older way.
+ */
 export function cloudHomeTargets<T extends { deviceId: string; online: boolean }>(targets: readonly T[], home: string, self: string | null): T[] {
   return targets.filter(target => target.online && target.deviceId !== home && target.deviceId !== self);
 }

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, useEffect } from "react";
+import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type {
   KeyboardEvent,
@@ -8,23 +8,27 @@ import type {
 } from "react-native";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useComposerDockKeyboardHeight } from "@/session/useComposerDockKeyboardHeight";
-import { NativeKeyboardViewport } from "@/session/NativeKeyboardViewport";
-import { ComposerOverlayHeight, ComposerOverlayLayout, useComposerOverlayLayout } from "@/session/ComposerOverlayLayout";
+import { __resetDockedKeyboardHeightsForTest } from "@/session/keyboardOverlap";
 
 const native = vi.hoisted(() => ({
   keyboard: { height: { value: 0 }, state: { value: 0 } },
   viewport: { width: 390, height: 844 },
+  platform: { OS: "ios", isPad: false },
   shown: false,
   metrics: undefined as KeyboardMetrics | undefined,
   listeners: new Map<KeyboardEventName, Set<(event: KeyboardEvent) => void>>(),
 }));
-vi.mock("expo-modules-core", () => ({
-  requireOptionalNativeModule: () => ({ keyboardViewportAvailable: true }),
-  requireNativeViewManager: () => ({ children }: any) => <div>{children}</div>,
+const storage = vi.hoisted(() => new Map<string, string>());
+vi.mock("@react-native-async-storage/async-storage", () => ({
+  default: {
+    getItem: vi.fn(async (key: string) => storage.get(key) ?? null),
+    setItem: vi.fn(async (key: string, value: string) => {
+      storage.set(key, value);
+    }),
+  },
 }));
 vi.mock("react-native", () => ({
-  Platform: { OS: "ios" },
-  View: ({ children }: any) => <section>{children}</section>,
+  Platform: native.platform,
   useWindowDimensions: () => native.viewport,
   Keyboard: {
     metrics: () => native.metrics,
@@ -82,6 +86,9 @@ beforeEach(() => {
   native.shown = false;
   native.metrics = undefined;
   native.viewport = { width: 390, height: 844 };
+  native.platform.isPad = false;
+  storage.clear();
+  __resetDockedKeyboardHeightsForTest();
   native.listeners.clear();
   container = document.createElement("div");
   root = createRoot(container);
@@ -93,82 +100,6 @@ afterEach(() => {
 function mount() {
   act(() => root.render(<Harness />));
 }
-
-// Unit regression: recommendation/working-row height samples previously updated
-// SessionScreen, rebuilding the composer and message projection each animation
-// frame. Keyboard-height tests only cover the native keyboard source. Two layout
-// samples must update the consumers without re-rendering the page or losing focus.
-it("updates composer clearance without rebuilding the task page or its focused input", () => {
-  let layout!: ReturnType<typeof useComposerOverlayLayout>;
-  let pageRenders = 0;
-  let historyRenders = 0;
-  function Page() {
-    pageRenders++;
-    layout = useComposerOverlayLayout();
-    return <>
-      <input defaultValue="draft" />
-      <ComposerOverlayLayout source={layout}>{({ height, inputTop }) =>
-        <output>{height - inputTop}</output>}
-      </ComposerOverlayLayout>
-      <ComposerOverlayHeight source={layout}>{height => {
-        historyRenders++;
-        return <span>{height}</span>;
-      }}</ComposerOverlayHeight>
-    </>;
-  }
-  document.body.append(container);
-  act(() => root.render(<Page />));
-  const input = container.querySelector('input')!;
-  input.focus();
-  input.value = 'unfinished draft';
-  act(() => layout.update({ height: 150, inputTop: 50 }));
-  expect(container.querySelector('output')?.textContent).toBe('100');
-  act(() => layout.update({ height: 120, inputTop: 30 }));
-  expect(container.querySelector('output')?.textContent).toBe('90');
-  const renders = historyRenders;
-  act(() => layout.update({ inputTop: 20 }));
-  expect(container.querySelector('output')?.textContent).toBe('100');
-  expect(container.querySelector('span')?.textContent).toBe('120');
-  expect(historyRenders).toBe(renders);
-  expect(pageRenders).toBe(1);
-  expect(document.activeElement).toBe(input);
-  expect(input.value).toBe('unfinished draft');
-  // Once UIKit owns clearance, per-frame samples must not republish all retained
-  // histories. Secondary React geometry catches up after the animation settles.
-  vi.useFakeTimers();
-  act(() => layout.update({ height: 130 }, true));
-  act(() => layout.update({ height: 140 }, true));
-  expect(historyRenders).toBe(renders);
-  expect(container.querySelector('output')?.textContent).toBe('120');
-  act(() => vi.advanceTimersByTime(50));
-  expect(historyRenders).toBe(renders + 1);
-  expect(container.querySelector('span')?.textContent).toBe('140');
-  vi.useRealTimers();
-});
-
-// Unit: switching keyboard ownership cannot remount history or lose its local
-// state. Height-only tests do not cover the wrapper's component identity.
-it("keeps history mounted when native keyboard ownership changes", () => {
-  let mounts = 0;
-  let unmounts = 0;
-  function History() {
-    useEffect(() => { mounts++; return () => { unmounts++; }; }, []);
-    return <input defaultValue="reading position" />;
-  }
-  const render = (enabled: boolean) => act(() => root.render(
-    <NativeKeyboardViewport enabled={enabled} followLatest={enabled} onKeyboardTransition={() => {}}>
-      <History />
-    </NativeKeyboardViewport>,
-  ));
-  render(true);
-  const input = container.querySelector("input")!;
-  input.value = "preserved history state";
-  render(false);
-  render(true);
-  expect(container.querySelector("input")).toBe(input);
-  expect(input.value).toBe("preserved history state");
-  expect({ mounts, unmounts }).toEqual({ mounts: 1, unmounts: 0 });
-});
 
 it("corrects a third-party keyboard height after show, then follows frame-only growth and shrinkage", () => {
   mount();
@@ -224,9 +155,12 @@ it("reconciles a keyboard already open when navigating and recomputes after rota
 });
 
 it("does not lift the page for floating, hidden, or cross-fade frames", () => {
+  native.platform.isPad = true;
   mount();
   native.keyboard.state.value = 2;
   native.keyboard.height.value = 300;
+  emit("keyboardDidShow");
+  expect(result.value).toBe(350);
   for (const metrics of [
     frame(300, 544, 250),
     frame(300, 300),
@@ -238,10 +172,53 @@ it("does not lift the page for floating, hidden, or cross-fade frames", () => {
   }
 });
 
+// 2026-11-03 iPhone Duo：远程桌面返回进入画中画后，新建任务页的浮动输入框仍被键盘盖住。
+// 输入卡片已改用共用判据，这里的 settled 高度却仍把 274×178 这种不可能的坐标算成 0；
+// 两条路径必须对同一坐标给出同一遮挡高度（估算值见 keyboardOverlap.ts）。
+it("lifts the dock for an impossible iPhone keyboard frame instead of settling at zero", () => {
+  native.viewport = { width: 380, height: 900 };
+  mount();
+  native.keyboard.state.value = 2;
+  native.keyboard.height.value = 0;
+  emit("keyboardDidShow", { screenX: 192, screenY: 500, width: 274, height: 178 });
+  expect(result.value).toBe(342);
+});
+
+// PR #8665 review：浮动输入框的 settled 高度也要在本机记录读完后重算。
+it("recomputes a settled impossible frame once the saved height finishes loading", async () => {
+  native.viewport = { width: 380, height: 900 };
+  storage.set("cindy.mobile.keyboard-docked-height.v2", JSON.stringify({ 380: 400 }));
+  mount();
+  native.keyboard.state.value = 2;
+  emit("keyboardDidShow", { screenX: 192, screenY: 500, width: 274, height: 178 });
+  expect(result.value).toBe(342);
+  await act(async () => {});
+  expect(result.value).toBe(400);
+});
+
 it("removes all subscriptions on unmount", () => {
   mount();
   act(() => root.render(null));
   expect(
     [...native.listeners.values()].every((listeners) => listeners.size === 0),
   ).toBe(true);
+});
+
+// 2026-11-07: a hidden iPhone keyboard can still emit a zero-width frame.
+// The hook's public height drives both the composer and message viewport. The
+// existing dismissal case had no trailing frame; this unit sequence must stay at 0.
+it("does not restore the keyboard reservation from frame events after dismissal", () => {
+  mount();
+  native.keyboard.state.value = 2;
+  emit("keyboardDidShow");
+  expect(result.value).toBe(350);
+  emit("keyboardWillHide");
+  native.keyboard.state.value = 4;
+  emit("keyboardDidHide");
+  emit("keyboardDidChangeFrame", frame(0, 844, 0));
+  expect(result.value).toBe(0);
+  emit("keyboardWillShow");
+  native.keyboard.state.value = 2;
+  emit("keyboardDidShow");
+  expect(result.value).toBe(350);
 });

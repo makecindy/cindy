@@ -5,14 +5,42 @@ import {
   botGroupErrorVariant,
   botGroupNoticeVariant,
   botGroupPlanFollowUp,
+  botGroupPlanStepState,
+  canSkipBotGroupPlanStep,
   isBotGroupDivisionBlocked,
   mergeBotGroupMessages,
   projectBotGroupExecutionFailures,
   botGroupExecutionFailureBatches,
+  botGroupSidebarPlanPreview,
   chatGroupMembership,
   botGroupNewMessageCount,
+  botGroupActivityAt,
+  latestBotGroupMessage,
 } from '../botGroupPresentation.js';
-import { chatGroupTalkRouteKey, groupLaneOfRouteKey, isChatOnlyGroupLane, BOT_GROUP_RUNTIME_FAILURE_CODES, readBotGroupExecutionFailure, type BotGroupErrorCode, type BotGroupExecutionFailureView, type BotGroupMemberView, type BotGroupMessageView, type BotGroupNoticeCode, type BotGroupPlanView } from '../botGroupChat.js';
+import { chatGroupTalkRouteKey, groupLaneOfRouteKey, isChatOnlyGroupLane, BOT_GROUP_RUNTIME_FAILURE_CODES, readBotGroupExecutionFailure, type BotGroupErrorCode, type BotGroupExecutionFailureView, type BotGroupMemberView, type BotGroupMessageView, type BotGroupNoticeCode, type BotGroupOpenPlanSummary, type BotGroupPlanStepStatus, type BotGroupPlanView, type BotGroupSummary } from '../botGroupChat.js';
+
+describe('group list activity', () => {
+  it('keeps creation as a floor without treating settings edits as activity', () => {
+    const group = { createdAt: 20, updatedAt: 100, lastMessage: null };
+    expect(botGroupActivityAt(group)).toBe(20);
+    expect(botGroupActivityAt({ ...group, lastMessage: { createdAt: 10 } })).toBe(20);
+    expect(botGroupActivityAt({ ...group, lastMessage: { createdAt: 30 } })).toBe(30);
+    expect(botGroupActivityAt({ createdAt: NaN, lastMessage: { createdAt: 30 } })).toBe(30);
+    expect(botGroupActivityAt({ createdAt: 20, lastMessage: { createdAt: NaN } })).toBe(20);
+  });
+
+  it('selects topics and shared notices by exact server position without mutating the snapshot', () => {
+    const main = { seq: '9007199254740992', deleted: false, threadRootId: null };
+    const topic = { ...main, seq: '9007199254740993', threadRootId: 'root' };
+    const joined = { ...main, seq: '9007199254740994', origin: 'system' };
+    const deleted = { ...main, seq: '9007199254740995', deleted: true };
+    const messages = Object.freeze([main, deleted, topic]);
+    expect(latestBotGroupMessage(messages)).toBe(topic);
+    expect(latestBotGroupMessage([joined, ...messages])).toBe(joined);
+    expect(latestBotGroupMessage([deleted])).toBeUndefined();
+    expect(latestBotGroupMessage([])).toBeUndefined();
+  });
+});
 
 // Unit: history browsing needs an actionable count; old-page loads and repeated pushes are not arrivals.
 it('counts only new messages from other people and companions below the observed tail', () => {
@@ -31,6 +59,23 @@ it('counts only new messages from other people and companions below the observed
     { ...message, id: 'read', sequence: 2, serverSequence: '9007199254740992' },
     { ...message, id: 'arrival', sequence: 3, serverSequence: '9007199254740993' },
   ], '9007199254740992')).toBe(1);
+});
+
+// #8443 P2 / unit: delayed capability notices need the same return-to-tail
+// affordance in both clients; ordinary notices must not inflate the count.
+it.each([undefined, 'root'])('counts delayed capability notices in their lane (%s)', threadRootId => {
+  const notice = { id: 'capability', sequence: 11, kind: 'notice', authorKind: 'bot',
+    capabilityNoticeCode: 'GROUP_AUTHORIZATION_REQUIRED', threadRootId } as BotGroupMessageView;
+  expect(botGroupNewMessageCount([notice, notice], 10, threadRootId)).toBe(1);
+  expect(botGroupNewMessageCount([notice], 11, threadRootId)).toBe(0);
+  expect(botGroupNewMessageCount([notice], null, threadRootId)).toBe(0);
+  const excluded = [
+    { ...notice, deleted: true }, { ...notice, isSelf: true },
+    { ...notice, authorKind: 'system' }, { ...notice, authorKind: 'user', isSelf: false },
+    { ...notice, capabilityNoticeCode: undefined }, { ...notice, capabilityNoticeCode: 'UNKNOWN' },
+    { ...notice, threadRootId: threadRootId ? undefined : 'other' },
+  ] as BotGroupMessageView[];
+  expect(botGroupNewMessageCount(excluded, 10, threadRootId)).toBe(0);
 });
 
 describe('server group membership affordances', () => {
@@ -98,14 +143,30 @@ describe('execution failures are a projection of the current snapshot', () => {
 describe('public failure snapshot decoder', () => {
   const row = { id: 'run', conversation_id: 'room', source_message_id: 'source', bot_id: 'bot', epoch: 2,
     plan_id: 'plan', updated_at: '2026-10-10T00:00:00Z', detail: 'private diagnostic' };
+  it('carries the server-owned unclaimed timeout reason through the source notice', () => {
+    const failure = readBotGroupExecutionFailure({ ...row, failure_code: 'RUNTIME_TIMEOUT',
+      failure_reason: 'unclaimed_timeout' }, 'room')!;
+    expect(failure).toHaveProperty('reason', 'unclaimed_timeout');
+    const source = { id: 'source', sequence: 1, createdAt: 1, threadRootId: 'thread' } as BotGroupMessageView;
+    expect(projectBotGroupExecutionFailures([source], [failure])[1]).toMatchObject({
+      runtimeFailureCode: 'RUNTIME_TIMEOUT', runtimeFailureReason: 'unclaimed_timeout', threadRootId: 'thread',
+    });
+  });
+  it.each([
+    ['RUNTIME_TIMEOUT', undefined], ['RUNTIME_TIMEOUT', 'private diagnostic'],
+    ['AUTH_REQUIRED', 'unclaimed_timeout'], ['future-code', 'unclaimed_timeout'],
+  ])('ignores absent, unknown or mismatched reasons (%s, %s)', (code, reason) => {
+    const failure = readBotGroupExecutionFailure({ ...row, failure_code: code, failure_reason: reason }, 'room')!;
+    expect(failure).not.toHaveProperty('reason');
+  });
   it.each(BOT_GROUP_RUNTIME_FAILURE_CODES)('reads a new server snapshot without requiring legacy status: %s', code => {
     const view = readBotGroupExecutionFailure({ ...row, failure_code: code }, 'room');
     expect(view).toEqual({ executionId: 'run', epoch: 2, sourceMessageId: 'source', botId: 'bot', botName: '',
       code, planId: 'plan', updatedAt: Date.parse(row.updated_at) });
     expect(JSON.stringify(view)).not.toContain(row.detail);
   });
-  it.each([{ status: 'running' }, { conversation_id: 'foreign' }, { epoch: NaN }, { epoch: -1 }, { source_message_id: null }])
-    ('rejects inapplicable or malformed execution rows: %j', invalid => {
+  it.each([{ status: 'running' }, { conversation_id: 'foreign' }, { epoch: NaN }, { epoch: -1 }, { source_message_id: null }])(
+    'rejects inapplicable or malformed execution rows: %j', invalid => {
       expect(readBotGroupExecutionFailure({ ...row, ...invalid }, 'room')).toBeNull();
     });
   it('uses a fixed fallback for unknown categories and drops invalid timestamps', () => {
@@ -122,6 +183,37 @@ const plan = (overrides: Partial<BotGroupPlanView> = {}): BotGroupPlanView => ({
     { position: 1, botId: 'b', botName: 'B', task: 'two', status: 'pending' },
   ],
   ...overrides,
+});
+
+// Test value
+// - Production entry and observable result: botGroupSidebarPlanPreview() chooses the running
+//   sidebar strip, a terminal step label, or the latest-message fallback.
+// - Bug / rule basis: #7084; the plan-level running status must not outlive its current step.
+// - Existing coverage gap: composer and follow-up tests exist, but no sidebar preview branch did.
+// - Minimal failing input: a running open plan whose current step is no longer running; unit tier.
+describe('sidebar plan activity follows the current step', () => {
+  const summary = (
+    status: BotGroupOpenPlanSummary['status'],
+    currentStepStatus: BotGroupPlanStepStatus | null,
+  ): BotGroupSummary => ({
+    members: [{ botId: 'a', name: 'A' }],
+    planningBotId: null,
+    organizerBotId: 'a',
+    openPlan: {
+      id: 'p1', status, currentStep: 0, stepCount: 2, currentBotName: 'A', currentStepStatus,
+    },
+  } as BotGroupSummary);
+
+  it.each([
+    ['running', 'running', { kind: 'running', botName: 'A', step: 1, total: 2 }],
+    ['running', 'done', { kind: 'step-done', botName: 'A' }],
+    ['running', 'failed', { kind: 'step-failed', botName: 'A' }],
+    ['running', 'pending', null],
+    ['waiting', 'done', { kind: 'step-done', botName: 'A' }],
+    ['waiting', 'failed', { kind: 'step-failed', botName: 'A' }],
+  ] as const)('maps plan %s with %s current step', (status, currentStepStatus, expected) => {
+    expect(botGroupSidebarPlanPreview(summary(status, currentStepStatus))).toEqual(expected);
+  });
 });
 
 describe('bot group copy variants (shared by desktop and phone)', () => {
@@ -231,12 +323,97 @@ describe('group body component display', () => {
   it.each([rich({ kind: 'text', props: { text: '' } }), rich({ kind: 'range' }), '```cindy-ui\ninvalid\n```'])('retains unreadable source %s', content => {
     expect(botGroupBodyParts(content, 'bot')).toEqual([{ kind: 'markdown', content }]);
   });
+  it.each(['image', 'video', 'audio', 'svg'])('keeps %s descriptions but never an internal source or an attachment promise', kind => {
+    for (const src of ['cindy-media://blobs/example.png', 'file:///private/image.png', 'xdt-file:///image.png', '/private/image.png', 'javascript:alert(1)', 'data:image/png;base64,AA==']) {
+      expect(botGroupBodyParts(rich({ kind, props: { label: 'Title', alt: 'Description', caption: 'Caption', src } }), 'bot'))
+        .toEqual([{ kind: 'text', content: 'Title\nDescription\nCaption' }]);
+    }
+  });
+  // #7492 review: public media are not uploaded as attachments. Removing their
+  // source erases the only access path; keep descriptions literal and emit a web link.
+  it.each(['image', 'video', 'audio'])('preserves a public %s link with and without a description', kind => {
+    const src = `https://example.test/public-${kind}`;
+    expect(botGroupBodyParts(rich({ kind, props: { src, caption: '*literal* [caption]' } }), 'bot')).toEqual([
+      { kind: 'text', content: '*literal* [caption]' },
+      { kind: 'markdown', content: `<${src}>` },
+    ]);
+    expect(botGroupBodyParts(rich({ kind, props: { src } }), 'bot').at(-1))
+      .toEqual({ kind: 'markdown', content: `<${src}>` });
+  });
+  it('encodes public media URL delimiters without creating additional Markdown content', () => {
+    const src = 'http://example.test/image>![fake](file:///private/image.png)';
+    expect(botGroupBodyParts(rich({ kind: 'image', props: { src } }), 'bot')).toEqual([
+      { kind: 'text', content: '🖼' },
+      { kind: 'markdown', content: '<http://example.test/image%3E![fake](file:///private/image.png)>' },
+    ]);
+  });
+  it('keeps an undescribed image visible as a placeholder without exposing protocol source', () => {
+    expect(botGroupBodyParts(rich({ kind: 'image', props: { src: 'cindy-media://blobs/example.png' } }), 'bot'))
+      .toEqual([{ kind: 'text', content: '🖼' }]);
+  });
   it('uses final tree content and exposes media descriptions without requesting local media', () => {
     const content = rich({ kind: 'stack', props: { label: 'Summary' } }, { parent: 'n0', kind: 'text', props: { text: 'Old' } },
       { op: 'patch', id: 'n1', props: { text: 'Updated' } }, { kind: 'image', props: { alt: 'Diagram', src: 'cindy-media://blobs/example.png' } });
     expect(botGroupBodyParts(content, 'bot')).toEqual([
       { kind: 'text', content: 'Summary' }, { kind: 'text', content: 'Updated' },
-      { kind: 'text', content: 'Diagram\ncindy-media://blobs/example.png' },
+      { kind: 'text', content: 'Diagram' },
     ]);
+  });
+});
+
+// An assigned talk turn may still be waiting for its device. Both UIs use these facts.
+describe('unclaimed talk turn controls', () => {
+  it('allows future pending turns only on capable hosts and leaves running turns protected', () => {
+    const current = { position: 0, botId: 'a', botName: 'A', task: '', status: 'running' as const, executionId: 'run', executionStatus: 'running' };
+    const future = { position: 1, botId: 'b', botName: 'B', task: '', status: 'pending' as const };
+    const value = plan({ kind: 'talk', status: 'running', currentStep: 0, canManage: true, supportsPendingSkip: true, steps: [current, future] });
+    expect(canSkipBotGroupPlanStep(value, current)).toBe(false);
+    expect(canSkipBotGroupPlanStep(value, future)).toBe(true);
+    expect(canSkipBotGroupPlanStep({ ...value, status: 'waiting' }, future)).toBe(true);
+    for (const overrides of [{ supportsPendingSkip: undefined }, { kind: 'work' as const }, { canManage: false }, { status: 'stopped' as const }]) {
+      expect(canSkipBotGroupPlanStep({ ...value, ...overrides }, future)).toBe(false);
+    }
+    expect(canSkipBotGroupPlanStep(value, { ...future, status: 'skipped' })).toBe(false);
+  });
+  const queued = () => plan({ kind: 'talk', status: 'running', canManage: true,
+    steps: [{ position: 0, botId: 'a', botName: 'A', task: '', status: 'running', executionId: 'run', executionStatus: 'queued' }],
+  });
+  it('labels queued work without claiming that the device started it', () => {
+    const value = queued();
+    expect(botGroupPlanStepState(value, value.steps[0])).toBe('queued');
+    expect(canSkipBotGroupPlanStep(value, value.steps[0])).toBe(true);
+    expect(botGroupPlanStepState({ ...value, status: 'stopped' }, value.steps[0])).toBe('stopped');
+    expect(botGroupPlanStepState(value, { ...value.steps[0], executionStatus: 'running' })).toBe('running');
+  });
+  it('offers no skip for legacy snapshots, running devices, work plans or viewers', () => {
+    const value = queued();
+    for (const overrides of [{ kind: 'work' as const }, { canManage: false }, { status: 'stopped' as const }, { currentStep: 1 }]) {
+      expect(canSkipBotGroupPlanStep({ ...value, ...overrides }, value.steps[0])).toBe(false);
+    }
+    for (const overrides of [{ executionId: undefined }, { executionStatus: undefined }, { executionStatus: 'running' }]) {
+      expect(canSkipBotGroupPlanStep(value, { ...value.steps[0], ...overrides })).toBe(false);
+    }
+  });
+  it('continues a skipped talk turn without treating a work dependency as complete', () => {
+    const value = plan({ kind: 'talk' });
+    value.steps[0].status = 'skipped';
+    expect(botGroupPlanFollowUp(value)?.kind).toBe('continue');
+    expect(botGroupPlanFollowUp({ ...value, kind: 'work' })).toBeNull();
+  });
+
+  // #9909: a discussion turn that answered NO_REPLY publishes no group message at all, so the
+  // queue card must show it as skipped rather than spoken. Only an explicit `null` means "no
+  // message": a legacy projection omits the field and keeps the plain done state.
+  it('shows a discussion turn that published nothing as skipped', () => {
+    const value = plan({ kind: 'talk', steps: [
+      { position: 0, botId: 'a', botName: 'A', task: '', status: 'done', resultMessageId: null },
+      { position: 1, botId: 'b', botName: 'B', task: '', status: 'done', resultMessageId: '90000000-0000-4000-8000-000000000001' },
+      { position: 2, botId: 'a', botName: 'A', task: '', status: 'done' },
+    ] });
+    expect(botGroupPlanStepState(value, value.steps[0])).toBe('skipped');
+    expect(botGroupPlanStepState(value, value.steps[1])).toBe('done');
+    expect(botGroupPlanStepState(value, value.steps[2])).toBe('done');
+    // A division step hands work over; it is never a spoken turn.
+    expect(botGroupPlanStepState({ ...value, kind: 'work' }, value.steps[0])).toBe('done');
   });
 });

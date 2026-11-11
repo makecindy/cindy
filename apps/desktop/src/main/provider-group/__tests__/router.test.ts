@@ -7,11 +7,27 @@ import type { RemoteAgentCaps } from '@cindy/device-link';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ProviderGroupConfig, ProviderGroupMember } from '../../../shared/providerGroup';
-import type { ProviderGroupBinding } from '../bindings';
+import type { ProviderGroupBinding } from '../bindings.desktop';
 import type { DeviceLinkDeviceView } from '../../../shared/deviceLinkIpc';
 import { createProviderGroupDirectory, type ProviderGroupDirectory, type ResolvedProviderGroupMember } from '../directory';
 import { createProviderGroupRouter, PROVIDER_GROUP_PICK_QUICK_MS, type ProviderGroupRouterDeps } from '../router';
 import { SHARED_GROUP_STATUS_CAPS_CACHE_MS, SHARED_GROUP_STATUS_TIMEOUT_MS } from '../sharedStatus';
+// The full @cindy/device-link barrel is not under test here. The reachable
+// router/directory modules use only these three real helpers; re-export the
+// real submodules so behavior stays real while the unexecuted client/relay
+// surface is not assembled for this file.
+vi.mock('@cindy/device-link', async () => {
+  const [providerGroup, providerShareCatalog, metadataContinuity] = await Promise.all([
+    import('../../../../../../packages/device-link/src/providerGroup.js'),
+    import('../../../../../../packages/device-link/src/providerShareCatalog.js'),
+    import('../../../../../../packages/device-link/src/metadataContinuity.js'),
+  ]);
+  return {
+    readProviderRunningTurns: providerGroup.readProviderRunningTurns,
+    readProviderShareGuestRunning: providerShareCatalog.readProviderShareGuestRunning,
+    readProviderMetadataContinuity: metadataContinuity.readProviderMetadataContinuity,
+  };
+});
 
 const MODEL = 'claude-opus-5-5';
 
@@ -74,6 +90,60 @@ function harness(
   });
 }
 
+// 2026-11-11 用户裁决：达到并发上限就不再分；没设置过上限的电脑不限制。
+describe('provider group hard concurrency limits', () => {
+  const capped = (entry: ProviderGroupMember, limit: number): ProviderGroupMember => ({ ...entry, limit, limitSet: true });
+
+  it('reports a full group instead of overfilling the least busy computer', async () => {
+    const config: ProviderGroupConfig = { strategy: 'least', autoSwitch: true,
+      members: [capped(SHARE_A, 2), capped(LOCAL, 1)] };
+    const router = harness({ [SHARE_A.key]: 2, [LOCAL.key]: 1 }, {}, [], config);
+    await expect(router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model: MODEL, localTask: true }))
+      .resolves.toMatchObject({ kind: 'unavailable', full: true });
+    await expect(router.view('anthropic')).resolves.toMatchObject({
+      members: [{ key: SHARE_A.key, state: 'full', limitSet: true }, { key: LOCAL.key, state: 'full', limitSet: true }],
+    });
+  });
+
+  it('keeps assigning a computer whose limit was never set, including legacy default limits', async () => {
+    const config: ProviderGroupConfig = { strategy: 'order', autoSwitch: true, members: [LOCAL, capped(SHARE_A, 1)] };
+    const router = harness({ [LOCAL.key]: 40, [SHARE_A.key]: 0 }, {}, [], config);
+    await expect(router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model: MODEL, localTask: true }))
+      .resolves.toMatchObject({ kind: 'member', member: { key: LOCAL.key } });
+    const view = await router.view('anthropic');
+    expect(view.members.find((entry) => entry.key === LOCAL.key)).toMatchObject({ state: 'available', limit: 4 });
+  });
+});
+
+describe('group view source continuity', () => {
+  it('keeps source budgets isolated per provider', async () => {
+    const configFor = (providerId: string): ProviderGroupConfig => ({ strategy: 'least', autoSwitch: true,
+      members: [{ key: 'device:m:' + providerId, kind: 'device', agentDeviceId: 'm', providerId,
+        limit: 4, weight: 1, paused: false }] });
+    const directory: ProviderGroupDirectory = {
+      async resolveMembers(providerId, current) {
+        return current.members.map((member): ResolvedProviderGroupMember => ({ member, label: member.key,
+          state: 'ok', view: view(providerId),
+          providerContinuity: providerId === 'openai'
+            ? { stale: true, remainingMs: 60_000 } : { stale: false, remainingMs: 120_000 } }));
+      },
+      async listCandidates() { return []; },
+      async readDeviceCatalog() { return []; },
+      async probe() { return 'ok' as const; },
+      memberLabel: (member) => member.key,
+      invalidate: () => undefined,
+    };
+    const router = createProviderGroupRouter({ directory,
+      readGroup: (providerId) => providerId === 'openai' || providerId === 'anthropic' ? configFor(providerId) : null,
+      listBindings: () => ({}), isTurnRunning: () => false, now: () => 1_000, random: () => 0 });
+    await expect(router.view('openai')).resolves.toMatchObject({
+      providerContinuity: { stale: true, remainingMs: 60_000 },
+    });
+    await expect(router.view('anthropic')).resolves.toMatchObject({
+      providerContinuity: { stale: false, remainingMs: 120_000 },
+    });
+  });
+});
 describe('provider group details capability reader lifetime', () => {
   const devices = Array.from({ length: 5 }, (_, index) => member(`device:${index}:anthropic`, 'device', `device-${index}`, 1));
   const supportedCaps = { virtualWorkspace: true, guestRelay: true } as RemoteAgentCaps;
@@ -303,7 +373,9 @@ describe('provider group quick picks with busy usable computers', () => {
   const SLOW = member('device:slow:anthropic', 'device', 'slow');
 
   function quickRouter(localLoad: number | Promise<number | null>, fastLoad: number | null, localView = view('anthropic'), localGroupLoad = 0) {
-    const config: ProviderGroupConfig = { strategy: 'order', autoSwitch: true, members: [LOCAL, FAST, SLOW] };
+    // Explicit limits: an unset limit is unlimited, so nothing here could ever be full.
+    const config: ProviderGroupConfig = { strategy: 'order', autoSwitch: true,
+      members: [LOCAL, FAST, SLOW].map((entry) => ({ ...entry, limitSet: true as const })) };
     const devices = ['fast', 'slow'].map((deviceId): DeviceLinkDeviceView => ({
       deviceId, name: deviceId, platform: 'win32', appVersion: '1.0.0', lastSeenAt: null,
       online: true, busy: false, remoteControlEnabled: true, controlEnabled: true, isSelf: false,
@@ -382,14 +454,12 @@ describe('provider group quick picks with busy usable computers', () => {
 
   // 本机任务与外部任务走同一条快速选择(本机任务只是不受本机的对外暂停限制)。
   it.each([
-    { label: 'a full local computer while both remote catalogs stall', localLoad: 4, fastLoad: null, expected: LOCAL.key },
     { label: 'a free computer before a full one, despite order strategy', localLoad: 4, fastLoad: 1, expected: FAST.key },
-    { label: 'the least busy computer when every resolved computer is full', localLoad: 6, fastLoad: 4, expected: FAST.key },
   ].flatMap((c) => [false, true].map((own) => ({ ...c, own }))))('finishes within the quick window with $label (own task=$own)', async ({ localLoad, fastLoad, expected, own }) => {
     vi.useFakeTimers();
     try {
       const { router, config } = quickRouter(localLoad, fastLoad);
-      if (own) config.members[0] = { ...LOCAL, paused: true };
+      if (own) config.members[0] = { ...config.members[0], paused: true };
       const done = vi.fn();
       void router.pick({
         providerId: 'anthropic', agentKind: 'claude-code', model: MODEL, ...(own ? { localTask: true as const } : {}),
@@ -407,12 +477,31 @@ describe('provider group quick picks with busy usable computers', () => {
     }
   });
 
+  // 2026-11-11：满载的电脑不再接新任务，也不算「已经有一台可以分」：继续等还没读到的那几台。
+  it.each([
+    { label: 'the only resolved computer is full', localLoad: 4, fastLoad: null },
+    { label: 'every resolved computer is full', localLoad: 6, fastLoad: 4 },
+  ].flatMap((c) => [false, true].map((own) => ({ ...c, own }))))('keeps waiting when $label (own task=$own)', async ({ localLoad, fastLoad, own }) => {
+    vi.useFakeTimers();
+    try {
+      const { router } = quickRouter(localLoad, fastLoad);
+      const done = vi.fn();
+      void router.pick({
+        providerId: 'anthropic', agentKind: 'claude-code', model: MODEL, ...(own ? { localTask: true as const } : {}),
+      }).then(done);
+      await vi.advanceTimersByTimeAsync(PROVIDER_GROUP_PICK_QUICK_MS * 2);
+      expect(done).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each(['paused', 'excluded', 'cooling', 'wrong-model'] as const)(
     'keeps waiting when the full resolved computer is %s', async (reason) => {
       vi.useFakeTimers();
       try {
         const { router, config } = quickRouter(4, null);
-        if (reason === 'paused') config.members[0] = { ...LOCAL, paused: true };
+        if (reason === 'paused') config.members[0] = { ...config.members[0], paused: true };
         if (reason === 'cooling') router.markCooling('anthropic', LOCAL.key, 100_000);
         const done = vi.fn();
         void router.pick({
@@ -426,4 +515,35 @@ describe('provider group quick picks with busy usable computers', () => {
       }
     },
   );
+});
+
+describe('group pick source budget', () => {
+  function continuityRouter(remainingMs: number) {
+    const config: ProviderGroupConfig = { strategy: 'least', autoSwitch: true,
+      members: [member('device:m:anthropic', 'device', 'm')] };
+    const directory: ProviderGroupDirectory = {
+      async resolveMembers(_providerId, current) {
+        return current.members.map((entry): ResolvedProviderGroupMember => ({ member: entry, label: entry.key,
+          state: 'ok', view: view('anthropic'),
+          providerContinuity: { stale: true, remainingMs } }));
+      },
+      async listCandidates() { return []; },
+      async readDeviceCatalog() { return []; },
+      async probe() { return 'ok' as const; },
+      memberLabel: (entry) => entry.key,
+      invalidate: () => undefined,
+    };
+    return createProviderGroupRouter({ directory, readGroup: () => config,
+      listBindings: () => ({}), isTurnRunning: () => false, now: () => 1_000, random: () => 0 });
+  }
+
+  it('keeps a stale source usable while its 30-minute budget remains', async () => {
+    await expect(continuityRouter(60_000).pick({ providerId: 'anthropic', agentKind: 'claude-code', model: MODEL }))
+      .resolves.toMatchObject({ kind: 'member' });
+  });
+
+  it('does not assign a new task to a member whose source budget has expired', async () => {
+    await expect(continuityRouter(0).pick({ providerId: 'anthropic', agentKind: 'claude-code', model: MODEL }))
+      .resolves.toMatchObject({ kind: 'unavailable' });
+  });
 });

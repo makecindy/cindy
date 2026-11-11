@@ -1,4 +1,6 @@
 import { Menu } from 'lucide-react';
+import { openPerformanceTrace } from '@/components/performance-trace/PerformanceTrace';
+import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -29,12 +31,12 @@ export function MenuButton({ onExitFullscreen }: { onExitFullscreen?: () => void
     <><DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
       <DropdownMenuTrigger asChild>
         <Tip text={t('titleBar.menu')} side="bottom" controlledOpen={menuOpen ? false : undefined}>
-          {/* 尺寸与 ChromeActions 的折叠按钮同规格(h-7 / 图标 15 / rounded-md),
+          {/* 尺寸与 ChromeActions 的折叠按钮同规格(h-7 / 图标 15 / rounded-full),
               与折叠态标题行图标(「…」h-7 / 15)视觉重量一致。 */}
           <button
             className={cn(
               'flex items-center justify-center',
-              'h-7 w-7 rounded-md',
+              'h-7 w-7 rounded-full',
               'text-titlebar-icon',
               'transition-colors',
               'hover:bg-titlebar-button-hover',
@@ -80,6 +82,9 @@ export function MenuButton({ onExitFullscreen }: { onExitFullscreen?: () => void
         >
           {t('titleBar.menuItems.resourceUsage')}
         </DropdownMenuItem>
+        {!isSecondaryWindow() && <DropdownMenuItem onSelect={openPerformanceTrace}>
+          {t('performanceTrace.title')}
+        </DropdownMenuItem>}
         <DropdownMenuItem
           onSelect={() => {
             log.info('Help clicked');

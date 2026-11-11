@@ -1,3 +1,5 @@
+import { isTeammateTask } from './teammateTaskSource';
+import { applyMobileSessionRebalancePreferencePatch } from './sessionRebalanceCache';
 import { readTokenSpeedSnapshot, type TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
 import { historyTurnEnded, nextHistoryCacheReceipt } from '@cindy/maker-shared/message-window';
 import { normalizeTaskTags, reconcileTaskTags } from '@cindy/maker-shared';
@@ -44,7 +46,7 @@ import { isDefaultDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
 import { EMPTY_INPUT_PROJECTION, normalizeInputProjection } from '@/session/inputProjection';
 import { sortPendingInteractions } from '@/session/interactionModel';
-import { clearAskUserDraft } from '@/session/interactionDraftStore';
+import { clearAskUserDraft, clearIssueConfirmDraft, clearAllInteractionDrafts } from '@/session/interactionDraftStore';
 import { applySessionModelPrefPush } from '@/session/sessionModelMirror';
 import {
   createLatestWriteGuard,
@@ -150,6 +152,8 @@ export interface RemoteSessionRunStatus {
   isRunning: boolean;
   /** Terminal failure remains sticky until the next run, even after read acknowledgement. */
   hasTerminalError?: boolean;
+  /** Existing maker:event identity, retained locally for live/history error deduplication. */
+  terminalError?: { clientId: string; message: string } | null;
   reconnectAttempt: RemoteSessionReconnectAttempt | null;
   sideTaskRunning: boolean;
   startedAt: number | null;
@@ -258,8 +262,9 @@ const listMessageKeys = new Map<string, Set<string>>();
 const livePlanSnapshots = new Map<string, Map<string, LivePlanSnapshot>>();
 const pendingInteractions = new Map<string, PendingInteraction[]>();
 // Editing is local to the controller. It must not keep a provider turn alive.
-const protectedQuestions = new Map<string, PendingInteraction>();
-const visibleInteractionCache = new Map<string, { raw: PendingInteraction[]; protected?: PendingInteraction; result: PendingInteraction[] }>();
+// Every edited async question keeps its own snapshot; lists are replaced, never mutated, so the cache can compare identity.
+const protectedQuestions = new Map<string, PendingInteraction[]>();
+const visibleInteractionCache = new Map<string, { raw: PendingInteraction[]; protected?: PendingInteraction[]; result: PendingInteraction[] }>();
 /**
  * 这个会话的 pending 列表当前是不是**权威**的(来自被控端的一次全量快照)。
  *
@@ -1782,8 +1787,14 @@ function sameElementRefs<T>(a: readonly T[], b: readonly T[]): boolean {
   return true;
 }
 
+// Ordinary task-list snapshots do not describe these detail-only conversations.
+// Share the omission rule with reconciliation: absence from Home is not deletion.
+function isDetailOnlySession(session: RemoteSession): boolean {
+  return session.source === 'side-chat' || (session.source === 'bot' && !isTeammateTask(session));
+}
+
 function reconcileVisibleSessions(): void {
-  const next = mergedSessions.filter((session) => session.source !== 'side-chat'
+  const next = mergedSessions.filter((session) => !isDetailOnlySession(session)
     && sessionListRemovalPreviews.pendingFields(session.id).length === 0
     && (CINDY_MAKE_ENABLED || !isCindyMakeSource(session.source)));
   if (!sameElementRefs(visibleSessions, next)) visibleSessions = next;
@@ -1827,6 +1838,8 @@ function preserveSessionRuntimeFields(
   if (!local) return fresh;
   let next = fresh;
   for (const key of [
+    'companion',
+    'taskTeammate',
     'agentSwitchIntent',
     'runtimeGeneration',
     'runtimeBaseline',
@@ -3310,7 +3323,13 @@ function sweepDevicesOffline(deviceIds: readonly string[]): boolean {
     // invalidation, or actual device removal will retire them.
     changed = freezeUnboundPendingHostAnchorsForOffline(sessionId, indexedDeviceId) || changed;
     changed = writeMakerTurnRunning(sessionId, false) || changed;
-    changed = writeSessionRunStatus(sessionId, EMPTY_SESSION_RUN_STATUS) || changed;
+    // Soft offline keeps history. Keep its known terminal identity too: reconnect
+    // restores the error projection without replaying the terminal maker event.
+    // The next running transition or session/device removal still retires it.
+    const terminalError = readSessionRunStatus(sessionId).terminalError;
+    changed = writeSessionRunStatus(sessionId, terminalError
+      ? { ...EMPTY_SESSION_RUN_STATUS, hasTerminalError: true, terminalError }
+      : EMPTY_SESSION_RUN_STATUS) || changed;
   }
   for (const [sessionId, pendingAnchors] of pendingHostAnchorLiveAssistantClientIds) {
     for (const identity of pendingAnchors.values()) {
@@ -3582,7 +3601,7 @@ export const remoteSessionStore = {
       const pendingStatusRows = (existing?.sessions ?? []).filter((row) =>
         !snapshotIds.has(row.id) && (sessionPendingWrites.pendingFields(row.id).includes('status')
           // These details are deliberately omitted from the host's ordinary task list.
-          || (row.source === 'side-chat' && (row.status === 'active' || row.status === 'archived'))));
+          || (isDetailOnlySession(row) && (row.status === 'active' || row.status === 'archived'))));
       if (pendingStatusRows.length > 0) nextSessions = [...pendingStatusRows, ...nextSessions];
     }
     if (
@@ -4776,6 +4795,7 @@ export const remoteSessionStore = {
       const sessionId = readString(payload, 'sessionId');
       const patch = isRecord(payload.patch) ? payload.patch : null;
       if (sessionId && patch) {
+        applyMobileSessionRebalancePreferencePatch(deviceId, sessionId, patch);
         bumpDeviceSessionListMutationEpoch(deviceId);
         // 遮蔽本机在途写的字段:旧写的无差别 push 回流不得滚回更新的乐观意图,
         // 被遮字段的终态由对应写的对账 / 后续 push 收敛;全部被遮时跳过应用。
@@ -4982,9 +5002,21 @@ export const remoteSessionStore = {
       const sessionId = readString(payload, 'sessionId');
       const requestId = readString(payload, 'requestId');
       if (sessionId && requestId && acceptSessionStateSource(sessionId, deviceId, sessionInteractionSources)) {
-        if (payload.reason === 'resolved' && !(isRecord(payload.decision) && payload.decision.dismissed === true)) {
-          this.confirmProtectedQuestion(sessionId, requestId);
+        if (payload.reason === 'question_withdrawn' && typeof payload.withdrawalReason === 'string') {
+          this.settleOptimisticInteractionDismiss(sessionId, requestId, { kind: 'confirmed' });
+          const retained = protectedQuestions.get(sessionId);
+          if (retained?.some((item) => item.request.requestId === requestId)) {
+            protectedQuestions.set(sessionId, retained.map((item) => item.request.requestId === requestId
+              ? { ...item, request: { ...item.request, withdrawalReason: payload.withdrawalReason as string } } : item));
+            visibleInteractionCache.delete(sessionId);
+            emit();
+          }
         }
+        if (payload.reason === 'resolved' || payload.reason === 'superseded' || payload.reason === 'session_closed') {
+          this.confirmProtectedQuestion(sessionId, requestId);
+          clearAskUserDraft(requestId);
+        }
+        clearIssueConfirmDraft(requestId);
         // 注意:这里**不**提前回收延长抑制条目——push 到达只说明被控端已确认,
         // 不排除仍有「决定提交前发出、此刻还在途」的旧 getPendingInteractions
         // 快照晚于本 push 返回(弱网高发);提前回收会让那份旧快照把已解决的卡
@@ -5182,6 +5214,9 @@ export const remoteSessionStore = {
         && writeSessionRunStatus(sessionId, {
           ...readSessionRunStatus(sessionId),
           hasTerminalError: true,
+          terminalError: persistId && readString(event.data, 'message')
+            ? { clientId: persistId, message: readString(event.data, 'message')! }
+            : null,
         });
       this.setSessionRunning(
         sessionId,
@@ -5384,6 +5419,7 @@ export const remoteSessionStore = {
       const next: RemoteSessionRunStatus = {
         isRunning,
         ...(current.hasTerminalError !== undefined ? { hasTerminalError: current.hasTerminalError } : {}),
+        ...(current.terminalError !== undefined ? { terminalError: current.terminalError } : {}),
         reconnectAttempt: null,
         sideTaskRunning: isRunning ? data?.skipTurnReset === true : false,
         startedAt: isRunning ? (current.startedAt ?? Date.now()) : null,
@@ -5508,6 +5544,7 @@ export const remoteSessionStore = {
   },
 
   clear(): void {
+    clearAllInteractionDrafts();
     clearRemoteHistoryViews();
     deviceSessionListMutationEpochFloor = ++nextDeviceSessionListMutationEpoch;
     deviceSessionListMutationEpochs.clear();
@@ -5790,21 +5827,25 @@ export const remoteSessionStore = {
 
   protectAsyncQuestion(sessionId: string, item: PendingInteraction): void {
     if (item.request.kind !== 'ask_user_question' || item.request.delivery !== 'async') return;
-    if (protectedQuestions.get(sessionId)?.request.requestId === item.request.requestId) return;
-    protectedQuestions.set(sessionId, { ...item, retainedDraft: true });
+    const retained = protectedQuestions.get(sessionId) ?? [];
+    if (retained.some((q) => q.request.requestId === item.request.requestId)) return;
+    protectedQuestions.set(sessionId, [...retained, { ...item, retainedDraft: true }]);
     emit();
   },
 
   releaseProtectedQuestion(sessionId: string, requestId: string): void {
-    if (protectedQuestions.get(sessionId)?.request.requestId !== requestId) return;
-    protectedQuestions.delete(sessionId);
+    const retained = protectedQuestions.get(sessionId);
+    if (!retained?.some((q) => q.request.requestId === requestId)) return;
+    const rest = retained.filter((q) => q.request.requestId !== requestId);
+    if (rest.length > 0) protectedQuestions.set(sessionId, rest);
+    else protectedQuestions.delete(sessionId);
     visibleInteractionCache.delete(sessionId);
     emit();
   },
 
   /** Both the resolve receipt and a resolved push complete the same draft. */
   confirmProtectedQuestion(sessionId: string, requestId: string): void {
-    if (protectedQuestions.get(sessionId)?.request.requestId !== requestId) return;
+    if (!protectedQuestions.get(sessionId)?.some((q) => q.request.requestId === requestId)) return;
     // Register the existing stale-snapshot suppression before publishing removal.
     this.settleOptimisticInteractionDismiss(sessionId, requestId, { kind: 'confirmed' });
     clearAskUserDraft(requestId);
@@ -5818,7 +5859,8 @@ export const remoteSessionStore = {
     if (!retained) return raw;
     const cached = visibleInteractionCache.get(sessionId);
     if (cached?.raw === raw && cached.protected === retained) return cached.result;
-    const result = [retained, ...raw.filter((item) => item.request.requestId !== retained.request.requestId)];
+    const kept = new Set(retained.map((item) => item.request.requestId));
+    const result = [...retained, ...raw.filter((item) => !kept.has(item.request.requestId))];
     visibleInteractionCache.set(sessionId, { raw, protected: retained, result });
     return result;
   },
@@ -6060,7 +6102,7 @@ function writeMakerTurnRunning(sessionId: string, running: boolean): boolean {
 function writeSessionRunStatus(sessionId: string, next: RemoteSessionRunStatus): boolean {
   const current = readSessionRunStatus(sessionId);
   if (next.isRunning && !current.isRunning && current.hasTerminalError) {
-    next = { ...next, hasTerminalError: false };
+    next = { ...next, hasTerminalError: false, terminalError: null };
   }
   if (shallowRecordEqual(current as unknown as Record<string, unknown>, next as unknown as Record<string, unknown>)) {
     return false;
@@ -6428,6 +6470,9 @@ function useSessionMessageCacheSync(
 ): void {
   const hydratedKeyRef = useRef<string | null>(null);
   const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Set when the debounce was skipped because a reply was still streaming: there is no timer,
+  // but the latest snapshot is still unsaved, so unmount must flush it like a pending timer.
+  const persistDeferredWhileStreamingRef = useRef(false);
   const retention = useSyncExternalStore(
     remoteSessionStore.subscribe,
     () => remoteSessionStore.getSessionRetention(sessionId),
@@ -6486,11 +6531,20 @@ function useSessionMessageCacheSync(
   useEffect(() => {
     if (persistTimerRef.current) clearTimeout(persistTimerRef.current);
     persistTimerRef.current = null;
+    persistDeferredWhileStreamingRef.current = false;
     if (!deviceId || !sessionId || retention !== 'regular') return;
     const key = `${deviceId}::${sessionId}`;
     // 空内存可能只是 regular LRU 淘汰，绝不能据此删除磁盘缓存。真正的远端
     // 删除由 removeMessages / 权威空窗显式处理。
     if (messages.length === 0) return;
+    // A streaming reply rewrites this snapshot every flush, and each write re-reads, normalizes
+    // and stringifies the whole window on the JS thread. Wait for the final flush (the row loses
+    // isStreaming), which changes `messages` again and schedules the write; unmount flushes the
+    // deferred snapshot via the ref below.
+    if (messages.some((message) => message.agentMeta?.isStreaming === true)) {
+      persistDeferredWhileStreamingRef.current = true;
+      return;
+    }
     const cacheAuthority = captureSessionMessageCacheWriteAuthority(deviceId, sessionId);
     persistTimerRef.current = setTimeout(() => {
       persistTimerRef.current = null;
@@ -6504,9 +6558,10 @@ function useSessionMessageCacheSync(
 
   // 卸载时把尚未落盘的最新快照立即 flush(防止快速返回导致最后一次更新丢失)。
   useEffect(() => () => {
-    if (!persistTimerRef.current) return;
-    clearTimeout(persistTimerRef.current);
+    if (!persistTimerRef.current && !persistDeferredWhileStreamingRef.current) return;
+    if (persistTimerRef.current) clearTimeout(persistTimerRef.current);
     persistTimerRef.current = null;
+    persistDeferredWhileStreamingRef.current = false;
     const ctx = ctxRef.current;
     if (!ctx.deviceId || !ctx.sessionId) return;
     if (remoteSessionStore.getSessionRetention(ctx.sessionId) !== 'regular') return;

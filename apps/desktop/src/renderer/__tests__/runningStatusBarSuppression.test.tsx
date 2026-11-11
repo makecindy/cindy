@@ -6,7 +6,6 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import ts from 'typescript';
 import { afterEach, expect, it, vi } from 'vitest';
 import { formatSessionDuration } from '@/lib/sessionDurationFormat';
-import { Collapse } from '@/components/ui/collapse';
 import {
   RunningTokenRatePopover,
   useRunningTokenRateHistory,
@@ -18,7 +17,6 @@ import {
 } from '@/features/cc-agent/lib/runningTokenUsage';
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
-vi.mock('@/hooks/useReducedMotion', () => ({ useReducedMotion: () => true }));
 
 // Execute the actual status bar without loading the entire session view's IPC/store graph.
 const source = readFileSync(
@@ -42,7 +40,6 @@ const compiled = ts.transpileModule(component.getText(ast), {
 const Icon = () => null;
 const deps = {
   React,
-  Collapse,
   useCallback,
   useEffect,
   useRef,
@@ -81,6 +78,14 @@ const RunningStatusBar = new Function(
   outputTokens: number;
   generationDurationMs: number;
   generationReliable?: boolean;
+  tokenSpeed?: {
+    rate: number;
+    average: number;
+    tokens: number;
+    elapsedMs: number;
+    streaming: boolean;
+    peak?: number;
+  };
 }>;
 
 afterEach(cleanup);
@@ -159,6 +164,41 @@ it('opens measured zero history and restores fallback across reliability and tur
   expect(trigger()).not.toBeNull();
 });
 
+it('paused token speed hides the current rate but keeps average and peak', () => {
+  const speed = { rate: 100, average: 100, tokens: 500, elapsedMs: 5_000, streaming: true, peak: 1750 };
+  const props = {
+    visible: true,
+    status: 'Running bash…',
+    startedAt: 1,
+    tokenUsage: 500,
+    outputTokens: 500,
+    generationDurationMs: 5_000,
+    generationReliable: true,
+    tokenSpeed: speed,
+  };
+  const { container, rerender } = render(<RunningStatusBar {...props} />);
+  const trigger = () => container.querySelector('[data-running-status-meta] button');
+  fireEvent.click(trigger()!);
+  expect(screen.getByRole('dialog')).toBeTruthy();
+  const currentRate = () => screen.getByText('chat.runningStatus.currentRate').nextElementSibling;
+  const value = (label: string) => screen.getByText(label).nextElementSibling;
+  expect(currentRate()?.textContent).toContain('100');
+
+  // A tool call pauses generation: the cached live rate (fresh for 60s) must not
+  // be shown as a current speed, while average and peak still describe the turn.
+  rerender(
+    <RunningStatusBar {...props} tokenSpeed={{ ...speed, streaming: false, rate: speed.average }} />,
+  );
+  expect(trigger()?.textContent).not.toContain('tokenRate');
+  expect(currentRate()?.textContent).toContain('—');
+  expect(value('chat.runningStatus.averageRate')?.textContent).not.toContain('—');
+  expect(value('chat.runningStatus.observedPeak')?.textContent).not.toContain('—');
+
+  // Streaming resumes: the live reading is back.
+  rerender(<RunningStatusBar {...props} />);
+  expect(currentRate()?.textContent).toContain('100');
+});
+
 it.each([true, false])(
   'plan review preserves the collapsed indicator and suppresses a pinned panel (running=%s)',
   (visible) => {
@@ -194,3 +234,18 @@ it.each([true, false])(
     expect(container.childElementCount).toBe(0);
   },
 );
+
+// 回合已结束、只有后台命令在跑:有命令仍在工作(跑测试、构建)时写「正在后台工作」并保留呼吸;
+// 只剩长驻服务(本地预览服务等)时任务已做完,写「后台服务运行中」且不再呼吸。
+it.each([
+  ['commands still working', 2, 1, 'chat.backgroundActivity.bashWorkStatus', true],
+  ['only long-lived services left', 2, 0, 'chat.backgroundActivity.bashServiceStatus', false],
+] as const)('background commands: %s', (_label, total, working, statusKey, shimmers) => {
+  const Bar = RunningStatusBar as React.ComponentType<Record<string, unknown>>;
+  const { container } = render(<Bar
+    visible status="Done" startedAt={1} tokenUsage={0} outputTokens={0} generationDurationMs={0}
+    backgroundTasksRunning backgroundBashOnlyCount={total} backgroundBashWorkCount={working}
+  />);
+  expect(screen.getByText(statusKey)).toBeTruthy();
+  expect(container.querySelector('.status-bar-shimmer') !== null).toBe(shimmers);
+});

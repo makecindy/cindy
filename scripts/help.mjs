@@ -50,7 +50,9 @@ export function printHelp(log = console.log) {
   log('    pnpm mobile:xcode');
   log('    # 中国大陆版：生成 iOS 工程、打开 Xcode 并启动 Metro');
   log('    pnpm mobile:xcode --region=cn');
-  log('    # Cindy 模拟器：先 rebuild 安装，再 start 启动 Metro');
+  log('    # macOS：一条命令在 iOS 模拟器上启动当前 worktree（只看界面加 -- --mock；可重复运行）');
+  log('    pnpm mobile:sim:up');
+  log('    # 分步：先 rebuild 安装，再 start 启动 Metro');
   log('    pnpm mobile:sim:rebuild');
   log('    pnpm mobile:sim:start');
   log('    # 中国大陆版模拟器：先 rebuild 安装，再 start 启动 Metro');
@@ -61,6 +63,8 @@ export function printHelp(log = console.log) {
   log('    pnpm mobile:sim:start -- --region=cn');
   log('    # 查看当前 Metro 对应的 checkout / branch');
   log('    pnpm mobile:sim:whoami');
+  log('    # 验证后检查 Metro 日志：最近一次打包后的 ERROR 和新 WARN（并行设备加 -- --port 8082）');
+  log('    pnpm mobile:sim:logcheck');
   log('    # macOS：打开唯一已启动设备的 Device Hub / Simulator 窗口（多设备时加 -- --udid <UDID>）');
   log('    pnpm mobile:sim:open');
   log('    # 外部窗口验收：额外检查所选 Xcode 的窗口程序是否运行');

@@ -40,6 +40,7 @@ import {
 import { registerBrowserAgentActHookRoutes } from "./agent.act.hooks.js";
 import { normalizeActRequest, validateBatchTargetIds } from "./agent.act.normalize.js";
 import { resolveActionTargetIds } from "../../../../../shim/browser-action-targets.js";
+import { readBrowserDom } from "../../../../../shim/browser-dom-read.js";
 import { type ActKind, isActKind } from "./agent.act.shared.js";
 import {
   browserNavigationPolicyForProfile,
@@ -459,6 +460,23 @@ export function registerBrowserAgentActRoutes(
               ...extra,
             });
           };
+          // Only structured host reads enter this path. Arbitrary fn is
+          // ignored here, never trusted as a promise of read-only behavior.
+          if (action.kind === "evaluate" && body.domRead !== undefined && !isExistingSession) {
+            if (!evaluateEnabled) {
+              return jsonActError(res, 403, ACT_ERROR_CODES.evaluateDisabled,
+                browserEvaluateDisabledMessage("evaluate"));
+            }
+            const observed = await readBrowserDom({
+              cdpUrl, targetId: tab.targetId, spec: body.domRead,
+              timeoutMs: action.timeoutMs, ssrfPolicy,
+              browserProxyMode: navigationPolicy.browserProxyMode, signal: req.signal,
+            });
+            if ("blockedByDialog" in observed) {
+              return res.json({ ok: true, targetId: tab.targetId, ...observed });
+            }
+            return res.json({ ok: true, targetId: tab.targetId, url: observed.url, result: observed.value });
+          }
           const profileName = profileCtx.profile.name;
           if (isExistingSession) {
             const initialTabTargetIds = hasNavigationResultPolicy

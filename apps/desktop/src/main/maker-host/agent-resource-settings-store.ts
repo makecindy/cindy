@@ -13,12 +13,12 @@
  * 后续 Settings UI 接入(IPC 写路径)复用同一 store。
  */
 
-import { app } from 'electron';
-import path from 'node:path';
+import { userDataPath } from '../userDataPath.js';
 
 import { desktopMakerLogger } from './logger-adapter.js';
 import {
   createOverrideSettingsFile,
+  portableOverrideSettings,
   type OverrideSettingsState,
 } from './override-settings-file.js';
 
@@ -63,7 +63,7 @@ const DEFAULTS: AgentResourceSettings = {
 export const MAX_CONCURRENT_COMMANDS_CAP = 64;
 
 function settingsFilePath(): string {
-  return path.join(app.getPath('userData'), 'agent-resource-settings.json');
+  return userDataPath('agent-resource-settings.json');
 }
 
 function normalize(raw: unknown): AgentResourceSettings {
@@ -122,3 +122,6 @@ export function resetAgentResourceSettings(): AgentResourceSettings {
 }
 
 export const __testing = { normalize };
+
+/** New-computer setup: values the user changed here (docs/product-rules/new-device-setup-migration.md). */
+export const agentResourcePortableSettings = portableOverrideSettings(store);

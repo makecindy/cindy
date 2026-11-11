@@ -226,7 +226,7 @@ function messageOrderKey(message: Record<string, unknown>): number {
 }
 
 /**
- * 会话列表瘦身:只留列表渲染(标题 / 预览 / 时间 / 图标)、分组(workingDir / workspaceKind)
+ * 会话列表瘦身:只留列表渲染(标题 / 预览 / 时间 / 图标)、分组(projectDir / workingDir / workspaceKind)
  * 与跳转(id)需要的字段白名单,长文本截断。
  * 刻意丢弃 live-only 字段(deviceLinkConnectionStatus / attached / 运行态)与大字段
  * (_count / extraDirs / token 统计):前者会画出假在线,后者列表行不消费。
@@ -236,6 +236,7 @@ const SESSION_FIELD_WHITELIST = [
   'userId',
   'title',
   'workingDir',
+  'projectDir',
   'workspaceKind',
   'worktreePath',
   'model',
@@ -274,6 +275,12 @@ export function coerceCachedSession(input: unknown): Record<string, unknown> | n
     if (value === undefined) continue;
     out[key] =
       typeof value === 'string' && TRUNCATED_TEXT_FIELDS.has(key) ? truncateText(value) : value;
+  }
+  const companion = input.companion;
+  if (isRecord(companion) && typeof companion.id === 'string' && typeof companion.role === 'string') {
+    out.companion = { id: companion.id, role: companion.role,
+      ...(typeof companion.channel === 'string' ? { channel: companion.channel } : {}),
+      ...(typeof companion.routineId === 'string' ? { routineId: companion.routineId } : {}) };
   }
   return out;
 }

@@ -159,6 +159,26 @@ interface DeviceLinkPresenceSnapshot {
   busy: boolean;
 }
 
+/** 远程连接拓扑:一条已协商可靠链路的本机视角(镜像 shared/deviceLinkIpc 的 DeviceLinkPeerLinkView) */
+interface DeviceLinkPeerLinkView {
+  deviceId: string;
+  encrypted?: boolean;
+  path: 'direct' | 'relay';
+  /** 可靠帧 ACK 的平滑往返;首个 ACK 之前为 null,闲置时是最近测得的值 */
+  rttMs: number | null;
+  /** link-open / link-accept 双向都已就绪 */
+  open: boolean;
+  /** 距本机最近一次发出业务消息多少毫秒(取快照时算);还没发过为 null */
+  sentAgoMs: number | null;
+  /** 距最近一次从对端收到业务消息多少毫秒;还没收到过为 null */
+  receivedAgoMs: number | null;
+}
+interface DeviceLinkPeerLinksSnapshot {
+  links: DeviceLinkPeerLinkView[];
+  /** 本机到主 relay 连接的心跳往返;离线 / 未测得为 null */
+  relayRttMs: number | null;
+}
+
 /** .cshare 导入向导的预览数据(main 侧 SharePreview 的镜像)。 */
 interface SessionSharePreview {
   title: string;
@@ -402,6 +422,7 @@ interface ComputerDriverUpdateCheck {
   updating: boolean;
   checkStatus?: 'success' | 'error';
   checkedAt?: number;
+  checkError?: { kind: 'rate_limited' | 'network' };
 }
 
 interface ComputerDriverUpdateProgress {
@@ -530,6 +551,25 @@ interface WechatChannelSettingsState {
   workingDirAvailable: boolean;
   companionBotId?: string;
 }
+
+/** 服务器频道白名单：默认不开放；个人 bot 只认主人，伙伴连接可显式允许成员。 */
+type DiscordBotChannelAccess = import('../shared/botImConnection').BotImDiscordChannelAccess;
+type DiscordBotChannelPermissions = {
+  view: boolean;
+  send: boolean;
+  readHistory: boolean;
+  embed: boolean;
+  attachFiles: boolean;
+  sendInThreads: boolean;
+};
+type DiscordBotChannelListing = {
+  status: DiscordBotTransportStatus;
+  guilds: Array<{
+    id: string;
+    name: string;
+    channels: Array<{ id: string; name: string; permissions: DiscordBotChannelPermissions }>;
+  }>;
+};
 
 type DiscordBotSessionAuthCheckResult = {
   ok: boolean;
@@ -822,7 +862,7 @@ interface CCAgentStatusUpdate {
   generationDurationMs?: number;
   generationActive?: boolean;
   generationReliable?: boolean;
-  /** Host-measured live tok/s (Pi extension algorithm); old hosts omit it. */
+  /** Host-measured live tok/s; old hosts omit it. */
   tokenSpeed?: import('@cindy/maker-shared/usage-format').TokenSpeedSnapshot;
   isRunning: boolean;
   /** Host-owned SDK boundary claim; a claimed `status(false)` is not product idle. */
@@ -861,6 +901,7 @@ interface CCAgentAskUserQuestionOption {
 }
 
 interface CCAgentAskUserQuestionItem {
+  id?: string;
   question: string;
   header?: string;
   options?: CCAgentAskUserQuestionOption[];
@@ -1087,6 +1128,14 @@ interface ProjectAutomationReconcileResult {
   updated: number;
   deleted: number;
   skipped: 'no-file' | 'parse-error' | null;
+  pendingImport?: ProjectAutomationImport;
+}
+
+interface ProjectAutomationImport {
+  workingDir: string;
+  configHash: string;
+  schedules: Array<Record<string, unknown>>;
+  removedNames: string[];
 }
 
 type ProjectAutomationEvent = {
@@ -1097,7 +1146,7 @@ type ProjectAutomationEvent = {
   deleted: number;
   isFirstTime: boolean;
   hashChanged: boolean;
-};
+} | { type: 'import-required'; pendingImport: ProjectAutomationImport };
 
 type ApplicationMenuCommand = import('../shared/applicationMenuCommands').ApplicationMenuCommand;
 type ApplicationMenuLocale = import('../shared/locale').SupportedLocale;
@@ -1148,11 +1197,13 @@ type ElectronLocalDbSessionListUsageOptions = Omit<
 };
 
 interface ElectronAPI {
+  hostConnection?: import('@cindy/maker-shared/host-event-stream').HostConnectionApi;
+  performanceTrace: import('../shared/performanceTrace').PerformanceTraceAPI;
   localAgent: import('../shared/localAgent').LocalAgentSettingsApi;
   botMarket: import('../shared/botMarket').BotMarketApi;
   companionImport: import('@cindy/maker-shared/companion-import').CompanionImportApi;
   modelFavoritesHost: import('../shared/modelFavoritesSync').ModelFavoritesHostApi;
-  routines: import('../shared/routines').RoutinesAPI;
+  setupMigration: import('../shared/setupMigration').SetupMigrationApi;
   platform: string;
   /** 当前 Desktop 构建是否具备 Beta 更新渠道。 */
   supportsBetaUpdateChannel?: boolean;
@@ -1162,6 +1213,8 @@ interface ElectronAPI {
   ) => () => void;
   osRelease: string;
   appVersion: string;
+  /** 当前进程是否经 ARM64 转译运行(Apple 芯片上的 Intel 包)。 */
+  getArm64Translation?: () => Promise<boolean>;
   /** 运行期端点清单(main 启动时远程 → 缓存 → 烘焙解析;重启生效)。 */
   clientEndpoints: { websiteUrl: string };
   appDisplayVersion: string;
@@ -1173,6 +1226,8 @@ interface ElectronAPI {
   getDeviceId: () => Promise<string>;
   windowMinimize: () => void;
   windowMaximize: () => void;
+  windowSidebarExpansion?: (width: number, shrink?: number, adopt?: boolean) => Promise<number | void>;
+  onSidebarWindowUserResize?: (callback: () => void) => () => void;
   windowExitFullscreen: () => void;
   windowClose: () => void;
   /**
@@ -1196,7 +1251,9 @@ interface ElectronAPI {
   pageZoomOut: () => Promise<{ ok: true; zoomFactor: number }>;
   pageZoomReset: () => Promise<{ ok: true; zoomFactor: number }>;
   accessibilitySupport: import('../shared/accessibilitySupport').AccessibilitySupportBridge;
+  appPreferenceControl?: import('../shared/appPreferenceControl').AppPreferenceControlBridge;
   appearanceSettings: {
+    loadPluginFont?: (role: string) => Promise<{ family: string; bytes: ArrayBuffer }>;
     importWallpaper: () => Promise<import('../shared/appearanceSettings').AppearanceSettings | null>;
     ensureWallpaperVideo?: (id: import('../shared/appearanceSettings').WallpaperId) => Promise<string | null>;
     ensureWallpaperImage?: (id: import('../shared/appearanceSettings').WallpaperId) => Promise<string | null>;
@@ -1214,6 +1271,7 @@ interface ElectronAPI {
   };
   onApplicationMenuCommand: (callback: (command: ApplicationMenuCommand) => void) => () => void;
   setApplicationMenuLocale: (locale: ApplicationMenuLocale) => Promise<{ ok: true }>;
+  setClassicalReplyStyle: (style: string) => Promise<{ ok: true }>;
   billing: import('../shared/billing').BillingRendererApi;
 
   // lifecycle 兜底 catch 到瞬时网络错误时推一次。renderer 收到后由
@@ -1239,6 +1297,7 @@ interface ElectronAPI {
     openDir: () => Promise<LocalThemeOpenDirResult>;
     /** 导入 VSCode / Obsidian 主题文件；对话框与读文件都在 main 侧。 */
     importExternal: () => Promise<import('../shared/theme-import/types').LocalThemeImportResult>;
+    onChanged: (cb: (payload: LocalThemesResult) => void) => () => void;
   };
 
   /** RSB terminal tab —— PTY 后端 + xterm.js,详见 shared/terminal-bridge.ts 注释。 */
@@ -1249,6 +1308,8 @@ interface ElectronAPI {
     getState: () => {
       overrides: import('../shared/appShortcuts').AppShortcutOverrides;
       platform: string;
+      /** 运行态: 注册失败 (多为被其它应用占用) 的全局快捷键 id。 */
+      globalFailures?: unknown;
     };
     setOverride: (
       id: import('../shared/appShortcuts').AppShortcutId,
@@ -1262,6 +1323,7 @@ interface ElectronAPI {
     onChanged: (
       callback: (payload: {
         overrides: import('../shared/appShortcuts').AppShortcutOverrides;
+        globalFailures?: unknown;
       }) => void,
     ) => () => void;
   };
@@ -1284,6 +1346,7 @@ interface ElectronAPI {
 
   /** 意识仓库 —— 数据模型与校验见 shared/ghost.ts,main 端见 main/cindy-brain/。 */
   ghosts: {
+    activateBrowser: (id: string) => Promise<{ ok: boolean }>;
     mailPreview: (sessionId: string, url: string, read: boolean, opened?: boolean, providerId?: string) => Promise<import('@cindy/maker-shared/mail-message').MailPreviewResult>;
     openRemoteSettings: (target: import('../shared/remotePluginSettings').RemotePluginSettingsTarget) => Promise<import('../shared/remotePluginSettings').RemotePluginSettingsView>;
     closeRemoteSettings: (id: string) => Promise<void>;
@@ -1381,7 +1444,15 @@ interface ElectronAPI {
     onRetirementOpen: (callback: (id: string) => void) => () => void;
     acknowledgeRetirement: (id: string) => Promise<{ ok: true }>;
     setEnabled: (id: string, enabled: boolean, expectedInstalledApproval?: string) => Promise<{ ok: true }>;
-    requestTaskApproval: (id: string) => Promise<{ granted: boolean }>;
+    uiPrompts: () => Promise<Array<{id: string; name: string; version: string}>>;
+    deferUiPrompt: (id: string, version: string) => Promise<void>;
+    requestUiApproval: (id: string) => Promise<{ granted: boolean }>;
+    requestTaskApproval: (id: string, capability?: 'observe' | 'companions') => Promise<{ granted: boolean }>;
+    getControlPoints: (id: string) => Promise<import('../shared/ghost').GhostControlPointInfo[]>;
+    listControlPointCandidates: (point: import('../shared/ghost').GhostControlPointId) => Promise<import('../shared/ghost').GhostControlPointCandidate[]>;
+    runtimePlugins: (sessionId: string, settings?: import('../shared/pluginRuntime').RuntimePluginSettings) => Promise<import('../shared/pluginRuntime').RuntimePluginSettings>;
+    listPickerModels: () => Promise<import('../shared/ghost').GhostPickerModel[]>;
+    routeNewTask: (pluginId: string, data: import('../shared/ghost').GhostStartTaskPointData) => Promise<import('../shared/ghost').GhostStartTaskRouteResult>;
     /** 详情页「后台任务」:本插件转入后台(hidden)且未删除的任务。 */
     listBackgroundTasks: (id: string) => Promise<{
       items: Array<{ taskId: string; title: string; status: 'active' | 'archived'; updatedAt: number; running: boolean }>;
@@ -1389,7 +1460,9 @@ interface ElectronAPI {
     /** 「显示到任务列表」:清除后台隐藏,任务重新出现在任务列表。 */
     revealBackgroundTask: (id: string, taskId: string) => Promise<{ ok: true }>;
     /** 目录级禁用清单(插件页项目范围视图;sendSync 切换同帧渲染)。 */
-    workdirPrefsSync: (workdir: string) => { disabled: string[] };
+    workdirPrefsSync: (workdir: string) => { disabled: string[]; workdirKey?: string };
+    workdirPrefs: (workdir: string) => Promise<{ disabled: string[]; workdirKey?: string }>;
+    onWorkdirPrefsChanged: (callback: (payload: { workdirKey: string; disabled: string[] }, ownerStamp?: unknown) => void) => () => void;
     /** 写/清一条目录级例外(disabled=false 即清除,回到跟随全局)。 */
     setWorkdirDisabled: (
       workdir: string,
@@ -1488,6 +1561,8 @@ interface ElectronAPI {
       prompt?: string,
       formValues?: Record<string, string>,
       formChange?: boolean,
+      /** 卡内模型下拉框(data-ghost-model-select)选中的模型;agentDeviceId 是另一台电脑或分享来的供应商。 */
+      modelSelection?: import('@cindy/device-link').PluginModelSelection & { agentDeviceId?: string },
     ) => Promise<{ ok: boolean }>;
     /** 订阅槽①:用户消息被意识钩子拦下(renderer 把乐观气泡原地降级为被拦态;
      *  没有既有气泡时用 text 补渲一条——排队消息被拦不无声蒸发)。 */
@@ -1587,6 +1662,10 @@ interface ElectronAPI {
     ) => () => void;
     /** confirm 槽回包:把用户的点击送回 main 结算挂起的管子请求。 */
     resolveConfirm: (requestId: string, confirmed: boolean) => Promise<{ handled: boolean }>;
+    onModelPickerRequest: (callback: (request: import('../shared/pluginModelPicker').PluginModelPickerPresentation) => void) => () => void;
+    onModelPickerDismissed: (callback: (request: { requestId: string }) => void) => () => void;
+    resolveModelPicker: (requestId: string, route: import('../shared/pluginTasks').PluginTaskRoute | null) => Promise<{ handled: boolean; accepted: boolean }>;
+    answerRemoteModelPicker: (viewId: string, requestId: string, route: import('../shared/pluginTasks').PluginTaskRoute | null) => Promise<{ handled: boolean; accepted: boolean }>;
     /** taskView 槽:插件请求在指定任务的右侧栏打开 / 聚焦它的任务页页签(main 已资格审)。 */
     onTaskViewOpen: (
       callback: (payload: { instanceId: string; sessionId: string; focus?: true }) => void,
@@ -1629,7 +1708,11 @@ interface ElectronAPI {
     usageHistory: () => Promise<{ subjectId: string; ghostId: string; displayName: string; sourceKind: string }[]>;
     usageHistorySummary: (subjectId: string) => Promise<import('../shared/pluginUsage').PluginUsageSummary | null>;
     clearUsage: (subjectId: string | null) => Promise<void>;
+    readme: (id: string, locale?: string) => Promise<import('@cindy/plugin-protocol').GhostReadmeContent | null>;
     libraryOverview: (id: string) => Promise<import('../shared/ghost').GhostLibraryOverview>;
+    handoffList: (id: string) => Promise<import('../shared/ghost').GhostHandoffFile[]>;
+    handoffFolder: (id: string) => Promise<string | null>;
+    handoffDelete: (id: string, ref: string) => Promise<{ existed: boolean }>;
     libraryPickLocation: (id: string) => Promise<{
       ok: boolean;
       cancelled?: boolean;
@@ -1663,8 +1746,16 @@ interface ElectronAPI {
 
   /** Plugin Protocol v2 市场；网络、下载与安装全部在 main 进程完成。 */
   pluginMarket: {
+    query: (input: import('../shared/pluginMarket').PluginMarketQuery) => Promise<import('../shared/pluginMarket').PluginMarketPage>;
+    lookup: (ghostIds: string[]) => Promise<import('../shared/pluginMarket').PluginMarketSnapshot>;
+    recommendations: () => Promise<import('../shared/pluginMarket').PluginMarketItem[]>;
     snapshot: () => Promise<import('../shared/pluginMarket').PluginMarketSnapshot>;
     detail: (pluginId: string) => Promise<import('../shared/pluginMarket').PluginMarketDetail>;
+    prepareShare: (pluginId: string, options?: import('../shared/share').ShareOptions) => Promise<import('../shared/share').ShareContent>;
+    prepareLocalShare: (instanceId: string, operationId: string, options: import('../shared/share').ShareOptions, expected: import('../shared/share').LocalPluginShareBinding, uploadConfirmed: boolean) => Promise<import('../shared/share').SharePreparation>;
+    localShareDetail: (snapshotId: string) => Promise<import('@cindy/plugin-protocol').LocalPluginShareSnapshot>;
+    installLocalShare: (snapshotId: string, expected: import('@cindy/plugin-protocol').LocalPluginShareSnapshot) => Promise<{ ghost: import('../shared/ghost').InstalledGhost }>;
+    releaseLocalShare: (operationId: string) => Promise<void>;
     localIcons: (
       requests: import('../shared/pluginMarket').PluginMarketLocalIconRequest[],
     ) => Promise<import('../shared/pluginMarket').PluginMarketLocalIconResult[]>;
@@ -1694,6 +1785,7 @@ interface ElectronAPI {
     refreshSource: (name: string) => Promise<import('../shared/pluginMarket').MarketSourceSummary>;
     gitPreflight: () => Promise<{ ok: boolean; version: string | null }>;
   };
+  pluginContributions: import('../shared/pluginContributions').PluginContributionsApi;
   pluginPublisher: {
     start: (filePath: string) => Promise<{ transferId: string; uploadId: string | null }>;
     status: (transferId: string) => Promise<{ progress: unknown }>;
@@ -1916,6 +2008,12 @@ interface ElectronAPI {
     setLoginItem: (enabled: boolean) => Promise<import('../shared/loginItem').LoginItemState>;
     getMenubarState: () => Promise<import('../shared/menubarQuota').MenubarState>;
     setMenubarEnabled: (enabled: boolean) => Promise<import('../shared/menubarQuota').MenubarState>;
+    getAwayGuardState: () => Promise<import('../shared/awayGuard').AwayGuardState>;
+    setAwayGuardEnabled: (enabled: boolean) => Promise<import('../shared/awayGuard').AwayGuardState>;
+    setAwayGuardDelay: (
+      delaySeconds: import('../shared/awayGuard').AwayGuardDelaySeconds | null,
+    ) => Promise<import('../shared/awayGuard').AwayGuardState>;
+    previewAwayGuard: () => Promise<import('../shared/awayGuard').AwayGuardPreviewResult>;
     setSwallowActivationClick: (enabled: boolean) => Promise<{ ok: true }>;
     getWindowsCloseBehavior: () => Promise<'quit' | 'tray' | null>;
     setWindowsCloseBehavior: (behavior: 'quit' | 'tray') => Promise<'quit' | 'tray'>;
@@ -2128,6 +2226,9 @@ interface ElectronAPI {
     setRemoteSessions: (sessions: AgentIslandRemoteSessionInput[]) => Promise<{ ok: true }>;
     setSoundSettings: (settings: AgentIslandSoundSettings) => Promise<{ ok: true }>;
     setMascotSkin: (skin: AgentIslandMascotSkin) => Promise<{ ok: true }>;
+    setSubtleReminders: (enabled: boolean) => Promise<{ ok: true }>;
+    setLiveActivity?: (enabled: boolean) => Promise<{ ok: true }>;
+    getLiveActivitySupport?: () => Promise<{ ok: true; supported: boolean }>;
     setDisplayTarget: (target: AgentIslandDisplayTarget) => Promise<{ ok: true }>;
     getDisplayOptions: () => Promise<{
       ok: true;
@@ -2231,6 +2332,9 @@ interface ElectronAPI {
   // ── 客户端日志上报(设置 → 关于)──
   // 只上报 App 自身的运行记录 + 设备环境信息;对话内容、文件内容、提示词、工作目录路径
   // 永不上报,凭证与邮箱在上传前被自动抹除(实现见 main/log-upload/)。
+  getCrashDiagnosis: () => Promise<import('../shared/crashDiagnosis').CrashDiagnosisSummary | null>;
+  prepareCrashDiagnosis: () => Promise<import('../shared/crashDiagnosis').CrashDiagnosisEvidence | null>;
+  dismissCrashDiagnosis: () => Promise<void>;
   getLogUploadSettings: () => Promise<LogUploadSettingsPayload>;
   setLogUploadCrashAuto: (enabled: boolean) => Promise<LogUploadSettingsPayload>;
   /** 恢复默认:删掉 override,重新跟随当前版本默认的“已有 Git 项目”模式。 */
@@ -2302,6 +2406,7 @@ interface ElectronAPI {
 
   // ── Discord Bot (Settings → IM Bot tab) ──
   discordBot: {
+    reconnect: () => Promise<{ status: DiscordBotTransportStatus; ownerUserId: string | null }>;
     getStatus: () => Promise<{
       status: DiscordBotTransportStatus;
       ownerUserId: string | null;
@@ -2320,6 +2425,9 @@ interface ElectronAPI {
       lifecycleAnnouncement: boolean;
     }>;
     checkSessionAuth: () => Promise<DiscordBotSessionAuthCheckResult>;
+    listChannels: () => Promise<DiscordBotChannelListing>;
+    getChannelAccess: () => Promise<DiscordBotChannelAccess>;
+    setChannelAccess: (access: DiscordBotChannelAccess) => Promise<DiscordBotChannelAccess>;
     onStatusChange: (
       callback: (update: { status: DiscordBotTransportStatus }) => void,
     ) => () => void;
@@ -2392,6 +2500,14 @@ interface ElectronAPI {
       chatId: string;
       mode: import('../shared/botImConnection').BotImGroupActivationMode;
     }) => Promise<import('../shared/botImConnection').BotImConnectionGroupsPayload>;
+    /** Discord 连接的服务器频道白名单（可选：旧电脑没有）；默认空 = 不开放。 */
+    listDiscordChannels?: (payload: {
+      id: string;
+    }) => Promise<import('../shared/botImConnection').BotImDiscordChannelsPayload>;
+    setDiscordChannelAccess?: (payload: {
+      id: string;
+      access: import('../shared/botImConnection').BotImDiscordChannelAccess;
+    }) => Promise<import('../shared/botImConnection').BotImDiscordChannelsPayload>;
     /** 这条连接下有任务的落点(主人私聊 + 群 / 话题 / 其他人私聊的隐藏任务)。 */
     listLanes: (payload: {
       id: string;
@@ -2541,6 +2657,10 @@ interface ElectronAPI {
   /** Renderer localStorage workerCreationPrefs → main 内存镜像。 */
   syncWorkerCreationPrefs: (snapshot: {
     workerPermissionMode: 'auto' | 'bypassPermissions';
+    selection?: import('../shared/workerCreationSelection').WorkerCreationSelection | null;
+    /** 当前账号的协同角色清单与每个角色的记忆，供手机与远程控制的电脑读取。 */
+    roles?: import('@cindy/device-link').OrcaWorkerRoles | null;
+    ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp;
   }) => void;
 
   /** 被控端 renderer → 自身 main:providerModelMemory 全量快照镜像(草稿列表行真实读源)。 */
@@ -2600,6 +2720,14 @@ interface ElectronAPI {
   /** Orca tool 显式修改 Worker 默认权限后，回写 renderer localStorage。 */
   onWorkerCreationPrefsApply: (
     cb: (payload: { workerPermissionMode: 'auto' | 'bypassPermissions' }) => void,
+  ) => () => void;
+
+  /** 手机或远程控制的电脑改了这台电脑的协同角色清单后，回写 renderer localStorage。 */
+  onWorkerRolesApplyRequest: (
+    cb: (payload: {
+      mutation: import('@cindy/device-link').OrcaWorkerRolesMutation;
+      ownerStamp: import('../shared/dataOwnerPush').DataOwnerPushStamp;
+    }) => void,
   ) => () => void;
 
   /** 被控端本地 main → 自身 renderer:控制端写穿的会话「模型 effort/fast」pref(调本地 setter)。 */
@@ -2950,6 +3078,13 @@ interface ElectronAPI {
     sessionId: string;
     title: string;
     kind: 'done' | 'error' | 'needs-reply';
+    inputHandoffRequestId?: string;
+    remoteDeviceId?: string;
+    /**
+     * Stable identity of a repeated needs-reply or error. Main turns two
+     * deliveries of the same id into one desktop toast. Completions omit it.
+     */
+    alertEventId?: string;
     /**
      * 选择性走哪些通知通道; 缺省 / 未传 → 兼容旧行为(仅桌面)。
      * renderer 侧 gate(localStorage notifications.enabled /
@@ -2975,7 +3110,12 @@ interface ElectronAPI {
     ) => Promise<{ configured: boolean; enabled: boolean; maskedKey?: string }>;
     clear: () => Promise<{ configured: boolean; enabled: boolean }>;
   };
-  /** 主窗口投影全部任务的关注总数；独立于通知事件及逐任务已读回执。 */
+  /**
+   * 主窗口投影本机需处理任务的关注总数，不是字面「全部任务」。
+   * 不含 device-link 远程会话，不含 scheduler / legacy Schedule 标题自动化会话，
+   * 也不含绑在普通会话上的 heartbeat 完成态（done + 未读 run）。
+   * 本地 learn 会话的待审查等关注态仍计入。独立于通知事件及逐任务已读回执。
+   */
   notificationSetAppAttentionCount: (
     snapshot: import('../shared/sessionAttention').AppAttentionSnapshot,
   ) => Promise<void>;
@@ -3067,11 +3207,14 @@ interface ElectronAPI {
         | { type: 'new-session'; workingDir: string }
         | { type: 'share-import'; filePath: string }
         | { type: 'provider-import'; importId: string }
-        | { type: 'shared-task-join'; invitation: string; server: string }
+        | { type: 'shared-task-join'; invitation: string; server: string; link?: string }
         | { type: 'chat-invite'; token: string }
         | { type: 'chat-invite-malformed' }
         | { type: 'provider-share-join'; link: string }
-        | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control'; connect?: string; intent?: 'topup' },
+        | { type: 'plugin'; pluginId: string }
+        | { type: 'local-plugin-share'; snapshotId: string }
+        | { type: 'installed-plugin'; ghostId?: string }
+        | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' },
     ) => void,
   ) => () => void;
 
@@ -3088,13 +3231,22 @@ interface ElectronAPI {
     | { type: 'new-session'; workingDir: string }
     | { type: 'share-import'; filePath: string }
     | { type: 'provider-import'; importId: string }
-    | { type: 'shared-task-join'; invitation: string; server: string }
+    | { type: 'shared-task-join'; invitation: string; server: string; link?: string }
     | { type: 'chat-invite'; token: string }
     | { type: 'chat-invite-malformed' }
     | { type: 'provider-share-join'; link: string }
-    | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control'; connect?: string; intent?: 'topup' }
+    | { type: 'plugin'; pluginId: string }
+    | { type: 'local-plugin-share'; snapshotId: string }
+    | { type: 'installed-plugin'; ghostId?: string }
+    | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' }
     | null
   >;
+
+  /** 全局截图交给新任务: main 唤醒后取走待处理请求 (只有主窗口能取)。 */
+  regionScreenshotCompose?: {
+    onWake: (callback: () => void) => () => void;
+    take: () => Promise<import('../shared/regionScreenshot').RegionScreenshotComposeRequest | null>;
+  };
 
   // ── TextLightbox (text-lightbox F4/F5) ──
   /**
@@ -3345,6 +3497,8 @@ interface ElectronAPI {
   resolvePathBatch: (params: {
     hrefs: string[];
     workingDir: string;
+    /** Re-walk hrefs whose cached answer is `none` / `multiple`. */
+    revalidateNegative?: boolean;
   }) => Promise<
     Record<
       string,
@@ -3894,6 +4048,18 @@ interface ElectronAPI {
     choose(): Promise<import('../shared/dialogueWorkspaceSettings').DialogueWorkspaceSettingsState>;
     reset(): Promise<import('../shared/dialogueWorkspaceSettings').DialogueWorkspaceSettingsState>;
   };
+  projectsRoot: {
+    get(): Promise<import('../shared/projectsRoot').ProjectsRootState>;
+    choose(): Promise<import('../shared/projectsRoot').ProjectsRootState>;
+    reset(): Promise<import('../shared/projectsRoot').ProjectsRootState>;
+  };
+  createProjectFromTask: {
+    prepare(sessionId: string): Promise<import('../shared/projectsRoot').PreparedProjectFromTask>;
+    chooseParent(): Promise<string | null>;
+    create(
+      input: import('../shared/projectsRoot').CreateProjectFromTaskInput,
+    ): Promise<import('../shared/projectsRoot').CreateProjectFromTaskResult>;
+  };
 
   cindyMediaStorage: {
     /** 本窗口草稿附件 URL 变化时上报(fire-and-forget;多窗口防误删取证)。 */
@@ -4002,8 +4168,10 @@ interface ElectronAPI {
   }>;
   /** 用户主动重启,让 beta 通道切换在下次冷启动前生效。 */
   relaunchForChannelChange: () => Promise<void>;
-  /** 用户确认后重启，下一次启动只更新所确认的受管 Harness（Pi 由内核管理单独处理）。 */
-  relaunchForHarnessUpdate: (kind: 'claude-code' | 'codex') => Promise<{ accepted: true }>;
+  /** 下载并校验指定版本；完成前不重启、不切换当前引擎。 */
+  prepareHarnessUpdate: (kind: 'claude-code' | 'codex', version: string) => Promise<{ ready: true }>;
+  /** 已准备的目标只消费缓存；省略版本保留旧入口的指定引擎修复（Pi 单独管理）。 */
+  relaunchForHarnessUpdate: (kind: 'claude-code' | 'codex', preparedVersion?: string) => Promise<{ accepted: true }>;
   /** 打开 beta 前预检:探测 beta manifest 是否可达(HTTP 200)。 */
   probeBetaChannel: () => Promise<{ available: boolean }>;
   onUpdateChannelSettings: (
@@ -4012,11 +4180,14 @@ interface ElectronAPI {
   setUpdateRelaunchTheme: (theme: 'light' | 'dark') => void;
   // E4D 毛玻璃:family 切换/启动通知 main 开关 vibrancy(仅 CINDY 透壁纸)
   theme: {
+    setSidebarWidth: (width: number) => void;
     applyVibrancy: (
       familyId: string,
       isDark: boolean,
       mode: 'system' | 'light' | 'dark',
       systemModeFollowsSystem: boolean,
+      wallpaperCovered?: boolean,
+      desktopBlur?: number | null,
     ) => void;
   };
   /**
@@ -4091,6 +4262,7 @@ interface ElectronAPI {
   openRemoteDesktop: (target: { deviceId: string; name: string; handoff?: string }) => Promise<void>;
   remoteDesktopViewer: import('../shared/remoteDesktopViewer').RemoteDesktopViewerApi;
   remoteDesktop: import('../shared/remoteDesktop').RemoteDesktopApi;
+  selfHostedRelay: import('../shared/selfHostedRelay').SelfHostedRelayApi;
   sharedTask: {
     host(command: import('@cindy/device-link').SharedTaskHostCommand): Promise<unknown>;
     account(command: import('@cindy/device-link').SharedTaskAccountCommand): Promise<unknown>;
@@ -4108,6 +4280,12 @@ interface ElectronAPI {
     /** 有人请求把这里分享的供应商经他的供应商组转给别人用(转分享)。 */
     onReshareRequested(cb: () => void): () => void;
   };
+  subscriptionAccounts: {
+    onChanged(cb: (event: { providerId: import('../shared/subscriptionAccounts').SubscriptionProvider }) => void): () => void;
+    command(command: import('../shared/subscriptionAccounts').SubscriptionAccountCommand): Promise<import('../shared/subscriptionAccounts').SubscriptionPoolView>;
+    /** Validate the reply with parseSubscriptionSessionAccountView. */
+    sessionAccount?(query: import('../shared/subscriptionAccounts').SubscriptionSessionAccountQuery): Promise<unknown>;
+  };
   providerGroup: {
     command<C extends import('../shared/providerGroup').ProviderGroupCommand>(
       command: C,
@@ -4122,10 +4300,13 @@ interface ElectronAPI {
       remoteControlEnabled: boolean;
       keepAwake: boolean;
       linkStatus: 'stopped' | 'connecting' | 'online';
+      directDataDeviceIds?: string[];
       connectionIssue: DeviceLinkConnectionIssuePayload | null;
       standby: boolean;
       controlledBy: Array<{ deviceId: string; name: string }>;
       revokedControllers: string[];
+      /** 单独关掉「用本机模型」的同账号电脑(旧主进程不返回)。 */
+      modelUseRevokedControllers?: string[];
       disabledControlDeviceIds: string[];
       unresponsiveDeviceIds: string[];
     }>;
@@ -4135,7 +4316,12 @@ interface ElectronAPI {
       deviceId: string,
       enabled: boolean,
     ) => Promise<{ deviceId: string; enabled: boolean; disabledControlDeviceIds: string[] }>;
-    listDevices: () => Promise<{ devices: DeviceLinkDeviceView[] }>;
+    listDevices: () => Promise<{ devices: DeviceLinkDeviceView[]; stale?: boolean;
+      displayBudget?: { remainingMs: number } }>;
+    /** 远程连接拓扑:本机已建链对端的路径 / RTT 快照 */
+    getPeerLinks: () => Promise<DeviceLinkPeerLinksSnapshot>;
+    /** 对端链路拓扑变化,payload 为全量快照 */
+    onPeerLinksChanged: (cb: (payload: DeviceLinkPeerLinksSnapshot) => void) => () => void;
     renameDevice: (
       deviceId: string,
       name: string | null,
@@ -4156,11 +4342,12 @@ interface ElectronAPI {
     revoke: (deviceId: string) => Promise<{ ok: true }>;
     /** 被控端:恢复某控制端的访问权限 */
     restore: (deviceId: string) => Promise<{ ok: true }>;
+    setModelUse: (deviceId: string, allowed: boolean) => Promise<{ ok: true }>;
     /** 同账号某设备 presence 变化(上线/下线/开关/busy) */
     onPresenceChanged: (cb: (snap: DeviceLinkPresenceSnapshot) => void) => () => void;
     /** 本机 relay 连接状态变化 */
     onStatusChanged: (
-      cb: (payload: { status: 'stopped' | 'connecting' | 'online' }) => void,
+      cb: (payload: { status: 'stopped' | 'connecting' | 'online'; directDataDeviceIds?: string[]; dataPathChangedDeviceId?: string }) => void,
     ) => () => void;
     /** 本机 relay 连接问题变化(鉴权失效/被顶号/超限/版本不符;null = 已恢复) */
     onConnectionIssue: (
@@ -4168,6 +4355,8 @@ interface ElectronAPI {
     ) => () => void;
     /** 同机单持有者仲裁角色变化。 */
     onOwnershipChanged: (cb: (payload: { standby: boolean }) => void) => () => void;
+    /** 云端设备目录被明确拒绝后，已挂载的设备列表立即失效。 */
+    onDeviceDirectoryInvalidated?: (cb: () => void) => () => void;
     /** 控制端:被控端转发回来的 renderer 广播事件 */
     onRemotePush: (
       cb: (
@@ -4194,11 +4383,13 @@ interface ElectronAPI {
         disabledControlDeviceIds: string[];
       }) => void,
     ) => () => void;
+    /** 本机远程控制开关经设置页或授权弹窗变更后推送 */
+    onControlEnabledChanged?: (cb: (payload: { remoteControlEnabled: boolean }) => void) => () => void;
     /** 「保持电脑唤醒」在其它共享 userData 实例被翻转后推送 */
     onKeepAwakeChanged: (cb: (payload: { keepAwake: boolean }) => void) => () => void;
     /** Main 本地投影:单个 peer 的恢复作废旧内容就绪证据，不代表 relay 离线。 */
     onPeerLinkReopened?: (cb: (payload: { deviceId: string }) => void) => () => void;
-    onPeerLinkReset?: (cb: (payload: { deviceId: string }) => void) => () => void;
+    onPeerLinkReset?: (cb: (payload: { deviceId: string; offline?: boolean }) => void) => () => void;
     /** 控制端:目标设备「无响应」熔断状态翻转(弱网 / 对端卡死;presence 可能仍在线) */
     onResponsivenessChanged: (
       cb: (payload: { deviceId: string; unresponsive: boolean; recovered?: boolean }) => void,
@@ -4293,6 +4484,7 @@ interface ElectronAPI {
     connect: (id: string) => Promise<{ host: RemoteHostSnapshot | null }>;
     disconnect: (id: string) => Promise<{ host: RemoteHostSnapshot | null }>;
     onStatusChanged: (cb: (snap: RemoteHostSnapshot) => void) => () => void;
+    onHostsChanged?: (cb: (result: RemoteSshListResult) => void) => () => void;
     // Phase B: agent-on-remote
     probeAgent: (id: string, kind: RemoteAgentKind) => Promise<{ probe: RemoteAgentProbe }>;
     installAgent: (
@@ -4418,7 +4610,7 @@ interface ElectronAPI {
     baseRepo: string;
   }) => Promise<import('@/lib/worktree.types').SuggestNameResp>;
   worktreeBranchSyncStatus: (req: import('../shared/worktreeBranchSync').BranchSyncRequest) => Promise<import('../shared/worktreeBranchSync').BranchSyncStatus>;
-  worktreeSyncBranch: (req: import('../shared/worktreeBranchSync').BranchSyncRequest) => Promise<import('../shared/worktreeBranchSync').BranchSyncResult>;
+  worktreeSyncBranch: (req: import('../shared/worktreeBranchSync').BranchSyncRequest) => Promise<import('../shared/worktreeBranchSync').BranchSyncReply>;
   worktreeListBranches: (req: {
     baseRepo: string;
   }) => Promise<import('@/lib/worktree.types').ListBranchesResp>;
@@ -4452,7 +4644,7 @@ interface ElectronAPI {
       enabled: boolean,
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     setProviderEnabled: (
-      provider: 'telegram' | 'x',
+      provider: 'telegram' | 'x' | 'feishu',
       enabled: boolean,
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     setWorkspaces: (
@@ -4462,7 +4654,7 @@ interface ElectronAPI {
     setXCompanion: (botId: string | null, expectedBotId: string | null) =>
       Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     setProviderDefaultWorkspace: (
-      provider: 'telegram' | 'x',
+      provider: 'telegram' | 'x' | 'feishu',
       alias: string | null,
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     bindStart: () => Promise<{ ok: true }>;
@@ -4481,17 +4673,24 @@ interface ElectronAPI {
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     cancelPendingBind: () => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     providerBindStart: (
-      provider: 'telegram' | 'x',
+      provider: 'telegram' | 'x' | 'feishu',
+      scopeId?: string,
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     providerBindCancel: (
-      provider: 'telegram' | 'x',
+      provider: 'telegram' | 'x' | 'feishu',
+    ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
+    providerBindSelect: (
+      provider: 'telegram' | 'x' | 'feishu',
+      bindingId?: string,
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     providerBindRevoke: (
-      provider: 'telegram' | 'x',
+      provider: 'telegram' | 'x' | 'feishu',
+      bindingId?: string,
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     openProviderAction: (
-      provider: 'telegram' | 'x',
+      provider: 'telegram' | 'x' | 'feishu',
       action: import('../shared/hookControlIpc').ProviderOpenAction,
+      scopeId?: string,
     ) => Promise<{ ok: true }>;
     getWorkspacePrefs: () => Promise<{
       prefs: import('../shared/hookControlIpc').HookPrefsView;
@@ -4501,11 +4700,11 @@ interface ElectronAPI {
       patch: import('../shared/hookControlIpc').HookPrefsPatch,
       teamId?: string | null,
     ) => Promise<{ prefs: import('../shared/hookControlIpc').HookPrefsView }>;
-    getProviderWorkspacePrefs: (provider: 'telegram' | 'x') => Promise<{
+    getProviderWorkspacePrefs: (provider: 'telegram' | 'x' | 'feishu') => Promise<{
       prefs: import('../shared/hookControlIpc').ProviderPrefsView;
     }>;
     setProviderWorkspacePrefs: (
-      provider: 'telegram' | 'x',
+      provider: 'telegram' | 'x' | 'feishu',
       workspace: string,
       patch: import('../shared/hookControlIpc').HookPrefsPatch,
     ) => Promise<{ prefs: import('../shared/hookControlIpc').ProviderPrefsView }>;
@@ -4533,7 +4732,7 @@ interface ElectronAPI {
     }>;
     setWorkspaceProviderSource: (payload: {
       agentDeviceId?: string | null;
-      channel: 'slack' | 'telegram' | 'x';
+      channel: 'slack' | 'telegram' | 'x' | 'feishu';
       teamId: string | null;
       workspace: string;
       providerId: string | null;
@@ -4561,11 +4760,15 @@ interface ElectronAPI {
 
   // ── session-git-pr-context: 会话分支感知 + PR 关联状态 ──
   gitContext: {
+    readGithub: (method: import('@cindy/maker-shared').GithubReadMethod, args: unknown) => Promise<Record<string, unknown>>;
     githubSetupStatus: () => Promise<import('../shared/githubSetup').GithubSetupState>;
+    checkCindyStar: () => Promise<boolean | null>;
+    starCindy: () => Promise<boolean | null>;
     githubConnection: () => Promise<import('../shared/githubSetup').GithubConnectionState>;
     startGithubSetup: () => Promise<import('../shared/githubSetup').GithubSetupState>;
     cancelGithubSetup: () => Promise<import('../shared/githubSetup').GithubSetupState>;
     onGithubConnected: (cb: () => void) => () => void;
+    onGithubSetupOpen?: (cb: () => void) => () => void;
     get: (workdir: string) => Promise<import('@/lib/gitContext.types').GitContextSnapshot>;
     getForSession: (input: {
       sessionId: string;
@@ -4580,10 +4783,17 @@ interface ElectronAPI {
     watch: (workdir: string) => Promise<void>;
     unwatch: (workdir: string) => Promise<void>;
     listPrRefs: (sessionId: string) => Promise<import('@/lib/gitContext.types').SessionPrRef[]>;
+    managePrRefs: (input: { sessionId: string } & (import('@cindy/maker-shared').SessionPrRefAction | { action: 'list' })) => Promise<import('@/lib/gitContext.types').SessionPrRef[]>;
     /** null = main 侧 db 尚未就绪(登录前/启动期),调用方应稍后重试。 */
     listAllPrRefs: () => Promise<import('@/lib/gitContext.types').SessionPrRef[] | null>;
     getPrStatuses: (
-      queries: Array<{ owner: string; repo: string; prNumber: number }>,
+      queries: Array<{
+        provider?: 'github' | 'gitlab';
+        host?: string;
+        owner: string;
+        repo: string;
+        prNumber: number;
+      }>,
     ) => Promise<import('@/lib/gitContext.types').PrStatusResult[]>;
     onChanged: (
       cb: (data: import('@/lib/gitContext.types').GitContextSnapshot) => void,
@@ -4917,6 +5127,8 @@ interface ElectronAPI {
           contextWindow?: number;
           clearedAt?: string | null;
           pinnedAt?: string | null;
+          /** 任务级「消息免打扰」：不发系统通知 / 灵动岛 / 手机推送 / IM 消息。 */
+          notificationsMuted?: boolean;
           status?: import('@/lib/ccAgent.types').SessionStatus;
           orcaRole?: import('@/lib/ccAgent.types').OrcaRole | null;
           /** 附加只读引用目录覆盖列表 (绝对路径)。 */
@@ -4966,6 +5178,19 @@ interface ElectronAPI {
         welcomeContext?: import('../shared/botWelcomeContext').BotWelcomeContext;
         locale?: import('../shared/locale').SupportedLocale;
       }) => Promise<unknown[]>;
+      /** Host-side companion read positions shared with the phone and other Macs. */
+      readState?: {
+        get: () => Promise<{ ownerId: string | null; positions: Record<string, number>; acknowledgedPositions?: Record<string, number> }>;
+        update: (body: {
+          ownerId: string;
+          mark?: Record<string, number>;
+          seed?: Record<string, number>;
+          prune?: { botIds?: string[]; groupIds?: string[] };
+        }) => Promise<{ ownerId: string | null; positions: Record<string, number>; acknowledgedPositions?: Record<string, number> }>;
+        onChanged: (
+          callback: (payload: unknown, ownerStamp?: unknown) => void,
+        ) => () => void;
+      };
       get: (botId: string) => Promise<unknown>;
       generateDraft: (
         body: import('../shared/botCreation').BotCreationRequest,
@@ -4999,40 +5224,22 @@ interface ElectronAPI {
         >;
         list: (body: { botId: string; rootSessionId: string }) => Promise<import('../shared/botDmThread').BotDmThreadSummary[]>;
       };
-      todos: {
-        list: (botId:string) => Promise<{items:import('@cindy/maker-shared/teammate-todo').TeammateTodo[];version:1}>;
-        update: (botId:string, patch:import('@cindy/maker-shared/teammate-todo').TodoPatch) => Promise<import('@cindy/maker-shared/teammate-todo').TeammateTodo>;
-        act: (botId:string, input:{id:string;revision:number;requestId:string;locale?:string}) => Promise<import('@cindy/maker-shared/teammate-todo').TeammateTodo | null>;
-        /** 近况「每天帮我查一次」：不传 enabled 只读；返回当前是否开着。 */
-        dailyCheck: (botId:string, enabled?:boolean) => Promise<boolean>;
-      };
       projects: {
         list: (botId: string) => Promise<import('../shared/botWorkbench').BotProjectOption[]>;
         set: (botId: string, projectId: string, linked: boolean) => Promise<import('../shared/botWorkbench').BotProjectOption[]>;
       };
       workbench: {
-        get: (botId: string) => Promise<import('../shared/botWorkbench').BotWorkbench | null>;
-        readTask: (
-          botId: string,
-          taskId: string,
-        ) => Promise<
-          | { ok: true; taskId: string; transcript: import('../shared/botWorkbench').WorkbenchTranscript }
-          | { ok: false; errorCode: string; message: string }
-        >;
-        /** 每个在用本机伙伴的逐任务责任 ID；旧宿主缺字段时不推断。`delegatedSessionIds` 只含伙伴自己开的后台任务。 */
+        /** 每个在用本机伙伴开的任务 ID；旧宿主缺字段时不推断。`delegatedSessionIds` 含它开过的全部任务，`sessionIds` 去掉已解除的。 */
         followScopes: () => Promise<Array<{ botId: string; sessionIds?: string[]; delegatedSessionIds?: string[] }>>;
       };
-      /** 伙伴自主跟进：工作台「一眼」投影与账号级「自动跟进所有任务」设置（shared/botAutonomy.ts）。 */
-      autonomy: {
-        glance: (botId: string, refreshRemote?: boolean) => Promise<import('../shared/botAutonomy').BotGlance>;
-        getSettings: () => Promise<import('../shared/botAutonomy').BotAutonomySettingsView>;
-        setSettings: (
-          patch: import('../shared/botAutonomy').BotAutonomySettings,
-        ) => Promise<import('../shared/botAutonomy').BotAutonomySettingsView>;
-        /** 删除 override，重新跟随当前版本默认。 */
-        resetSettings: () => Promise<import('../shared/botAutonomy').BotAutonomySettingsView>;
-      };
       listSkills: (botId: string) => Promise<import('../shared/botSkill').BotSkillSummary[]>;
+      skills: {
+        core: () => Promise<import('../shared/botSkill').BotCoreSkill>;
+        read: (botId: string, slug: string) => Promise<import('../shared/botSkill').BotSkillDetail | null>;
+        save: (botId: string, skill: import('../shared/botSkill').BotSkillSaveInput) => Promise<void>;
+        setEnabled: (botId: string, slug: string, enabled: boolean) => Promise<void>;
+        delete: (botId: string, slug: string) => Promise<void>;
+      };
       memory: {
         list: (
           botId: string,
@@ -5154,40 +5361,12 @@ interface ElectronAPI {
       onChanged: (cb: () => void) => () => void;
     };
     sessionImport: {
-      scan: (request?: { force?: boolean }) => Promise<{
-        sources: {
-          codexHomes: string[];
-          claudeRoots: string[];
-        };
-        candidates: Array<{
-          key: string;
-          source: 'codex' | 'claude';
-          id: string;
-          title: string;
-          cwd: string;
-          updatedAt: string;
-          archived: boolean;
-          workspaceKind: import('@/lib/ccAgent.types').WorkspaceKind;
-          sidebarBucket: 'project' | 'dialogue';
-          projectDir: string | null;
-        }>;
-        rejected: {
-          codex: number;
-          claude: number;
-          existing: number;
-        };
-        currentProjectDirs: string[];
-        /** 候选与本机已有项目里是 git 仓库的目录。 */
-        gitRepoDirs?: string[];
-        /** 主目录、应用数据目录、系统临时目录(伙伴工作台过滤非项目目录用)。 */
-        pathHints?: { homeDir: string | null; userDataDir: string | null; tempDirs: string[] };
-      }>;
-      importSelected: (
-        items: Array<{ source: 'codex' | 'claude'; id: string }>,
-      ) => Promise<{ inserted: number; updated: number; scanned: number }>;
-      linkCodexProject: (
-        workingDir: string,
-      ) => Promise<{ matched: number; inserted: number; updated: number; scanned: number }>;
+      scan: (request?: { force?: boolean }) => Promise<import('../shared/sessionImport').ImportScanResult>;
+      start: (keys: string[]) => Promise<import('../shared/sessionImport').ImportJobView>;
+      status: (requestId?: string) => Promise<import('../shared/sessionImport').ImportJobView | null>;
+      cancel: (requestId: string) => Promise<boolean>;
+      relocate: (sessionId: string, workingDir: string) => Promise<{ ok: true }>;
+      onProgress: (cb: (view: import('../shared/sessionImport').ImportJobView) => void) => () => void;
     };
     sessionShare: {
       export: (request: {
@@ -5303,7 +5482,8 @@ interface ElectronAPI {
         sessionId: string,
         opts?: { limit?: number; before?: string; beforeTs?: number },
       ) => Promise<import('@/lib/ccAgent.types').Message[]>;
-      estimatedSessionValue: (sessionId: string) => Promise<{
+      estimatedSessionValue: (sessionId: string, options?: { includeBreakdown?: boolean; clientId?: string }) => Promise<{
+        costBreakdown?: import('@cindy/maker-shared/usage-cost-details').UsageCostRow[];
         totalValueMoney?: import('../shared/regionalMoney').RegionalMoney | null;
         totalValueUsd?: number;
         entries: Array<{
@@ -5471,20 +5651,23 @@ interface ElectronAPI {
    */
   browserBackend: {
     getState: () => Promise<{
-      active: 'external' | 'rsb-webview';
-      systemDefault: 'external' | 'rsb-webview';
+      active: 'external' | 'rsb-webview' | 'user-browser';
+      systemDefault: 'external' | 'rsb-webview' | 'user-browser';
       isOverride: boolean;
       useRealProfile: boolean;
     }>;
-    setKind: (kind: 'external' | 'rsb-webview') => Promise<{
+    setKind: (kind: 'external' | 'rsb-webview' | 'user-browser') => Promise<{
       ok: true;
-      active: 'external' | 'rsb-webview';
+      active: 'external' | 'rsb-webview' | 'user-browser';
     }>;
-    reset: () => Promise<{ ok: true; active: 'external' | 'rsb-webview' }>;
+    reset: () => Promise<{ ok: true; active: 'external' | 'rsb-webview' | 'user-browser' }>;
     getHealth: () => Promise<BrowserBackendHealth>;
     recover: () => Promise<BrowserBackendRecoveryResult>;
     setUseRealProfile: (enabled: boolean) => Promise<{ ok: true; enabled: boolean }>;
     probeSourceRead: () => Promise<BrowserBackendSourceReadAccess>;
+    openExtensionStore?: () => Promise<
+      import('../shared/browserBackend').BrowserExtensionStoreOpenResult
+    >;
   };
 
   // ── Dialog（v0.6 新增） ────────────────────────────────────────────────────
@@ -5494,6 +5677,11 @@ interface ElectronAPI {
       success: boolean;
       path: string | null;
     }>;
+    /** 把最近项目列表里的目录授权为当前任务的可写目录（只认列表里原样保存的路径）。 */
+    authorizeRecentWritableDirectory: (params: {
+      directory: string;
+      writableGrantScope: string;
+    }) => Promise<{ success: true }>;
     /** 打开系统文件选择对话框，返回用户选中的文件路径（取消时 path=null）。 */
     showOpenFile: (params?: {
       defaultPath?: string;
@@ -5521,35 +5709,14 @@ interface ElectronAPI {
     listAvailableAgents: () => Promise<Array<'claude-code' | 'codex' | 'pi'>>;
     onAgentsChanged: (cb: () => void) => () => void;
     getCapabilities: (agentKind: 'claude-code' | 'codex' | 'pi') => Promise<unknown>;
+    /** Read-only: the V1 background tasks a teammate chat started (stored rows). */
     listBotDelegations: (
       parentSessionId: string,
     ) => Promise<import('../shared/botDelegation').BotDelegationListResult>;
-    cancelBotDelegation: (
-      parentSessionId: string,
-      delegationId: string,
-    ) => Promise<import('../shared/botDelegation').BotDelegationCancelResult>;
-    /** The owner's 补一句 from a task card leaves its trace in the Bot's chat (local tasks only). */
-    traceBotDelegationNote: (
-      parentSessionId: string,
-      delegationId: string,
-      text: string,
-    ) => Promise<import('../shared/botDelegation').BotDelegationNoteTraceResult>;
-    onBotDelegationChanged: (
-      cb: (
-        payload: import('../shared/botDelegation').BotDelegationChangedPayload,
-        ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp,
-      ) => void,
-    ) => () => void;
     getBotDirectMessageThread: (
       threadId: string,
       viewerBotId: string,
     ) => Promise<import('../shared/botDirectMessage').BotDirectMessageThreadResult>;
-    onBotDirectMessageChanged: (
-      cb: (
-        payload: import('../shared/botDirectMessage').BotDirectMessageChangedPayload,
-        ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp,
-      ) => void,
-    ) => () => void;
     chatServer: import('../shared/botGroupChat').ChatServerApi;
     listBotGroups: () => Promise<import('../shared/botGroupChat').BotGroupListResult>;
     getBotGroup: (
@@ -5568,7 +5735,14 @@ interface ElectronAPI {
     deleteBotGroup: (groupId: string) => Promise<import('../shared/botGroupChat').BotGroupMutationResult>;
     sendBotGroupMessage: (
       input: import('../shared/botGroupChat').BotGroupSendInput,
+      execution?: import('../shared/botGroupOutboxStorage').BotGroupOutboxExecution,
     ) => Promise<import('../shared/botGroupChat').BotGroupSendResult>;
+    chatDisplayCache: (request: import('../shared/chatDisplayCache').ChatDisplayCacheRequest) => Promise<unknown>;
+    botGroupOutbox: (input: import('../shared/botGroupOutboxStorage').BotGroupOutboxStorageRequest) => Promise<import('../shared/botGroupOutboxStorage').BotGroupOutboxStoredEntry[]>;
+    botGroupOutboxCommand: (input: import('../shared/botGroupOutboxStorage').BotGroupOutboxCommandRequest) => Promise<import('../shared/botGroupOutboxStorage').BotGroupOutboxCommandResult>;
+    onBotGroupOutboxChanged: (callback: (event: import('../shared/botGroupOutboxStorage').BotGroupOutboxChanged) => void) => (() => void);
+    botReadState: (input: import('../shared/botReadStateStorage').BotReadStateRequest) => Promise<import('../shared/botReadStateStorage').BotReadStateResult>;
+    onBotReadStateChanged: (callback: (event: import('../shared/botReadStateStorage').BotReadStateChanged) => void) => (() => void);
     continueBotGroupRound: (groupId: string) => Promise<import('../shared/botGroupChat').BotGroupMutationResult>;
     stopBotGroupRound: (groupId: string, scope?: 'all') => Promise<import('../shared/botGroupChat').BotGroupMutationResult>;
     startBotGroupPlan: (
@@ -5612,8 +5786,6 @@ interface ElectronAPI {
       cb: (payload: { botId: string; change: 'created' | 'updated' }) => void,
     ) => () => void;
     onBotWorkbenchChanged: (cb: (payload: { botId: string }) => void) => () => void;
-    /** 状态表或「自动跟进所有任务」设置变化（节流 ≤ 1 次/秒）；缺 botIds = 全部伙伴。 */
-    onBotAutonomyChanged: (cb: (payload: { botIds?: string[] }) => void) => () => void;
     runBotLifecycleAction: (
       request: import('../shared/botLifecycle').BotLifecycleActionRequest,
     ) => Promise<import('../shared/botLifecycle').BotLifecycleActionResult>;
@@ -5736,11 +5908,19 @@ interface ElectronAPI {
     /** 自定义供应商创建模板（目录 presets 段，纯 UI 模板数据）。 */
     listProviderPresets: () => Promise<{
       presets: import('@cindy/model-providers').ProviderPreset[];
+      modelRegistry?: import('@cindy/model-providers').ModelRegistry;
     }>;
     /** 供应商「测试连接」—— 与真实会话同路由口径的最小探测请求（结构化结果，code 走 providerError.* i18n）。 */
     testProviderConnection: (
       input: import('../shared/providerConnectionTest').ProviderConnectionTestRequest,
     ) => Promise<import('../shared/providerConnectionTest').ProviderConnectionTestResult>;
+    /** 供应商账户余额查询（API Key 计费连接的余额卡，查询型结构化结果，快照不含密钥材料）。 */
+    fetchProviderAccountUsage: (input: {
+      providerId: string;
+      forceRefresh?: boolean;
+    }) => Promise<
+      import('../shared/providerAccountUsage').ProviderAccountUsageResult
+    >;
     /** 供应商「获取模型列表」—— 表单值透传，结构化结果（code 走 providerError.* i18n）。 */
     detectProvider?: (input: ({ requestId: string; cancel: true } | {
       requestId: string; agent: 'claude-code' | 'codex' | 'pi'; baseUrl: string;
@@ -5785,7 +5965,9 @@ interface ElectronAPI {
     /** 自定义供应商变更广播订阅（返回 off）。 */
     onProvidersChanged: (cb: () => void) => () => void;
 
-    mcpApps: (sessionId: string, input: unknown) => Promise<unknown>;
+    mcpApps: (sessionId: string | null, input: unknown) => Promise<unknown>;
+    onPluginUiAction: (callback: (input: unknown) => void) => () => void;
+    onPluginUiState: (callback: (input: { epoch: string; updates: import('../shared/pluginUi').PluginUiStateChange[] }) => void) => () => void;
     // 自定义 MCP 服务器配置 CRUD（可选 bearer token 另走通用 safeStorage IPC，不经这里）。
     listCustomMcpServers: (
       context?: import('../shared/customMcp').CustomMcpListContext,
@@ -5799,6 +5981,8 @@ interface ElectronAPI {
     deleteCustomMcpServer: (mcpId: string) => Promise<{ ok: true }>;
     /** token-only 后置刷新：safeStorage write/remove 完成后调用，消除竞态窗口。 */
     refreshCustomMcpCodex: () => Promise<{ ok: true }>;
+    listMcpDuplicates: () => Promise<import('../shared/customMcp').McpDuplicateReport>;
+    chooseMcpDuplicate: (input: { id: string; choice: import('../shared/customMcp').McpDuplicateChoice | null }) => Promise<{ ok: true }>;
     /** 自定义 MCP 变更广播订阅（返回 off）。 */
     onMcpChanged: (cb: () => void) => () => void;
     /** 通用 OAuth 供应商（目录 auth.oauth 描述符驱动）登录 / 登出 / 取消。 */
@@ -5815,6 +5999,9 @@ interface ElectronAPI {
       providerId: string,
       options?: { releaseOwner?: boolean; ownerId?: string },
     ) => Promise<{ ok: true }>;
+    importProviderFile: () => Promise<string | string[] | null>;
+    scanLocalProviderImports: () => Promise<import('../shared/localProviderImport').LocalProviderImportScan>;
+    editLocalProviderImport: (id: string, input: import('../shared/localProviderImport').LocalProviderImportEdit) => Promise<import('../shared/localProviderImport').LocalProviderImportItem>;
     previewProviderImport: (
       importId: string,
       targetProviderId?: string,
@@ -5877,6 +6064,12 @@ interface ElectronAPI {
     onSessionBackgroundActivityChanged: (
       cb: (payload: { sessionId: string; active: boolean }) => void,
     ) => () => void;
+    /** 回合已结束但后台命令仍在工作的会话全量列表(任务列表初始快照,增量走 push 订阅)。 */
+    listSessionBackgroundWork: () => Promise<{ sessionIds: string[] }>;
+    /** 后台命令仍在工作的翻转订阅(payload = { sessionId, active },返回 off)。 */
+    onSessionBackgroundWorkChanged: (
+      cb: (payload: { sessionId: string; active: boolean }) => void,
+    ) => () => void;
     /** 精确停止会话内单个后台任务(不中断当前 turn;任务已结束幂等成功)。 */
     stopAgentTask: (sessionId: string, taskId: string) => Promise<{ ok: true }>;
     controlPiSubagent: (input: {
@@ -5894,6 +6087,8 @@ interface ElectronAPI {
         toolUseId?: string;
         title?: string;
         provider?: 'pi' | 'claude-code';
+        /** 后台命令是会自己结束的工作还是长驻服务;缺省按 work。 */
+        backgroundCommandKind?: 'work' | 'service';
       }>;
       /** 「任务已终态、wake turn 尚未启动或仍在跑」的 continuation claim 数(桥接对账收口权威依据)。 */
       pendingContinuations?: number;
@@ -5927,6 +6122,8 @@ interface ElectronAPI {
       providerId: string;
       enabled: boolean;
     }) => Promise<{ ok: true; enabled: boolean }>;
+    /** 供应商「运行于」：deviceId、'local'，或 null 回到默认；写入后经 PROVIDER_CHANGED 刷新。 */
+    setProviderRunLocation: (input: { providerId: string; location: string | null }) => Promise<{ ok: true }>;
     /** Persist the visible provider order only if the active owner still matches. */
     setProviderOrder: (
       dataOwnerId: string | null,
@@ -5943,6 +6140,15 @@ interface ElectronAPI {
     resetModelPriceOverride: (
       target: import('../shared/modelPriceOverride').ModelPriceOverrideTarget,
     ) => Promise<import('../shared/modelPriceOverride').ModelPriceOverrideView>;
+    /** Local image-input capability; null removes the user override. */
+    getModelImageInputOverride: (
+      target: import('../shared/modelImageInputOverride').ModelImageInputTarget,
+    ) => Promise<import('../shared/modelImageInputOverride').ModelImageInputView>;
+    setModelImageInputOverride: (
+      target: import('../shared/modelImageInputOverride').ModelImageInputTarget,
+      value: boolean | null,
+      owner: import('../shared/modelImageInputOverride').ModelImageInputOwner,
+    ) => Promise<import('../shared/modelImageInputOverride').ModelImageInputView>;
     /**
      * 单模型上下文上限 override(设置 → 模型 → 高级设置)。窗口是自动压缩比例的分母,
      * 调小它让压缩按用户设的长度提前触发。target 与价格 override 同形。
@@ -5950,6 +6156,11 @@ interface ElectronAPI {
      */
     getModelContextLimit: (
       target: import('../shared/modelContextLimit').ModelContextLimitTarget,
+    ) => Promise<import('../shared/modelContextLimit').ModelContextLimitView>;
+    setModelCompaction: (
+      target: import('../shared/modelContextLimit').ModelContextLimitTarget,
+      pct: number | null,
+      owner: import('../shared/modelContextLimit').ModelContextLimitOwner,
     ) => Promise<import('../shared/modelContextLimit').ModelContextLimitView>;
     /** 任务窗口档位表的权威边界（与 device-link 的 maker:get-context-window-bounds 同一 handler）。 */
     getSessionContextWindowBounds: (
@@ -6035,6 +6246,7 @@ interface ElectronAPI {
         name: string;
         description?: string;
         builtIn?: boolean;
+        cindyOfficial?: boolean;
         source: 'user' | 'skill';
         path?: string;
         scope?: string;
@@ -6458,6 +6670,8 @@ interface ElectronAPI {
       requestId: string,
       revision: number,
     ) => Promise<import('@cindy/device-link').InputHandoffPicture | null>;
+    /** 代输入 sign-in on this computer: bring its window to the front (trusted frame only). */
+    raiseInputHandoff: (requestId: string) => Promise<boolean>;
     /** 代输入 screenshot step on another computer (sealed offer, this window only). */
     openRemoteInputHandoffPicture: (
       request: import('../shared/pluginOauth').LocalInputHandoffPictureRequest,
@@ -6479,8 +6693,6 @@ interface ElectronAPI {
         persistId?: string;
       }>
     >;
-    /** Detached Bot workbench only: approve its current local permission row. */
-    allowBotWorkbenchPermission: (botId: string, sessionId: string, requestId: string) => Promise<{ accepted: boolean }>;
 
     // ── 运行时切换 (Stage 2 B) ─────────────────────────────────────────────
     // session 不存在(没 send 过/已 close)时 main 侧 no-op,renderer 可乐观调用。
@@ -6791,48 +7003,6 @@ interface ElectronAPI {
       defaultAutoSnapshotEnabled: boolean;
     }>;
 
-    /**
-     * 智能通讯录(maker-contacts)— 设置页管理 UI 数据通道。
-     * DTO 用 unknown 透传, renderer 在 lib/contactsService.ts 收敛为
-     * @cindy/maker-core 的 contacts 类型(type-only import)。
-     */
-    contacts: {
-      settingsGet: () => Promise<{ enabled: boolean; isCustomized: boolean }>;
-      settingsSet: (enabled: boolean) => Promise<{ enabled: boolean; codexMcpRefreshed?: boolean }>;
-      syncStatusGet: () => Promise<unknown>;
-      syncEnabledSet: (enabled: boolean) => Promise<unknown>;
-      syncNow: () => Promise<unknown>;
-      list: (opts?: unknown) => Promise<unknown[]>;
-      get: (id: string) => Promise<unknown>;
-      create: (input: unknown) => Promise<unknown>;
-      update: (id: string, patch: unknown) => Promise<unknown>;
-      delete: (id: string) => Promise<{ deleted: boolean }>;
-      merge: (targetId: string, sourceId: string) => Promise<unknown>;
-      resolve: (value: string, opts?: unknown) => Promise<unknown[]>;
-      search: (query: string, opts?: unknown) => Promise<unknown[]>;
-      stats: () => Promise<{ people: number; orgs: number; pending: number; groups: number }>;
-      addIdentity: (contactId: string, input: unknown) => Promise<unknown>;
-      removeIdentity: (identityId: string) => Promise<{ removed: boolean }>;
-      appendEvent: (contactId: string, input: unknown) => Promise<unknown>;
-      deleteEvent: (eventId: string) => Promise<{ deleted: boolean }>;
-      addRelation: (fromId: string, input: unknown) => Promise<unknown>;
-      removeRelation: (relationId: string) => Promise<{ removed: boolean }>;
-      groupsList: () => Promise<unknown[]>;
-      groupsCreate: (name: string, description?: string) => Promise<unknown>;
-      groupsUpdate: (groupId: string, patch: unknown) => Promise<unknown>;
-      groupsDelete: (groupId: string) => Promise<{ deleted: boolean }>;
-      groupsSetMembers: (
-        groupId: string,
-        payload: { add?: string[]; remove?: string[] },
-      ) => Promise<{ added: number; removed: number }>;
-      resetAll: () => Promise<{ removedCount: number }>;
-      systemRead: () => Promise<unknown[]>;
-      parseVcf: (text: string) => Promise<unknown[]>;
-      import: (records: unknown[], opts?: { groupId?: string }) => Promise<unknown>;
-      onChanged: (cb: () => void) => () => void;
-      onSyncStatusChanged: (cb: (status: unknown) => void) => () => void;
-    };
-
     /** Codex app-server 当前进程启动冻结的鉴权注入方式(oauth-bearer = 走订阅 / env-key = 走网关 / provider-oauth = proxy 注入供应商 OAuth) */
     codexRuntimeRouteGet: () => Promise<{
       authInjection: 'oauth-bearer' | 'env-key' | 'provider-oauth';
@@ -6938,7 +7108,7 @@ interface ElectronAPI {
       sessionId: string;
       completionRevision: number;
       cancel: true;
-    }) => Promise<{ prompt: string | null }>;
+    }) => Promise<{ prompt: string | null; retryable?: boolean }>;
     helpAsk: (
       request: import('../shared/helpTypes').HelpAskRequest,
     ) => Promise<import('../shared/helpTypes').HelpAnswerResult>;
@@ -7228,6 +7398,27 @@ interface ElectronAPI {
       pause: (id: string) => Promise<unknown>;
       resume: (id: string) => Promise<unknown>;
       runNow: (id: string) => Promise<{ runId: string }>;
+      /** Webhook 触发的接收地址与最近投递情况;未开启时返回 null。 */
+      webhookReceiver: () => Promise<'cloud' | 'local' | 'signed-out' | 'unavailable'>;
+      webhookStatus: (id: string) => Promise<{
+        receiver: 'cloud' | 'local' | 'signed-out' | 'unavailable';
+        url?: string;
+        hasSecret: boolean;
+        lastReceivedAt?: number;
+        received: number;
+        ignored: number;
+        connected?: boolean;
+        problem?: 'limit' | 'failed' | 'suspended' | 'quota' | 'released';
+        quotaLimit?: number;
+        quotaResetAt?: number;
+      } | null>;
+      /** 设置签名密钥:传入时保存从发送方复制的密钥;不传时生成新密钥,明文只在这次返回。仅任务所在电脑可用。 */
+      setWebhookSecret: (id: string, secret?: string) => Promise<{ secret?: string }>;
+      /** 换一个新的接收地址,旧地址立即失效。仅任务所在电脑可用。 */
+      rotateWebhookUrl: (id: string) => Promise<{ url: string }>;
+      webhookAccount: () => Promise<import('../shared/webhookAccount').WebhookAccountOverview>;
+      releaseWebhookEndpoint: (id: string) => Promise<void>;
+      restoreWebhookEndpoint: (id: string) => Promise<void>;
       /** script 任务能力选择器:各能力的运行时可用性(依赖意识的装入/唤醒态)。 */
       scriptCapabilityStatus: () => Promise<{
         statuses: Array<{
@@ -7264,6 +7455,7 @@ interface ElectronAPI {
         scheduleName?: string;
         workingDir?: string;
         providerId?: string;
+        modelAgentDeviceId?: string;
         agentKind?: 'claude-code' | 'codex' | 'pi';
         model?: string;
         /** 绑定会话任务:workingDir 空时 main 按会话 meta.workDir 解析落盘/自测目录。 */
@@ -7313,7 +7505,8 @@ interface ElectronAPI {
     };
 
     projectAutomation: {
-      reconcile: (params: { workingDir: string }) => Promise<ProjectAutomationReconcileResult>;
+      reconcile: (params: { workingDir: string; approvedHash?: string }) => Promise<ProjectAutomationReconcileResult>;
+      listPendingImports: () => Promise<ProjectAutomationImport[]>;
       listConsents: () => Promise<ProjectAutomationConsent[]>;
       revokeConsent: (workingDir: string) => Promise<{ deleted: number }>;
       upsertSchedule: (params: {

@@ -53,9 +53,6 @@ vi.mock('lucide-react-native', () => ({ Check: () => null, AlertCircle: () => nu
   Bot: () => null, Ghost: () => null, Send: () => null, Timer: () => null,
   Monitor: () => null, Smartphone: () => null, Clock: () => null, ChevronDown: () => null }));
 vi.mock('@/session/SentInlineAtomBody', () => ({ SentInlineAtomBody: () => null }));
-// The height wrapper has its own lifecycle tests; keep this suite on pending
-// actions and native text selection without importing the native animation runtime.
-vi.mock('@/session/AnimatedContentHeight', () => ({ AnimatedContentHeight: ({ children }: { children: ReactNode }) => children }));
 vi.mock('@/session/sentAttachmentThumbStore', () => ({ getSentAttachmentThumbUri: (ref: string) => durableThumbs.get(ref) ?? null,
   useSentAttachmentThumbsVersion: () => 0 }));
 vi.mock('react-i18next', () => ({ initReactI18next: { type: '3rdParty', init: () => undefined },
@@ -115,7 +112,7 @@ function show(
 }
 function touch(type: 'Start' | 'Move' | 'End' | 'Cancel', x = 0, y = 0, count = type === 'End' ? 0 : 1) {
   const handler = handlers.get('pendingSend.body.a')?.[`onTouch${type}`] as ((e: GestureResponderEvent) => void) | undefined;
-  act(() => handler?.({ nativeEvent: { pageX: x, pageY: y, touches: Array(count).fill({}) } } as GestureResponderEvent));
+  act(() => handler?.({ nativeEvent: { pageX: x, pageY: y, touches: Array(count).fill({}) } } as unknown as GestureResponderEvent));
 }
 function flush() {
   act(() => { for (const [id, callback] of [...frames]) { frames.delete(id); callback(0); } });

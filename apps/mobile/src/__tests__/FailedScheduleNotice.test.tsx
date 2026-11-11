@@ -15,11 +15,11 @@ vi.mock('react-native', async () => {
   return { View: view('div'), Text: view('span'), Pressable: view('button'), StyleSheet: { create: (s: unknown) => s, hairlineWidth: 1 } };
 });
 vi.mock('@/components/AppText', async () => ({ Text: (await import('react-native')).Text }));
-vi.mock('lucide-react-native', () => ({ CircleAlert: () => null, X: () => null }));
+vi.mock('lucide-react-native', () => ({ CircleAlert: () => null, X: () => null, ChevronDown: () => null, ChevronRight: () => null, Stethoscope: () => null }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('@/theme', async () => {
   const { lightColors } = await import('@/theme/tokens');
-  return { useTheme: () => ({ colors: lightColors }), useThemedStyles: (make: (colors: typeof lightColors) => unknown) => make(lightColors) };
+  return { iconSize: { sm: 12 }, iconStroke: { regular: 1.5 }, useTheme: () => ({ colors: lightColors }), useThemedStyles: (make: (colors: typeof lightColors) => unknown) => make(lightColors) };
 });
 let root: Root;
 let host: HTMLDivElement;
@@ -65,4 +65,23 @@ it('can close for the current view even if preference storage fails', async () =
   await show();
   await act(async () => host.querySelector('button')!.click());
   expect(host.textContent).toBe('');
+});
+
+// Existing dismissal coverage did not exercise execution details or diagnosis.
+it('discloses the recorded error and keeps it out of dismissal preferences', async () => {
+  const onDiagnose = vi.fn();
+  await act(async () => root.render(<FailedScheduleNotice source="owner/device/task"
+    run={{ ...run, errorMsg: 'provider mismatch api_key=private-test-value' }} onDiagnose={onDiagnose} />));
+  const click = async (text: string) => act(async () => {
+    const button = [...host.querySelectorAll('button')].find(b => b.textContent === text);
+    expect(button).toBeTruthy(); button!.click();
+  });
+  expect(host.textContent).not.toContain('provider mismatch');
+  await click('session.tail.showErrorDetails');
+  expect(host.textContent).toContain('provider mismatch');
+  expect(host.textContent).not.toContain('private-test-value');
+  await click('session.tail.diagnose');
+  expect(onDiagnose).toHaveBeenCalledWith(expect.objectContaining({ details: 'provider mismatch api_key=private-test-value' }));
+  await act(async () => host.querySelector('button')!.click());
+  expect(storage.get('scheduleFailureDismissal:owner/device/task')).toBe(JSON.stringify(run));
 });

@@ -524,6 +524,7 @@ export class WecomIM extends BaseIM implements TextChannelIM {
     client.on("authenticated", () => {
       if (!this.isCurrent(client, generation)) return;
       serverConflict = false;
+      this.lastAuthFailureReason = "";
       this.setStatus({ kind: "connected", appId: botId });
     });
     client.on("reconnecting", () => {

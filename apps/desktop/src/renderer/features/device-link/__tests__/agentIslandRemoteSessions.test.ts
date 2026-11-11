@@ -4,7 +4,8 @@ import type { Session } from '@/lib/ccAgent.types';
 import { buildAgentIslandRemoteSessionInputs } from '../agentIslandRemoteSessions';
 import { applyRemoteSessionActivity, clearRemoteSessionActivity, getRemoteSessionActivity, type RemoteSessionActivity } from '../remoteSessionActivityStore';
 import { parseAgentIslandRemoteSessions } from '../../../../shared/agentIsland';
-import { agentIslandCompletionToken, createAgentIslandState, syncAgentIslandDeviceSessions } from '../../../../main/agent-island/state';
+import { agentIslandCompletionToken, buildAgentIslandDisplayState, createAgentIslandState, syncAgentIslandDeviceSessions } from '../../../../main/agent-island/state';
+import { normalizeActivityText } from '../../../../main/agent-island/activityTextStream';
 import { SessionActivityRelay } from '../../../../main/agent-island/sessionActivityRelay';
 import { MACHINE_ALL, MACHINE_LOCAL } from '../selectedMachineStore';
 
@@ -49,6 +50,54 @@ const readActivity = (sessionId: string): RemoteSessionActivity | undefined =>
   activities.get(sessionId);
 
 describe('buildAgentIslandRemoteSessionInputs', () => {
+  // Unit regression #7972: the selected project must survive renderer -> IPC
+  // parsing -> island state, including a later explicit move clearing membership.
+  it('carries project membership through the complete remote island projection', () => {
+    const state = createAgentIslandState();
+    const session = remoteSession('a-1', 'device-a', {
+      projectDir: '/products/Chosen', workingDir: '/tmp/checkout',
+    });
+    const sync = () => syncAgentIslandDeviceSessions(state, parseAgentIslandRemoteSessions(
+      buildAgentIslandRemoteSessionInputs([session], MACHINE_ALL, readActivity),
+    )!, 2000);
+    sync();
+    expect(buildAgentIslandDisplayState(state, 2000).sessions[0]?.projectName).toBe('Chosen · Mac device-a');
+    session.projectDir = null;
+    session.workingDir = '/products/Moved';
+    sync();
+    expect(buildAgentIslandDisplayState(state, 2000).sessions[0]?.projectName).toBe('Moved · Mac device-a');
+  });
+
+  // #7566 review, unit: new host plain text survives the complete transport chain;
+  // an old/unknown format still uses Markdown compatibility on the same text.
+  it('preserves literal code through relay, store, IPC and running/completed cards', () => {
+    clearRemoteSessionActivity();
+    const state = createAgentIslandState();
+    const relay = new SessionActivityRelay(payload => {
+      applyRemoteSessionActivity('device-a', payload);
+      const inputs = buildAgentIslandRemoteSessionInputs([remoteSession('a-1', 'device-a')], MACHINE_ALL, getRemoteSessionActivity);
+      syncAgentIslandDeviceSessions(state, parseAgentIslandRemoteSessions(inputs)!, 2000);
+    }, { minIntervalMs: 0 });
+    const plain = normalizeActivityText('`foo_bar **literal**`');
+    const activity = { sessionId: 'a-1', phase: 'running' as const, recordStatus: 'active',
+      compactDetail: plain, summaryFormat: 'plain-text' as const,
+      startedAtMs: 1, lastActivityAtMs: 1, currentActionSummary: plain,
+      attention: true, workflow: null, turnGeneration: null, gracefulStopState: 'none', source: 'live' } as const;
+    try {
+      for (const phase of ['running', 'completed'] as const) {
+        relay.publish([{ ...activity, phase }]);
+        expect(buildAgentIslandDisplayState(state, 2000).sessions[0]?.compactDetail).toBe(plain);
+      }
+      // The text itself does not change: format changes must invalidate relay/store signatures.
+      relay.publish([{ ...activity, phase: 'completed', summaryFormat: undefined }]);
+      expect(buildAgentIslandDisplayState(state, 2000).sessions[0]?.compactDetail).toBe('foo_bar literal');
+      relay.publish([{ ...activity, phase: 'completed' }]);
+      expect(buildAgentIslandDisplayState(state, 2000).sessions[0]?.compactDetail).toBe(plain);
+    } finally {
+      relay.dispose();
+      clearRemoteSessionActivity();
+    }
+  });
   // Full production projection chain: a second completion with identical text
   // must replace the owner token, while an old host must not gain swipe actions.
   it('preserves completion identity through relay, store, parser and native projection', () => {
@@ -81,31 +130,27 @@ describe('buildAgentIslandRemoteSessionInputs', () => {
     remoteSession('b-2', 'device-b', { title: '  ' }),
   ];
 
-  it.each([true, false])('carries host notification ownership through relay, store, IPC parsing and remote events (%s)', async handled => {
+  // Older hosts send pending, then teammate (or nothing) for a V1 background task's completion.
+  it.each([true, false])('carries an older host notification ownership through store, IPC parsing and remote events (%s)', handled => {
     clearRemoteSessionActivity();
-    let resolve!: (handled: boolean) => void;
     const state = createAgentIslandState();
     const events: string[] = [];
-    const relay = new SessionActivityRelay(payload => {
+    const deliver = (payload: Parameters<typeof applyRemoteSessionActivity>[1]) => {
       applyRemoteSessionActivity('device-a', payload);
       const inputs = buildAgentIslandRemoteSessionInputs([remoteSession('a-1', 'device-a')], MACHINE_ALL, getRemoteSessionActivity);
       const parsed = parseAgentIslandRemoteSessions(inputs);
       expect(parsed).not.toBeNull();
       events.push(...syncAgentIslandDeviceSessions(state, parsed!, 2_000).events.map(event => event.kind));
-    }, { isCompletionHandledByTeammate: () => new Promise<boolean>(r => { resolve = r; }) });
-    const activity = { sessionId: 'a-1', phase: 'running' as const, recordStatus: 'active', compactDetail: 'Working', startedAtMs: 1, lastActivityAtMs: 1, currentActionSummary: 'Working', attention: false, workflow: null, turnGeneration: null, gracefulStopState: 'none', source: 'live' } as const;
-    relay.publish([activity]);
-    relay.publish([{ ...activity, phase: 'completed', attention: true, compactDetail: 'Final result' }]);
-    await Promise.resolve();
+    };
+    deliver({ sessionId: 'a-1', phase: 'running', compactDetail: 'Working', attention: false });
+    const done = { sessionId: 'a-1', phase: 'completed', attention: true, compactDetail: 'Final result' } as const;
+    deliver({ ...done, completionNotification: 'pending' });
     expect(events).toEqual([]);
     expect(getRemoteSessionActivity('a-1', 'device-a')).toMatchObject({ phase: 'completed', attention: true, compactDetail: 'Final result' });
-    resolve(handled);
-    await relay.waitForCompletionNotification('a-1');
-    expect(events).toEqual(handled ? [] : ['done']);
-    relay.replay([{ ...activity, phase: 'completed', attention: true }]);
+    deliver({ ...done, ...(handled ? { completionNotification: 'teammate' as const } : {}) });
     expect(events).toEqual(handled ? [] : ['done']);
     expect(state.sessions.get('a-1')).toMatchObject({ phase: 'completed', unread: true });
-    relay.dispose(); clearRemoteSessionActivity();
+    clearRemoteSessionActivity();
   });
 
   it('carries silence through relay, store and IPC without losing unread or suppressing later errors', () => {
@@ -215,12 +260,16 @@ describe('buildAgentIslandRemoteSessionInputs', () => {
     expect(parseAgentIslandRemoteSessions(inputs)).not.toBeNull();
   });
 
-  it('skips Bot tasks and disconnected devices', () => {
+  // Review (#8381): a relay reconnect now leaves sessions `connecting` instead of
+  // `disconnected`; their retained running / waiting activity must not stay live in the island.
+  it('skips Bot tasks and disconnected or still-reconnecting devices', () => {
     expect(
       buildAgentIslandRemoteSessionInputs(
         [
           remoteSession('a-1', 'device-a', { source: 'bot' }),
           remoteSession('b-1', 'device-b', { deviceLinkConnectionStatus: 'disconnected' }),
+          // b-2 has retained activity; while its device reconnects it must not be shown as live.
+          remoteSession('b-2', 'device-c', { deviceLinkConnectionStatus: 'connecting' }),
         ],
         MACHINE_ALL,
         readActivity,

@@ -16,6 +16,7 @@ import {
   REMOTE_AGENT_CHANNEL,
   REMOTE_AGENT_MAX_INLINE_PAYLOAD_CHARS,
   REMOTE_AGENT_MAX_PAYLOAD_BYTES,
+  REMOTE_AGENT_MAX_UPLOAD_CHUNKS,
   REMOTE_AGENT_UPLOAD_CHUNK_BYTES,
   parseRemoteAgentCaps,
   parseRemoteAgentStreamItem,
@@ -32,11 +33,19 @@ import {
 } from '@cindy/device-link';
 
 import { LineSplitter } from '../eventLog';
+import { remoteAgentStartupTiming } from '../startupTiming';
 import { isRetryableLinkError, RemoteAgentPoller, type PolledRun, type RemoteAgentInvoke } from './poller';
 
 export { isRetryableLinkError, RemoteAgentPoller, type RemoteAgentInvoke } from './poller';
 
 const gzipAsync = promisify(gzip);
+
+// These are sender preferences, not protocol limits. A 512 KiB upload becomes
+// roughly 683 KiB on the wire and can exceed the 30s invoke deadline on relay.
+// Keep ordinary uploads within one transport fragment, and compress large
+// inline values too; character counts alone understate UTF-8 delivery cost.
+const INLINE_PAYLOAD_BYTES = 64 * 1024;
+const PREFERRED_UPLOAD_CHUNK_BYTES = 64 * 1024;
 
 /** 单行事件上限(大工具结果)。 */
 const MAX_LINE_BYTES = 64 * 1024 * 1024;
@@ -63,6 +72,7 @@ export interface RemoteAgentRunHandlers {
   onClosed(reason: string, error?: RemoteAgentErrorInfo, idleReclaimed?: boolean): void;
   /** 本机还有这个任务的工作在进行、对方看不到(拉取时报 hold，对方不按闲置收回)。 */
   holdsRemote?(): boolean;
+  recoverAuthorization?(): Promise<void>;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -75,6 +85,8 @@ export class RemoteAgentRunClient implements PolledRun {
   private readonly drained: Promise<void>;
   private markDrained!: () => void;
   private pushSeq = 0;
+  /** Stop invalidates only sends still preparing their payload, not the live link. */
+  private sendGeneration = 0;
   /** 在途的 push 批次(含重试中的)。 */
   private pushing = 0;
   /** 正在回答的反向请求(从收到到回包交付完)。 */
@@ -91,7 +103,10 @@ export class RemoteAgentRunClient implements PolledRun {
     private readonly poller: RemoteAgentPoller,
     private readonly handlers: RemoteAgentRunHandlers,
     private readonly newId: () => string,
-    private readonly log?: { warn(message: string, meta?: Record<string, unknown>): void },
+    private readonly log?: {
+      debug?(message: string, meta?: Record<string, unknown>): void;
+      warn(message: string, meta?: Record<string, unknown>): void;
+    },
   ) {
     this.invoke = poller.invoke;
     this.drained = new Promise<void>((resolve) => {
@@ -99,20 +114,39 @@ export class RemoteAgentRunClient implements PolledRun {
     });
   }
 
+  async recoverAuthorization(): Promise<void> {
+    if (!this.closed) await this.handlers.recoverAuthorization?.();
+  }
+
   static async caps(invoke: RemoteAgentInvoke): Promise<RemoteAgentCaps> {
     return parseRemoteAgentCaps(await invoke([{ op: 'caps' }]));
   }
 
   /** 把一个 JSON 值做成载荷：小的内联，大的 gzip 后分段上传。 */
-  async payload(value: unknown, uploadId = this.newId()): Promise<RemoteAgentPayload> {
+  async payload(value: unknown, uploadId = this.newId(), requireActive?: () => void): Promise<RemoteAgentPayload> {
+    const requireOpen = () => {
+      if (this.closed) throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
+      requireActive?.();
+    };
+    requireOpen();
     const text = JSON.stringify(value ?? null);
-    if (text.length <= REMOTE_AGENT_MAX_INLINE_PAYLOAD_CHARS) return { json: JSON.parse(text) as unknown };
+    if (text.length <= REMOTE_AGENT_MAX_INLINE_PAYLOAD_CHARS && Buffer.byteLength(text, 'utf8') <= INLINE_PAYLOAD_BYTES) {
+      return { json: JSON.parse(text) as unknown };
+    }
     const gz = await gzipAsync(Buffer.from(text, 'utf8'));
+    requireOpen();
     if (gz.length > REMOTE_AGENT_MAX_PAYLOAD_BYTES) throw new Error('The request is too large to send to the other computer.');
-    const chunks = Math.max(1, Math.ceil(gz.length / REMOTE_AGENT_UPLOAD_CHUNK_BYTES));
+    // Older receivers accept at most MAX_UPLOAD_CHUNKS. Grow the slice only
+    // when necessary to retain the full existing payload capacity.
+    const chunkBytes = Math.min(REMOTE_AGENT_UPLOAD_CHUNK_BYTES,
+      Math.max(PREFERRED_UPLOAD_CHUNK_BYTES, Math.ceil(gz.length / REMOTE_AGENT_MAX_UPLOAD_CHUNKS)));
+    const chunks = Math.max(1, Math.ceil(gz.length / chunkBytes));
     for (let index = 0; index < chunks; index += 1) {
-      const data = gz.subarray(index * REMOTE_AGENT_UPLOAD_CHUNK_BYTES, (index + 1) * REMOTE_AGENT_UPLOAD_CHUNK_BYTES);
+      requireOpen();
+      const data = gz.subarray(index * chunkBytes, (index + 1) * chunkBytes);
       await this.invoke([{ op: 'upload', uploadId, index, data: data.toString('base64') }]);
+      // An in-flight chunk can finish after cancellation, but no next chunk or open may start.
+      requireOpen();
     }
     return { uploadId, chunks, bytes: gz.length };
   }
@@ -123,26 +157,48 @@ export class RemoteAgentRunClient implements PolledRun {
    */
   async open(agentKind: RemoteAgentKind, openPayload: unknown): Promise<Record<string, unknown>> {
     if (this.closed) throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
-    const payload = await this.payload(openPayload);
-    if (this.closed) throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
-    const started = new Promise<Record<string, unknown>>((resolve, reject) => {
-      this.started = { resolve, reject };
+    const sessionId =
+      openPayload &&
+      typeof openPayload === 'object' &&
+      'sessionId' in openPayload &&
+      typeof openPayload.sessionId === 'string'
+        ? openPayload.sessionId
+        : undefined;
+    const timing = remoteAgentStartupTiming(this.log, {
+      side: 'transport',
+      kind: agentKind,
+      sessionId,
+      runId: this.runId,
     });
+    let status: 'ok' | 'failed' = 'failed';
     try {
-      await this.invoke([{ op: 'open', runId: this.runId, agentKind, payload }]);
-    } catch (error) {
-      this.started = null;
-      throw error;
+      const payload = await timing.measure('payload-upload', () => this.payload(openPayload));
+      if (this.closed) throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
+      const started = new Promise<Record<string, unknown>>((resolve, reject) => {
+        this.started = { resolve, reject };
+      });
+      try {
+        await timing.measure('open-request', () =>
+          this.invoke([{ op: 'open', runId: this.runId, agentKind, payload }]),
+        );
+      } catch (error) {
+        this.started = null;
+        throw error;
+      }
+      if (this.closed) {
+        // 打开途中本机关掉了这个任务：对方可能先收到关闭(那时还没有这个任务)再收到打开，补发一次关闭。
+        void started.catch(() => undefined);
+        void this.invoke([{ op: 'close', runId: this.runId, mode: 'close', reason: 'navigation' }]).catch(() => undefined);
+        throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
+      }
+      this.registered = true;
+      this.poller.register(this);
+      const result = await timing.measure('session-ready', () => started);
+      status = 'ok';
+      return result;
+    } finally {
+      timing.finish(status);
     }
-    if (this.closed) {
-      // 打开途中本机关掉了这个任务：对方可能先收到关闭(那时还没有这个任务)再收到打开，补发一次关闭。
-      void started.catch(() => undefined);
-      void this.invoke([{ op: 'close', runId: this.runId, mode: 'close', reason: 'navigation' }]).catch(() => undefined);
-      throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
-    }
-    this.registered = true;
-    this.poller.register(this);
-    return started;
   }
 
   /** 调用对方会话的一个方法，等结果。 */
@@ -151,13 +207,27 @@ export class RemoteAgentRunClient implements PolledRun {
   }
 
   /** 预先分配的 callId(需要先把回调登记到 callId 上时用)。 */
-  async callWithId(callId: string, method: RemoteAgentMethod, args: unknown[]): Promise<unknown> {
+  async callWithId(callId: string, method: RemoteAgentMethod, args: unknown[], signal?: AbortSignal): Promise<unknown> {
     if (this.closed) throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on the other computer.');
+    if (method === 'abort' || method === 'requestGracefulStop') this.sendGeneration += 1;
+    const generation = this.sendGeneration;
+    const requireActive = () => {
+      if (this.closed) throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
+      if (signal?.aborted || ((method === 'send' || method === 'steer') && generation !== this.sendGeneration)) {
+        throw new DOMException('The message was cancelled before delivery to the other computer.', 'AbortError');
+      }
+    };
     const result = new Promise<unknown>((resolve, reject) => {
       this.pendingCalls.set(callId, { resolve, reject });
     });
+    // finish() can reject this while payload preparation is still awaiting.
+    // Observe it now; the public call still returns the original result below.
+    void result.catch(() => undefined);
     try {
-      const payload = await this.payload(args);
+      const payload = await this.payload(args, this.newId(), requireActive);
+      // Stop can overtake gzip or a chunk acknowledgement, including the final
+      // await before dispatch. Never deliver that old send after Stop.
+      requireActive();
       await this.invoke([{ op: 'call', runId: this.runId, callId, method, payload }]);
     } catch (error) {
       this.pendingCalls.delete(callId);

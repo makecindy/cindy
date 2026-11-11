@@ -5,11 +5,11 @@ import type { InstalledGhost } from '../../shared/ghost.js';
 import { ghostInstallApprovalToken } from '../../shared/ghost.js';
 import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
 import {
-  encryptContactsSyncBytes,
-  decryptContactsSyncBytes,
-  isValidContactsSyncPublicKey,
-} from '../contacts-sync/crypto.js';
-import type { ContactsSyncKeyStore } from '../contacts-sync/keyStore.js';
+  encryptDeviceSyncBytes,
+  decryptDeviceSyncBytes,
+  isValidDeviceSyncPublicKey,
+} from '../device-sync-keys/crypto.js';
+import type { DeviceSyncKeyStore } from '../device-sync-keys/keyStore.js';
 
 /** Opaque, bounded RPC between the same plugin on authenticated owner desktops.
  * Persistence, merge rules and retry idempotency belong to the plugin. No model runs.
@@ -34,7 +34,7 @@ export interface PluginSyncTransport {
 interface Deps {
   scope(): string;
   keys: Pick<
-    ContactsSyncKeyStore,
+    DeviceSyncKeyStore,
     'prepare' | 'getIdentity' | 'getPeerPublicKey' | 'pinPeerPublicKey'
   >;
   getGhost(id: string): InstalledGhost | null;
@@ -252,7 +252,7 @@ export class PluginDeviceSync {
     if (bytes.length > MAX_BYTES) throw new Error('packet too large');
     // Domain bind this channel in authenticated transferId, separate from legacy contacts packets.
     const transferId = `plugin-sync:${randomUUID()}`;
-    const enc = encryptContactsSyncBytes(bytes, this.deps.keys.getIdentity().privateKey, key, {
+    const enc = encryptDeviceSyncBytes(bytes, this.deps.keys.getIdentity().privateKey, key, {
       srcDeviceId: self,
       dstDeviceId: peer,
       transferId,
@@ -281,7 +281,7 @@ export class PluginDeviceSync {
     if (this.receivingCount >= 64 ||
       (raw.kind !== 'key' && raw.kind !== 'data') ||
       (raw.kind === 'data' && (typeof raw.data !== 'string' || raw.data.length > Math.ceil(MAX_BYTES / 3) * 4)) ||
-      (raw.kind === 'key' && !isValidContactsSyncPublicKey(raw.publicKey))) return;
+      (raw.kind === 'key' && !isValidDeviceSyncPublicKey(raw.publicKey))) return;
     const generation = this.generation,
       scope = this.deps.scope(),
       receivedAt = Date.now(),
@@ -321,7 +321,7 @@ export class PluginDeviceSync {
       await wait(this.deps.keys.prepare());
       if (!current()) return;
       if (raw.kind === 'key') {
-        if (!isValidContactsSyncPublicKey(raw.publicKey)) return;
+        if (!isValidDeviceSyncPublicKey(raw.publicKey)) return;
         await wait(this.deps.keys.pinPeerPublicKey(peer, raw.publicKey));
         if (!current()) return;
         if (Date.now() - (this.keyReplies.get(peer) ?? 0) > 5000) {
@@ -348,7 +348,7 @@ export class PluginDeviceSync {
         typeof raw.tag !== 'string'
       )
         return;
-      const bytes = decryptContactsSyncBytes(
+      const bytes = decryptDeviceSyncBytes(
         { ciphertext: Buffer.from(raw.data, 'base64'), iv: raw.iv, tag: raw.tag },
         this.deps.keys.getIdentity().privateKey,
         key,

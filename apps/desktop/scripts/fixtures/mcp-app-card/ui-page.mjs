@@ -5,12 +5,13 @@ export default {
   entry: './mcp-app-card-fixture.tsx',
   viewport: { width: 800, height: 520 },
   real: 'McpAppCard, McpAppController, Button, saved fallback text, theme and translations',
-  notCovered: 'Live cross-origin App, teardown handshake, fullscreen and full Cindy session switching; verified separately from this error-surface screenshot',
+  notCovered: 'Pending page approvals have a separate mcp-app-approval fixture; this card fixture supplies no pending requests. Live cross-origin App, teardown handshake, fullscreen and full Cindy session switching; verified separately from this error-surface screenshot',
   stubs: {
+    'src/renderer/lib/makerChatStore': 'export const makerChatStore = { subscribe: () => () => {}, getSnapshot: () => ({}) };',
     'src/renderer/features/device-link/stickySessionOrigin':
       'export const getStickySessionDeviceId = () => undefined;',
     'src/renderer/features/device-link/remoteProjectsStore':
-      'export const remoteProjectsStore = { subscribe: () => () => {} };',
+      'export const getSessionDeviceId = () => undefined; export const remoteProjectsStore = { subscribe: () => () => {} };',
   },
   cases: { default: { about: 'Failed App retains saved text and offers retry' } },
   async ready(page) { await page.getByRole('alert').waitFor(); },

@@ -624,21 +624,41 @@ export async function getIntegrationCacheBytes(integration: string, db: LedgerDb
 
 /** cache 性质 blob 按 LRU 升序(最久未用在前),供逐出候选规划。 */
 export async function listCacheBlobsByLru(db: LedgerDb = defaultDb(), integration?: string): Promise<CacheBlobRow[]> {
+  const hasOtherRefs = sql`EXISTS (SELECT 1 FROM ${mediaRefs} WHERE ${mediaRefs.hash} = ${mediaBlobs.hash}
+    AND (${mediaRefs.refKind} <> 'integration-cache' OR ${mediaRefs.originId} IS NULL OR ${mediaRefs.originId} <> ${integration ?? ''}))`;
+  // Manual image cleanup may unlink its own index without reclaiming shared bytes.
+  // Keep those candidates visible, but do not promise space that other refs protect.
+  const unlinkShared = integration === 'remote-media';
   return await db
     .select({
       hash: mediaBlobs.hash,
       ext: mediaBlobs.ext,
-      bytes: mediaBlobs.bytes,
+      bytes: unlinkShared ? sql<number>`CASE WHEN ${hasOtherRefs} THEN 0 ELSE ${mediaBlobs.bytes} END` : mediaBlobs.bytes,
       lastAccessAt: mediaBlobs.lastAccessAt,
     })
     .from(mediaBlobs)
     .where(and(eq(mediaBlobs.isCache, true), integration ? sql`EXISTS (
       SELECT 1 FROM ${mediaRefs} WHERE ${mediaRefs.hash} = ${mediaBlobs.hash}
       AND ${mediaRefs.refKind} = 'integration-cache' AND ${mediaRefs.originId} = ${integration}
-    ) AND NOT EXISTS (SELECT 1 FROM ${mediaRefs} WHERE ${mediaRefs.hash} = ${mediaBlobs.hash}
-      AND (${mediaRefs.refKind} <> 'integration-cache' OR ${mediaRefs.originId} IS NULL OR ${mediaRefs.originId} <> ${integration}))` : undefined))
+    ) ${unlinkShared ? sql`` : sql`AND NOT ${hasOtherRefs}`}`
+      // Long-lived chat image copies have their own explicit cleanup category.
+      // Shared bytes stay protected even when an ordinary cache also references them.
+      : sql`NOT EXISTS (SELECT 1 FROM ${mediaRefs} WHERE ${mediaRefs.hash} = ${mediaBlobs.hash}
+        AND ${mediaRefs.refKind} = 'integration-cache' AND ${mediaRefs.originId} = 'remote-media')`))
     .orderBy(asc(mediaBlobs.lastAccessAt))
     .all();
+}
+
+/** Drop only this cache's index; a pinned blob and every other owner's ref survive. */
+export async function removeIntegrationCacheRefs(
+  hash: string,
+  integration: string,
+  db: LedgerDb = defaultDb(),
+): Promise<void> {
+  await db.delete(mediaRefs).where(and(
+    eq(mediaRefs.hash, hash), eq(mediaRefs.refKind, 'integration-cache'), eq(mediaRefs.originId, integration),
+    sql`EXISTS (SELECT 1 FROM ${mediaBlobs} WHERE ${mediaBlobs.hash} = ${mediaRefs.hash} AND ${mediaBlobs.isCache} = 1)`,
+  )).run();
 }
 
 /**
@@ -685,7 +705,9 @@ export async function deleteCacheBlobRecord(
         eq(mediaBlobs.isCache, true),
         sql`NOT EXISTS (SELECT 1 FROM ${mediaRefs} WHERE ${mediaRefs.hash} = ${mediaBlobs.hash} AND ${mediaRefs.refKind} <> 'integration-cache')`,
         integration ? sql`NOT EXISTS (SELECT 1 FROM ${mediaRefs} WHERE ${mediaRefs.hash} = ${mediaBlobs.hash}
-          AND (${mediaRefs.originId} IS NULL OR ${mediaRefs.originId} <> ${integration}))` : undefined,
+          AND (${mediaRefs.originId} IS NULL OR ${mediaRefs.originId} <> ${integration}))`
+          : sql`NOT EXISTS (SELECT 1 FROM ${mediaRefs} WHERE ${mediaRefs.hash} = ${mediaBlobs.hash}
+            AND ${mediaRefs.refKind} = 'integration-cache' AND ${mediaRefs.originId} = 'remote-media')`,
         integration ? sql`EXISTS (SELECT 1 FROM ${mediaRefs} WHERE ${mediaRefs.hash} = ${mediaBlobs.hash}
           AND ${mediaRefs.originId} = ${integration})` : undefined,
       ),

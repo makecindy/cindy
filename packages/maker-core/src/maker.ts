@@ -108,8 +108,23 @@ export interface SessionLifecycleHooks {
   onStartFailed?: (context: SessionStartFailureContext) => void | Promise<void>;
   /** Failed startup's handle was finally closed after deferred cleanup; no task ownership change. */
   onStartCleanupSucceeded?: (sessionId: string, options: CreateSessionOptions) => void | Promise<void>;
-  /** session 关闭时调用；options 始终属于该次启动，不从当前同 id 的 runtime 取值。 */
-  onClose?: (sessionId: string, options: CreateSessionOptions) => void | Promise<void>;
+  /**
+   * 关闭请求发起时刻同步取样：这次 close 是否为「瞬态重建」——同一任务随后会按 DB
+   * 行重建，worktree 与暂存附件必须留给重建后的 runtime。
+   *
+   * 只在请求入口问一次，结果随 onClose 下发。onClose 是异步的、close 不等待它，
+   * 任何「调用方在关闭期间开一个窗口」的旁路到钩子真正执行时都可能已释放。
+   */
+  isTransientCloseRequest?: (sessionId: string) => boolean;
+  /**
+   * session 关闭时调用；options 始终属于该次启动，不从当前同 id 的 runtime 取值。
+   * close 是 Maker 在请求入口固化的关闭事实，reason 与瞬态标记同批取样。
+   */
+  onClose?: (
+    sessionId: string,
+    options: CreateSessionOptions,
+    close: MakerSessionCloseFacts,
+  ) => void | Promise<void>;
   /**
    * Codex-only: resume 前读取该业务 session 对应 thread history 是否已可靠包含
    * 产品 prompt。读取失败由 Maker 视为 unknown,让 Codex fail toward restore。
@@ -156,9 +171,17 @@ export interface MakerDeps {
   visionBridge?: import('./types/vision-bridge.js').VisionBridgeHook;
   /**
    * 可选: Pi / Codex 工具循环疑似命中时的辅助模型复核入口。Claude Code 在 agent 内
-   * 检测,由 AgentDeps.toolLoopReviewer 注入同一实现。缺省 = 疑似即中断。
+   * 检测,由 AgentDeps.toolLoopReviewer 注入同一实现。缺省放行疑似,保留最终上限。
    */
   toolLoopReviewer?: import('./agents/shared/tool-loop-review.js').ToolLoopReviewer;
+}
+
+/** A previous attempt still owns native resources; retry without changing route/history. */
+export class SessionCreationCleanupPendingError extends Error {
+  constructor(options?: ErrorOptions) {
+    super('Previous session startup cleanup is still pending; retry the task.', options);
+    this.name = 'SessionCreationCleanupPendingError';
+  }
 }
 
 export interface CreateSessionOptions extends StartSessionOptions {
@@ -195,6 +218,13 @@ export type MakerSessionCloseReason =
   | 'agent-switch'
   | 'runtime-refresh'
   | 'unexpected';
+
+/** 一次 close 请求固化下来的事实；事后 close 竞态或退出确认失败都不再改写。 */
+export interface MakerSessionCloseFacts {
+  reason: MakerSessionCloseReason;
+  /** 同一任务随后会重建；onClose 据此跳过 worktree 释放与暂存附件清理。 */
+  transient: boolean;
+}
 
 export type MakerEvent =
   | { type: 'session:created'; session: Session }
@@ -240,6 +270,21 @@ function capabilitiesForSession(
       reason: 'platform-limited',
       message: '远端 Codex 会话暂不支持对话 rewind',
     },
+  };
+}
+
+/** External applications use only this small Session surface. Remote handles
+ * enforce the peer's actual capabilities; no local binary is required. */
+function applicationHandleCapabilities(handle: AgentSessionHandle): Capabilities {
+  const no = { supported: false, reason: 'not-implemented' } as const;
+  const yes = { supported: true } as const;
+  return {
+    switchModel: no, availableModels: [], hasFastMode: false,
+    effort: handle.setEffort ? yes : no, effortLevels: [], reasoningDisplay: [],
+    permissionModes: [], setPermissionModeMidSession: no,
+    multimodal: { text: yes, image: yes, file: no },
+    fork: no, rewind: no, abort: yes, sameTurnSteer: yes,
+    memory: { supported: no }, extraDirs: no,
   };
 }
 
@@ -482,7 +527,7 @@ export class Maker {
    */
   private readonly inFlightSessionCreations = new Map<
     string,
-    { promise: Promise<Session> }
+    { promise: Promise<Session>; signal?: AbortSignal }
   >();
   /** All create paths, including anonymous ids, that may still publish or quarantine a handle. */
   private readonly pendingSessionCreations = new Set<Promise<Session>>();
@@ -515,8 +560,8 @@ export class Maker {
   private readonly sdkSessionPersistenceTails = new Map<string, Promise<void>>();
   /** 已确认失效的 vendor id；用于丢弃 CAS 之后才到达的旧 query session_id 事件。 */
   private readonly invalidSdkSessionIds = new Map<string, Set<string>>();
-  /** Explicit close cause keyed by the exact Session instance that will emit closed. */
-  private readonly closeReasons = new WeakMap<Session, MakerSessionCloseReason>();
+  /** Close facts keyed by the exact Session instance that will emit closed. */
+  private readonly closeFacts = new WeakMap<Session, MakerSessionCloseFacts>();
   /** Host cleanup hooks must settle before Maker.shutdown() releases its process barrier. */
   private readonly pendingLifecycleCloses = new Set<Promise<void>>();
   /** Maker Memory 顶层单例 (可选). undefined 时 maker memory 功能整体禁用. */
@@ -628,11 +673,12 @@ export class Maker {
    * 同 id 已有 active Session 或正在创建时直接复用 —— 适配"用户切回老 session
    * 继续聊"以及多个后台入口同时恢复同一会话的场景。
    */
-  async createSession(opts: CreateSessionOptions): Promise<Session> {
+  async createSession(opts: CreateSessionOptions, signal?: AbortSignal): Promise<Session> {
+    signal?.throwIfAborted();
     if (this.shutdownStarted) {
       throw new Error('Maker is shutting down; refusing to create a new session');
     }
-    const creation = this.createSessionWhileRunning(opts);
+    const creation = this.createSessionWhileRunning(opts, signal);
     this.pendingSessionCreations.add(creation);
     try {
       return await creation;
@@ -641,15 +687,48 @@ export class Maker {
     }
   }
 
-  private async createSessionWhileRunning(opts: CreateSessionOptions): Promise<Session> {
+  /** Keep replacement startup bounded without abandoning native cleanup ownership. */
+  private waitForSessionCleanup(cleanup: Promise<unknown>, signal?: AbortSignal): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      let done = false;
+      const finish = (failed: boolean, error?: unknown) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timeout);
+        signal?.removeEventListener('abort', abort);
+        if (failed) reject(error); else resolve();
+      };
+      const timeout = setTimeout(() => finish(true, new SessionCreationCleanupPendingError()), 1000);
+      const abort = () => finish(true, signal?.reason);
+      signal?.addEventListener('abort', abort, { once: true });
+      if (signal?.aborted) abort();
+      // Cleanup rejection still means native ownership is unresolved. Keep it
+      // distinct from the caller's abort reason so hosts cannot enter fallback.
+      void cleanup.then(() => finish(false), error => finish(true,
+        new SessionCreationCleanupPendingError({ cause: error })));
+    });
+  }
+
+  private async createSessionWhileRunning(opts: CreateSessionOptions, signal?: AbortSignal): Promise<Session> {
+    signal?.throwIfAborted();
     if (!opts.id) {
-      return this.createSessionOnce(opts);
+      return this.createSessionOnce(opts, signal);
     }
 
     // Any handle that failed cleanup before publication still owns this
     // business id. Confirm its shutdown before checking/starting live state.
     if (this.failedHandleCleanups.has(opts.id)) {
-      await this.retryFailedHandleCleanup(opts.id);
+      await this.waitForSessionCleanup(this.retryFailedHandleCleanup(opts.id), signal);
+      signal?.throwIfAborted();
+    }
+
+    // A cancelled creation still owns its native startup until cleanup settles.
+    // Never hand that promise to a replacement. Bound this wait so a hung
+    // adapter cannot indefinitely hold a new caller; retries retain the barrier.
+    const cancelled = this.inFlightSessionCreations.get(opts.id);
+    if (cancelled?.signal?.aborted) {
+      await this.waitForSessionCleanup(cancelled.promise.then(() => undefined, () => undefined), signal);
+      return this.createSessionWhileRunning(opts, signal);
     }
 
     // 进程内已经活着或正在启动的 session, 直接复用 (避免 spawn 第二个 SDK)。
@@ -657,8 +736,13 @@ export class Maker {
     // 摘掉并与可能仍存活的底层 transport 并存。先重试同一个 close；只有真实
     // 关闭成功、status listener 将其移除后，才允许创建新的 handle。
     const existing = this.activeSessions.get(opts.id);
+    if (existing?.hasStartedClosing()) {
+      await this.waitForSessionCleanup(existing.close(), signal);
+      return this.createSessionWhileRunning(opts, signal);
+    }
     if (existing?.getStatus() === 'error') {
       await existing.close();
+      signal?.throwIfAborted();
     }
     const reusable = this.activeSessions.get(opts.id);
     if (reusable) return reusable;
@@ -666,7 +750,7 @@ export class Maker {
     const inFlight = this.inFlightSessionCreations.get(opts.id);
     if (inFlight) return inFlight.promise;
 
-    const creation = { promise: this.createSessionOnce(opts) };
+    const creation = { promise: this.createSessionOnce(opts, signal), signal };
     this.inFlightSessionCreations.set(opts.id, creation);
     try {
       return await creation.promise;
@@ -679,11 +763,15 @@ export class Maker {
   }
 
   /** 执行一次真实 session startup；带 id 的并发去重由 createSession 统一负责。 */
-  private async createSessionOnce(opts: CreateSessionOptions): Promise<Session> {
-    const agent = this.requireAgent(opts.agentKind);
+  private async createSessionOnce(opts: CreateSessionOptions, signal?: AbortSignal): Promise<Session> {
+    signal?.throwIfAborted();
+    // Visible application tasks use the ordinary persistence path, but their
+    // remote engine need not be installed on this controller either.
+    const agent = opts[LOCAL_AGENT_CLIENT] && opts.agentDeviceId
+      ? this.agents[opts.agentKind] : this.requireAgent(opts.agentKind);
     const id = opts.id ?? generateSessionId();
     const localPiPackageGeneration = (
-      opts.agentKind === 'pi' && !opts.remoteHostId && !opts.reviewMode
+      opts.agentKind === 'pi' && !opts.remoteHostId && !opts.agentDeviceId && !opts.reviewMode
     ) ? this.localPiPackageRuntimeGeneration : null;
 
     this.logger.debug('createSession ↓', {
@@ -739,6 +827,7 @@ export class Maker {
     if (this.lifecycleHooks.prepareStartOptions) {
       try {
         await this.lifecycleHooks.prepareStartOptions(id, startOpts);
+        signal?.throwIfAborted();
       } catch (error) {
         await notifyStartFailed('prepare', error);
         throw error;
@@ -786,7 +875,17 @@ export class Maker {
     let codexThreadClaim: CodexThreadClaimLease | null = null;
     let handle: AgentSessionHandle;
     let agentStartAttempted = false;
+    // Local apps own their native history and require an explicit failed resume,
+    // including failures discovered on first send. Visible tasks still use this
+    // createSession path; never authorize a fresh conversation/replay for them.
+    const onInvalidResumeSession: StartSessionOptions['onInvalidResumeSession'] =
+      startOpts[LOCAL_AGENT_CLIENT]
+        ? async () => false
+        : opts.agentKind === 'claude-code' || opts.agentKind === 'pi'
+          ? (expectedSdkSessionId) => this.invalidateAndClearSdkSessionId(id, expectedSdkSessionId)
+          : undefined;
     try {
+      signal?.throwIfAborted();
       if (opts.agentKind === 'codex' && isClaimableCodexThreadId(startOpts.resumeSessionId)) {
         codexThreadClaim = this.claimCodexThread({
           sessionId: id,
@@ -815,14 +914,10 @@ export class Maker {
             ...startOpts,
             sessionId: id,
             sessionInstanceId,
-            onInvalidResumeSession:
-              opts.agentKind === 'claude-code' || opts.agentKind === 'pi'
-                ? (expectedSdkSessionId) =>
-                    this.invalidateAndClearSdkSessionId(id, expectedSdkSessionId)
-                : undefined,
+            onInvalidResumeSession,
           },
         });
-      } else handle = await agent.startSession({
+      } else handle = await (agent ?? this.requireAgent(opts.agentKind)).startSession({
         ...startOpts,
         sessionId: id,
         sessionInstanceId,
@@ -832,11 +927,7 @@ export class Maker {
         // 就把 SDK 回填、已落库的 sdk_session_id 变成幽灵 id(见 claude-code/index.ts
         // 的 fresh-session self-reference 恢复),需要同一把 CAS 才能把它清掉,否则下一次
         // send 会 resume 同一个不存在的会话反复失败。
-        onInvalidResumeSession:
-          opts.agentKind === 'claude-code' || opts.agentKind === 'pi'
-            ? (expectedSdkSessionId) =>
-                this.invalidateAndClearSdkSessionId(id, expectedSdkSessionId)
-            : undefined,
+        onInvalidResumeSession,
       });
       handle = withFastModePolicy(handle, startOpts.fastModePolicy);
     } catch (error) {
@@ -862,6 +953,26 @@ export class Maker {
       }
       throw startupError;
     }
+    const rejectCancelledStartup = async (): Promise<never> => {
+      let cleanupFailed = false;
+      try {
+        await handle.close({ reason: 'navigation' });
+      } catch (closeError) {
+        cleanupFailed = true;
+        this.failedHandleCleanups.set(id, {
+          handle, promise: null,
+          onCleaned: () => { codexThreadClaim?.release(); notifyStartCleanupSucceeded(); },
+        });
+        this.logger.warn('failed to close cancelled startup', { sessionId: id, error: String(closeError) });
+      }
+      if (!cleanupFailed) codexThreadClaim?.release();
+      // Keep already-assigned native history. This unpublished handle must not
+      // run ordinary Session.onClose or release durable task/worktree ownership.
+      const error = signal?.reason ?? new Error('Session startup cancelled');
+      await notifyStartFailed('agent-start', error, cleanupFailed);
+      throw error;
+    };
+    if (signal?.aborted) return rejectCancelledStartup();
     if (opts.agentKind === 'codex' && isClaimableCodexThreadId(handle.id)) {
       try {
         if (codexThreadClaim) {
@@ -933,6 +1044,7 @@ export class Maker {
     let updatedSdkSessionId = false;
     try {
       existingRowBeforePersistence = opts.id ? await this.storage.get(opts.id) : null;
+      signal?.throwIfAborted();
       if (existingRowBeforePersistence) {
         updatedSdkSessionId = handle.id !== '<pending>'
           && existingRowBeforePersistence.sdkSessionId !== handle.id;
@@ -947,6 +1059,7 @@ export class Maker {
           title: opts.title ?? DEFAULT_DRAFT_SESSION_TITLE,
           model: opts.model,
           workspaceKind: opts.workspaceKind,
+          projectDir: opts.projectDir,
           effort: opts.effort,
           permissionMode: opts.permissionMode,
           fastMode: opts.fastMode,
@@ -990,6 +1103,8 @@ export class Maker {
       await notifyStartFailed('storage', error, cleanupFailed);
       throw error;
     }
+
+    if (signal?.aborted) return rejectCancelledStartup();
 
     const rollbackStaleLocalPiMetadata = async (): Promise<void> => {
       const current = await this.storage.get(id);
@@ -1069,6 +1184,7 @@ export class Maker {
       }
     }
 
+    if (signal?.aborted) return rejectCancelledStartup();
     if (this.lifecycleHooks.onStartSucceeded) {
       try {
         await this.lifecycleHooks.onStartSucceeded(id, startOpts);
@@ -1087,6 +1203,7 @@ export class Maker {
       return rejectStaleLocalPiAfterPersistence();
     }
 
+    if (signal?.aborted) return rejectCancelledStartup();
     const session = new Session({
       id: meta.id,
       sessionInstanceId,
@@ -1096,7 +1213,7 @@ export class Maker {
       hostStartupPreferences: opts.hostStartupPreferences,
       capabilities: capabilitiesForSession(
         meta.agentKind,
-        agent.capabilities,
+        agent?.capabilities ?? applicationHandleCapabilities(handle),
         meta.remoteHostId,
         meta.agentDeviceId ?? startOpts.agentDeviceId,
         handle,
@@ -1111,6 +1228,8 @@ export class Maker {
       // 层 B：视觉桥钩子（per-session 优先，否则全局默认；缺省不传 = 零干扰）。
       visionBridge: startOpts.visionBridge ?? this.visionBridge,
       toolLoopReviewer: this.toolLoopReviewer,
+      // 整机拆除期间抑制空闲会话的进程死亡终态错误(#8831 退出期守卫)。
+      isHostShuttingDown: () => this.shutdownStarted,
     });
 
     // 另一台电脑上的 Claude Code：新编号等这一轮成功结束才落库。失联的回合里，对方可能还没写出
@@ -1164,11 +1283,12 @@ export class Maker {
         codexThreadClaim?.release();
         // 不再持久化运行态: 'closed' 是 SDK 子进程的瞬态, 重启即灭, 无意义存盘。
         this.activeSessions.delete(meta.id);
+        const close = this.getSessionCloseFacts(session);
         this.emit({
           type: 'session:closed',
           sessionId: meta.id,
           session,
-          reason: this.closeReasons.get(session) ?? 'unexpected',
+          reason: close.reason,
         });
         // 注入的副作用钩子 (worktree / temp 文件 / image cache 清理等)。
         // fire-and-forget, 异常只记日志, 不影响其他清理。在 storage update / activeSessions
@@ -1176,7 +1296,7 @@ export class Maker {
         // 自己的 invariant 先一致。
         if (this.lifecycleHooks.onClose) {
           const cleanup = Promise.resolve()
-            .then(() => this.lifecycleHooks.onClose!(meta.id, startOpts))
+            .then(() => this.lifecycleHooks.onClose!(meta.id, startOpts, close))
             .catch((err) => {
               this.logger.warn('lifecycleHooks.onClose threw', { sessionId: meta.id, error: String(err) });
             });
@@ -1344,20 +1464,52 @@ export class Maker {
   async closeSessionIfCurrent(
     session: Session,
     reason: Exclude<MakerSessionCloseReason, 'unexpected'> = 'requested',
-    opts?: { afterCurrentTurn?: boolean; failureEvent?: () => AgentEvent },
+    opts?: { afterCurrentTurn?: boolean; failureEvent?: () => AgentEvent; onlyIfIdle?: boolean },
   ): Promise<'closed' | 'deferred' | void> {
     if (this.activeSessions.get(session.id) !== session) return;
+    let idleClose: Promise<boolean> | undefined;
+    if (opts?.onlyIfIdle) {
+      if (session.hasStartedClosing()) return;
+      // closeIfIdle synchronously reserves teardown or refuses it. Record the
+      // cause only for an accepted close, before its first async completion.
+      idleClose = session.closeIfIdle();
+      if (!session.hasStartedClosing()) return;
+    }
     // Deferred internal retirement is only intent. An explicit closer may
     // take ownership until Session actually starts teardown; after that the
     // cause stays fixed even if exit confirmation fails or another close races.
-    const previousReason = this.closeReasons.get(session);
-    if (previousReason === undefined || (
-      previousReason === 'runtime-refresh' && !opts?.afterCurrentTurn && !session.hasStartedClosing()
-    )) this.closeReasons.set(session, reason);
+    const previous = this.closeFacts.get(session);
+    if (previous === undefined || (
+      previous.reason === 'runtime-refresh' && !opts?.afterCurrentTurn && !session.hasStartedClosing()
+    )) {
+      // 原因与瞬态标记必须在同一个请求入口固化:onClose 是异步的,close 不等它,
+      // 调用方的抑制窗口在 close 返回后就释放了,到钩子里再问必然错过。
+      this.closeFacts.set(session, {
+        reason,
+        transient: this.lifecycleHooks.isTransientCloseRequest?.(session.id) ?? false,
+      });
+    }
+    if (idleClose) {
+      await idleClose;
+      return 'closed';
+    }
     if (opts?.afterCurrentTurn) return session.closeAfterCurrentTurn(opts);
     await session.close();
     return 'closed';
     // status listener 会自动清理 activeSessions 并 emit
+  }
+
+  /**
+   * 项目资源漂移的 pi 本地根任务:空闲时经 Maker 以 runtime-refresh 原因回收运行时。
+   * 供直发链路(IM turnRunner / scheduler 直发降级 / goal)在 send 前调用,与桌面发送
+   * 事务(makerSendTransaction 的 lazy bootstrap)同口径;调用方随后按各自的自愈路径
+   * 重建会话再投递。非本 maker 会话/未漂移/非空闲一律 no-op 返回 false。
+   */
+  async recyclePiRuntimeIfResourcesDrifted(session: Session): Promise<boolean> {
+    if (this.activeSessions.get(session.id) !== session) return false;
+    if (!session.hasRecyclableProjectResourceDrift()) return false;
+    await this.closeSessionIfCurrent(session, 'runtime-refresh');
+    return true;
   }
 
   /** 关闭并移除一个 session */
@@ -1378,7 +1530,12 @@ export class Maker {
    * created before a late close notification from the old instance arrives.
    */
   getSessionCloseReason(session: Session): MakerSessionCloseReason {
-    return this.closeReasons.get(session) ?? 'unexpected';
+    return this.getSessionCloseFacts(session).reason;
+  }
+
+  /** 关闭事实（原因 + 瞬态标记）；自关闭的 Session 没有显式原因。 */
+  private getSessionCloseFacts(session: Session): MakerSessionCloseFacts {
+    return this.closeFacts.get(session) ?? { reason: 'unexpected', transient: false };
   }
 
   /**
@@ -1423,7 +1580,10 @@ export class Maker {
       phase: 'initial' | 'late',
     ): Array<Promise<void>> => {
       for (const session of sessions) {
-        if (!this.closeReasons.has(session)) this.closeReasons.set(session, 'requested');
+        if (!this.closeFacts.has(session)) {
+          // 退出期不做瞬时取样：onClose 副作用此时已被 shutdown 整体抑制。
+          this.closeFacts.set(session, { reason: 'requested', transient: false });
+        }
       }
       return sessions.map((session) =>
         Promise.resolve()
@@ -1553,9 +1713,13 @@ export class Maker {
     if (!opts[LOCAL_AGENT_CLIENT] || opts.deviceHosted || opts.remoteHostId) {
       throw new Error('Local application sessions require a Main-process capability');
     }
-    const agent = this.requireAgent(kind);
+    const deviceId = opts[LOCAL_AGENT_CLIENT]!.agentDeviceId;
+    const agent = deviceId ? undefined : this.requireAgent(kind);
+    if (deviceId && !this.startDeviceAgentSession) throw new Error('Remote agent execution is unavailable');
     const creation = (async () => {
-      const handle = await agent.startSession(opts);
+      const handle = deviceId
+        ? await this.startDeviceAgentSession!({ agentKind: kind, deviceId, options: opts })
+        : await agent!.startSession(opts);
       if (this.shutdownStarted) {
         await handle.close({ reason: 'account-boundary' });
         throw new Error('Maker stopped before the local application session started');
@@ -1567,8 +1731,10 @@ export class Maker {
         handle,
         logger: this.logger,
         permissionMode: opts.permissionMode,
-        capabilities: capabilitiesForSession(kind, agent.capabilities, undefined, undefined, handle),
+        capabilities: deviceId ? applicationHandleCapabilities(handle) : capabilitiesForSession(kind, agent!.capabilities, undefined, undefined, handle),
         toolLoopReviewer: this.toolLoopReviewer,
+        // 整机拆除期间抑制空闲会话的进程死亡终态错误(#8831 退出期守卫)。
+        isHostShuttingDown: () => this.shutdownStarted,
       });
       this.localAgentSessions.add(session);
       session.onStatusChange(status => {
@@ -1598,6 +1764,8 @@ export class Maker {
   async listAgentSkills(
     agentKind: AgentKind,
     opts: ListAgentSkillsOptions & { sessionId?: string },
+    /** Host-only request-scoped verification; never part of renderer/remote options. */
+    readDisabledSkillPaths?: () => Promise<readonly string[]>,
   ): Promise<ListAgentSkillsResult> {
     const { sessionId, ...agentOpts } = opts;
     const sessionMeta = sessionId ? await this.storage.get(sessionId) : null;
@@ -1609,11 +1777,13 @@ export class Maker {
       ));
     const agent = this.requireAgent(agentKind);
     const session = sessionId ? this.getSession(sessionId) : undefined;
-    const filter = (result: ListAgentSkillsResult) => agent.filterActiveSkillCommands(
-      result, agentOpts.remoteHostId ?? sessionMeta?.remoteHostId ?? undefined,
-      session?.agentKind === agentKind ? session.getDisabledSkillPaths() : undefined,
-    );
-    const result = filter(await agent.listAgentSkills({
+    const filter = async (result: ListAgentSkillsResult) => {
+      const remoteHostId = agentOpts.remoteHostId ?? sessionMeta?.remoteHostId ?? undefined;
+      const snapshot = session?.agentKind === agentKind ? session.getDisabledSkillPaths() : undefined;
+      const current = !remoteHostId && snapshot === undefined ? await readDisabledSkillPaths?.() : undefined;
+      return agent.filterActiveSkillCommands(result, remoteHostId, snapshot, current);
+    };
+    const result = await filter(await agent.listAgentSkills({
       ...agentOpts,
       includeManagedPiPackages,
     }));
@@ -1694,7 +1864,7 @@ export class Maker {
    * 用途: 起标题 / 命名 / 总结摘要 / skillReview 等 "纯文本 → 文本" 任务,
    * 不需要 session 生命周期 / 事件流 / 持久化。
    *
-   * 各 agent 默认模型 (Claude → haiku-4-5, Codex → gpt-5.4-mini), 鉴权与正常 session 同源。
+   * 各 agent 默认模型 (Claude → haiku-4-5, Codex → app-server 自身默认), 鉴权与正常 session 同源。
    * 失败抛 OneShotError (reason: timeout/auth/network/malformed) —— 调用方按 reason
    * 决定 swallow (起标题) 还是上报 (skillReview)。
    */

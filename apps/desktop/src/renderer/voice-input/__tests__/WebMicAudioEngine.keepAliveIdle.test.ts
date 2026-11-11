@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { getDefaultVoiceInputSettings, type VoiceInputDataSnapshot } from '../../../shared/voiceInputData';
+import * as mod from '../WebMicAudioEngine';
+import * as pool from '../audioContextPool';
 
 vi.mock('../audioContextPool', () => ({
   PCM16K_WORKLET_NAME: 'pcm16k-worklet',
   prewarmVoiceInputAudio: vi.fn(),
 }));
 
-type EngineModule = typeof import('../WebMicAudioEngine');
 type PowerCallback = (payload: { reason: 'system_suspend' | 'screen_locked' }) => void;
 
 const WORKLET_URL = 'https://app.local/pcm16k-worklet.js';
@@ -32,19 +34,17 @@ function createFakeTrack(): FakeTrack {
 }
 
 /**
- * The keep-alive session is module-level state, so every case re-imports the
- * engine to start from a clean slate. Without this the process-wide power
- * listener flag would leak across cases and silently skip the subscription.
+ * Load the engine once. Exercise its real power release and HMR disposal at
+ * teardown so streams, use windows and subscriptions cannot leak across cases.
  */
 describe('keep-alive microphone idle window', () => {
-  let mod: EngineModule;
   let track: FakeTrack;
   let sink: { connect: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn>; gain: { value: number } };
   let destination: object;
   let powerCallback: PowerCallback | undefined;
   let getUserMedia: ReturnType<typeof vi.fn>;
 
-  beforeEach(async () => {
+  beforeEach(() => {
     vi.useFakeTimers();
     track = createFakeTrack();
     powerCallback = undefined;
@@ -82,8 +82,6 @@ describe('keep-alive microphone idle window', () => {
       port: { close: vi.fn(), postMessage: vi.fn(), onmessage: null },
     })));
 
-    vi.resetModules();
-    const pool = await import('../audioContextPool');
     vi.mocked(pool.prewarmVoiceInputAudio).mockResolvedValue({
       context: {
         currentTime: 0,
@@ -96,17 +94,18 @@ describe('keep-alive microphone idle window', () => {
       workletReady: Promise.resolve(),
       workletUrl: WORKLET_URL,
     });
-    mod = await import('../WebMicAudioEngine');
   });
 
   afterEach(async () => {
-    await mod.disposeKeepAliveVoiceInputMicrophone('test_cleanup');
+    powerCallback?.({ reason: 'screen_locked' });
+    await mod.disposeVoiceInputAudioModuleForHmr();
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
 
   it('releases the warm microphone once the idle window elapses', async () => {
+    mod.noteVoiceInputUse();
     await mod.prewarmVoiceInputMicrophone({ workletUrl: WORKLET_URL });
     expect(track.stopped).toBe(false);
 
@@ -156,7 +155,194 @@ describe('keep-alive microphone idle window', () => {
     expect(track.stopped).toBe(true);
   });
 
+  it('does not open the microphone for a mount-time prewarm before any dictation', async () => {
+    // Mounting a ChatInput or the overlay is bookkeeping, not use. The AudioContext
+    // and worklet may warm up, but the capture device — and the OS privacy
+    // indicator — must stay off until the user asks to dictate.
+    await mod.prewarmVoiceInputMicrophone({ workletUrl: WORKLET_URL });
+
+    expect(getUserMedia).not.toHaveBeenCalled();
+  });
+
+  it('clears enable intent on a power release before the first capture', async () => {
+    // Settings can enable fast activation before any capture engine is built.
+    // That intent must already observe lock/suspend, or a later chat mount
+    // would open the device after the user has walked away.
+    mod.noteVoiceInputUse();
+    expect(powerCallback).toBeDefined();
+    powerCallback?.({ reason: 'screen_locked' });
+    await mod.prewarmVoiceInputMicrophone({ workletUrl: WORKLET_URL });
+    expect(getUserMedia).not.toHaveBeenCalled();
+  });
+
+  it.each([0, 60 * 1000])('does not relight the microphone %i ms after the idle release', async (delay) => {
+    mod.noteVoiceInputUse();
+    await mod.prewarmVoiceInputMicrophone({ workletUrl: WORKLET_URL });
+    await vi.advanceTimersByTimeAsync(IDLE_TTL_MS);
+    expect(track.stopped).toBe(true);
+    getUserMedia.mockClear();
+
+    // Past the window the user stopped dictating: remounting the ChatInput (a new
+    // task, a settings change) must not start a fresh 30-minute window, otherwise
+    // the indicator never goes out while the user just keeps working.
+    await vi.advanceTimersByTimeAsync(delay);
+    await mod.prewarmVoiceInputMicrophone({ workletUrl: WORKLET_URL });
+
+    expect(getUserMedia).not.toHaveBeenCalled();
+  });
+
+  it('keeps the original deadline when the session is rebuilt late in the window', async () => {
+    mod.noteVoiceInputUse();
+    await mod.prewarmVoiceInputMicrophone({ workletUrl: WORKLET_URL });
+    await vi.advanceTimersByTimeAsync(29 * 60 * 1000);
+
+    // A devicechange released the warm session 29 minutes in. The next mount may
+    // rebuild it, but the window still ends 30 minutes after the last dictation —
+    // anchoring to "now" would keep the indicator lit until minute 59 for a user
+    // who never spoke again.
+    await mod.disposeKeepAliveVoiceInputMicrophone('devicechange');
+    track.stopped = false;
+    await mod.prewarmVoiceInputMicrophone({ workletUrl: WORKLET_URL });
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
+    expect(track.stopped).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(59 * 1000);
+    expect(track.stopped).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(2 * 1000);
+    expect(track.stopped).toBe(true);
+  });
+
+  it('refreshes the window when a direct capture recording ends', async () => {
+    mod.noteVoiceInputUse();
+    await vi.advanceTimersByTimeAsync(25 * 60 * 1000);
+
+    const engine = new mod.WebMicAudioEngine({ workletUrl: WORKLET_URL, keepAlive: false });
+    await engine.start();
+    await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+    await engine.stop();
+
+    // 35 minutes after that recording *started*, but only 20 after it ended: the
+    // window must have been refreshed by the stop, or fast activation would have
+    // silently expired. The use timestamp used to move only on the
+    // keep-alive-stays branch.
+    await vi.advanceTimersByTimeAsync(20 * 60 * 1000);
+    await mod.prewarmVoiceInputMicrophone({ workletUrl: WORKLET_URL });
+
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps an existing warm microphone until 30 minutes after a direct recording ends', async () => {
+    mod.noteVoiceInputUse();
+    await mod.prewarmVoiceInputMicrophone({ workletUrl: WORKLET_URL });
+    await vi.advanceTimersByTimeAsync(20 * 60 * 1000);
+
+    const directTrack = createFakeTrack();
+    getUserMedia.mockImplementationOnce(async () => ({
+      getAudioTracks: () => [directTrack],
+      getTracks: () => [directTrack],
+    }));
+    const engine = new mod.WebMicAudioEngine({ workletUrl: WORKLET_URL, keepAlive: false });
+    await engine.start();
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+    await engine.stop();
+    expect(directTrack.stopped).toBe(true);
+
+    // Cross the original warm session's deadline without remounting. Its
+    // existing timer must follow the same last-use timestamp as future prewarm.
+    await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+    expect(track.stopped).toBe(false);
+    await vi.advanceTimersByTimeAsync(20 * 60 * 1000);
+    expect(track.stopped).toBe(true);
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
+  });
+
+  it('reopens the warm microphone from a later mount inside the use window', async () => {
+    mod.noteVoiceInputUse();
+    await mod.prewarmVoiceInputMicrophone({ workletUrl: WORKLET_URL });
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+
+    // A devicechange released the warm session, but the user dictated moments
+    // ago: the next mount may warm the new configuration right away.
+    await mod.disposeKeepAliveVoiceInputMicrophone('devicechange');
+    await mod.prewarmVoiceInputMicrophone({ workletUrl: WORKLET_URL });
+
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not replace a recording still awaiting microphone permission after 60 seconds', async () => {
+    mod.noteVoiceInputUse();
+    let resolveStream: (value: unknown) => void = () => undefined;
+    getUserMedia.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveStream = resolve;
+    }));
+    const engine = new mod.WebMicAudioEngine({
+      workletUrl: WORKLET_URL,
+      keepAlive: true,
+      onInterrupted: vi.fn(),
+    });
+    const starting = engine.start();
+    void starting.catch(() => undefined);
+    await vi.advanceTimersByTimeAsync(0);
+
+    await vi.advanceTimersByTimeAsync(2 * 60 * 1000);
+    await mod.prewarmVoiceInputMicrophone({ workletUrl: WORKLET_URL });
+
+    // A permission prompt has no fixed response deadline. A mount must neither
+    // replace the owner's pending request nor cause a later cold fallback.
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+    resolveStream({ getAudioTracks: () => [track], getTracks: () => [track] });
+    await starting;
+    expect(track.stopped).toBe(false);
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+    await engine.stop();
+  });
+
+  it('warms on an enable broadcast but not on repeated or newly mounted settings snapshots', async () => {
+    const { subscribeVoiceInputSettings } = await import('../../hooks/useVoiceInputSettings');
+    let settings = { ...getDefaultVoiceInputSettings('darwin'), fastActivationEnabled: false };
+    const listeners = new Set<(snapshot: VoiceInputDataSnapshot) => void>();
+    Object.assign(window.electronAPI.voiceInput, {
+      getDataSnapshot: () => ({ settings, history: [] }),
+      onDataChanged: (listener: (snapshot: VoiceInputDataSnapshot) => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    });
+    const warming: Promise<void>[] = [];
+    const subscribe = () => subscribeVoiceInputSettings(() => {
+      warming.push(mod.prewarmVoiceInputMicrophone({ workletUrl: WORKLET_URL }));
+    });
+    const emit = async (enabled: boolean) => {
+      settings = { ...settings, fastActivationEnabled: enabled };
+      listeners.forEach((listener) => listener({ settings, history: [] } as VoiceInputDataSnapshot));
+      await Promise.all(warming.splice(0));
+    };
+    let unsubscribe = subscribe();
+    try {
+      await emit(true);
+      expect(getUserMedia).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(IDLE_TTL_MS);
+      expect(track.stopped).toBe(true);
+      await emit(true);
+      expect(getUserMedia).toHaveBeenCalledTimes(1);
+
+      // A renderer subscribing after the switch is already on must not infer a
+      // new activation from that initial snapshot or a history-only broadcast.
+      unsubscribe();
+      unsubscribe = subscribe();
+      await emit(true);
+      expect(getUserMedia).toHaveBeenCalledTimes(1);
+      await emit(false);
+      await emit(true);
+      expect(getUserMedia).toHaveBeenCalledTimes(2);
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it('does not extend the idle window when prewarm re-asserts keep-alive intent', async () => {
+    mod.noteVoiceInputUse();
     await mod.prewarmVoiceInputMicrophone({ workletUrl: WORKLET_URL });
 
     // A ChatInput mounting (or an unrelated voice setting changing) 20 minutes
@@ -172,6 +358,7 @@ describe('keep-alive microphone idle window', () => {
   });
 
   it('restarts the full window after real dictation ends', async () => {
+    mod.noteVoiceInputUse();
     await mod.prewarmVoiceInputMicrophone({ workletUrl: WORKLET_URL });
     await vi.advanceTimersByTimeAsync(20 * 60 * 1000);
 
@@ -193,6 +380,7 @@ describe('keep-alive microphone idle window', () => {
   });
 
   it('releases the microphone when the machine suspends or the screen locks', async () => {
+    mod.noteVoiceInputUse();
     await mod.prewarmVoiceInputMicrophone({ workletUrl: WORKLET_URL });
     expect(powerCallback).toBeDefined();
 
@@ -200,6 +388,8 @@ describe('keep-alive microphone idle window', () => {
     await vi.advanceTimersByTimeAsync(0);
 
     expect(track.stopped).toBe(true);
+    await mod.prewarmVoiceInputMicrophone({ workletUrl: WORKLET_URL });
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
   });
 
   it('stops a stream that arrives after the session was released mid-startup', async () => {
@@ -208,6 +398,7 @@ describe('keep-alive microphone idle window', () => {
       resolveStream = resolve;
     }));
 
+    mod.noteVoiceInputUse();
     const prewarming = mod.prewarmVoiceInputMicrophone({ workletUrl: WORKLET_URL });
     // Let start() reach the pending getUserMedia await.
     await vi.advanceTimersByTimeAsync(0);
@@ -318,6 +509,7 @@ describe('keep-alive microphone idle window', () => {
       resolveStream = resolve;
     }));
 
+    mod.noteVoiceInputUse();
     const engine = new mod.WebMicAudioEngine({
       workletUrl: WORKLET_URL,
       keepAlive: true,
@@ -344,6 +536,7 @@ describe('keep-alive microphone idle window', () => {
       resolveStream = resolve;
     }));
 
+    mod.noteVoiceInputUse();
     const first = mod.prewarmVoiceInputMicrophone({ workletUrl: WORKLET_URL });
     await vi.advanceTimersByTimeAsync(0);
 
@@ -403,6 +596,11 @@ describe('keep-alive microphone idle window', () => {
     // happen until the machine wakes up.
     expect(onInterrupted).toHaveBeenCalledTimes(1);
     expect(track.stopped).toBe(true);
+    // The UI stops the interrupted engine after the power notification. That
+    // cleanup must not create a fresh use window when the window remounts.
+    await engine.stop();
+    await mod.prewarmVoiceInputMicrophone({ workletUrl: WORKLET_URL });
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
   });
 
   it('reports cancellation when the shared context fails after a release', async () => {
@@ -477,36 +675,18 @@ describe('keep-alive microphone idle window', () => {
     expect(track.stopped).toBe(false);
   });
 
-  it('does not open the microphone when enumeration outlives a power release', async () => {
-    let resolveEnumerate: (value: unknown) => void = () => undefined;
-    vi.stubGlobal('navigator', {
-      mediaDevices: {
-        enumerateDevices: vi.fn(() => new Promise((resolve) => {
-          resolveEnumerate = resolve;
-        })),
-        getUserMedia,
-        addEventListener: vi.fn(),
-      },
-    });
-
-    const engine = new mod.WebMicAudioEngine({
-      workletUrl: WORKLET_URL,
-      keepAlive: false,
-      deviceId: 'specific-device',
-      onInterrupted: vi.fn(),
-    });
-    const starting = engine.start();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(powerCallback).toBeDefined();
-
+  it('opens an exact device without waiting for enumeration and still releases it on lock', async () => {
+    const enumerate = vi.fn(() => new Promise(() => undefined));
+    vi.stubGlobal('navigator', { mediaDevices: { enumerateDevices: enumerate, getUserMedia, addEventListener: vi.fn() } });
+    const engine = new mod.WebMicAudioEngine({ workletUrl: WORKLET_URL, deviceId: 'specific-device' });
+    await engine.start();
+    expect(enumerate).not.toHaveBeenCalled();
+    expect(getUserMedia).toHaveBeenCalledOnce();
+    expect(getUserMedia.mock.calls[0][0].audio.deviceId).toEqual({ exact: 'specific-device' });
     powerCallback?.({ reason: 'screen_locked' });
     await vi.advanceTimersByTimeAsync(0);
-    // Enumeration succeeds *after* the release, reporting the device as present.
-    resolveEnumerate([{ kind: 'audioinput', deviceId: 'specific-device' }]);
-
-    await expect(starting).rejects.toThrow(/disposed/i);
-    // The one-shot event has passed; nothing may reopen the device now.
-    expect(getUserMedia).not.toHaveBeenCalled();
+    expect(track.stopped).toBe(true);
+    expect(getUserMedia).toHaveBeenCalledOnce();
   });
 
   it('does not report an error when a release hits a still-starting capture', async () => {

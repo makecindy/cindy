@@ -11,6 +11,23 @@ const bodies = (messages: RemoteMessage[], running: boolean) => companionConvers
 const base = [row('u0', 'user', 'Help'), row('a1', 'assistant', 'Public progress'),
   row('t2', 'tool_use', { toolName: 'Read', toolUseId: 't', input: { path: 'private' } }),
   row('r3', 'tool_result', { toolUseId: 't', result: 'technical details' })];
+// B2B host metadata must survive native history projection without exposing internal prose.
+it.each([true, false])('keeps internal B2B prose hidden in streaming and reloaded companion history (%s)', running => {
+  const internal = row('a1', 'assistant', 'Internal reply', { botPrivateReply: true, turnCompleted: true });
+  const trace = row('a2', 'assistant', '', { botDirectMessage: {
+    v: 1, threadId: 'thread', viewerBotId: 'cindy-default', peerBotId: 'peer', peerBotName: 'Peer',
+    direction: 'received', sequence: 1, preview: 'Internal message',
+  } });
+  const source = [internal, trace, ...base.slice(2), row('a4', 'assistant', 'Owner reply', { turnCompleted: true }),
+    row('e5', 'error', 'Action required')];
+  const result = bodies(source, running);
+  expect(JSON.stringify(result)).not.toContain('Internal reply');
+  expect(JSON.stringify(result)).toContain('Owner reply');
+  expect(JSON.stringify(result)).toContain('Action required');
+  expect(JSON.stringify(result)).toContain('technical details');
+  expect(result.some(item => item.type === 'message' && item.message.companion)).toBe(true);
+  expect(internal.content).toBe('Internal reply');
+});
 // Unit regression: the real normalize → group → companion projection used to
 // hide prose as soon as commentary metadata or a later tool arrived.
 it('keeps working prose through streaming metadata and tools, folding only after the answer', () => {
@@ -227,4 +244,40 @@ it('keeps a component progress answer visible before finalization and later tool
   const source = [row('u0', 'user', 'Help'), row('a1', 'assistant', content, { assistantPhase: 'commentary' }), ...base.slice(2)];
   const result = bodies(source, true);
   expect(result.some(item => item.type === 'message' && item.message.body === content)).toBe(true);
+});
+
+// Unit: actual normalize → ordinary grouping → teammate journal. A streaming
+// commentary followed by one tool used to become separate top-level messages.
+it('keeps mobile progress in one stable process across tools, switch and completion', async () => {
+  const { companionProcessItems } = await import('../session/companionConversationPresentation');
+  const stages = [base.slice(0, 1).concat(row('a1', 'assistant', 'Checking', { assistantPhase: 'commentary' })),
+    base, [...base, row('s4', 'agent_switch', { fromAgentKind: 'codex', toAgentKind: 'pi' }), row('a5', 'assistant', 'Continuing', { assistantPhase: 'commentary' })]];
+  const keys = stages.map(source => {
+    const items = companionProcessItems(buildMobileMessageRenderItems(source, { isSessionStreaming: true }), true);
+    expect(items.filter(item => item.type === 'work_group')).toHaveLength(1);
+    return items.find(item => item.type === 'work_group')!.key;
+  });
+  expect(new Set(keys).size).toBe(1);
+  const done = companionProcessItems(buildMobileMessageRenderItems([...stages[2], row('a6', 'assistant', 'Result', { turnCompleted: true })], { isSessionStreaming: false }), false);
+  expect(done.find(item => item.type === 'work_group')?.key).toBe(keys[0]);
+  expect(done.filter(item => item.type === 'message').map(item => item.message.body)).toEqual(['Help', 'Result']);
+  expect(JSON.stringify(done)).toContain('technical details');
+  expect(JSON.stringify(done)).toContain('Continuing');
+});
+
+it('retains the first thinking-only work before any progress text', async () => {
+  const { companionProcessItems } = await import('../session/companionConversationPresentation');
+  const source = [row('u0', 'user', 'Help'), row('w1', 'thinking', { text: 'Initial work', durationMs: 1 }),
+    row('a2', 'assistant', 'Checking', { assistantPhase: 'commentary' }),
+    row('w3', 'thinking', { text: 'More work', durationMs: 1 }), row('a4', 'assistant', 'Result', { turnCompleted: true })];
+  const initial = companionProcessItems(buildMobileMessageRenderItems(source.slice(0, 2), { isSessionStreaming: true }), true);
+  expect(initial.filter(item => item.type === 'work_group')).toHaveLength(1);
+  expect(JSON.stringify(initial)).toContain('Initial work');
+  for (const running of [false, true]) {
+    const raw = buildMobileMessageRenderItems(source, { isSessionStreaming: running });
+    const items = companionProcessItems(raw, running);
+    expect(items.filter(item => item.type === 'work_group')).toHaveLength(1);
+    expect(JSON.stringify(items.find(item => item.type === 'work_group'))).toContain('Initial work');
+    expect(items.filter(item => item.type === 'message').map(item => item.message.body)).toEqual(['Help', 'Result']);
+  }
 });

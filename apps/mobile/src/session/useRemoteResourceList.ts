@@ -1,12 +1,15 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { REMOTE_DISPLAY_REUSE_MS } from '@/device-link/remoteResourceAvailability';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { AppState } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/auth/AuthContext';
+import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
+import { useRevokedDevices, revokedDevicesStore } from '@/device-link/revokedDevicesStore';
 import { startFocusedTopicSubscription } from '@/device-link/focusedTopicSubscription';
 import {
-  cacheRemoteResourceItems, readRemoteResourceSnapshot,
+  cacheRemoteResourceItems, peekRemoteResourceSnapshot, readRemoteResourceSnapshot,
   remoteResourceCacheRevision, subscribeRemoteResourceCache,
 } from '@/device-link/remoteResourceCache';
 import { REMOTE_RESOURCE_STARTUP_TIMEOUT_MS, remoteResourceConnectionState, hasRemoteCollectionCache, isRemoteResourceHostOnline, readRemoteCollectionCache, writeRemoteCollectionCache } from '@/device-link/remoteResourceAvailability';
@@ -20,18 +23,23 @@ import { startBoundedStartupRead } from './mobileHomeStartup';
 /** One roster reader for resource routes, home and the picker. Host shards reconcile independently. */
 export function useRemoteResourceList(collectionId: string, targets: readonly RemoteResourceHostTarget[], enabled = true) {
   const { user, accountGeneration } = useAuth();
+  const revoked = useRevokedDevices();
   const { t, i18n } = useTranslation();
   const { connectionEpoch, status, presenceVersion, getPresenceAvailability, invoke, openLink,
-    onRemoteResourceChanged, subscribe, unsubscribe } = useDeviceLink();
+    onRemoteResourceChanged, subscribe, unsubscribe, getSubscriptionIdentity } = useDeviceLink();
   useSyncExternalStore(subscribeRemoteResourceCache, remoteResourceCacheRevision);
   const owner = `${user?.id ?? ''}:${accountGeneration}`;
   const binding = JSON.stringify([owner, collectionId]);
   const bindingRef = useRef(binding); bindingRef.current = binding;
+  const freshHosts = useRef<{ binding: string; ids: Set<string> }>({ binding, ids: new Set() });
+  if (freshHosts.current.binding !== binding) freshHosts.current = { binding, ids: new Set() };
+  const localItems = () => hasRemoteCollectionCache(owner, collectionId)
+    ? readRemoteCollectionCache(owner, collectionId) : peekRemoteResourceSnapshot(user?.id ?? '')?.items[collectionId] ?? [];
   const [hydrated, setHydrated] = useState('');
   const [state, setState] = useState<{
     binding: string; items: HostedRemoteCollectionItem[]; replies: Record<string, number>;
     settled: boolean; loading: boolean; refreshing: boolean; error: string | null;
-  }>(() => ({ binding, items: readRemoteCollectionCache(owner, collectionId), replies: {}, settled: hasRemoteCollectionCache(owner, collectionId), loading: true, refreshing: false, error: null }));
+  }>(() => ({ binding, items: localItems(), replies: {}, settled: hasRemoteCollectionCache(owner, collectionId), loading: true, refreshing: false, error: null }));
   const generation = useRef(0);
   const active = useRef(false);
   const focusController = useRef(new AbortController());
@@ -40,18 +48,42 @@ export function useRemoteResourceList(collectionId: string, targets: readonly Re
   const settledRef = useRef(false);
   settledRef.current = state.binding === binding && state.settled;
   const presenceKey = targets.map((target) => `${target.deviceId}:${getPresenceAvailability(target.deviceId)}`).join('|');
+  const readKey = JSON.stringify([binding, connectionEpoch, status, presenceKey, targets, i18n.language]);
+  const validatedRead = useRef<string | null>(null);
+  const subscriptionReader = useRef(getSubscriptionIdentity); subscriptionReader.current = getSubscriptionIdentity;
+  const subscriptionStamp = () => {
+    if (!targets.length) return 'empty';
+    const stamps = targets.map(host => subscriptionReader.current?.(host.deviceId, ['sessions']) ?? null);
+    return stamps.some(stamp => stamp === null) ? null : JSON.stringify(stamps);
+  };
+  const validatedSubscription = useRef<string | null>(null);
+  const validatedAt = useRef(0);
+  const changes = useRef(0);
+  const validatedChanges = useRef(-1);
   void presenceVersion;
   useEffect(() => {
     generation.current += 1;
     let cancelled = false;
-    const cached = readRemoteCollectionCache(owner, collectionId);
+    const cached = localItems();
     setState({ binding, items: cached, replies: {}, settled: hasRemoteCollectionCache(owner, collectionId), loading: true, refreshing: false, error: null });
     const cacheRead = startBoundedStartupRead(readRemoteResourceSnapshot(user?.id ?? ''), { home: [], items: {}, read: {} });
     // A slow local cache must not hold up live reads. A late cache never replaces a fresh roster.
-    void cacheRead.initial.then(({ value: snapshot }) => {
+    const restore = (snapshot: Awaited<ReturnType<typeof readRemoteResourceSnapshot>>) => {
       if (cancelled || bindingRef.current !== binding) return;
-      setState((current) => ({ ...current, items: current.items.length ? current.items : snapshot.items[collectionId] ?? [] }));
+      setState(current => {
+        // A fast computer must not suppress the saved rows of a slower one.
+        // Conversely, a fresh empty shard is a deletion and must never be restored.
+        const present = new Set(current.items.map(row => row.host.deviceId));
+        const missing = (snapshot.items[collectionId] ?? []).filter(row => !revokedDevicesStore.has(row.host.deviceId) && !present.has(row.host.deviceId)
+          && !freshHosts.current.ids.has(row.host.deviceId));
+        return missing.length ? { ...current, items: [...current.items, ...missing] } : current;
+      });
+    };
+    void cacheRead.initial.then(({ value: snapshot, timedOut }) => {
+      if (cancelled || bindingRef.current !== binding) return;
+      restore(snapshot);
       setHydrated(binding);
+      if (timedOut) void cacheRead.completion.then(result => { if (result.ok) restore(result.value); });
     });
     return () => { cancelled = true; generation.current += 1; };
   }, [binding, collectionId, owner, user?.id]);
@@ -73,6 +105,9 @@ export function useRemoteResourceList(collectionId: string, targets: readonly Re
     // dependency will schedule the same read once the relay is online.
     if ((status === 'stopped' || status === 'connecting') && !settledRef.current) return;
     const expected = ++generation.current;
+    const changeAtStart = changes.current;
+    const subscriptionAtStart = subscriptionStamp();
+    validatedRead.current = null;
     const signal = focusController.current.signal;
     const current = () => !run.isStale() && !signal.aborted && generation.current === expected
       && bindingRef.current === binding && active.current && AppState.currentState === 'active';
@@ -100,12 +135,14 @@ export function useRemoteResourceList(collectionId: string, targets: readonly Re
           if (!response || !Array.isArray(response.items)) throw new Error(t('devices.resources.loadFailed'));
           const next = normalizeRemoteCollectionItems(response, collectionId).map(item => ({ host, item,
             key: JSON.stringify([host.deviceId, item.ref.collectionId, item.ref.kind, item.ref.id]) }));
+          freshHosts.current.ids.add(host.deviceId);
           setState(old => ({ ...old,
             items: mergeRemoteCollectionHostShards(old.items, next, new Set([host.deviceId]), targets),
             replies: { ...old.replies, [host.deviceId]: connectionEpoch },
           }));
         } catch (error) {
           if (!current()) return;
+          mobileDebugLog('warn', 'recovery', 'companion-roster-refresh', { source: 'computer-list', collectionId });
           failures.push(error);
           if (isAutoRecoveringRemoteError(error)) failedHosts.current.add(host.deviceId);
         }
@@ -119,9 +156,12 @@ export function useRemoteResourceList(collectionId: string, targets: readonly Re
       settled: true, loading: false, refreshing: false,
       error: failures.length ? failures.slice(0, 2).map(formatRemoteError).join('\n') : targets.length ? null : t('devices.resources.noHosts'),
     }));
-    if (!failures.length) recovery.current?.succeeded();
+    if (!failures.length) {
+      validatedRead.current = readKey; validatedChanges.current = changeAtStart; validatedAt.current = Date.now(); validatedSubscription.current = subscriptionAtStart === subscriptionStamp() ? subscriptionAtStart : null;
+      recovery.current?.succeeded();
+    }
     else failures.forEach(error => recovery.current?.failed(error));
-  }, [binding, collectionId, connectionEpoch, enabled, getPresenceAvailability, hydrated, i18n.language, invoke, openLink, presenceKey, status, t, targets]);
+  }, [binding, collectionId, connectionEpoch, enabled, getPresenceAvailability, hydrated, i18n.language, invoke, openLink, presenceKey, readKey, status, t, targets]);
 
   // Phase pushes can arrive faster than a roster RPC. Keep one active read and
   // one latest follow-up, using the same coordinator as other remote snapshots.
@@ -129,6 +169,17 @@ export function useRemoteResourceList(collectionId: string, targets: readonly Re
     read, JSON.stringify([binding, connectionEpoch, status, presenceKey, targets, enabled, hydrated]),
   );
   const refresh = useCallback((visible = true) => requestRefresh({ reason: visible ? 'visible' : 'changed' }), [read, requestRefresh]);
+
+  // Keep invalidation listening while hidden, but do no network work until visible.
+  useEffect(() => {
+    const off = onRemoteResourceChanged((deviceId, payload) => {
+      if (payload.collectionId !== collectionId || !targets.some(host => host.deviceId === deviceId)) return;
+      changes.current++;
+      if (active.current && AppState.currentState === 'active') void refresh(false);
+    });
+    const app = AppState.addEventListener('change', next => { if (next !== 'active') changes.current++; });
+    return () => { off(); app.remove(); };
+  }, [collectionId, onRemoteResourceChanged, refresh, targets]);
 
   // Persist after commit, never from a React state updater (which may be replayed).
   useEffect(() => {
@@ -143,27 +194,25 @@ export function useRemoteResourceList(collectionId: string, targets: readonly Re
       focusController.current = new AbortController();
       recovery.current = createRemoteReadRecovery(() => { void requestRefresh({ reason: 'retry' }); },
         () => active.current && status === 'online' && AppState.currentState === 'active');
-      if (active.current) void refresh(false);
+      if (active.current && (validatedRead.current !== readKey || validatedChanges.current !== changes.current || validatedSubscription.current === null || validatedSubscription.current !== subscriptionStamp() || Date.now() - validatedAt.current >= REMOTE_DISPLAY_REUSE_MS)) void refresh(false);
     };
     const stop = () => { active.current = false; generation.current += 1;
       focusController.current.abort(); recovery.current?.dispose(); };
     start();
     const foreground = AppState.addEventListener('change', (value) => { stop(); if (value === 'active') start(); });
-    const off = onRemoteResourceChanged((deviceId, payload) => {
-      if (AppState.currentState === 'active' && payload.collectionId === collectionId && targets.some((host) => host.deviceId === deviceId)) void refresh(false);
-    });
     const cleanups = targets.map((target) => startFocusedTopicSubscription({
       deviceId: target.deviceId, owner: `remote-collection:${collectionId}:${target.deviceId}`,
       subscribe, topic: 'sessions', unsubscribe,
     }));
-    return () => { stop(); foreground.remove(); off(); cleanups.forEach((cleanup) => cleanup()); };
-  }, [collectionId, enabled, onRemoteResourceChanged, refresh, requestRefresh, status, subscribe, targets, unsubscribe]));
+    return () => { stop(); foreground.remove(); cleanups.forEach((cleanup) => cleanup()); };
+  }, [collectionId, enabled, readKey, refresh, requestRefresh, status, subscribe, targets, unsubscribe]));
   const ownState = state.binding === binding;
+  const visibleItems = useMemo(() => revoked.size ? state.items.filter(row => !revoked.has(row.host.deviceId)) : state.items, [state.items, revoked]);
   const isOnline = useCallback((host: RemoteResourceHostTarget) => ownState && isRemoteResourceHostOnline(
     status, getPresenceAvailability(host.deviceId), state.replies[host.deviceId], connectionEpoch,
   ), [connectionEpoch, getPresenceAvailability, ownState, presenceKey, state.replies, status]);
   return {
-    items: ownState ? state.items : [],
+    items: ownState ? visibleItems : [],
     // A disk snapshot is still unverified on a cold mount. Keep the first
     // screen in its loading state until a live collection read settles; after
     // that, background refreshes continue to leave the current rows visible.

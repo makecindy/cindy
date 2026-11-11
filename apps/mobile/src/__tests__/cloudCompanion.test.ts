@@ -36,7 +36,7 @@ describe('cloud companion rows', () => {
     expect(rows.find(item => item.item.ref.id === 'dash')?.host.deviceName).toBe('Studio');
     // A new phone that never saw the main computer still gets an entry for the cloud conversation.
     const mia = rows.find(item => item.item.ref.id === 'mia')!;
-    expect(mia.host).toEqual({ deviceId: 'mac-c', deviceName: 'mac-c' });
+    expect(mia.host).toEqual({ deviceId: 'mac-c', deviceName: 'another computer' });
     expect(mia.item.display).toMatchObject({ title: 'mia', avatar: { kind: 'emoji', value: '🦊' } });
     expect(cloudActorForRow(actors, mia)?.id).toBe(id(5));
     expect(cloudCompanionRows(items, []).map(item => item.key)).toEqual(items.map(item => item.key));
@@ -96,9 +96,10 @@ describe('cloud companion rows', () => {
     expect(view.map(item => item.text)).toEqual(['m30', 'm20']);
   });
 
-  it('offers the computers the main computer names, never itself or this phone', () => {
-    const targets = [{ deviceId: 'home', online: true }, { deviceId: 'phone', online: true }, { deviceId: 'mac', online: true }, { deviceId: 'off', online: false }];
-    expect(cloudHomeTargets(targets, 'home', 'phone').map(target => target.deviceId)).toEqual(['mac']);
+  it('offers the computers the main computer names, never itself or this phone; an older one too', () => {
+    const targets = [{ deviceId: 'home', online: true }, { deviceId: 'phone', online: true }, { deviceId: 'mac', online: true }, { deviceId: 'off', online: false },
+      { deviceId: 'old', online: true, outdated: true }];
+    expect(cloudHomeTargets(targets, 'home', 'phone').map(target => target.deviceId)).toEqual(['mac', 'old']);
   });
 });
 
@@ -147,13 +148,36 @@ describe('Chat Server client for companions', () => {
       value: { name: 'Cindy', description: '', soul: '', systemPrompt: '', user: '' } }]);
     const client = createChatServerClient(request as never);
     await expect(client.hasProfileSnapshot(id(1))).resolves.toBe(true);
-    expect(request).toHaveBeenLastCalledWith('/preferences', 'GET', undefined, id(1));
+    expect(request).toHaveBeenLastCalledWith('/preferences?key=companion.profile.v1', 'GET', undefined, id(1));
     request.mockResolvedValueOnce([{ key: 'companion.memory.v1:a.md', value: { content: 'x' } }]);
     await expect(client.hasProfileSnapshot(id(1))).resolves.toBe(false);
     request.mockResolvedValueOnce([{ key: 'companion.profile.v1', value: null }]);
     await expect(client.hasProfileSnapshot(id(1))).resolves.toBe(false);
     request.mockResolvedValueOnce([{ key: 'companion.profile.v1', value: { name: 'Cindy' } }]);
     await expect(client.hasProfileSnapshot(id(1))).resolves.toBe(false);
+  });
+
+  it('finds a profile too large for the preferences in the companion store, and none on an older server', async () => {
+    const complete = { name: 'Cindy', description: '', soul: '', systemPrompt: '', user: '' };
+    const request = vi.fn(async (path: string): Promise<unknown> => (path.startsWith('/preferences') ? []
+      : { key: 'companion.profile.v1', revision: 1, deleted: false, value: complete }));
+    const client = createChatServerClient(request as never);
+    await expect(client.hasProfileSnapshot(id(1))).resolves.toBe(true);
+    expect(request).toHaveBeenLastCalledWith('/companion-store/entry?key=companion.profile.v1', 'GET', undefined, id(1));
+    request.mockImplementation(async (path: string) => (path.startsWith('/preferences') ? []
+      : { key: 'companion.profile.v1', revision: 1, deleted: false, blob: true }));
+    await expect(client.hasProfileSnapshot(id(1))).resolves.toBe(true);
+    request.mockImplementation(async (path: string) => {
+      if (path.startsWith('/preferences')) return [];
+      throw Object.assign(new Error('NOT_FOUND'), { status: 404 });
+    });
+    await expect(client.hasProfileSnapshot(id(1))).resolves.toBe(false);
+    // A failed read is not "no profile": callers keep what they knew.
+    request.mockImplementation(async (path: string) => {
+      if (path.startsWith('/preferences')) return [];
+      throw Object.assign(new Error('UNAVAILABLE'), { status: 503 });
+    });
+    await expect(client.hasProfileSnapshot(id(1))).rejects.toThrow('UNAVAILABLE');
   });
 
   it('sends compare-and-set and returns a typed conflict', async () => {

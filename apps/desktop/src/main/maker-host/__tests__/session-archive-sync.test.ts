@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import Database from 'better-sqlite3';
 import { createSessionArchiveSync, prepareArchiveSessions, type ArchiveSessionRow } from '../session-archive-sync.js';
-import { projectNativeSessionMetadata } from '../native-session-metadata.js';
 import { setCurrentDbClient, clearCurrentDbClient } from '../../localDb/client/current.js';
 import type { DbClient } from '../../localDb/client/DbClient.js';
 
@@ -150,25 +149,5 @@ describe('task archive projection', () => {
     f.sync.mockImplementationOnce(async () => { f.assertCurrent.mockImplementation(() => { throw new Error('changed'); }); });
     await f.coordinator.request();
     expect(f.sync).toHaveBeenCalledTimes(1);
-  });
-
-  it.each(['cc', 'codex'] as const)('overlays %s archive and project scope onto CLI scan results', async kind => {
-    const f = fixture(); f.insert('task', kind, 'archived', 'native');
-    const candidate = { id: 'native', cwd: '/old-project', archived: false };
-    expect(await projectNativeSessionMetadata(kind, [candidate])).toEqual([
-      { ...candidate, archived: true, cwd: '/project', workspaceKind: 'project', extraDirs: ['/reference'], writableDirs: ['/output'] },
-    ]);
-    f.db.prepare("UPDATE sessions SET status='active'").run();
-    expect(await projectNativeSessionMetadata(kind, [{ ...candidate, archived: true }])).toEqual([
-      expect.objectContaining({ archived: false }),
-    ]);
-    f.db.prepare("UPDATE sessions SET status='deleted'").run();
-    expect(await projectNativeSessionMetadata(kind, [candidate])).toEqual([candidate]);
-  });
-
-  it('does not overlay another harness or SSH task with an identical native ID', async () => {
-    const f = fixture(); f.insert('cc', 'cc', 'archived', 'same'); f.insert('remote', 'codex', 'archived', 'same', 'ssh');
-    const candidate = { id: 'same', cwd: '/cli', archived: false };
-    expect(await projectNativeSessionMetadata('codex', [candidate])).toEqual([candidate]);
   });
 });

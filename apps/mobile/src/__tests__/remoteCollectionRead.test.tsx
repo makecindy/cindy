@@ -1,3 +1,4 @@
+import { stackState, reduceStack } from './navigationFixture';
 // @vitest-environment jsdom
 import { act, createElement } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -53,6 +54,7 @@ vi.mock('@/utils/useGuardedPush', () => ({ useGuardedPush: () => h.push }));
 vi.mock('@/device-link/focusedTopicSubscription', () => ({ startFocusedTopicSubscription: () => () => {} }));
 vi.mock('@/device-link/remoteResourceAvailability', async (original) => ({ ...await original<typeof import('@/device-link/remoteResourceAvailability')>(), isRemoteResourceHostOnline: () => true, readRemoteCollectionCache: () => [], writeRemoteCollectionCache: () => {} }));
 vi.mock('@/device-link/remoteResourceCache', () => ({
+  peekRemoteResourceSnapshot: () => null,
   cacheRemoteResourceItems: vi.fn(), readRemoteResourceSnapshot: async () => ({ items: {} }),
   isRemoteResourceUnread: () => true, markRemoteResourceRead: h.markRead,
   subscribeRemoteResourceCache: () => () => {}, remoteResourceCacheRevision: () => 0,
@@ -82,11 +84,11 @@ it.each(['index', 'devices/index'])('migrates the retired collection by returnin
   h.params.collectionId = 'teammates';
   const router = StackRouter({ initialRouteName: name });
   const options = { routeNames: [name, 'resources/[collectionId]'], routeParamList: {}, routeGetIdList: {}, routeKeyChanges: [] };
-  let state = router.getInitialState(options);
+  let state = stackState(options, name);
   const home = state.routes[0];
-  state = router.getStateForAction(state, StackActions.push('resources/[collectionId]', { collectionId: 'teammates' }), options)! as typeof state;
+  state = reduceStack(router, state, StackActions.push('resources/[collectionId]', { collectionId: 'teammates' }), options);
   h.routes = state.routes;
-  h.dismiss.mockImplementationOnce(count => { state = router.getStateForAction(state, StackActions.pop(count), options)! as typeof state; });
+  h.dismiss.mockImplementationOnce(count => { state = reduceStack(router, state, StackActions.pop(count), options); });
   const container = document.createElement('div');
   const root = createRoot(container);
   try {

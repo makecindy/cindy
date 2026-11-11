@@ -6,6 +6,7 @@ import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { chatGroupView, createChatServerClient, type ChatSnapshot } from '@/chat/chatServerClient';
+import { createChatInviteShares } from '@/chat/chatInviteShare';
 const h = vi.hoisted(() => ({ api: null as any, enabled: true, uuid: 0 }));
 vi.mock('expo-crypto', () => ({ randomUUID: () => `operation-${++h.uuid}` }));
 vi.mock('@/chat/useChatServer', () => ({ useChatClient: () => h.api }));
@@ -17,15 +18,21 @@ let result: ReturnType<typeof useBotGroupSettingsManagement>;
 let candidates: ReturnType<typeof useCloudGroupCandidates>;
 let source: ReturnType<typeof chatGroupView>;
 const request = vi.fn();
+const shareFetch = vi.fn();
+const shareId = 'b'.repeat(32), shareBase = 'https://share.example.invalid';
 const writes = () => request.mock.calls.filter(call => call[1] === 'POST' || call[1] === 'PATCH');
 function Probe() { result = useBotGroupSettingsManagement(source, h.enabled); candidates = useCloudGroupCandidates(h.enabled); return null; }
 async function render() { root ??= createRoot(document.createElement('div')); await act(async () => root!.render(createElement(Probe))); }
 function api(owner = 'account-1') {
-  return { owner, enabled: true, current: () => h.api.owner === owner, client: createChatServerClient(request) };
+  const current = () => h.api.owner === owner;
+  const shares = createChatInviteShares({ baseUrl: () => shareBase, region: 'global', realm: 'global', current, apiFetch: shareFetch });
+  return { owner, enabled: true, current, client: createChatServerClient(request, undefined, undefined, shares) };
 }
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 beforeEach(() => {
   vi.clearAllMocks(); h.enabled = true; h.uuid = 0;
+  shareFetch.mockResolvedValue({ schemaVersion: 1, kind: 'chat-invite', includeAttribution: true,
+    shareId, url: `${shareBase}/chat-invite/${shareId}` });
   snapshot = { room: { id: id(1), name: 'Group', description: 'Original', kind: 'group', archived: false, revision: 4,
     response_mode: 'all', speaking_mode: 'auto', created_at: '2026-10-01', updated_at: '2026-10-01' }, cursor: '1', messages: [], members: [
     { id: id(2), kind: 'human', ownerActorId: id(2), ownerName: '', name: 'Me', avatar: null, state: 'joined', role: 'owner' },
@@ -52,9 +59,12 @@ beforeEach(() => {
 afterEach(() => { act(() => root?.unmount()); root = undefined; });
 
 it('reads and saves cloud settings and offers offline companions without any host connection', async () => {
+  // The chat page knows where your teammate runs; the settings read alone does not.
+  source = chatGroupView({ snapshot, messages: [], before: null }, id(2), [{ id: id(3), kind: 'bot', externalId: 'bot', name: 'Bot', avatar: null, homeDeviceId: 'pc' }]);
   await render();
   expect(result.editable).toBe(true);
   expect(result.group).toMatchObject({ description: 'Original', singleSpeaker: true });
+  expect(result.group?.members.find(member => member.actorId === id(3))?.homeDeviceId).toBe('pc');
   expect(candidates.rows.map(row => row.id)).toEqual([id(4)]);
   await act(async () => { await result.act('update', { name: 'Renamed', description: 'Shared background', replyMode: 'mentioned', organizerBotId: id(3) }); });
   expect(writes()[0]).toEqual([`/conversations/${id(1)}`, 'PATCH', { operationId: 'operation-1', expectedRevision: 4, name: 'Renamed', description: 'Shared background', responseMode: 'mentioned', organizerId: id(3) }, id(2)]);
@@ -72,12 +82,42 @@ it.each(['member', 'guest'] as const)('keeps %s read-only based on account membe
   expect(result.reason).toBe('permission');
   await expect(result.act('update', { name: 'Denied' })).rejects.toThrow('PERMISSION_DENIED');
   expect(writes()).toHaveLength(0);
+  // Your own nickname and teammates are written as yourself, never through a manager.
+  await act(async () => { await result.act('nickname', { actorId: id(2), nickname: ' Nana ' }); await result.act('add-member', { actorId: id(4) }); });
+  expect(writes().map(call => [call[0], call[2], call[3]])).toEqual([
+    [`/conversations/${id(1)}/nickname`, { operationId: 'operation-1', actorId: id(2), nickname: 'Nana' }, undefined],
+    [`/conversations/${id(1)}/members`, { operationId: 'operation-2', actorId: id(4), action: 'invite' }, undefined],
+  ]);
+});
+
+it('lets an ordinary member save notifications without a manager or online computer, and refreshes personal changes', async () => {
+  snapshot.members[0].role = 'member';
+  snapshot.reads = [{ thread_key: 'main', read_seq: '7', muted: false, notification_scope: null }];
+  const original = request.getMockImplementation()!;
+  request.mockImplementation(async (path, method, body, actor) => {
+    if (path === '/me') return { actor: { id: id(2), kind: 'human' }, capabilities: { groupNotificationSettings: 1 } };
+    if (path.endsWith('/read') && method === 'POST') {
+      expect(actor).toBeUndefined();
+      snapshot.reads![0].notification_scope = body.notificationMode;
+      return { readSeq: '7', muted: false, notificationScope: body.notificationMode };
+    }
+    return original(path, method, body, actor);
+  });
+  await render();
+  expect(result.editable).toBe(false);
+  await act(async () => { await result.act('notifications', { mode: 'mentions' }); });
+  expect(writes()).toEqual([[`/conversations/${id(1)}/read`, 'POST', { operationId: 'operation-1', readSeq: '0', notificationMode: 'mentions' }]]);
+  expect(result.group?.notificationMode).toBe('mentions');
+  snapshot.reads[0].muted = true;
+  source = { ...source, notificationMode: 'none' };
+  await render();
+  expect(result.group?.notificationMode).toBe('none');
 });
 
 it('selects only an owned manager, never a foreign owner', async () => {
   snapshot.members[0].role = 'member'; snapshot.members[1].role = 'admin';
   snapshot.members.push({ ...snapshot.members[0], id: id(9), ownerActorId: id(9), role: 'owner' });
-  await render(); await act(async () => { await result.act('add-member', { botId: id(4) }); });
+  await render(); await act(async () => { await result.act('remove-member', { actorId: id(4) }); });
   expect(writes()[0][3]).toBe(id(3));
 });
 
@@ -152,4 +192,61 @@ it('discards account and closed-sheet read results and never revives their autho
   expect(result.group).toBeUndefined(); expect(result.editable).toBe(false);
   await expect(oldAct('update', { name: 'Late' })).rejects.toThrow('PERMISSION_DENIED');
   expect(writes()).toHaveLength(0);
+});
+
+// Unit regression for #8386: the real settings hook must publish the manager's invite
+// through the share service; the former deep-link expectation missed this contract.
+it('creates an invite link as the manager and rejects a malformed token', async () => {
+  await render();
+  const token = 'A'.repeat(43);
+  request.mockImplementationOnce(async () => ({ token, expiresAt: null, reusable: true }));
+  let link: Awaited<ReturnType<typeof result.invite>> = null;
+  await act(async () => { link = await result.invite(); });
+  expect(link).toEqual({ link: `${shareBase}/chat-invite/${shareId}`, expiresAt: null, reusable: true });
+  expect(shareFetch).toHaveBeenCalledExactlyOnceWith('/api/shares', expect.objectContaining({
+    body: expect.objectContaining({ reference: id(1), token, actorId: id(2), authRealm: 'global' }),
+  }));
+  expect(writes().at(-1)?.slice(0, 2)).toEqual([`/conversations/${id(1)}/invite-links`, 'POST']);
+  expect(writes().at(-1)?.[3]).toBe(id(2));
+  request.mockImplementationOnce(async () => ({ token: 'short', expiresAt: null, reusable: true }));
+  await act(async () => { await expect(result.invite()).rejects.toThrow('CHAT_RESPONSE_INVALID'); });
+  expect(shareFetch).toHaveBeenCalledTimes(1);
+});
+
+// #9459: a share acknowledgement can be lost after the invite was created.
+// Unit: the real settings hook/client must retry the original server receipt;
+// the earlier creation test covered only success and malformed invite responses.
+it('reuses an invitation receipt after a lost share response and clears it after success', async () => {
+  await render();
+  const invite = { token: 'A'.repeat(43), expiresAt: null, reusable: true };
+  request.mockResolvedValueOnce(invite);
+  shareFetch.mockRejectedValueOnce(new Error('share-response-lost'));
+  await act(async () => { await expect(result.invite()).rejects.toThrow('share-response-lost'); });
+  const first = writes().at(-1)!;
+  request.mockResolvedValueOnce(invite);
+  await act(async () => { await expect(result.invite()).resolves.toMatchObject({ link: `${shareBase}/chat-invite/${shareId}` }); });
+  expect(writes().at(-1)).toEqual(first);
+  expect(shareFetch.mock.calls.map(([, options]) => options.body.token)).toEqual([invite.token, invite.token]);
+  request.mockResolvedValueOnce({ ...invite, token: 'B'.repeat(43) });
+  await act(async () => { await result.invite(); });
+  expect(writes().at(-1)?.[2].operationId).not.toBe(first[2].operationId);
+});
+
+it.each(['account', 'group', 'manager'] as const)('does not reuse an uncertain invitation across a changed %s', async scope => {
+  await render();
+  const invite = { token: 'A'.repeat(43), expiresAt: null, reusable: true };
+  shareFetch.mockRejectedValue(new Error('share-offline'));
+  request.mockResolvedValueOnce(invite);
+  await act(async () => { await expect(result.invite()).rejects.toThrow('share-offline'); });
+  const first = writes().at(-1)!;
+  if (scope === 'account') h.api = api('account-2');
+  if (scope === 'group') snapshot.room.id = id(5);
+  if (scope === 'manager') { snapshot.members[0].role = 'member'; snapshot.members[1].role = 'admin'; }
+  source = chatGroupView({ snapshot, messages: [], before: null }, id(2));
+  await render();
+  request.mockResolvedValueOnce(invite);
+  await act(async () => { await expect(result.invite()).rejects.toThrow('share-offline'); });
+  expect(writes().at(-1)?.[2].operationId).not.toBe(first[2].operationId);
+  expect(writes().at(-1)?.[0]).toBe(`/conversations/${scope === 'group' ? id(5) : id(1)}/invite-links`);
+  expect(writes().at(-1)?.[3]).toBe(scope === 'manager' ? id(3) : id(2));
 });

@@ -24,7 +24,7 @@ function session(id: string, patch: Partial<MobileHomeSessionLike> = {}): Mobile
 }
 
 describe('Cindy Make home visibility', () => {
-  it.each(['zh-CN', 'zh-TW', 'en', 'ja', 'ko'])('hides Cindy Make rows in grouped and flat home views (%s)', async (locale) => {
+  it.each(['zh-CN', 'zh-TW', 'en', 'ja', 'ko', "es", "fr", "de", "pt-PT", "pt-BR"])('hides Cindy Make rows in grouped and flat home views (%s)', async (locale) => {
     await i18n.changeLanguage(locale);
     const home = buildMobileHomePresentation({
       sessions: [

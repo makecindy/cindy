@@ -1,11 +1,12 @@
 //! Main-only taskbar bridge. Electron 41 always resizes overlays to 16 physical
-//! pixels; pass the original DPI-sized image to the Shell instead.
+//! pixels; pass the original DPI-sized image to the Shell instead. Also sets an
+//! owned window's light/dark mode, which tints its Windows 11 system backdrop.
 use napi::bindgen_prelude::Buffer;
 use napi_derive::napi;
 use windows::{
     core::{w, PCWSTR},
     Win32::{
-        Foundation::{HWND, RPC_E_CHANGED_MODE},
+        Foundation::{BOOL, HWND, POINT, RECT, RPC_E_CHANGED_MODE},
         System::{
             Com::{
                 CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
@@ -13,11 +14,16 @@ use windows::{
             },
             Threading::GetCurrentProcessId,
         },
+        Graphics::{
+            Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE},
+            Gdi::{GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST},
+        },
         UI::{
             Shell::{ITaskbarList3, TaskbarList},
             WindowsAndMessaging::{
                 CreateIconFromResourceEx, DestroyIcon, GetWindowThreadProcessId, IsWindow,
-                RegisterWindowMessageW, HICON, LR_DEFAULTCOLOR,
+                RegisterWindowMessageW, GetCursorPos, GetWindowRect, SetWindowPos, HICON, LR_DEFAULTCOLOR,
+                SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
             },
         },
     },
@@ -119,6 +125,65 @@ pub fn set_overlay_icon(
     }
 }
 
+// Keep drag geometry in physical pixels. Electron's DIP bounds round-trip is
+// not idempotent at fractional DPI, even when the logical size is held fixed.
+#[napi(object)]
+pub struct WindowDragOffset {
+    pub x: i32,
+    pub y: i32,
+}
+
+#[napi]
+pub fn window_drag_offset(handle: Buffer) -> napi::Result<WindowDragOffset> {
+    let window = window_from_bytes(&handle)?;
+    let mut cursor = POINT::default();
+    let mut bounds = RECT::default();
+    unsafe {
+        GetCursorPos(&mut cursor).map_err(failure)?;
+        GetWindowRect(window, &mut bounds).map_err(failure)?;
+    }
+    Ok(WindowDragOffset { x: cursor.x - bounds.left, y: cursor.y - bounds.top })
+}
+
+#[napi]
+pub fn move_window_at_cursor(handle: Buffer, offset_x: i32, offset_y: i32) -> bool {
+    let Ok(window) = window_from_bytes(&handle) else { return false; };
+    let mut cursor = POINT::default();
+    let mut bounds = RECT::default();
+    unsafe {
+        if GetCursorPos(&mut cursor).is_err() || GetWindowRect(window, &mut bounds).is_err() {
+            return false;
+        }
+        let x = cursor.x - offset_x;
+        let mut y = cursor.y - offset_y;
+        let monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
+        let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+        if GetMonitorInfoW(monitor, &mut info).as_bool() {
+            y = y.max(info.rcWork.top);
+        }
+        if x == bounds.left && y == bounds.top { return true; }
+        SetWindowPos(window, HWND::default(), x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE).is_ok()
+    }
+}
+
+// The Acrylic/Mica system backdrop takes its tint from the window's own
+// light/dark mode. Electron derives that from the Windows setting, so a dark
+// Cindy theme on light Windows would otherwise show a white-tinted backdrop.
+#[napi]
+pub fn set_window_dark_mode(handle: Buffer, dark: bool) -> bool {
+    let Ok(window) = window_from_bytes(&handle) else { return false; };
+    let value = BOOL::from(dark);
+    unsafe {
+        DwmSetWindowAttribute(
+            window,
+            DWMWA_USE_IMMERSIVE_DARK_MODE,
+            (&value as *const BOOL).cast(),
+            std::mem::size_of::<BOOL>() as u32,
+        )
+        .is_ok()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,5 +227,6 @@ mod tests {
         assert!(png_size(&nonsquare).is_err());
         assert!(window_from_bytes(&[0]).is_err());
         assert!(window_from_bytes(&[0; std::mem::size_of::<usize>()]).is_err());
+        assert!(!set_window_dark_mode(Buffer::from(vec![0; std::mem::size_of::<usize>()]), true));
     }
 }

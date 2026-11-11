@@ -18,6 +18,7 @@ import {
 } from '@/session/composerDocument';
 import { composerNodesForBoundedPlainTextPaste } from '@/session/composerPaste';
 import { buildComposerRichInputHtml, type ComposerRichInputTheme } from '@/session/composerRichInputHtml';
+import type { ComposerTextScrollEdge } from '@/session/composerResize';
 import { COMPOSER_SINGLE_LINE_HEIGHT } from '@/session/composerTextMetrics';
 import {
   parseComposerWebMessage,
@@ -26,9 +27,11 @@ import {
 import { COMPOSER_PASTED_IMAGE_FILE_PREFIX } from '@/session/pastedImageAttachment';
 import { registerMobileMessageWebView } from '@/session/mobileMessageWebViewMetrics';
 import { useComposerWebViewRecovery } from '@/session/useComposerWebViewRecovery';
+import { Gesture, GestureDetector } from '@/platform/gestureHandler';
 
 export interface ComposerRichInputHandle {
-  expand?(): void;
+  /** WebView read barrier; validates the caller's scope before acknowledging the draft. */
+  flushDocument?(isCurrent?: () => boolean): Promise<ComposerDocument>;
   getSelection(draft: string): ComposerSelection;
   rememberSelection(draft: string, selection: { start: number; end: number }): void;
   applyDocumentAndSetSelectionToEnd(document: ComposerDocument): void;
@@ -59,6 +62,8 @@ export interface ComposerRichInputProps {
   onPasteImages?: (uris: string[]) => void;
   onPasteImagesLoadFailed?: () => void;
   onPasteImagesLoading?: (count: number) => void;
+  /** 文字滚到了哪一端；按在文字上上下拖动时据此决定滚动还是调高输入框。 */
+  onScrollEdgeChange?: (edge: ComposerTextScrollEdge) => void;
   opticalPadding?: boolean;
   placeholder: string;
   resolveSessionLinkLabel?: (href: string) => Promise<ResolvedSessionLinkSemantic | null>;
@@ -67,6 +72,9 @@ export interface ComposerRichInputProps {
 }
 
 interface PendingImagePaste {
+  // Acceptance belongs to this start event, not to props when FileReader finishes.
+  deliver: ComposerRichInputProps['onPasteImages'];
+  fail: ComposerRichInputProps['onPasteImagesLoadFailed'];
   expectedCount: number;
   settledIndexes: Set<number>;
   urisByIndex: Map<number, string>;
@@ -90,6 +98,7 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
     onPasteImages,
     onPasteImagesLoadFailed,
     onPasteImagesLoading,
+    onScrollEdgeChange,
     opticalPadding = true,
     placeholder,
     resolveSessionLinkLabel,
@@ -117,6 +126,22 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
     /** 尚未交接给附件上传 hook 的 WebView 粘贴缓存文件。 */
     const pendingPastedImageFilesRef = useRef(new Set<string>());
     const disposedRef = useRef(false);
+    const snapshotSequenceRef = useRef(0);
+    const pendingSnapshotRef = useRef<{
+      requestId: number;
+      documentId: number;
+      isCurrent?: () => boolean;
+      resolve(document: ComposerDocument): void;
+      reject(error: Error): void;
+      timer: ReturnType<typeof setTimeout>;
+    } | null>(null);
+    const rejectSnapshot = useCallback(() => {
+      const pending = pendingSnapshotRef.current;
+      if (!pending) return;
+      pendingSnapshotRef.current = null;
+      clearTimeout(pending.timer);
+      pending.reject(new Error('COMPOSER_SNAPSHOT_UNAVAILABLE'));
+    }, []);
     const initialConfigRef = useRef({
       accessibilityLabel,
       document,
@@ -157,16 +182,17 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
       webViewRef.current?.injectJavaScript(`try { ${script} } catch (_) {} true;`);
     }, []);
     const recovery = useComposerWebViewRecovery(inject, () => {
+      rejectSnapshot();
       readyRef.current = false;
       pendingFocusRef.current = false;
       if (pendingDocumentRef.current) pendingDocumentRef.current.focusAfter = false;
-      const failedPastes = pendingImagePastesRef.current.size;
+      const failedPastes = [...pendingImagePastesRef.current.values()];
       pendingImagePastesRef.current.clear();
       pendingImagePasteOrderRef.current = [];
       const pendingUris = [...pendingPastedImageFilesRef.current];
       pendingPastedImageFilesRef.current.clear();
       if (pendingUris.length > 0) void deleteComposerPastedImageUris(pendingUris);
-      for (let i = 0; i < failedPastes; i += 1) onPasteImagesLoadFailed?.();
+      for (const batch of failedPastes) batch.fail?.();
       onBlur?.();
     }, () => readyRef.current);
     const { generation, current: currentGeneration } = recovery;
@@ -179,6 +205,7 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
       if (Platform.OS === 'android') webViewRef.current?.requestFocus();
     }, [inject]);
     const applyDocument = useCallback((value: ComposerDocument, focusAfter = false, caret?: { nodeIndex: number; offset: number }) => {
+      rejectSnapshot();
       if (value !== webDocumentRef.current.document && selectionRef.current?.atomRange) selectionRef.current = null;
       const documentId = webDocumentRef.current.id + 1;
       webDocumentRef.current = { document: value, draft: composerDocumentProjectedText(value), id: documentId };
@@ -188,7 +215,7 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
       }
       inject(`window.cindyComposer.applyDocument(${JSON.stringify(value)}, ${focusAfter}, ${JSON.stringify(caret) ?? 'null'}, ${documentId});`);
       if (focusAfter && Platform.OS === 'android') webViewRef.current?.requestFocus();
-    }, [inject]);
+    }, [inject, rejectSnapshot]);
 
     useEffect(() => {
       // A native edit may advance again before React commits its previous
@@ -207,6 +234,16 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
     useEffect(() => {
       if (!forwardedRef) return undefined;
       const handle: ComposerRichInputHandle = {
+        flushDocument: (isCurrent) => {
+          if (!readyRef.current || disposedRef.current) return Promise.reject(new Error('COMPOSER_SNAPSHOT_UNAVAILABLE'));
+          rejectSnapshot();
+          return new Promise<ComposerDocument>((resolve, reject) => {
+            const requestId = ++snapshotSequenceRef.current;
+            pendingSnapshotRef.current = { requestId, documentId: webDocumentRef.current.id, isCurrent,
+              resolve, reject, timer: setTimeout(rejectSnapshot, 3000) };
+            inject(`window.cindyComposer.snapshot(${requestId});`);
+          });
+        },
         getSelection: (draft) => {
           const saved = selectionRef.current;
           return saved?.draft === draft
@@ -261,7 +298,7 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
         if (typeof forwardedRef === 'function') forwardedRef(null);
         else forwardedRef.current = null;
       };
-    }, [applyDocument, focusEditor, forwardedRef, inject]);
+    }, [applyDocument, focusEditor, forwardedRef, inject, rejectSnapshot]);
 
     const persistPastedImage = useCallback(async (
       message: Extract<ComposerWebMessage, { type: 'paste-image' }>,
@@ -300,24 +337,25 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
         const uris = [...batch.urisByIndex.entries()]
           .sort(([left], [right]) => left - right)
           .map(([, uri]) => uri);
-        if (uris.length > 0 && onPasteImages) {
+        if (uris.length > 0 && batch.deliver) {
           // 所有权在调用前转交上传 hook；后续成功 / 失败 / 取消由其负责清理。
           for (const uri of uris) pendingPastedImageFilesRef.current.delete(uri);
-          onPasteImages(uris);
+          batch.deliver(uris);
         } else {
           if (uris.length > 0) {
             for (const uri of uris) pendingPastedImageFilesRef.current.delete(uri);
             void deleteComposerPastedImageUris(uris);
           }
-          onPasteImagesLoadFailed?.();
+          batch.fail?.();
         }
       }
-    }, [onPasteImages, onPasteImagesLoadFailed]);
+    }, []);
 
     useEffect(() => {
       disposedRef.current = false;
       return () => {
         disposedRef.current = true;
+        rejectSnapshot();
         // sessionId 原地换代时 ComposerRichInput 会重挂载。旧实例的异步图片写盘即使
         // 随后落定，也不能再沿旧闭包调用新任务的 onPasteImages / load-failed；先摘掉
         // 批次登记，settlePastedImage 会把迟到结果视为已作废。
@@ -327,7 +365,7 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
         pendingPastedImageFilesRef.current.clear();
         if (pendingUris.length > 0) void deleteComposerPastedImageUris(pendingUris);
       };
-    }, []);
+    }, [rejectSnapshot]);
 
     const settlePastedImage = useCallback((
       requestId: string,
@@ -388,6 +426,7 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
       if (!message) return;
       if (message.type === 'pong') return recovery.onPong(message.id);
       if (message.type === 'ready') {
+        rejectSnapshot();
         recovery.onReady();
         readyRef.current = true;
         inject(`window.cindyComposer.setConfig(${JSON.stringify(runtimeConfig)});`);
@@ -408,16 +447,29 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
         }
         return;
       }
-      if (message.type === 'change') {
+      if (message.type === 'change' || message.type === 'snapshot') {
+        const pending = message.type === 'snapshot' ? pendingSnapshotRef.current : null;
+        if (message.type === 'snapshot') {
+          if (!pending || pending.requestId !== message.requestId) return;
+          // Cancellation can restore the caller's draft before its next render.
+          // Reject before touching editor state or invoking the persistence callback.
+          if (pending.isCurrent?.() === false) { rejectSnapshot(); return; }
+          if (message.pendingPaste || message.documentId !== pending.documentId) { rejectSnapshot(); return; }
+        }
         if ((message.documentId ?? 0) !== webDocumentRef.current.id) return;
         const next = parseStoredComposerDocument(message.document);
-        if (!next) return;
+        if (!next) { if (pending) rejectSnapshot(); return; }
         const normalized = normalizeComposerDocument(next);
+        if (pending) {
+          pendingSnapshotRef.current = null;
+          clearTimeout(pending.timer);
+        }
         if (selectionRef.current?.atomRange) selectionRef.current = null;
         webSignatureRef.current = JSON.stringify(normalized);
         webDocumentRef.current = { document: normalized, draft: composerDocumentProjectedText(normalized), id: webDocumentRef.current.id };
         localDocumentsRef.current.add(normalized);
         onChangeDocument(normalized);
+        pending?.resolve(normalized);
         return;
       }
       if (message.type === 'selection') {
@@ -437,6 +489,7 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
         }
         return;
       }
+      if (message.type === 'scroll-edge') return onScrollEdgeChange?.({ atTop: message.atTop, atBottom: message.atBottom });
       if (message.type === 'focus') return onFocus?.();
       if (message.type === 'blur') return onBlur?.();
       if (message.type === 'paste-text-request') {
@@ -445,12 +498,14 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
       }
       if (message.type === 'paste-images-start') {
         pendingImagePastesRef.current.set(message.requestId, {
+          deliver: onPasteImages,
+          fail: onPasteImages ? onPasteImagesLoadFailed : undefined,
           expectedCount: message.count,
           settledIndexes: new Set(),
           urisByIndex: new Map(),
         });
         pendingImagePasteOrderRef.current.push(message.requestId);
-        onPasteImagesLoading?.(Math.max(0, message.count));
+        if (onPasteImages) onPasteImagesLoading?.(Math.max(0, message.count));
         return;
       }
       if (message.type === 'paste-image-failed') {
@@ -472,12 +527,18 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
             }
           });
       }
-    }, [applyDocument, commitPlainTextPaste, focusEditor, hidden, inject, maxHeight, onBlur, onChangeDocument, onFocus, onHeightChange, onPasteImagesLoading, persistPastedImage, runtimeConfig, settlePastedImage, generation, currentGeneration, recovery.onPong, recovery.onReady]);
+    }, [applyDocument, commitPlainTextPaste, focusEditor, hidden, inject, maxHeight, onBlur, onChangeDocument, onFocus, onHeightChange, onPasteImages, onPasteImagesLoadFailed, onPasteImagesLoading, onScrollEdgeChange, persistPastedImage, runtimeConfig, settlePastedImage, generation, currentGeneration, recovery.onPong, recovery.onReady, rejectSnapshot]);
 
     const heightStyle = useAnimatedStyle(() => ({ height: animatedHeight?.value ?? height }));
+    // Android: a gesture that takes over (dragging the composer taller) only stops
+    // forwarding touches to native children; the WebView never sees ACTION_CANCEL and
+    // finishes the stale touch as a tap / scroll. Registering its frame as a native
+    // view lets RNGH send that cancel. UIKit already cancels touches on iOS.
+    const touchGesture = useMemo(() => Gesture.Native().enabled(Platform.OS === 'android'), []);
     return (
       // WebView's imperative ref is a command handle, not a Fabric host ref.
       // Animate its native View container and let the WebView fill that frame.
+      <GestureDetector gesture={touchGesture}>
       <Animated.View style={[styles.frame, heightStyle, { opacity: hidden ? 0 : 1 }]}>
       <WebView
         key={generation}
@@ -515,6 +576,7 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
         textInteractionEnabled
       />
       </Animated.View>
+      </GestureDetector>
     );
   },
 );

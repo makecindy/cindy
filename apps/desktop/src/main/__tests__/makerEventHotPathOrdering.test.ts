@@ -11,6 +11,10 @@ import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { ScriptTarget, transpileModule } from 'typescript';
 import type { AgentEvent } from '@cindy/maker-core';
+import {
+  rehydrateCloseSuppression,
+  withRehydrateCloseSuppressed,
+} from '../maker-host/rehydrateCloseSuppression.js';
 
 const sourcePath = resolve(__dirname, '..', 'maker-ipc', 'register.ts');
 const source = readFileSync(sourcePath, 'utf8').replace(/\r\n?/g, '\n');
@@ -409,11 +413,12 @@ describe('maker:event hot path ordering', () => {
     const started = new Promise<void>((resolve) => { releaseStart = resolve; });
     const waitForStart = vi.fn(() => started);
     const handleWorkerTerminalTurn = vi.fn(async (_terminal: { capture: unknown }) => undefined);
+    const noteWorkerProductTerminal = vi.fn();
     const finalize = new Function(
       'workerTurnStartSequencer',
       'orcaTeamServiceForEvents',
       `${js}\nreturn ${name};`,
-    )({ waitForStart }, { handleWorkerTerminalTurn }) as (
+    )({ waitForStart }, { handleWorkerTerminalTurn, noteWorkerProductTerminal }) as (
       sessionId: string,
       payload: unknown,
     ) => void;
@@ -423,6 +428,8 @@ describe('maker:event hot path ordering', () => {
     };
 
     finalize('worker-session', payload);
+    // Releasing a deferred failure closes A's report ownership before B can start.
+    expect(noteWorkerProductTerminal).toHaveBeenCalledExactlyOnceWith(capture);
     expect(waitForStart).toHaveBeenCalledWith('worker-session');
     expect(handleWorkerTerminalTurn).not.toHaveBeenCalled();
     releaseStart();
@@ -563,7 +570,7 @@ describe('maker:event hot path ordering', () => {
     expect(source).toContain(
       'const pendingContinuationOnlyAutoResumeRebuilds = new WeakMap<Session, number>();',
     );
-    expect(source).toContain('if (isAcceptedTurnContinuationOnlyReason(signals.reason)) {');
+    expect(source).toContain('if (isContinuationOnlyAutoResumeReason(signals.reason)) {');
     expect(source).toContain(
       'pendingContinuationOnlyAutoResumeRebuilds.set(runtimeSession, decision.attemptToken);',
     );
@@ -1125,7 +1132,7 @@ describe('maker:event hot path ordering', () => {
 
   it('pi subscription turns estimate value from the shared reference-price helper', () => {
     const wireSessionSource = readEventModule('sessionPiTurnUsage');
-    const piDoneIndex = wireSessionSource.indexOf("event.type === 'done' && event.source === 'pi'");
+    const piDoneIndex = wireSessionSource.indexOf("if ((event.type === 'done' || (identified && isTerminalAgentErrorEvent(event))) && event.source === 'pi')");
     expect(piDoneIndex).toBeGreaterThanOrEqual(0);
     const piDoneSource = wireSessionSource.slice(piDoneIndex);
     expect(piDoneSource).toContain(
@@ -1139,7 +1146,7 @@ describe('maker:event hot path ordering', () => {
     expect(piDoneSource).toContain(': getReferenceModelPricing();');
     expect(piDoneSource).toContain("getSubscriptionValuePriceFor('pi', model, pricing)");
     expect(piDoneSource).toContain(
-      'const pricingSegments = piSegmentsReliable ? group.segments : [];',
+      "? group.segments.filter(segment => !segment.id?.startsWith('pi-unattributed:')) : [];",
     );
     expect(piDoneSource).toContain('money = resolveTurnCost({');
     expect(piDoneSource).toContain('segments: pricingSegments,');
@@ -1148,19 +1155,19 @@ describe('maker:event hot path ordering', () => {
     );
     expect(piDoneSource).toContain('money ?? unpricedSubscriptionValueMarker()');
     expect(piDoneSource).toContain('money: modelRowMoney,');
-    expect(piDoneSource).toContain('if (actualMoney)');
+    expect(piDoneSource).toContain('if (actualMoney && !identified)');
     expect(piDoneSource).toContain('await recordSchedulerTurnCost({');
     // 消息 / 调度落库失败同样落进 catch:兜底只补写正常分支尚未发起的模型组,
     // 不重放已写过的用量(否则任务与模型用量翻倍)。
-    expectOrder(piDoneSource, 'recordedModels.add(model);', 'modelWrites.push(');
+    expectOrder(piDoneSource, 'recordedModels.add(model);', 'if (!identified) modelWrites.push(');
     expect(piDoneSource).toMatch(
-      /\[\.\.\.groupedSegments\]\s*\.filter\(\(\[model\]\) => !recordedModels\.has\(model\)\)\s*\.map\(/,
+      /\(identified \? \[\] : \[\.\.\.groupedSegments\]\)\s*\.filter\(\(\[model\]\) => !recordedModels\.has\(model\)\)\s*\.map\(/,
     );
   });
 
   it('records Claude subscription quota events only while the native login is connected', () => {
     const listenerSource = usageSource.match(
-      /setClaudeRateLimitInfoListener\(\(info\) => \{[\s\S]*?\n {2}\}\);/,
+      /setClaudeRateLimitInfoListener\(\(info, account\) => \{[\s\S]*?\n {2}\}\);/,
     )?.[0];
     expect(listenerSource).toBeTruthy();
     if (!listenerSource) return;
@@ -1420,5 +1427,63 @@ describe('session context window budget reconciler', () => {
     );
     expect(desktopSend).toContain('applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId)');
     expect(desktopSend).toContain('replayPendingSessionContextWindowBudgetUnderLock(sessionId)');
+  });
+
+  it('runs drift-recycle closes inside the rehydrate suppression window so the in-flight send survives (cancelled-before-dispatch regression)', async () => {
+    // 2026-11-08 实报:openspec init 后每个存量会话首条消息必失败一次 —— 漂移回收的
+    // close 在抑制窗口外执行,onSessionClosed abort 了正在驱动这次回收的发送边界,
+    // session.send 拿到已 abort 的 signal 直接 cancelled-before-dispatch,手动重试
+    // 才过。回归锚点:发送事务的 closeSessionIfCurrent 依赖必须包在
+    // withRehydrateCloseSuppressed 里,且 close adapters 的 preserve 读数仍来自
+    // 同一个抑制表(机制层契约见 agent-input-coordinator #1930 用例)。
+    const start = source.indexOf('    closeSessionIfCurrent: async (sessionId) => {');
+    const end = source.indexOf('    getSessionMeta: (sessionId) => maker.getSessionMeta(sessionId),', start);
+    if (start < 0 || end < 0) throw new Error('send-transaction closeSessionIfCurrent source changed');
+    // 整条语句切片转译(loadBudgetReconciler 同型):直接转译表达式会带语句分号,截断 return 包装。
+    const js = transpileModule(
+      `const closeSessionIfCurrent = { ${source.slice(start, end)} };`,
+      { compilerOptions: { target: ScriptTarget.ES2022 } },
+    ).outputText;
+    const closeCalls: Array<[{ id: string }, string]> = [];
+    let suppressedDuringClose: boolean | null = null;
+    const maker = {
+      getSession: (sessionId: string) => ({ id: sessionId }),
+      closeSessionIfCurrent: async (session: { id: string }, reason: string) => {
+        suppressedDuringClose = rehydrateCloseSuppression.isSuppressed(session.id);
+        closeCalls.push([session, reason]);
+      },
+    };
+    const closeSessionIfCurrent = new Function(
+      'maker',
+      'withRehydrateCloseSuppressed',
+      `${js}; return closeSessionIfCurrent.closeSessionIfCurrent;`,
+    )(maker, withRehydrateCloseSuppressed) as (sessionId: string) => Promise<void>;
+
+    await closeSessionIfCurrent('drift-task');
+    expect(closeCalls).toEqual([[{ id: 'drift-task' }, 'runtime-refresh']]);
+    // close await 期间抑制窗口开着:close adapters 的 shouldPreserveInputBoundary
+    // 读到 true → 在途发送边界不被 abort,事务继续 lazy bootstrap 投递。
+    expect(suppressedDuringClose).toBe(true);
+    expect(rehydrateCloseSuppression.isSuppressed('drift-task')).toBe(false);
+
+    // send_to_session 通道的同型直发点(独立于发送事务 deps)也必须包在抑制窗口内。
+    const laneStart = source.indexOf('async function sendToSessionInternal');
+    const driftStart = source.indexOf(
+      "if (live?.agentKind === 'pi' && live.hasRecyclableProjectResourceDrift()) {",
+      laneStart,
+    );
+    const driftEnd = source.indexOf('live = undefined;', driftStart);
+    expect(driftStart).toBeGreaterThan(laneStart);
+    const driftBlock = source.slice(driftStart, driftEnd);
+    expect(driftBlock).toContain('withRehydrateCloseSuppressed(targetSessionId');
+
+    // 消费端:close adapters 的边界保留读数必须仍指向抑制表(两条直发点共用)。
+    const adaptersStart = source.indexOf(
+      'const sessionBindings = createSessionBindingLifecycle<WiredSession, WiredSessionCloseContext>({',
+    );
+    const adaptersEnd = source.indexOf('beforeCloseTeardown:', adaptersStart);
+    expect(source.slice(adaptersStart, adaptersEnd)).toContain(
+      'shouldPreserveInputBoundary: () => rehydrateCloseSuppression.isSuppressed(session.id)',
+    );
   });
 });

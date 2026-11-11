@@ -47,3 +47,9 @@ Additional finishing prompts (built-in image_gen):
 
 - *-palm-v2.webp: three equal edge-to-edge blank material samples (platinum ABS / graphite ABS / black soft-touch rubber), subtle fine grain with diffuse lighting, no gradients, controls, logos or borders. Each sample is extracted separately and covers the palmrest without stretching grain.
 - powerbook-control-cutout.webp: preserve the photographed trackball and two curved buttons, remove all surrounding palmrest and the gap between controls to true transparency; retain shapes, rim and lighting.
+
+## Decks redrawn for the classic layout (2026-11-02)
+
+Generated with GPT Image 2.5 Flare, 1536×1024, to replace the rail / keys / palm slices. Prompt direction: photoreal exact orthographic top view of the keyboard base filling the frame, top band with period detail at the ends only, one recessed EMPTY keyboard well with straight edges and a flat uniform floor, plain palm rest with the machine's pointing control centred; no keys, labels, logos or UI. Materials: Macintosh II platinum with Snow White grooves and trackpad; PowerBook 170 graphite with hinges and trackball; ThinkPad 701C matte black with two red-lined buttons; classic ivory with brown well and trackpad, shared by the classic, compact and edge skins.
+
+`*-control.webp` is the pointing control cropped from each source with a feathered edge. `*-deck.webp` has it covered with neighbouring palm material, so the control can stay undistorted and clear of the toolbar. Well floors measured for `DECK_WELLS`: classic `(58,179)–(1487,594)`, Macintosh II `(48,169)–(1490,640)`, PowerBook `(71,148)–(1475,560)`, ThinkPad `(62,153)–(1482,593)`.

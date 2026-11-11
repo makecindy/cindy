@@ -1,3 +1,4 @@
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -128,23 +129,10 @@ const group = (
   childItems,
 });
 
-function containerPreview() {
-  return document.querySelector('[data-live-work-preview]')?.parentElement?.parentElement;
-}
-
 function clickGroup(label: string) {
   const button = screen.getByText(label).closest('button');
   if (!button) throw new Error(`Missing work-group button: ${label}`);
   fireEvent.click(button);
-  // The outgoing preview now retains its rows until its height transition ends.
-  // Finish that real production lifecycle event instead of counting both the
-  // exiting preview and expanded details, or waiting on a wall-clock fallback.
-  for (const preview of document.querySelectorAll('[data-live-work-preview]')) {
-    const body = preview.parentElement;
-    if (body?.getAttribute('aria-hidden') === 'true') {
-      fireEvent.transitionEnd(body.parentElement!, { propertyName: 'height' });
-    }
-  }
 }
 
 // #6351: production grouping feeds the real disclosure/Collapse/state store.
@@ -163,7 +151,7 @@ function samplingTimeline(input: RenderItem[], streaming: boolean) {
   };
   return createElement('div', null, ...groupWorkRuns(input, streaming).map(item => {
     if (item.type === 'work_group') return createElement('section', { key: item.key, 'data-testid': item.key },
-      createElement(WorkGroupBlock, { blockId: `work:${item.key.slice('work-'.length)}`, isStreaming: item.isStreaming,
+      createElement(WorkGroupBlock, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES, blockId: `work:${item.key.slice('work-'.length)}`, isStreaming: item.isStreaming,
         durationMs: item.durationMs, childItems: item.children.map(blockChild) }));
     if (item.type === 'message') return createElement('p', { key: item.key, 'data-testid': item.key }, item.message.content);
     throw new Error('Unexpected sampling fixture item');
@@ -262,7 +250,7 @@ describe('failed sampling work-group disclosure (#6351)', () => {
 
 describe('WorkGroupBlock — running latest-five preview', () => {
   it('keeps teammate execution collapsed while streaming and preserves explicit expansion at completion', async () => {
-    const props = { compact: true, blockId: 'work:bot-public', isStreaming: true,
+    const props = { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES, compact: true, blockId: 'work:bot-public', isStreaming: true,
       childItems: [rendered('progress', 'Checking the market'),
         tools('tools', [mkTool('search')], new Map([['search', 'original error evidence']]), new Set(['search']))] };
     const { rerender, container } = render(createElement(WorkGroupBlock, props));
@@ -282,7 +270,7 @@ describe('WorkGroupBlock — running latest-five preview', () => {
   it('keeps lazy teammate history load and retry controls reachable without a live preview', () => {
     const setVisible = vi.fn();
     const retry = vi.fn();
-    const props = { compact: true, blockId: 'work:bot-lazy', isStreaming: true, childItems: [],
+    const props = { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES, compact: true, blockId: 'work:bot-lazy', isStreaming: true, childItems: [],
       deferred: { owner: {}, key: 'range', expanded: false, loading: false, failed: true,
         toggle: vi.fn(), retry, setVisible } };
     render(createElement(WorkGroupBlock, props));
@@ -293,41 +281,46 @@ describe('WorkGroupBlock — running latest-five preview', () => {
   });
 
   it('rebinds visible detail interest when the Host changes without changing the group key', () => {
-    const first = vi.fn();
-    const second = vi.fn();
+    const firstRelease = vi.fn();
+    const secondRelease = vi.fn();
+    const first = vi.fn(() => firstRelease);
+    const second = vi.fn(() => secondRelease);
     const deferred = (owner: object, setVisible: typeof first) => ({ owner, key: 'range',
       expanded: false, loading: false, failed: false, toggle: vi.fn(), retry: vi.fn(), setVisible });
     const props = { blockId: 'work:same-key', isStreaming: true,
       childItems: [tools('tools', Array.from({ length: 6 }, (_, index) => mkTool(`t${index}`)))] };
-    const { rerender, unmount } = render(createElement(WorkGroupBlock, { ...props, deferred: deferred({}, first) }));
+    const { rerender, unmount } = render(createElement(WorkGroupBlock, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES, ...props, deferred: deferred({}, first) }));
     expect(first).toHaveBeenLastCalledWith(false, true);
     expect(screen.getAllByTestId('direct-tool')).toHaveLength(5);
     clickGroup('chat.workGroup.working');
     expect(first).toHaveBeenLastCalledWith(true, true);
-    rerender(createElement(WorkGroupBlock, { ...props, deferred: deferred({}, second) }));
-    expect(first).toHaveBeenLastCalledWith(false, false);
+    expect(firstRelease).toHaveBeenCalledTimes(1);
+    rerender(createElement(WorkGroupBlock, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES, ...props, deferred: deferred({}, second) }));
+    expect(firstRelease).toHaveBeenCalledTimes(2);
     expect(second).toHaveBeenLastCalledWith(true, true);
     unmount();
-    expect(second).toHaveBeenLastCalledWith(false, false);
+    expect(secondRelease).toHaveBeenCalledOnce();
   });
 
   it('keeps an outer summary independent from inner detail visibility and remembers the inner toggle', async () => {
-    const setVisible = vi.fn();
+    const release = vi.fn();
+    const setVisible = vi.fn(() => release);
     const child: WorkGroupChild = { kind: 'group', key: 'inner', blockId: 'work:inner', durationMs: 1000,
       isStreaming: false, childItems: [tools('tools', [mkTool('inside')])],
       deferred: { owner: {}, key: 'range', expanded: false, loading: false, failed: false, toggle: vi.fn(), retry: vi.fn(), setVisible } };
-    render(createElement(WorkGroupBlock, { blockId: 'work:summary', durationMs: 3000,
+    render(createElement(WorkGroupBlock, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES, blockId: 'work:summary', durationMs: 3000,
       childItems: [rendered('progress', 'Checking'), child] }));
     expect(setVisible).not.toHaveBeenCalled();
     clickGroup('chat.workGroup.worked:3s');
-    expect(setVisible).toHaveBeenLastCalledWith(false, false);
+    expect(setVisible).toHaveBeenLastCalledWith(false, true);
     expect(screen.queryByTestId('direct-tool')).toBeNull();
     clickGroup('chat.workGroup.worked:1s');
-    expect(setVisible).toHaveBeenLastCalledWith(true, false);
+    expect(setVisible).toHaveBeenLastCalledWith(true, true);
     clickGroup('chat.workGroup.worked:3s');
-    await waitFor(() => expect(setVisible).toHaveBeenLastCalledWith(false, false));
+    await waitFor(() => expect(release).toHaveBeenCalledTimes(2));
     clickGroup('chat.workGroup.worked:3s');
-    await waitFor(() => expect(setVisible).toHaveBeenLastCalledWith(true, false));
+    await waitFor(() => expect(setVisible).toHaveBeenCalledTimes(3));
+    expect(setVisible).toHaveBeenLastCalledWith(true, true);
   });
 
   it('keeps the latest five tools/reasoning rows in chronological order and drops empty thinking', async () => {
@@ -344,7 +337,7 @@ describe('WorkGroupBlock — running latest-five preview', () => {
     expect(activities.some((activity) => activity.key === 'empty')).toBe(false);
 
     render(
-      createElement(WorkGroupBlock, {
+      createElement(WorkGroupBlock, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         blockId: 'work:t1',
         isStreaming: true,
         childItems: children,
@@ -366,7 +359,7 @@ describe('WorkGroupBlock — running latest-five preview', () => {
 
   it('renders one reasoning row that updates in place as the same block receives deltas', () => {
     const { rerender } = render(
-      createElement(WorkGroupBlock, {
+      createElement(WorkGroupBlock, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         blockId: 'work:t1',
         isStreaming: true,
         childItems: [thinking(mkThinking('th1', '**inspecting**'))],
@@ -376,7 +369,7 @@ describe('WorkGroupBlock — running latest-five preview', () => {
     expect(screen.queryByText('**inspecting**')).toBeNull();
 
     rerender(
-      createElement(WorkGroupBlock, {
+      createElement(WorkGroupBlock, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         blockId: 'work:t1',
         isStreaming: true,
         childItems: [thinking(mkThinking('th1', '**inspecting the renderer**'))],
@@ -389,7 +382,7 @@ describe('WorkGroupBlock — running latest-five preview', () => {
 
   it('continues updating an expanded live reasoning row as deltas arrive', () => {
     const { rerender } = render(
-      createElement(WorkGroupBlock, {
+      createElement(WorkGroupBlock, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         blockId: 'work:t1',
         isStreaming: true,
         childItems: [thinking(mkThinking('th1', 'initial\nreasoning'))],
@@ -402,7 +395,7 @@ describe('WorkGroupBlock — running latest-five preview', () => {
     expect(thinkingButton.getAttribute('aria-expanded')).toBe('true');
 
     rerender(
-      createElement(WorkGroupBlock, {
+      createElement(WorkGroupBlock, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         blockId: 'work:t1',
         isStreaming: true,
         childItems: [thinking(mkThinking('th1', 'initial reasoning\nwith more detail'))],
@@ -427,7 +420,7 @@ describe('WorkGroupBlock — running latest-five preview', () => {
     };
 
     const { rerender } = render(
-      createElement(WorkGroupBlock, {
+      createElement(WorkGroupBlock, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         blockId: 'work:exec-1',
         isStreaming: true,
         childItems: [tools('seg-1', [command])],
@@ -439,7 +432,7 @@ describe('WorkGroupBlock — running latest-five preview', () => {
     expect(rows.map((row) => row.getAttribute('data-intent'))).toEqual(['read', 'search']);
 
     rerender(
-      createElement(WorkGroupBlock, {
+      createElement(WorkGroupBlock, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         blockId: 'work:exec-1',
         isStreaming: false,
         durationMs: 4_000,
@@ -456,7 +449,7 @@ describe('WorkGroupBlock — running latest-five preview', () => {
       thinking(mkThinking('th1', 'checking the\ncurrent state')),
     ];
     const { rerender } = render(
-      createElement(WorkGroupBlock, {
+      createElement(WorkGroupBlock, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         blockId: 'work:t1',
         isStreaming: true,
         childItems,
@@ -491,7 +484,7 @@ describe('WorkGroupBlock — running latest-five preview', () => {
     expect(document.querySelector('[data-live-work-preview="true"]')).toBeTruthy();
 
     rerender(
-      createElement(WorkGroupBlock, {
+      createElement(WorkGroupBlock, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         blockId: 'work:t1',
         isStreaming: false,
         durationMs: 12_000,
@@ -502,8 +495,6 @@ describe('WorkGroupBlock — running latest-five preview', () => {
     const doneButton = screen.getByText('chat.workGroup.worked:12s').closest('button');
     expect(doneButton?.hasAttribute('disabled')).toBe(false);
     expect(doneButton?.querySelector('svg.lucide-chevron-right')).toBeTruthy();
-    const outgoing = containerPreview();
-    if (outgoing) fireEvent.transitionEnd(outgoing, { propertyName: 'height' });
     expect(screen.queryByTestId('direct-tool')).toBeNull();
     clickGroup('chat.workGroup.worked:12s');
     expect(screen.getByTestId('direct-tool').textContent).toBe('git status');
@@ -512,7 +503,7 @@ describe('WorkGroupBlock — running latest-five preview', () => {
 
   it('shares thinking expansion state between the live preview and full work-group view', () => {
     render(
-      createElement(WorkGroupBlock, {
+      createElement(WorkGroupBlock, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         blockId: 'work:t1',
         isStreaming: true,
         childItems: [
@@ -553,7 +544,7 @@ describe('WorkGroupBlock — running latest-five preview', () => {
     expandMemory.setExpanded('work:t1', true);
     expandMemory.setExpanded('thinking:th1', true);
     render(
-      createElement(WorkGroupBlock, {
+      createElement(WorkGroupBlock, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         blockId: 'work:t1',
         durationMs: 2_000,
         childItems: [
@@ -574,7 +565,7 @@ describe('WorkGroupBlock — running latest-five preview', () => {
 
   it('keeps the toggle while running when expansion can reveal more than the preview', () => {
     render(
-      createElement(WorkGroupBlock, {
+      createElement(WorkGroupBlock, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         blockId: 'work:t1',
         isStreaming: true,
         childItems: [
@@ -612,7 +603,7 @@ describe('WorkGroupBlock — running latest-five preview', () => {
       ]),
     ];
     const first = render(
-      createElement(WorkGroupBlock, {
+      createElement(WorkGroupBlock, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         blockId: 'work:t1',
         isStreaming: true,
         childItems,
@@ -624,7 +615,7 @@ describe('WorkGroupBlock — running latest-five preview', () => {
     first.unmount();
 
     render(
-      createElement(WorkGroupBlock, {
+      createElement(WorkGroupBlock, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         blockId: 'work:t1',
         isStreaming: true,
         childItems,
@@ -643,7 +634,7 @@ describe('WorkGroupBlock — running latest-five preview', () => {
   it('falls back to live preview when collapsing restored full details', async () => {
     expandMemory.setExpanded('work:t1', true);
     render(
-      createElement(WorkGroupBlock, {
+      createElement(WorkGroupBlock, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         blockId: 'work:t1',
         isStreaming: true,
         childItems: [
@@ -669,7 +660,7 @@ describe('WorkGroupBlock — running latest-five preview', () => {
 
   it('keeps outer assistant text visible while nested actions need one more expansion', () => {
     render(
-      createElement(WorkGroupBlock, {
+      createElement(WorkGroupBlock, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         blockId: 'work:summary-t1',
         durationMs: 20_000,
         childItems: [
@@ -696,7 +687,7 @@ describe('WorkGroupBlock — running latest-five preview', () => {
 
   it('expands multi-line thinking from its compact single-line row', () => {
     render(
-      createElement(WorkGroupBlock, {
+      createElement(WorkGroupBlock, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         blockId: 'work:t1',
         durationMs: 3_000,
         childItems: [thinking(mkThinking('th1', 'first line\nsecond line'))],
@@ -715,7 +706,7 @@ describe('WorkGroupBlock — running latest-five preview', () => {
 
   it('always reserves the 18px trailing chevron slot on thinking rows', () => {
     render(
-      createElement(WorkGroupBlock, {
+      createElement(WorkGroupBlock, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         blockId: 'work:t1',
         isStreaming: true,
         childItems: [
@@ -745,7 +736,7 @@ describe('WorkGroupBlock — running latest-five preview', () => {
   it('drops empty thinking and renders redacted thinking directly', () => {
     const redacted = { ...mkThinking('hidden', ''), thinkingRedacted: true };
     render(
-      createElement(WorkGroupBlock, {
+      createElement(WorkGroupBlock, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         blockId: 'work:t1',
         childItems: [thinking(mkThinking('empty', '')), thinking(redacted)],
       }),
@@ -759,7 +750,7 @@ describe('WorkGroupBlock — running latest-five preview', () => {
 
   it('marks result/settled tools done and only unresolved tools running', () => {
     render(
-      createElement(WorkGroupBlock, {
+      createElement(WorkGroupBlock, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         blockId: 'work:t1',
         isStreaming: true,
         childItems: [
@@ -785,21 +776,21 @@ describe('WorkGroupBlock — Host-projected running lines', () => {
   });
   const placeholder = thinking({ ...mkThinking('placeholder', ''), thinkingRedacted: true });
 
-  it('renders Host lines without asking for the detail preview, and a line opens the group', () => {
+  it('renders Host lines, and a line opens the group', () => {
     const remote = deferred([
       { kind: 'tool', key: 'c1', toolName: 'exec', status: 'done',
         descriptor: { kind: 'command', toolName: 'exec', command: 'pnpm test', intent: { action: 'test' } } },
       { kind: 'thinking', key: 'c2', text: 'Checking the failing case' },
     ]);
-    const { container } = render(createElement(WorkGroupBlock, {
+    const { container } = render(createElement(WorkGroupBlock, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
       blockId: 'work:remote', isStreaming: true, childItems: [placeholder], deferred: remote,
     }));
-    expect(remote.setVisible).toHaveBeenLastCalledWith(false, false);
+    expect(remote.setVisible).toHaveBeenLastCalledWith(false, true);
     expect(container.querySelector('[data-live-work-preview]')).not.toBeNull();
     expect(screen.getByTestId('direct-tool').getAttribute('data-descriptor')).toBe('command');
     expect(screen.getByText('Checking the failing case')).toBeTruthy();
     fireEvent.click(screen.getByTestId('direct-tool'));
-    expect(remote.setVisible).toHaveBeenLastCalledWith(true, false);
+    expect(remote.setVisible).toHaveBeenLastCalledWith(true, true);
   });
 
   it('keeps the Host lines on screen after expanding until detail rows arrive', () => {
@@ -808,7 +799,7 @@ describe('WorkGroupBlock — Host-projected running lines', () => {
       blockId: 'work:remote-hold', isStreaming: true,
       childItems: [rendered('detail', 'Every detail row')],
     };
-    const { container, rerender } = render(createElement(WorkGroupBlock, {
+    const { container, rerender } = render(createElement(WorkGroupBlock, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
       ...props, deferred: { ...deferred(lines), awaitingDetails: true },
     }));
     clickGroup('chat.workGroup.working');
@@ -816,23 +807,20 @@ describe('WorkGroupBlock — Host-projected running lines', () => {
     expect(screen.getByText('Checking the failing case')).toBeTruthy();
     expect(screen.queryByTestId('assistant-progress')).toBeNull();
     // The detail body is already open, so the handoff below swaps rows without replaying its expansion.
-    const body = container.querySelector('[data-live-work-preview]')?.parentElement?.parentElement?.nextElementSibling;
+    const body = container.querySelector('.grid');
     expect(body).not.toBeNull();
 
-    rerender(createElement(WorkGroupBlock, {
+    rerender(createElement(WorkGroupBlock, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
       ...props, deferred: { ...deferred(lines), awaitingDetails: false },
     }));
-    const exiting = containerPreview();
-    if (exiting) fireEvent.transitionEnd(exiting, { propertyName: 'height' });
     expect(container.querySelector('[data-live-work-preview]')).toBeNull();
-    expect(body?.isConnected).toBe(true);
-    expect(body?.contains(screen.getByTestId('assistant-progress'))).toBe(true);
+    expect(container.querySelector('.grid')).toBe(body);
     expect(screen.getByTestId('assistant-progress').textContent).toBe('Every detail row');
   });
 
   it('keeps the detail preview for a Host that sends no lines', () => {
     const remote = deferred();
-    render(createElement(WorkGroupBlock, {
+    render(createElement(WorkGroupBlock, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
       blockId: 'work:remote-old', isStreaming: true, childItems: [placeholder], deferred: remote,
     }));
     expect(remote.setVisible).toHaveBeenLastCalledWith(false, true);

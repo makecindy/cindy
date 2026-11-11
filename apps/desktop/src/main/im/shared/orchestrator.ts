@@ -72,7 +72,7 @@ const registry = new Map<string, ImOrchestrator>();
 // routing from the saved channel identity, without creating/resuming a session.
 onChannelTurn(async (session, phase, source) => {
   if (phase !== 'starting') return;
-  if (source === 'provider-wake') {
+  if (source === 'provider-wake' || source === 'provider-wake-local') {
     // No send precedes a harness wake-up: its first event fans out right after this synchronous
     // call. Only output already wired for a channel can be marked in time; a cold route restored
     // after the row query would relay from mid-turn, so it is not attempted. Same admission as
@@ -168,7 +168,7 @@ export function createImOrchestrator(
         : acquirePendingAgentSwitchForDirectSend(sessionId),
     channelDefaultRoute: defaultRouteSync,
     // 发送前故障恢复与桌面直发同源；健康上下文交给 Session 原生压缩。
-    prepareUnhealthySession: (sessionId) => prepareUnhealthySessionForSend(sessionId),
+    prepareUnhealthySession: async (sessionId) => { await prepareUnhealthySessionForSend(sessionId); },
     // 伙伴自有连接: 消息落在伙伴的主任务 / 隐藏专线上。
     ...(options.companionBotId
       ? { companion: createImCompanionRouteDeps(options.companionBotId) }

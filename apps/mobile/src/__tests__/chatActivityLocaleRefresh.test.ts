@@ -86,6 +86,8 @@ describe('message activity wording refreshes with app language', () => {
       + statements('MarkdownBodyBase', ['renderInlines', 'renderTextRunBlock'])
       + '; return createElement(Block, { render: renderTextRunBlock }); };';
     const Markdown = compile(code, { ...bindings, Block, i18n, Text, MessageBodyText: Text,
+      // Keep native span imports bound in this DOM-only locale harness.
+      MarkdownSelectableSpan: Text, UITextView: Text,
       styles: {}, layout: { markdownBodyGap: 0 }, selectable: false, spanFor: () => undefined,
       onOpenSessionLink: undefined, openMarkdownImage: undefined, openMarkdownMedia: undefined,
       renderManagedImage: undefined, sessionLinkTitles: {}, streaming: false,

@@ -26,7 +26,7 @@ function pageCallback(name: string, bindings: Record<string, unknown>) {
 it.each([false, true])('atomically applies a selected slash command while queue editing=%s', (editing) => {
   const apply = vi.fn(); const placeCaret = vi.fn(); const focus = vi.fn();
   const bindings = { pendingSkillSelectionRef: { current: null }, sessionId: 's1', draftRef: { current: '/he' },
-    composerDocumentRef: { current: textComposerDocument('/he') }, queueEditingRef: { current: editing },
+    composerDocumentRef: { current: textComposerDocument('/he') }, queueEditingRef: { current: editing }, messageEditingRef: { current: null },
     composerInputRef: { current: { applyDocumentAndSetSelectionToEnd: placeCaret, focus } },
     applyComposerDocument: apply, detectComposerTrigger, replaceComposerTextRange, slashCommandTextNode };
   pageCallback('selectSlashCommand', bindings)({ name: 'help', kind: 'agent-skill' });
@@ -258,7 +258,9 @@ describe('mobile composer rich input HTML', () => {
         detach(node);
         return node;
       },
+      clientHeight: 264,
       scrollHeight: 0,
+      scrollTop: 0,
       setAttribute() {},
       style: {
         paddingBottom: '',
@@ -353,6 +355,7 @@ describe('mobile composer rich input HTML', () => {
       cindyComposer?: {
         applyDocument(value: unknown, focusAfter?: boolean, caret?: { nodeIndex: number; offset: number }): void;
         commitPaste(requestId: string, nodes: unknown[]): void;
+        snapshot(requestId: number): void;
         setConfig(value: { maxHeight: number }): void;
       };
       getSelection(): typeof selection;
@@ -388,14 +391,37 @@ describe('mobile composer rich input HTML', () => {
     root.scrollHeight = 500;
     const beforeResize = messages.length;
     for (let frame = 0; frame < 100; frame += 1) onResize();
-    expect(messages.slice(beforeResize)).toEqual([{ type: 'height', height: 264 }]);
+    expect(messages.slice(beforeResize)).toEqual([
+      { type: 'height', height: 264 },
+      // Native decides from these edges whether a drag on the text scrolls or resizes.
+      { type: 'scroll-edge', atTop: true, atBottom: false },
+    ]);
+    const beforeScroll = messages.length;
+    root.scrollTop = 120;
+    listeners.get('scroll')?.();
+    root.scrollTop = 236;
+    listeners.get('scroll')?.();
+    listeners.get('scroll')?.();
+    expect(messages.slice(beforeScroll)).toEqual([
+      { type: 'scroll-edge', atTop: false, atBottom: false },
+      { type: 'scroll-edge', atTop: false, atBottom: true },
+    ]);
+    // Replacing the draft can reset scrollTop without a scroll event or a resize.
+    const beforeReplace = messages.length;
+    root.scrollTop = 0;
+    windowStub.cindyComposer?.applyDocument({ version: 1, nodes: [{ type: 'text', text: 'replaced' }] }, false);
+    expect(messages.slice(beforeReplace)).toContainEqual({ type: 'scroll-edge', atTop: true, atBottom: false });
     windowStub.cindyComposer?.setConfig({ maxHeight: 400 });
     expect(messages.at(-1)).toEqual({ type: 'height', height: 400 });
     root.scrollHeight = 80;
+    root.scrollTop = 0;
     const beforeContentShrink = messages.length;
     onResize();
     onResize();
-    expect(messages.slice(beforeContentShrink)).toEqual([{ type: 'height', height: 80 }]);
+    expect(messages.slice(beforeContentShrink)).toEqual([
+      { type: 'height', height: 80 },
+      { type: 'scroll-edge', atTop: true, atBottom: true },
+    ]);
     children[0].nodeValue = 'hello world';
     listeners.get('input')?.();
     expect(messages).toContainEqual({
@@ -406,7 +432,7 @@ describe('mobile composer rich input HTML', () => {
     listeners.get('compositionstart')?.();
     children[0].nodeValue = 'hello world composing';
     listeners.get('input')?.();
-    expect(messages).not.toContainEqual({
+    expect(messages).toContainEqual({
       type: 'change',
       document: { version: 1, nodes: [{ type: 'text', text: 'hello world composing' }] },
     });
@@ -439,8 +465,21 @@ describe('mobile composer rich input HTML', () => {
       { type: 'blur' },
     ]);
 
-    // IME completion may arrive on either side of blur. Keep preedit text
-    // private until completion/cancellation, then publish the final DOM once.
+    // #7508 / #7509, unit: visible preedit must reach native before Send.
+    // Earlier coverage deliberately withheld it. A snapshot must also work if
+    // input has not fired yet, without committing/cancelling the IME's DOM.
+    listeners.get('compositionstart')?.();
+    children[0].nodeValue = '자동완성 껐';
+    windowStub.cindyComposer?.snapshot(77);
+    expect(messages.at(-1)).toEqual({ type: 'snapshot', requestId: 77, documentId: 0,
+      document: textComposerDocument('자동완성 껐'), pendingPaste: false });
+    expect(children[0].nodeValue).toBe('자동완성 껐');
+    children[0].nodeValue = '자동완성 껐는데';
+    listeners.get('input')?.();
+    expect(messages.at(-1)).toEqual({ type: 'change', document: textComposerDocument('자동완성 껐는데') });
+
+    // Completion/cancellation can arrive on either side of blur. The native
+    // draft must follow the visible preedit and then the final DOM in both cases.
     for (const completion of ['compositionend', 'compositioncancel']) {
       for (const blurFirst of [false, true]) {
         windowStub.cindyComposer?.applyDocument({
@@ -451,10 +490,11 @@ describe('mobile composer rich input HTML', () => {
         listeners.get('compositionstart')?.();
         children[0].nodeValue = '草稿候选';
         listeners.get('input')?.();
-        expect(messages.slice(beforeComposition)).toEqual([]);
+        const preedit = { type: 'change', document: textComposerDocument('草稿候选') };
+        expect(messages.slice(beforeComposition)).toEqual([preedit]);
         if (blurFirst) {
           listeners.get('blur')?.();
-          expect(messages.slice(beforeComposition)).toEqual([{ type: 'blur' }]);
+          expect(messages.slice(beforeComposition)).toEqual([preedit, { type: 'blur' }]);
           expect(children[0].nodeValue).toBe('草稿候选');
         }
 
@@ -463,13 +503,13 @@ describe('mobile composer rich input HTML', () => {
         listeners.get(completion)?.();
         listeners.get('input')?.();
         if (!blurFirst) listeners.get('blur')?.();
-        const changes = completion === 'compositionend' ? [{
+        const changes = [{
           type: 'change',
           document: { version: 1, nodes: [{ type: 'text', text: finalText }] },
-        }] : [];
+        }];
         expect(messages.slice(beforeComposition)).toEqual(blurFirst
-          ? [{ type: 'blur' }, ...changes]
-          : [...changes, { type: 'blur' }]);
+          ? [preedit, { type: 'blur' }, ...changes]
+          : [preedit, ...changes, { type: 'blur' }]);
 
         // Completion must also unlock ordinary editing after refocusing.
         listeners.get('focus')?.();
@@ -657,6 +697,9 @@ describe('mobile composer rich input HTML', () => {
 
   it('rejects malformed image messages at the WebView boundary', () => {
     expect(parseComposerWebMessage(JSON.stringify({ type: 'paste-images-start', count: '2' }))).toBeNull();
+    expect(parseComposerWebMessage(JSON.stringify({ type: 'scroll-edge', atTop: true, atBottom: false })))
+      .toEqual({ type: 'scroll-edge', atTop: true, atBottom: false });
+    expect(parseComposerWebMessage(JSON.stringify({ type: 'scroll-edge', atTop: 'yes', atBottom: false }))).toBeNull();
     expect(parseComposerWebMessage(JSON.stringify({
       type: 'paste-images-start',
       requestId: 'images-1',

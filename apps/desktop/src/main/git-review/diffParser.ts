@@ -257,6 +257,13 @@ export function parseGitDiff(raw: string, opts: {
 
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i];
+    // Git prefixes hunk body lines, so a deleted "-- note" arrives as "--- note"
+    // and an added "++ x" as "+++ x". Those prefixes only mean a file header once
+    // the current hunk's line counts are used up.
+    const inHunkBody = current !== null && (
+      oldLine < current.oldStart + current.oldLines
+      || newLine < current.newStart + current.newLines
+    );
     if (line.startsWith('diff --git ')) {
       headerLines.push(line);
       continue;
@@ -294,7 +301,10 @@ export function parseGitDiff(raw: string, opts: {
       headerLines.push(line);
       continue;
     }
-    if (line.startsWith('--- ') || line.startsWith('+++ ') || line.startsWith('similarity index ')) {
+    if (
+      (!inHunkBody && (line.startsWith('--- ') || line.startsWith('+++ ')))
+      || line.startsWith('similarity index ')
+    ) {
       headerLines.push(line);
       continue;
     }

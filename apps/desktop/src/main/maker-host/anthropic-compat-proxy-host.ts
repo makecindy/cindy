@@ -17,6 +17,7 @@
  */
 
 import { createAttachmentRecovery } from './oversized-attachment-recovery.js';
+import { getSessionSubscriptionAccount } from '../subscription-accounts/session.js';
 import {
   createAnthropicCompatProxy,
   createActiveStripTransform,
@@ -24,9 +25,11 @@ import {
   createEmptyAssistantMessageRecoveryRule,
   createEmptyTextRecoveryRule,
   createEmptyThinkingRecoveryRule,
+  createAnthropicContextManagementRecoveryRule,
   createEncryptedContentRecoveryRule,
   createToolExchangeAdjacencyRecoveryRule,
   createToolUseProviderSpecificFieldsRecoveryRule,
+  createToolReferenceRecoveryRule,
   createXaiModelInputRecoveryRule,
   createXaiModelInputSanitizeTransform,
   createAnthropicEffortCompatibilityRule,
@@ -48,11 +51,12 @@ import { buildVisionBridgeProxyTransform } from '../vision-bridge/vision-bridge-
 
 import { CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY, anthropicCatalogModelIds, isAnthropicWireModel } from './claude-gateway-config.js';
 import { getActiveCatalog } from './active-catalog.js';
-import { providerModelRecord, modelWithInterface } from '@cindy/model-providers';
-import { outboundFetch } from './outbound-fetch.js';
+import { providerModelRecord, modelWithInterface, type Provider } from '@cindy/model-providers';
+import { outboundFetch } from './outbound-fetch.desktop.js';
 import { invocationModelRecord, requiresNativeProviderAuth } from './pi-provider-transport.js';
 import { createClaudeProviderBridge } from './claude-provider-bridge.js';
-import { isOpenAiSubscriptionProviderId } from './codex-account-auth.js';
+import { isOpenAiSubscriptionProviderId } from './codex-account-auth.desktop.js';
+import { createPiWebSocketRequestPreparer, resolvePiWebSocketUpstream, piWebSocketTransforms } from './pi-subscription-websocket.js';
 import { isClaudeSubscriptionProviderId, isXaiSubscriptionProviderId } from './subscription-account-auth.js';
 import {
   getPiNativeSubscriptionHandler,
@@ -85,6 +89,7 @@ import { getSessionProvider, hasHostedSessionModelAccess } from './session-provi
 import {
   GUEST_ROUTE_HEADER,
   guestProviderOffersModel,
+  guestProviderModelDenial,
   hostedProviderOffersModel,
   guestProviderRouteForSession,
   guestProviderRouteForToken,
@@ -102,7 +107,9 @@ import {
   resolvePendingSessionRouteDecision,
   resolveProviderRouteDecision,
   resolveSessionRouteDecision,
+  rewriteRequestBodyModel,
 } from './provider-route.js';
+import { configuredCustomModelId, routeLookupModelId } from './claude-model-id.js';
 import { createProviderUpstreamErrorObserver } from './provider-upstream-error-observer.js';
 import { createClaudeAutoClassifierFailureObserver } from './claude-auto-permission-fallback.js';
 import {
@@ -127,11 +134,13 @@ import { claudeUpstreamEndpoint } from './runtime-configs.js';
 import { readSilentEncryptedRetrySettings } from './silent-encrypted-retry-store.js';
 import {
   createClaudeSessionActivityResponseObserver,
+  isClaudeContextUsageProbeUrl,
   recordClaudeApiActivity,
 } from './claude-session-background-activity.js';
 import {
   authenticatePiProxySession,
   getPiProxySessionProvider,
+  getPiProxySubscriptionAccount,
   isPiProxySubagentRoute,
 } from './pi-proxy-session-auth.js';
 import { createXdToolResultImageNoticeTransform } from './xd-tool-result-image-notice.js';
@@ -152,8 +161,9 @@ let _readGatewayKey: () => string | null = () => null;
 function attachClaudeProviderBridge(route: RoutingDecision, providerId: string, wireModel: string, sessionId?: string): RoutingDecision {
   if (route.localHandler) return route;
   const provider = getActiveCatalog().providers.find(p => p.id === providerId);
-  const catalogModel = provider?.models['claude-code']?.find(m => m.id === wireModel);
-  const routing = provider ? (sessionId ? sessionProviderRoutingForModel(sessionId, provider, 'claude-code', wireModel) : providerRoutingForModel(provider, 'claude-code', wireModel)) : null;
+  const lookupModel = routeLookupModelId(provider, wireModel);
+  const catalogModel = provider?.models['claude-code']?.find(m => m.id === lookupModel);
+  const routing = provider ? (sessionId ? sessionProviderRoutingForModel(sessionId, provider, 'claude-code', lookupModel) : providerRoutingForModel(provider, 'claude-code', lookupModel)) : null;
   const model = catalogModel && modelWithInterface(catalogModel, routing?.modelInterface);
   // Adapter identity belongs to the declared route. An OAuth account can select
   // another host without becoming a different provider (e.g. Copilot Business).
@@ -186,7 +196,10 @@ function attachClaudeProviderBridge(route: RoutingDecision, providerId: string, 
         fast: sessionId ? getSessionFastMode(sessionId) : false },
     }) };
   }
-  return route;
+  // model-interface routes already pin their wire model; only plain custom routes need restoring
+  const configured = provider?.source === 'user' && !route.transformRequestBody
+    ? configuredCustomModelId(provider, wireModel) : null;
+  return configured ? { ...route, transformRequestBody: rewriteRequestBodyModel(configured) } : route;
 }
 
 export function setClaudeProxyGatewayKeyReader(fn: () => string | null): void {
@@ -694,7 +707,14 @@ export function createModelRoutingTransform(): RoutingTransform {
     if (piGuest && !piRequestStaysOnGuestProvider(piGuest, piProviderId, registeredPiProviderId)) {
       return refuseGuestProviderRoute(403, 'shared_provider_only', 'This request is outside the provider shared with you.');
     }
-    if (piGuest || hasHostedSessionModelAccess(piSessionId)) {
+    // Pi's native ChatGPT transport sends zstd JSON. The generic proxy keeps
+    // those bytes opaque; the native handler decodes and checks the live grant
+    // before forwarding. An unparsed compressed body is not a missing model.
+    const nativeCompressedPiRequest = piSessionId && piProviderId
+      && isOpenAiSubscriptionProviderId(piProviderId)
+      && ctx.headers['content-encoding']?.toLowerCase() === 'zstd'
+      && !isPlainObject(body);
+    if ((piGuest || hasHostedSessionModelAccess(piSessionId)) && !nativeCompressedPiRequest) {
       const providerId = piGuest?.providerId ?? piProviderId ?? selectedPiProviderId;
       // Check the live member grant before native handlers and all other Pi routing branches.
       // Google's native API puts the authoritative model in the URL instead of body.model.
@@ -717,6 +737,8 @@ export function createModelRoutingTransform(): RoutingTransform {
         if (!allowed) { deniedModel = model; break; }
       }
       if (requestModels.length === 0 || deniedModel !== undefined) {
+        const denial = piGuest && deniedModel ? guestProviderModelDenial(piGuest.sessionId, deniedModel, 'pi') : null;
+        if (denial) return refuseGuestProviderRoute(403, denial.code, denial.message);
         return piGuest ? refuseGuestForeignRoute(deniedModel ?? '')
           : refuseGuestProviderRoute(403, 'remote_model_not_allowed', 'This model is not available for this remote task.');
       }
@@ -726,7 +748,8 @@ export function createModelRoutingTransform(): RoutingTransform {
         // PI has already built the provider-native request. The local handler
         // authenticates and forwards it; the xAI forwarder also restores its
         // provider server tools, but no Claude protocol bridge runs.
-        localHandler: getPiNativeSubscriptionHandler(piProviderId, piSessionId),
+        localHandler: getPiNativeSubscriptionHandler(piProviderId, piSessionId, undefined,
+          getPiProxySubscriptionAccount(piSessionId, claimedPiSessionToken)),
       };
     }
     const isPiGatewayRequest = Boolean(
@@ -746,13 +769,16 @@ export function createModelRoutingTransform(): RoutingTransform {
     // 都记一笔活动时刻。routingTransform 会处理无 body 控制面请求与 JSON 请求；
     // 非 JSON 的 POST/PUT/PATCH 不经过这里,由响应侧 observer 兜底观察活动。
     // 开销 = 一次 header 读 + 一次活跃会话表反解 + Map.set,非 per-token 路径。
+    // count_tokens 上下文用量探测不算活动(#8671):/context 卡片触发的计量请求
+    // 不生成 token,计入会把查用量误点亮成「后台子任务运行中」;判据与响应侧
+    // observer 用同一处导出,两边必须一致。
     const sdkSessionId = ctx.headers['x-claude-code-session-id'];
     const ccSessionId = sdkSessionId && _resolveCcSessionId
       ? _resolveCcSessionId(sdkSessionId)
       : null;
     // 受邀者的托管会话不在活跃会话表里：会话由路由令牌的登记给出。
     const sessionId = piSessionId ?? (guest ? guest.sessionId : ccSessionId);
-    if (sdkSessionId) {
+    if (sdkSessionId && !isClaudeContextUsageProbeUrl(ctx.url)) {
       recordClaudeApiActivity(
         sdkSessionId,
         ccSessionId,
@@ -819,7 +845,8 @@ export function createModelRoutingTransform(): RoutingTransform {
       fastIdentities.set(ctx.headers, { sessionId, providerId: bridgeProviderId });
       const denied = authorizeClaudeRoute(bridgeProviderId, bridgedSubscriptionModel(wireModel));
       if (denied) return denied;
-      const bridgeHandler = getResponsesBridgeHandler((isOpenAiSubscriptionProviderId(selectedProviderId) || isXaiSubscriptionProviderId(selectedProviderId)) ? selectedProviderId! : undefined);
+      const bridgeHandler = getResponsesBridgeHandler((isOpenAiSubscriptionProviderId(selectedProviderId) || isXaiSubscriptionProviderId(selectedProviderId)) ? selectedProviderId! : undefined,
+        bridgeProviderId === 'openai' ? getSessionSubscriptionAccount(sessionId) : undefined);
       if (!bridgeHandler) {
         if (isExclusiveXaiModelId(wireModel)) {
           log.warn('exclusive xAI model but responses handler unavailable; refusing default gateway', {
@@ -895,7 +922,10 @@ export function createModelRoutingTransform(): RoutingTransform {
       // wireModel 传给 scope 门:cc 内部辅助调用(权限 auto 分类器等 claude-* 小模型请求)
       // 不在订阅直连供应商(xai / openai-cc)声明的 modelPrefixes 范围内 → 返回 null,
       // 落到下方 ② 段 spawn 默认路由,分类器照常走网关/直连(issue #886)。
-      const perSession = resolveSessionRouteDecision(sessionId, requestAgent, gatewayKey, wireModel);
+      const routeModel = requestAgent === 'claude-code'
+        ? routeLookupModelId(getActiveCatalog().providers.find(p => p.id === selectedProviderId), wireModel)
+        : wireModel;
+      const perSession = resolveSessionRouteDecision(sessionId, requestAgent, gatewayKey, routeModel);
       const recordSelectedRoute = (route: RoutingDecision | null): RoutingDecision | null => {
         if (route) {
           const denied = authorizeClaudeRoute(selectedProviderId);
@@ -1134,7 +1164,10 @@ export function createModelRoutingTransform(): RoutingTransform {
           : refuseGuestProviderRoute(403, 'shared_provider_only', 'This request is outside the provider shared with you.');
       }
       const wireModel = typeof body.model === 'string' ? body.model : '';
-      if (!await guestProviderOffersModel(guest.providerId, 'claude-code', wireModel, guest.sessionId)) return refuseGuestForeignRoute(wireModel);
+      if (!await guestProviderOffersModel(guest.providerId, 'claude-code', wireModel, guest.sessionId)) {
+        const denial = guestProviderModelDenial(guest.sessionId, wireModel, 'claude-code');
+        return denial ? refuseGuestProviderRoute(403, denial.code, denial.message) : refuseGuestForeignRoute(wireModel);
+      }
       return route(body, ctx, guest);
     };
     try {
@@ -1163,6 +1196,9 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
       // 函数形态:model-access 凭据同步可能在 proxy 启动(splash)后才把 endpoint
       // 换成下发值;每请求现取才能保证与当前 key 同租户(proxy 内部按值 memoize)。
       upstream: () => claudeUpstreamEndpoint(),
+      resolveWebSocketUpstream: resolvePiWebSocketUpstream,
+      prepareWebSocketRequest: createPiWebSocketRequestPreparer(),
+      webSocketTransforms: piWebSocketTransforms,
       oversizedRequestRecovery: createAttachmentRecovery(headers => {
         const piSessionId = headerValue(headers, 'x-cindy-pi-session-id');
         if (piSessionId) {
@@ -1304,6 +1340,7 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
           onRetry: (threadId, model) => emptyAssistantStripController.markActive(threadId, model),
         }),
         createToolUseProviderSpecificFieldsRecoveryRule(),
+        createToolReferenceRecoveryRule(),
         // tool 配对断裂 400(moonshot `tool_call_id is not found` / Anthropic
         // `unexpected tool_use_id` / `tool_use ids were found without tool_result`
         // / OpenAI 系 wording)→ 组合结构修复重发,always-on。
@@ -1322,6 +1359,7 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
         // output_config.effort 重发一次。只在该文本命中时生效,官方 Claude / 订阅直连
         // 不会返回它;能力未声明的模型本就不该收到客户端偏好(#4860 出站不变量)。
         createAnthropicEffortCompatibilityRule(),
+        createAnthropicContextManagementRecoveryRule(),
       ],
       logger: log,
       // 请求体 dump 默认关(dev trace 级别 + agent 高并发会刷爆 main event loop

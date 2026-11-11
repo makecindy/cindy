@@ -88,7 +88,7 @@ describe('project grouping structural reuse', () => {
     expect(select(withMessage, {})).toEqual(groupSessions(withMessage));
   });
 
-  it('invalidates aliases, persistent projects, bots, pin inclusion, insertion and removal', () => {
+  it('invalidates aliases, persistent projects, pin inclusion, insertion and removal', () => {
     const select = createProjectGroupsSelector();
     let sessions = fixtures();
     const options: GroupSessionsOptions[] = [
@@ -100,11 +100,6 @@ describe('project grouping structural reuse', () => {
           { workingDir: '/empty', lastUsedAt: '2026-09-20', knownAgentKinds: ['cc'] },
         ],
       },
-      {
-        botOwnerBySessionId: new Map([
-          ['task-1', { botId: 'bot', displayName: 'Bot', avatar: '', avatarColor: '' }],
-        ]),
-      },
     ];
     for (const option of options) {
       expect(select(sessions, option)).toEqual(groupSessions(sessions, option));
@@ -115,7 +110,7 @@ describe('project grouping structural reuse', () => {
     expect(select(sessions, {})).toEqual(groupSessions(sessions));
   });
 
-  it('reuses equivalent persistent catalogues while retaining fresh pinned, dialogue and bot rows', () => {
+  it('reuses equivalent persistent catalogues while retaining fresh pinned and dialogue rows', () => {
     const select = createProjectGroupsSelector();
     const sessions = fixtures();
     sessions[1] = { ...sessions[1], workspaceKind: 'dialogue' };
@@ -124,9 +119,6 @@ describe('project grouping structural reuse', () => {
       persistentLocalProjects: [
         { workingDir: '/empty', lastUsedAt: '2026-09-01', knownAgentKinds: ['cc'] },
       ],
-      botOwnerBySessionId: new Map([
-        ['task-2', { botId: 'b', displayName: 'Bot', avatar: '', avatarColor: '' }],
-      ]),
     };
     const before = select(sessions, options);
     const next = sessions.map((s, i) =>
@@ -139,7 +131,6 @@ describe('project grouping structural reuse', () => {
     expect(after).toEqual(groupSessions(next, options));
     expect(after.pinned[0]).toBe(next[0]);
     expect(after.dialogues[0]).toBe(next[1]);
-    expect(after.bots[0].sessions[0]).toBe(next[2]);
     expect(after.projects.filter((p, i) => p === before.projects[i]).length).toBeGreaterThan(20);
   });
 });
@@ -228,7 +219,7 @@ describe('project grouping projection', () => {
     }
   });
 
-  it('invalidates aliases, platform, pinned/draft policy, persistent projects and bot ownership', () => {
+  it('invalidates aliases, platform, pinned/draft policy and persistent projects', () => {
     const rows = [session('a')];
     const select = createProjectGroupsSelector();
     const policies: GroupSessionsOptions[] = [
@@ -242,18 +233,9 @@ describe('project grouping projection', () => {
           { workingDir: '/empty', lastUsedAt: '2026-09-01T00:00:00Z', knownAgentKinds: ['pi'] },
         ],
       },
-      {
-        botOwnerBySessionId: new Map([
-          ['a', { botId: 'bot', displayName: 'Bot', avatar: 'star', avatarColor: 'blue' }],
-        ]),
-      },
     ];
     for (const options of policies)
       expect(select(rows, options)).toEqual(groupSessions(rows, options));
-    const options = policies.at(-1)!;
-    const updated = [{ ...rows[0], title: 'bot row update' }];
-    expect(select(updated, options)).toEqual(groupSessions(updated, options));
-    expect(select(updated, options).bots[0].sessions[0]).toBe(updated[0]);
   });
 
   // Main's structural reuse must not retain old project names when only the host snapshot changes.
@@ -281,6 +263,28 @@ describe('project grouping projection', () => {
     const members = [local, ssh];
     expect(select(rows, { remoteProjectAliases, projectAliasMembers: members }).projects[0].displayName).toBe('repo');
     expect(select(rows, { remoteProjectAliases, projectAliasMembers: rows }).projects[0].displayName).toBe('Local alias');
+  });
+
+  // #7469, unit: equal-sized alias arrays can change identity even when the
+  // displayed rows do not. Existing coverage only added/removed members.
+  it.each<Partial<Session>>([
+    { remoteHostId: null },
+    { workingDir: '/elsewhere' },
+    { deviceLinkDeviceId: 'another-device' },
+    { workspaceKind: 'dialogue' },
+    { status: 'deleted' },
+    { orcaRole: 'worker' },
+  ])('refreshes alias eligibility for an out-of-filter member change %j', (patch) => {
+    const local = session('same-id', { deviceLinkDeviceId: 'device', workingDir: '/repo' });
+    const ssh = session('ssh', { deviceLinkDeviceId: 'device', workingDir: '/repo', remoteHostId: 'ssh-a' });
+    const rows = [local];
+    const remoteProjectAliases = new Map([['device', { platform: 'darwin', aliases: [{ projectKey: 'local:/repo', alias: 'Host alias' }] }]]);
+    const select = createProjectGroupsSelector();
+    expect(select(rows, { remoteProjectAliases, projectAliasMembers: [local, ssh] }).projects[0].displayName).toBe('repo');
+    const options = { remoteProjectAliases, projectAliasMembers: [local, { ...ssh, ...patch }] };
+    const result = select(rows, options);
+    expect(result).toEqual(groupSessions(rows, options));
+    expect(result.projects[0].displayName).toBe('Host alias');
   });
 
   it('reuses equal persistent catalogues but refreshes changed project metadata', () => {

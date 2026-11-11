@@ -13,9 +13,9 @@ import { standardSessionRoute } from '@/lib/orcaSessionIdentity';
  */
 
 import { HookConnectionsSection } from '@/components/settings/HookConnectionsSection';
-import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { Archive, Briefcase, ChevronRight, ChevronUp, Gamepad2, MessageSquare, Plus, Send, Zap, type LucideIcon } from 'lucide-react';
+import { Archive, ArrowUpRight, Briefcase, ChevronRight, ChevronUp, Gamepad2, MessageSquare, Plus, Send, Zap, type LucideIcon } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 import { ChromeIconButton } from '@/components/title-bar/ChromeIconButton';
@@ -26,8 +26,8 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { FormField } from '@/components/ui/form-field';
 import { Input } from '@/components/ui/input';
 import { SegmentedControl } from '@/components/ui/segmented-control';
-import { Select } from '@/components/ui/select';
 import { Spinner } from '@/components/ui/spinner';
+import { DiscordChannelAccessSection } from '@/components/settings/DiscordChannelAccessSection';
 import { WechatBotSection } from '@/components/settings/WechatBotSection';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
@@ -53,7 +53,9 @@ import {
   archiveBotImConnectionLane,
   botImConnectionLaneArchiveSupported,
   adoptPersonalBot,
+  botImConnectionDiscordChannelsSupported,
   botImConnectionGroupsSupported,
+  discordChannelAccessSourceFor,
   botImConnectionLanesSupported,
   listBotImConnectionGroups,
   listBotImConnectionLanes,
@@ -68,6 +70,11 @@ import {
 
 const BOT_TOKEN_PATTERN = /^\d+:[A-Za-z0-9_-]{20,}$/;
 const OWNER_USER_ID_PATTERN = /^\d{4,20}$/;
+// Same application launchers as Settings → IM bots.
+const FEISHU_APP_LAUNCHER_URL: Record<BotImFeishuService, string> = {
+  feishu: 'https://open.feishu.cn/page/launcher?from=backend_oneclick',
+  lark: 'https://open.larksuite.com/page/launcher?from=backend_oneclick',
+};
 const DISCORD_OWNER_ID_PATTERN = /^\d{17,20}$/;
 
 const CHANNEL_ICON: Record<BotImChannel, LucideIcon> = {
@@ -76,10 +83,11 @@ const CHANNEL_ICON: Record<BotImChannel, LucideIcon> = {
   wecom: Briefcase,
   dingtalk: Zap,
   discord: Gamepad2,
+  imessage: MessageSquare,
 };
 
 function ChannelIcon({ channel }: { channel: BotImChannel }) {
-  const Icon = CHANNEL_ICON[channel];
+  const Icon = CHANNEL_ICON[channel] ?? MessageSquare;
   return <Icon size={18} aria-hidden className="shrink-0 text-[var(--text-secondary)]" />;
 }
 
@@ -227,8 +235,16 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
                   {t('bots.channels.remove')}
                 </Button>
                 </div>
-                {view.channel === 'telegram' && view.botContextId && botImConnectionGroupsSupported(im) ? (
+                {view.health && view.health.uncertainInputs + view.health.uncertainSends > 0 ? (
+                  <p className="text-12 leading-[1.5] text-[var(--text-secondary)]">{t('bots.channels.add.imessage.uncertain', {
+                    count: view.health.uncertainInputs + view.health.uncertainSends,
+                  })}</p>
+                ) : null}
+                {(view.channel === 'telegram' || view.channel === 'imessage') && view.botContextId && botImConnectionGroupsSupported(im) ? (
                   <ConnectionGroups api={im} connectionId={view.id} botName={bot.name} />
+                ) : null}
+                {view.channel === 'discord' && im && botImConnectionDiscordChannelsSupported(im) ? (
+                  <ConnectionDiscordChannels api={im} connectionId={view.id} botName={bot.name} deviceId={target.deviceId} />
                 ) : null}
                 {view.botContextId && botImConnectionLanesSupported(im) ? (
                   <ConnectionLanes api={im} connectionId={view.id} botName={bot.name}
@@ -363,6 +379,24 @@ function ConnectionGroups({ api, connectionId, botName }: { api: BotImConnection
         </div>
       ))}
     </div>
+  );
+}
+
+/**
+ * 一条 Discord 连接的「服务器频道」小节：白名单按连接各一份，默认不开放；每个频道可单独允许成员，
+ * 成员沿用这位伙伴的既有权限、工具与共享记忆。读写走连接设置（另一台电脑上的伙伴经远程操作）。
+ */
+function ConnectionDiscordChannels({ api, connectionId, botName, deviceId }: {
+  api: BotImConnectionApi; connectionId: string; botName: string; deviceId: string | null | undefined;
+}) {
+  const source = useMemo(() => discordChannelAccessSourceFor(api, connectionId), [api, connectionId]);
+  return (
+    <DiscordChannelAccessSection
+      connected
+      source={source}
+      sourceKey={`${deviceId ?? 'local'}:${connectionId}`}
+      members={{ botName }}
+    />
   );
 }
 
@@ -635,7 +669,7 @@ function ConnectionLanes({ api, connectionId, botName, platform, deviceId }: {
   );
 }
 
-const PLATFORMS: ReadonlyArray<BotImChannel> = ['telegram', 'feishu', 'wecom', 'dingtalk', 'discord'];
+const PLATFORMS: ReadonlyArray<BotImChannel> = ['telegram', 'feishu', 'wecom', 'dingtalk', 'discord', 'imessage'];
 
 /** 个人 bot 给人看的身份: Telegram @用户名 / Discord 标签原样, 其它平台的 id 打码。 */
 function adoptableIdentity(item: BotImAdoptablePersonalBot): string | undefined {
@@ -703,6 +737,8 @@ function BotChannelAddDialog({
   const [token, setToken] = useState('');
   const [ownerUserId, setOwnerUserId] = useState('');
   const [service, setService] = useState<BotImFeishuService>('feishu');
+  const [guideOpen, setGuideOpen] = useState(false);
+  const guideId = useId();
   const [appId, setAppId] = useState('');
   const [appSecret, setAppSecret] = useState('');
   // 企业微信 / 钉钉 / Discord 各自的两格: 字段名跟平台的叫法走, 互不串用。
@@ -712,6 +748,7 @@ function BotChannelAddDialog({
   const [dingtalkAppSecret, setDingtalkAppSecret] = useState('');
   const [discordToken, setDiscordToken] = useState('');
   const [discordOwnerUserId, setDiscordOwnerUserId] = useState('');
+  const [imessage, setIMessage] = useState({ serverUrl: '', password: '', ownerAddress: '', chatGuids: '', listenHost: '', listenPort: '18747' });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
@@ -722,6 +759,8 @@ function BotChannelAddDialog({
   const existing = adoptable.find((item) => item.channel === channel) ?? null;
   const credentialsHere = remoteName === undefined;
   const useExisting = existing !== null && (source === 'existing' || !credentialsHere);
+  const manualFeishu = channel === 'feishu' && credentialsHere && !useExisting;
+  const serviceName = t('bots.channels.platform.' + service);
 
   const apiRef = useRef(api);
   apiRef.current = api;
@@ -742,6 +781,8 @@ function BotChannelAddDialog({
     ? true
     : !credentialsHere
       ? false
+      : channel === 'imessage'
+      ? filled(...Object.values(imessage))
       : channel === 'telegram'
       ? filled(token, ownerUserId)
       : channel === 'feishu'
@@ -754,6 +795,9 @@ function BotChannelAddDialog({
 
   const buildInput = (): BotImConnectionAddInput | string => {
     switch (channel) {
+      case 'imessage': return { botId: bot.id, channel, ...imessage, groupAliases: [bot.name],
+        chatGuids: imessage.chatGuids.split(/[,\n]/).map(value => value.trim()).filter(Boolean),
+        listenPort: Number(imessage.listenPort) };
       case 'telegram': {
         const trimmedToken = token.trim();
         const trimmedOwner = ownerUserId.trim();
@@ -849,13 +893,15 @@ function BotChannelAddDialog({
               {t('bots.channels.add.title', { name: bot.name })}
             </Dialog.Title>
             <Dialog.Description className="mt-2 text-13 leading-[1.5] text-[var(--confirm-desc)]">
-              {t('bots.channels.add.description')}
+              {manualFeishu
+                ? t('bots.channels.add.feishu.description', { service: serviceName, name: bot.name })
+                : t('bots.channels.add.description')}
             </Dialog.Description>
 
             <div
               role="radiogroup"
               aria-label={t('bots.channels.add.platformLabel')}
-              className="mt-4 grid grid-cols-3 gap-2"
+              className="mt-4 grid grid-cols-2 gap-2 min-[400px]:grid-cols-3"
             >
               {PLATFORMS.map((item, index) => {
                 const checked = item === channel;
@@ -869,7 +915,7 @@ function BotChannelAddDialog({
                     disabled={busy}
                     onClick={() => setChannel(item)}
                     className={cn(
-                      'flex min-h-11 min-w-0 items-center justify-center gap-2 rounded-xl border px-3 text-13 outline-none transition-colors',
+                      'flex min-h-9 min-w-0 items-center justify-center gap-2 rounded-full border px-3 text-13 outline-none transition-colors',
                       'focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]',
                       'disabled:cursor-not-allowed',
                       checked
@@ -918,6 +964,18 @@ function BotChannelAddDialog({
                 <p className="px-1 text-12 leading-[1.5] text-[var(--text-secondary)]">
                   {t('bots.remoteSettings.finishOnHost', { device: remoteName })}
                 </p>
+              ) : channel === 'imessage' ? (
+                <>
+                  <p className="text-12 leading-[1.5] text-[var(--text-secondary)]">{t('bots.channels.add.imessage.hint')}</p>
+                  {(Object.keys(imessage) as Array<keyof typeof imessage>).map(key => (
+                    <FormField key={key} label={t(`bots.channels.add.imessage.${key}Label`)}>
+                      {control => <Input {...control} mono secret={key === 'password'} value={imessage[key]}
+                        onChange={value => setIMessage(previous => ({ ...previous, [key]: value }))}
+                        placeholder={t(`bots.channels.add.imessage.${key}Placeholder`)} autoComplete="off"
+                        spellCheck={false} disabled={busy} secretTipContentClassName="z-[10001]" />}
+                    </FormField>
+                  ))}
+                </>
               ) : channel === 'telegram' ? (
                 <>
                   <FormField label={t('bots.channels.add.telegram.tokenLabel')}>
@@ -956,21 +1014,57 @@ function BotChannelAddDialog({
                 </>
               ) : channel === 'feishu' ? (
                 <>
-                  <FormField label={t('bots.channels.add.feishu.serviceLabel')}>
-                    {(control) => (
-                      <Select
-                        id={control.id}
-                        label={t('bots.channels.add.feishu.serviceLabel')}
-                        value={service}
-                        options={[
-                          { value: 'feishu', label: t('bots.channels.platform.feishu') },
-                          { value: 'lark', label: t('bots.channels.platform.lark') },
-                        ]}
-                        onValueChange={(next) => setService(next === 'lark' ? 'lark' : 'feishu')}
-                        disabled={busy}
-                      />
-                    )}
-                  </FormField>
+                  <SegmentedControl
+                    aria-label={t('bots.channels.add.feishu.serviceLabel')}
+                    value={service}
+                    options={[
+                      { value: 'feishu', label: t('bots.channels.platform.feishu') },
+                      { value: 'lark', label: t('bots.channels.platform.lark') },
+                    ]}
+                    onValueChange={setService}
+                    disabled={busy}
+                  />
+                  <section className="flex flex-col gap-2 rounded-xl border border-[var(--border-default)] p-3">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-13 leading-[1.5]">
+                      <p className="font-medium text-[var(--text-primary)]">
+                        {t('bots.channels.add.feishu.createPrompt', { service: serviceName })}
+                      </p>
+                      <a
+                        href={FEISHU_APP_LAUNCHER_URL[service]}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          void window.electronAPI.openExternal?.(FEISHU_APP_LAUNCHER_URL[service]);
+                        }}
+                        className="inline-flex items-center gap-0.5 text-[var(--text-secondary)] underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                      >
+                        {t('bots.channels.add.feishu.createLink', { service: serviceName })}
+                        <ArrowUpRight size={13} aria-hidden="true" className="shrink-0" />
+                      </a>
+                    </div>
+                    <p className="text-12 leading-[1.5] text-[var(--text-secondary)]">
+                      {t('bots.channels.add.feishu.credentialsHint')}
+                    </p>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      tone="quiet"
+                      size="sm"
+                      className="w-fit justify-start gap-1 px-1 text-[var(--text-secondary)]"
+                      aria-expanded={guideOpen}
+                      aria-controls={guideId}
+                      onClick={() => setGuideOpen((open) => !open)}
+                    >
+                      <ChevronRight size={12} aria-hidden="true" className={cn('shrink-0 transition-transform motion-reduce:transition-none', guideOpen && 'rotate-90')} />
+                      {t('bots.channels.add.feishu.stepsLabel')}
+                    </Button>
+                    <Collapse open={guideOpen} id={guideId}>
+                      <ol className="list-decimal space-y-2 pl-5 text-12 leading-[1.5] text-[var(--text-secondary)]">
+                        <li>{t('bots.channels.add.feishu.stepCreate')}</li>
+                        <li>{t('bots.channels.add.feishu.stepCredentials')}</li>
+                        <li>{t('bots.channels.add.feishu.stepConnect', { service: serviceName })}</li>
+                      </ol>
+                    </Collapse>
+                  </section>
                   <FormField label={t('bots.channels.add.feishu.appIdLabel')}>
                     {(control) => (
                       <Input
@@ -1133,7 +1227,11 @@ function BotChannelAddDialog({
                 loading={busy}
                 disabled={!canSubmit || busy}
               >
-                {t(busy ? 'bots.channels.add.connecting' : 'bots.channels.add.confirm')}
+                {busy
+                  ? t('bots.channels.add.connecting')
+                  : manualFeishu
+                    ? t('bots.channels.add.feishu.confirm', { service: serviceName })
+                    : t('bots.channels.add.confirm')}
               </Button>
             </div>
           </form>

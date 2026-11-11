@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { DEFAULT_MENUBAR_SETTINGS, type MenubarSettings } from '../../../shared/menubarQuota';
 import type { SupportedLocale } from '../../../shared/locale';
-import { mainStringKeysUnder, rawMainString } from '../../i18n';
+import { mainStringKeysUnder, rawMainString } from '../../i18n.desktop';
 import { familyLogo, MENUBAR_CINDY_LOGO, MENUBAR_HARNESS_LOGOS } from '../logos';
 import {
   buildMenubarView,
@@ -12,6 +12,8 @@ import {
   type MenubarSubscriptionInput,
 } from '../snapshot';
 import { buildMenubarUiStrings, createMenubarTranslate, fillTemplate } from '../strings';
+import { buildAgentIslandQuota } from '../../agent-island/quota';
+import { buildUsageWidgetSnapshot } from '../../quota-overview/widgetSnapshot';
 
 const NOW = Date.UTC(2026, 9, 11, 3, 0, 0);
 const HOUR = 3_600_000;
@@ -66,16 +68,43 @@ describe('buildMenubarView', () => {
     expect(view.sources.find((s) => s.id === 'alpha')?.emphasized).toBe(false);
   });
 
-  it('marks a nearly empty window as a warning', () => {
-    const view = buildMenubarView(input([codex('alpha', 93)]));
-    expect(view.sources[0]).toMatchObject({ value: '7', level: 'warn', fill: 0.07 });
+  // Shared rule (quota-level): 30% or less left is yellow, 10% or less is red.
+  it('turns yellow at 30% left and red at 10% left', () => {
+    const view = buildMenubarView(input([codex('plenty', 69), codex('low', 70), codex('empty', 90)]));
+    expect(view.sources.map((cell) => [cell.id, cell.value, cell.level])).toEqual([
+      ['plenty', '31', 'normal'], ['low', '30', 'warn'], ['empty', '10', 'error'],
+    ]);
   });
 
   it('hatches a used-up window that still has extra credits', () => {
     const view = buildMenubarView(input([codex('alpha', 100, { credits: 61_838 }), codex('beta', 10)]));
     const alpha = view.sources.find((s) => s.id === 'alpha');
-    expect(alpha).toMatchObject({ value: null, reserve: true, fill: 0, level: 'error' });
+    expect(alpha).toMatchObject({ value: '61.8K', valueUnit: 'credits', reserve: true, fill: 0, level: 'error' });
+    expect(alpha?.accessibilityLabel).toContain('61,838');
+    // PR #8622: the new value/unit shape must stay readable through the real island projection.
+    // Unit tier; old hand-built island fixtures missed the minimal 61_838-credit regression.
+    expect(buildAgentIslandQuota(view).find((item) => item.id === 'alpha')?.text).toBe('61.8K credits');
     expect(view.details.alpha.action).toEqual({ kind: 'new-task', providerId: 'codex-alpha' });
+  });
+
+  // Regression: exhausted subscriptions must expose the usable balance, never a
+  // rounded zero or a percentage. The same values feed the mobile widget snapshot.
+  it.each([
+    { credits: 128, creditsUnlimited: false, value: '128' },
+    { credits: 0.04, creditsUnlimited: false, value: '0.04' },
+    { credits: null, creditsUnlimited: true, value: '∞' },
+  ])('shows remaining credits in the panel and widget: $value', ({ value, ...credits }) => {
+    const view = buildMenubarView(input([codex('alpha', 100, credits)]));
+    expect(view.sources[0]).toMatchObject({ value, valueUnit: 'credits', fill: 0, reserve: true });
+    const widget = buildUsageWidgetSnapshot(view, NOW, () => null);
+    expect(widget?.sources[0]).toMatchObject({ value, unit: 'credits', fill: 0, reserve: true });
+  });
+
+  // PR #8622: buildMenubarView must expose fractional Credits to screen readers.
+  // Existing unit coverage only checked an integer label; 0.0004 was read as zero.
+  it.each([0.0004, 128.1234])('preserves fractional credit precision in accessibility labels: %s', (credits) => {
+    const view = buildMenubarView(input([codex('alpha', 100, { credits })]));
+    expect(view.sources[0].accessibilityLabel).toContain(`${credits} credits`);
   });
 
   it('follows the saved order and hides pay-as-you-go connections until shown', () => {
@@ -111,7 +140,7 @@ describe('buildMenubarView', () => {
       burnPerDay: null, observedAtMs: NOW, currency: 'USD', quota: { resetsAtMs: NOW + 20 * DAY + 3 * HOUR, todaySpend: 3.62, dailyLimitEnabled },
     };
     const view = buildMenubarView(input([quota], { locale: 'zh-CN' }));
-    expect(view.sources[0]).toMatchObject({ when: '20天3时后重置' });
+    expect(view.sources[0]).toMatchObject({ when: '20天3时' });
     expect(view.sources[0].fill).toBeCloseTo(0.9998);
     expect(view.headlinePrimary).toBe('Cindy 本期配额还能用。');
     expect(view.details.cindy).toMatchObject({ title: 'Cindy 本期配额', action: { kind: 'open-settings' } });
@@ -158,6 +187,60 @@ describe('buildMenubarView', () => {
     expect(view.sources[0].name).toBe('Studio');
   });
 
+  // Owner rule 2026-10-31: the reset time colors only when a long window will reset with quota
+  // unused at the current pace — a day or less yellow, six hours or less red; numbers keep ink.
+  it('colors the reset time when a long window will reset with quota unused', () => {
+    const week = (id: string, used: number, leftMs: number, extra: Partial<MenubarSubscriptionInput> = {}) =>
+      codex(id, used, { windows: [{ kind: 'week', usedPercent: used, resetsAtMs: NOW + leftMs, windowMinutes: 10_080 }], ...extra });
+    const view = buildMenubarView(input([
+      week('soon', 20, 5 * HOUR),
+      week('tomorrow', 20, 20 * HOUR),
+      week('later', 20, 2 * DAY),
+      week('pace', 90, 20 * HOUR),
+      week('low', 75, 5 * HOUR),
+      codex('session', 20, { windows: [{ kind: 'session', usedPercent: 20, resetsAtMs: NOW + HOUR, windowMinutes: 300 }] }),
+    ]));
+    const levels = Object.fromEntries(view.sources.map((cell) => [cell.id, [cell.whenLevel, cell.unusedAtReset ?? false]]));
+    expect(levels).toEqual({
+      soon: ['error', true],
+      tomorrow: ['warn', true],
+      later: ['normal', true],
+      // 90% used over ~6 days runs out before the reset: nothing goes to waste.
+      pace: ['normal', false],
+      // A yellow liquid still resets with a quarter unused at this pace: use it now.
+      low: ['error', true],
+      session: ['normal', false],
+    });
+    // The Cindy period quota is a budget: plenty left hours before its reset is not a reminder.
+    const quota: MenubarSourceInput = {
+      kind: 'balance', id: 'cindy', logoSvg: MENUBAR_CINDY_LOGO, available: 38_000, fullAmount: 40_000, burnPerDay: 16,
+      observedAtMs: NOW, currency: 'USD', quota: { resetsAtMs: NOW + 5 * HOUR, todaySpend: null },
+    };
+    expect(buildMenubarView(input([quota])).sources[0]).toMatchObject({ whenLevel: 'normal' });
+    expect(buildMenubarView(input([quota])).sources[0].unusedAtReset).toBeUndefined();
+  });
+
+  it('shows an offline computer’s last reading with its age and never recommends it', () => {
+    const offline = codex('alpha', 10, {
+      id: 'remote:dev-2:openai', device: { id: 'dev-2', name: 'Studio' }, lastSeenAtMs: NOW - 3 * HOUR,
+    });
+    const view = buildMenubarView(input([offline, codex('beta', 70)]));
+    expect(view.sources.find((s) => s.id === offline.id)).toMatchObject({
+      value: '90', when: '3 hr ago', stale: true, resetsAtMs: null, emphasized: false,
+    });
+    expect(view.sources.find((s) => s.id === 'beta')?.emphasized).toBe(true);
+  });
+
+  it('does not call a positive offline reading "used up" when it is the only one', () => {
+    const offline = codex('alpha', 10, {
+      id: 'remote:dev-2:openai', device: { id: 'dev-2', name: 'Studio' }, lastSeenAtMs: NOW - 3 * HOUR,
+    });
+    const view = buildMenubarView(input([offline]));
+    expect(view.headlinePrimary).toBe('Quota not read yet.');
+    expect(view.headlineAlert).toBe(false);
+    expect(view.statusTextByMode.lowest).toBeNull();
+  });
+
   it('says nothing was read instead of "used up" when no level is known', () => {
     const unread = buildMenubarView(input([codex('alpha', 0, { windows: [] })]));
     expect(unread.headlinePrimary).toBe('Quota not read yet.');
@@ -184,9 +267,40 @@ describe('buildMenubarView', () => {
       ],
     });
     const view = buildMenubarView(input([claude], { locale: 'zh-CN' }));
-    expect(view.sources[0]).toMatchObject({ value: '90', when: '6天7时后重置', whenLevel: 'normal' });
+    expect(view.sources[0]).toMatchObject({ value: '90', when: '6天7时', whenLevel: 'normal' });
     // Plenty left: the headline does not narrate a reset.
     expect(view.headlineSecondary).toBeNull();
+  });
+
+  it('shows every account by its weekly window, even when the 5-hour one is tighter or not started', () => {
+    const idle = codex('alpha', 0, {
+      windows: [
+        { kind: 'session', usedPercent: 0, resetsAtMs: null, windowMinutes: 300 },
+        { kind: 'week', usedPercent: 0, resetsAtMs: NOW + 4 * DAY + 22 * HOUR, windowMinutes: 10_080 },
+      ],
+    });
+    const burst = codex('beta', 0, {
+      windows: [
+        { kind: 'session', usedPercent: 95, resetsAtMs: NOW + 2 * HOUR, windowMinutes: 300 },
+        { kind: 'week', usedPercent: 40, resetsAtMs: NOW + 3 * DAY, windowMinutes: 10_080 },
+      ],
+    });
+    const view = buildMenubarView(input([idle, burst], { locale: 'zh-CN' }));
+    expect(view.sources.find((cell) => cell.id === 'alpha')).toMatchObject({ value: '100', when: '4天22时' });
+    expect(view.sources.find((cell) => cell.id === 'beta')).toMatchObject({ value: '60', when: '3天', whenLevel: 'normal' });
+  });
+
+  it('keeps the detail page on the window that limits the account when the tube shows the weekly one', () => {
+    const blocked = codex('alpha', 0, {
+      resetCredits: { count: 1, earliestExpiryMs: NOW + 5 * DAY },
+      windows: [
+        { kind: 'session', usedPercent: 100, resetsAtMs: NOW + 2 * HOUR, windowMinutes: 300 },
+        { kind: 'week', usedPercent: 40, resetsAtMs: NOW + 3 * DAY, windowMinutes: 10_080 },
+      ],
+    });
+    const view = buildMenubarView(input([blocked]));
+    expect(view.sources[0]).toMatchObject({ value: '60' });
+    expect(view.details.alpha).toMatchObject({ bigValue: '0', action: { kind: 'open-settings' } });
   });
 
   it('names when a nearly empty source resets', () => {
@@ -194,7 +308,7 @@ describe('buildMenubarView', () => {
       windows: [{ kind: 'session', usedPercent: 92, resetsAtMs: NOW + 3 * HOUR + 5 * 60_000, windowMinutes: 300 }],
     });
     const view = buildMenubarView(input([low, codex('beta', 20)]));
-    expect(view.sources.find((cell) => cell.id === 'alpha')).toMatchObject({ when: 'Resets in 3h 5m', whenLevel: 'warn' });
+    expect(view.sources.find((cell) => cell.id === 'alpha')).toMatchObject({ when: '3h 5m', whenLevel: 'normal', level: 'error' });
     expect(view.headlineSecondary).toBe('alpha resets in 3h 5m.');
     expect(view.headlineAlert).toBe(true);
   });
@@ -252,4 +366,107 @@ describe('menubar strings', () => {
     expect(strings.updatedMinutes_one).toBe(strings.updatedMinutes_other);
     expect(strings.updatedMinutes_one).not.toMatch(/Updated/);
   });
+});
+
+// Unit: new monthly Kimi limits must remain monthly in the actual native-panel VM.
+it('projects Kimi monthly windows as remaining percentages with their real period label', () => {
+  const view = buildMenubarView(input([codex('kimi', 0, {
+    family: 'kimi', brand: 'Kimi Code', account: null, plan: null,
+    windows: [{ kind: 'period', label: 'limit_month_code', usedPercent: 35, resetsAtMs: null, windowMinutes: 0 }],
+  })]));
+  expect(view.sources[0]).toMatchObject({ value: '65', valueUnit: '%', fill: 0.65 });
+  expect(JSON.stringify(view.details.kimi)).toContain('Monthly Coding');
+});
+
+it('projects OpenCode Go rolling and monthly windows under its own provider', () => {
+  const view = buildMenubarView(input([codex('opencode', 0, {
+    family: 'opencode-go', logoSvg: familyLogo('opencode-go'), brand: 'OpenCode Go', account: null, plan: null,
+    windows: [
+      { kind: 'session', usedPercent: 30, resetsAtMs: NOW + 2 * 60 * 60_000, windowMinutes: 300 },
+      { kind: 'period', label: 'monthly', usedPercent: 10, resetsAtMs: NOW + 20 * DAY, windowMinutes: 0 },
+    ],
+  })]));
+  expect(view.sources[0]).toMatchObject({ id: 'opencode', name: 'OpenCode Go', value: '70', valueUnit: '%' });
+  expect(JSON.stringify(view.details.opencode)).toContain('Monthly Total');
+});
+
+// iPhone widgets show the panel's tubes only: rows without a level stay out, and the reset
+// time travels with each tube so the widget can keep the countdown current between refreshes.
+describe('buildUsageWidgetSnapshot', () => {
+  it('keeps measured sources in panel order with their logo and reset time', () => {
+    const payg: MenubarSourceInput = { kind: 'payg', id: 'glm', providerId: 'glm', logoSvg: '', name: 'GLM', billing: 'api' };
+    const view = buildMenubarView(input([codex('alpha', 30), payg, codex('beta', 95)]));
+    const snapshot = buildUsageWidgetSnapshot(view, NOW, (key) => rawMainString(key, 'en'));
+    expect(snapshot?.sources.map((s) => [s.id, s.logo, s.value, s.level, s.resetsAtMs])).toEqual([
+      ['alpha', 'codex', '70', 'normal', NOW + 3 * DAY],
+      ['beta', 'codex', '5', 'error', NOW + 3 * DAY],
+    ]);
+    expect(snapshot?.usage.days).toHaveLength(30);
+    expect(snapshot?.usage.days.at(-1)).toBe(view.usage.days.at(-1));
+    expect(snapshot?.strings['durationShort.daysHours']).toContain('{{d}}');
+  });
+
+  it('carries a period quota reset so the widget counts it down like the subscriptions', () => {
+    const quota: MenubarSourceInput = {
+      kind: 'balance', id: 'cindy', logoSvg: MENUBAR_CINDY_LOGO, available: 20, fullAmount: 40, burnPerDay: null,
+      observedAtMs: NOW, currency: 'USD', quota: { resetsAtMs: NOW + DAY, todaySpend: null },
+    };
+    const view = (source: MenubarSourceInput) => buildMenubarView(input([source]));
+    const snapshot = buildUsageWidgetSnapshot(view(quota), NOW, () => null);
+    expect(snapshot?.sources[0]).toMatchObject({ logo: 'cindy', resetsAtMs: NOW + DAY });
+    // A lone source is drawn as the panel's detail ring.
+    expect(snapshot?.sources[0].detail).toMatchObject({ bigValue: view(quota).details.cindy.bigValue, rings: [{ fraction: 0.5 }] });
+  });
+
+  it('has nothing to show behind the sign-in gate', () => {
+    const view = buildMenubarView({ ...input([]), gate: 'sign-in' });
+    expect(buildUsageWidgetSnapshot(view, NOW, () => null)).toBeNull();
+  });
+});
+
+// Shared quota details are read-only and must not offer a local task on the host's provider id.
+it('shows the account-wide sharing notice and no local subscription management actions', () => {
+  const source = codex('share:one', 54, {
+    family: 'shared', account: null, brand: 'Claude', plan: 'Shared',
+    shared: { label: 'Claude', note: 'Account-wide allowance' },
+  });
+  const view = buildMenubarView(input([source]));
+  expect(view.sources[0]).toMatchObject({ value: '46', name: 'Claude' });
+  expect(view.details[source.id]).toMatchObject({ plan: 'Shared', saySecondary: 'Account-wide allowance', action: { kind: 'open-app' } });
+  expect(view.details[source.id].facts.some(fact => /credits|resets left/i.test(fact.label))).toBe(false);
+});
+
+// Equal provider labels must remain distinguishable by the names already present in the
+// received-share directory; anonymous quota account identity stays undisclosed.
+it('distinguishes shares of the same provider by their sharers', () => {
+  const sources = ['dash', 'Chris'].map(name => codex(`share:${name}`, 18, {
+    family: 'shared', account: null, brand: 'Anthropic', plan: 'Shared',
+    shared: { label: name, ownerName: name, note: 'Account-wide allowance' },
+  }));
+  const view = buildMenubarView(input(sources));
+  expect(view.sources.map(source => source.name)).toEqual(['dash', 'Chris']);
+  expect(view.details['share:dash'].title).toBe('dash · Anthropic');
+  expect(view.details['share:Chris'].title).toBe('Chris · Anthropic');
+  expect(view.details['share:dash'].facts).toContainEqual(expect.objectContaining({ label: 'Shared by dash' }));
+});
+
+// Unit regression: new share identity bypassed the existing privacy setting in native
+// cells/headlines/manage/detail facts. Exercise both detail branches and legacy label-only input.
+it.each(['ready', 'no-windows', 'label-only'])('hides sharer identity across the native view in privacy mode (%s)', kind => {
+  const source = codex('share:one', 18, {
+    family: 'shared', account: null, brand: 'Anthropic', plan: 'Shared',
+    shared: { label: 'Private sharer', ownerName: kind === 'label-only' ? undefined : 'Private sharer', note: 'Account-wide allowance' },
+    ...(kind === 'no-windows' ? { windows: [] } : {}),
+  });
+  const visible = buildMenubarView(input([source]));
+  expect(visible.sources[0].name).toBe('Private sharer');
+  const hidden = buildMenubarView(input([source], { settings: { privacy: true } }));
+  expect(hidden.sources[0].name).toBe('Anthropic');
+  expect(hidden.manage.find(row => row.id === source.id)?.title).toBe('Anthropic');
+  expect(hidden.details[source.id].title).toBe('Anthropic');
+  expect(hidden.details[source.id].facts).toContainEqual(expect.objectContaining({ label: 'Anthropic' }));
+  expect(hidden.sources[0].value).toBe(visible.sources[0].value);
+  expect(JSON.stringify(hidden)).not.toContain('Private sharer');
+  // Projection must not overwrite the received name or lose it when privacy is turned off.
+  expect(buildMenubarView(input([source]))).toEqual(visible);
 });

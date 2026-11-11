@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, render } from '@testing-library/react';
+import { cleanup, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useComposerOverlayMetrics } from '../useComposerOverlayMetrics';
@@ -7,6 +7,8 @@ import { useComposerOverlayMetrics } from '../useComposerOverlayMetrics';
 type ActGlobal = typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
 
 let resizeCallbacks: Array<() => void> = [];
+let mutationCallback: (() => void) | undefined;
+let resizeObserved: Element[] = [];
 let overlayHeight = 236;
 let renders = 0;
 let latest: ReturnType<typeof useComposerOverlayMetrics> | null = null;
@@ -27,16 +29,25 @@ function Probe({ overlay }: { overlay: HTMLElement }) {
 
 beforeEach(() => {
   resizeCallbacks = [];
+  resizeObserved = [];
   overlayHeight = 236;
   renders = 0;
   latest = null;
+  vi.stubGlobal(
+    'MutationObserver',
+    class {
+      constructor(callback: () => void) { mutationCallback = callback; }
+      observe() {}
+      disconnect() {}
+    },
+  );
   vi.stubGlobal(
     'ResizeObserver',
     class {
       constructor(callback: () => void) {
         resizeCallbacks.push(callback);
       }
-      observe() {}
+      observe(target: Element) { resizeObserved.push(target); }
       unobserve() {}
       disconnect() {}
     },
@@ -53,6 +64,25 @@ afterEach(() => {
 });
 
 describe('useComposerOverlayMetrics', () => {
+  // Unit: a mutation burst must not force synchronous layout per React commit.
+  // Previous tests covered resize alone; one child insertion with unchanged size
+  // needs a resize observation, then the resulting metrics still commit pre-paint.
+  it('defers mutation measurements to the browser resize phase instead of forcing layout', () => {
+    const overlay = makeOverlay();
+    const height = vi.spyOn(overlay, 'offsetHeight', 'get');
+    render(<Probe overlay={overlay} />);
+    (globalThis as ActGlobal).IS_REACT_ACT_ENVIRONMENT = false;
+    height.mockClear();
+    resizeObserved = [];
+    for (let i = 0; i < 4; i++) mutationCallback!();
+    expect(height).not.toHaveBeenCalled();
+    // Re-observing is what yields the deferred notification for equal-size moves.
+    expect(resizeObserved.filter(target => target === overlay)).toHaveLength(4);
+    overlayHeight = 272;
+    for (const callback of resizeCallbacks) callback();
+    expect(height).toHaveBeenCalledTimes(1);
+    expect(latest?.overlayHeight).toBe(272);
+  });
   it('uses the measured overlay height on the first commit', () => {
     render(<Probe overlay={makeOverlay()} />);
     expect(latest?.overlayHeight).toBe(236);
@@ -73,40 +103,5 @@ describe('useComposerOverlayMetrics', () => {
     const before = renders;
     for (const callback of resizeCallbacks) callback();
     expect(renders).toBe(before);
-  });
-
-  // Unit: typing/status text mutations forced layout before ResizeObserver,
-  // visible as ~110ms in the live send profile. Existing tests only cover renders,
-  // not synchronous layout reads; absolute flyouts must still update immediately.
-  it('lets resize observation handle text edits while measuring new absolute flyouts', async () => {
-    const overlay = makeOverlay();
-    const readHeight = vi.fn(() => overlayHeight);
-    Object.defineProperty(overlay, 'offsetHeight', { get: readHeight });
-    overlay.getBoundingClientRect = () => ({ bottom: 500 }) as DOMRect;
-    const stack = document.createElement('div');
-    stack.dataset.chatComposerStack = '';
-    stack.getBoundingClientRect = () => ({ top: 300 }) as DOMRect;
-    const center = document.createElement('div');
-    center.dataset.composerCenterGroup = '';
-    center.getBoundingClientRect = () => ({ top: 250, height: 32 }) as DOMRect;
-    overlay.append(stack, center);
-    render(<Probe overlay={overlay} />);
-    readHeight.mockClear();
-    await act(async () => { stack.replaceChildren(document.createTextNode('typing')); });
-    expect(readHeight).not.toHaveBeenCalled();
-
-    // A reserved center row can gain/lose its occupant without resizing.
-    await act(async () => { center.append(document.createElement('button')); });
-    expect(latest?.bottomCenterClearanceOffset).toBe(250);
-    await act(async () => { center.replaceChildren(); });
-    expect(latest?.bottomCenterClearanceOffset).toBe(200);
-
-    const flyout = document.createElement('div');
-    flyout.dataset.planFlyoutPositioner = 'composer';
-    flyout.getBoundingClientRect = () => ({ top: 150, height: 100 }) as DOMRect;
-    await act(async () => { overlay.append(flyout); });
-    expect(latest?.bottomCenterClearanceOffset).toBe(350);
-    await act(async () => { flyout.remove(); });
-    expect(latest?.bottomCenterClearanceOffset).toBe(200);
   });
 });

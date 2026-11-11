@@ -17,7 +17,7 @@ import { createPiTranslateContext, disposePiTranslateContext, translatePiEvent }
 import { piSuccessfulReplyFrames, piReplyText, piReplyThinking } from '../../../../test/fixtures/piSuccessfulReply';
 import { persistSessionStreamEvent } from '../../../maker-ipc/sessionEventStream';
 import type { PreparedSessionEvent } from '../../../maker-ipc/sessionEventPreparation';
-import { clearSessionPersistState, drainPersistQueue, flushAssistantBlock, noteSessionAgentKind } from '../../../messagePersistBroadcaster';
+import { clearSessionPersistState, drainPersistQueue, flushAssistantBlock, noteSessionAgentKind } from '../../../messagePersistBroadcaster.desktop';
 
 const h = vi.hoisted(() => ({
   sqlite: null as Database.Database | null,
@@ -41,11 +41,8 @@ vi.mock('../../../logger', () => ({
 vi.mock('../../../logger.js', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: h.warn, error: vi.fn() }),
 }));
-vi.mock('../../../maker-host/codex-local-sessions', () => ({
-  importExternalCodexMessagesForSession: vi.fn(async () => undefined),
-}));
-vi.mock('../../../maker-host/claude-local-sessions', () => ({
-  importExternalClaudeCodeMessagesForSession: vi.fn(async () => undefined),
+vi.mock('../../../session-import/legacy', () => ({
+  adoptLegacySessionBeforeOpen: vi.fn(async () => undefined),
 }));
 vi.mock('../../../embedders/chat-history-embedder', () => ({
   onMessageCreated: vi.fn(async () => undefined),
@@ -98,6 +95,9 @@ function setupDb(): void {
       rewind_at INTEGER
     );
     CREATE UNIQUE INDEX uniq_messages_session_client ON messages(session_id, client_id);
+    CREATE TABLE bot_session_links (
+      bot_id TEXT, session_id TEXT, role TEXT, route_key TEXT, archived_at INTEGER
+    );
   `);
   sqlite.prepare("INSERT INTO sessions (id, cleared_at, status) VALUES ('s1', NULL, 'active')").run();
   const db = drizzle(sqlite, {

@@ -13,6 +13,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import { detectCwd } from '../worktree/WorktreeManager';
 import { GitExecError, type GitExecOpts } from '../worktree/gitExec';
+import { OperationBudget, currentOperationBudget } from '../utils/operationBudget';
 
 // ── mock gitExec, 控制 detectCwd 看到的 git 输出 ──────────────────────────
 const { gitExecMock, realpathMock } = vi.hoisted(() => ({
@@ -76,6 +77,31 @@ function setupGitMock(opts: {
 }
 
 describe('detectCwd → isInsideWorktree (I-1 fix)', () => {
+  // #7259, unit tier: a cancellable snapshot probe must not share a pending UI
+  // probe. The two callers own different lifetimes even for the same directory.
+  it('isolates a cancelled snapshot probe from a pending UI probe of the same directory', async () => {
+    realpathMock.mockResolvedValue(path.resolve('/probe-repo'));
+    let releaseUi!: () => void;
+    let enteredSnapshot!: () => void;
+    const entered = new Promise<void>((resolve) => { enteredSnapshot = resolve; });
+    const budget = new OperationBudget(1_000);
+    const answer = { stdout: '/probe-repo\nmain\n.git\n.git\n', stderr: '' };
+    gitExecMock.mockImplementation(() => {
+      if (currentOperationBudget()) {
+        enteredSnapshot();
+        return new Promise((_resolve, reject) => budget.signal.addEventListener('abort', () => reject(budget.signal.reason), { once: true }));
+      }
+      return new Promise((resolve) => { releaseUi = () => resolve(answer); });
+    });
+    const ui = detectCwd('/probe-repo');
+    const snapshot = budget.run(() => detectCwd('/probe-repo'));
+    await entered;
+    budget.cancel(new Error('snapshot stopped'));
+    await expect(snapshot).rejects.toThrow('snapshot stopped');
+    releaseUi();
+    await expect(ui).resolves.toMatchObject({ isGitRepo: true });
+    expect(gitExecMock).toHaveBeenCalledTimes(2);
+  });
   // PR #6544: 5s realpath + 10s Git leaves no headroom in Mobile's 15s wait.
   // Existing coverage bounds each phase separately, not their sum (unit tier).
   it.each([

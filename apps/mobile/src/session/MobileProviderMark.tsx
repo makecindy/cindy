@@ -1,14 +1,14 @@
 /**
  * MobileProviderMark —— provider-aware 模型下拉里每行前缀 / trigger 药丸的「来源徽标」。
  *
- * 对齐桌面 ProviderMark:目录供应商用**官方单色 mark**，品牌路径与 provider id/upstream
+ * 对齐桌面 ProviderMark:目录供应商用**品牌 mark**，品牌路径与 provider id/upstream
  * 识别由 @cindy/model-providers/branding 双端共享；未知自定义供应商回退首字母 monogram，使用与桌面一致的 4px 方盒。XD mark 非正方形(158:282),渲染时在 size×size 盒内
  * 垂直居中,保证与正方形 mark 同行对齐。
  */
-import type { ReactNode } from 'react';
+import { useId, type ReactNode } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { Text } from '@/components/AppText';
-import Svg, { Path } from 'react-native-svg';
+import Svg, { Defs, G, LinearGradient, Path, Stop } from 'react-native-svg';
 
 import {
   ANTHROPIC_PROVIDER_PATH,
@@ -20,7 +20,9 @@ import {
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight as fontWeightToken, lineHeight, radius, typeScale } from '@/theme/tokens';
 import {
+  MODEL_SPECTRUM_COLORS,
   PROVIDER_LOGO_PATHS,
+  CINDY_MARK_TRANSFORM, CINDY_MARK_PATH, CINDY_MARK_EARRING_PATH, CINDY_MARK_EARRING_COLOR,
   isProviderLogoKind,
   resolveProviderLogoKind,
   type ProviderLogoRouting,
@@ -128,6 +130,8 @@ export function MobileProviderMark({
         GLYPH_INSET,
         fill,
       );
+    case 'openai-spectrum':
+      return withRemote(<View accessible={false} style={styles.markBox}><OpenAISpectrumArtwork fill={fill} /></View>, remote, GLYPH_INSET, fill);
     case 'openai':
       return withRemote(
         <View accessible={false} style={styles.markBox}>
@@ -139,6 +143,8 @@ export function MobileProviderMark({
         GLYPH_INSET,
         fill,
       );
+    case 'cindy':
+      return withRemote(<View accessible={false} style={styles.markBox}><CindyArtwork fill={fill} /></View>, remote, GLYPH_INSET, fill);
     case 'xd':
       return withRemote(
         <View accessible={false} style={styles.markBox}>
@@ -212,19 +218,9 @@ export function MobileModelIconMark({
   if (kind) {
     const fill = color ?? colors.textSecondary;
     if (kind === 'cindy') {
-      return withRemote(
-        <View accessible={false} style={styles.markBox}>
-          <Svg width={XD_WIDTH} height={XD_WIDTH * XD_ASPECT} viewBox={XD_VIEW_BOX}>
-            {XD_SYMBOL_PATHS.map((p) => (
-              <Path key={p} d={p} fill={fill} />
-            ))}
-          </Svg>
-        </View>,
-        remote,
-        XD_INSET,
-        fill,
-      );
+      return withRemote(<View accessible={false} style={styles.markBox}><CindyArtwork fill={fill} /></View>, remote, GLYPH_INSET, fill);
     }
+
     return withRemote(
       <View accessible={false} style={styles.markBox}>
         <Svg width={GLYPH_SIZE} height={GLYPH_SIZE} viewBox="0 0 24 24">
@@ -249,4 +245,31 @@ export function MobileModelIconMark({
       remote={remote}
     />
   );
+}
+
+function CindyArtwork({ fill }: { fill: string }) {
+  return <Svg width={GLYPH_SIZE} height={GLYPH_SIZE} viewBox="0 0 24 24">
+    <G transform={CINDY_MARK_TRANSFORM}>
+      <Path d={CINDY_MARK_PATH} fill={fill} />
+      <Path d={CINDY_MARK_EARRING_PATH} fill={CINDY_MARK_EARRING_COLOR} />
+    </G>
+  </Svg>;
+}
+
+/** Adds spectrum color to the OpenAI blossom only for XD's byok-openai-codex
+ * provider. Temporary stand-in: remove when administrators can upload provider
+ * icons in the backend. Never reuse for other brands or as a general UI gradient. */
+function OpenAISpectrumArtwork({ fill }: { fill: string }) {
+  const { mode } = useTheme();
+  const gradientId = `openai-spectrum-${useId().replace(/:/g, '')}`;
+  const colors = MODEL_SPECTRUM_COLORS[mode];
+  return <Svg width={GLYPH_SIZE} height={GLYPH_SIZE} viewBox="0 0 24 24">
+    <Defs>
+      <LinearGradient id={gradientId} gradientUnits="userSpaceOnUse" x1={2} y1={2} x2={22} y2={22}>
+        {colors.map((color, index) => <Stop key={index} offset={index / (colors.length - 1)} stopColor={color} />)}
+      </LinearGradient>
+    </Defs>
+    <Path d={OPENAI_PROVIDER_PATH} fill={fill} opacity={mode === 'dark' ? 0.30 : 0.35} />
+    <Path d={OPENAI_PROVIDER_PATH} fill={`url(#${gradientId})`} opacity={mode === 'dark' ? 0.78 : 0.72} />
+  </Svg>;
 }

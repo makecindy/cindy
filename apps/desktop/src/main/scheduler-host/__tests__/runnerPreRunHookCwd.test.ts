@@ -57,7 +57,7 @@ vi.mock('../runners/_shared', () => ({
   backfillSessionMeta: mocks.backfillSessionMeta,
 }));
 
-import { MakerScheduleRunner } from '../runner';
+import { MakerScheduleRunner } from '../runner.desktop';
 
 function baseSchedule(overrides: Partial<Schedule> = {}): Schedule {
   return {
@@ -100,6 +100,7 @@ function createRunner(getSessionMeta: Maker['getSessionMeta']) {
     getSessionMeta,
     isSessionAlive: vi.fn(() => false),
     closeSession: vi.fn(async () => undefined),
+    recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
   } as unknown as Maker;
   const runner = new MakerScheduleRunner({
     maker,
@@ -262,6 +263,20 @@ describe('MakerScheduleRunner pre-run hook cwd 解析', () => {
     );
   });
 
+  it('批准快照中的执行目录变化时，在运行前拒绝前置命令', async () => {
+    const getSessionMeta = vi.fn(async () => ({ workDir: '/changed/project' }) as never);
+    const { runner } = createRunner(getSessionMeta as never);
+
+    await expect(
+      runner.fire(
+        baseSchedule({ targetSessionId: 'sess-bound', workingDir: undefined }),
+        { ...createFireContext(), expectedPreRunWorkingDir: '/approved/project' },
+      ),
+    ).rejects.toThrow(/execution directory changed/i);
+
+    expect(mocks.executePreRunHook).not.toHaveBeenCalled();
+  });
+
   it('heartbeat meta 读取失败 → 回落原值(undefined),hook 仍按结果协议执行', async () => {
     const getSessionMeta = vi.fn(async () => {
       throw new Error('session missing');
@@ -329,12 +344,13 @@ describe('MakerScheduleRunner pre-run hook cwd 解析', () => {
     );
   });
 
-  it('显式 workingDir 任务 → 直接用任务目录,不查 session meta', async () => {
+  // #8237: confirmed imports retain the same hook execution as authored schedules.
+  it.each(['user', 'project'] as const)('显式 workingDir 任务 (%s) → 直接用任务目录,不查 session meta', async (source) => {
     const getSessionMeta = vi.fn(async () => null);
     const { runner } = createRunner(getSessionMeta as never);
 
     await runner.fire(
-      baseSchedule({ workingDir: '/repo/project' }),
+      baseSchedule({ workingDir: '/repo/project', source }),
       createFireContext(),
     );
 
@@ -345,5 +361,18 @@ describe('MakerScheduleRunner pre-run hook cwd 解析', () => {
         stdinPayload: expect.objectContaining({ workingDir: '/repo/project' }),
       }),
     );
+  });
+
+  // Rule (2026-11-06): a host status change runs a PR follow-up at once, and its check must know
+  // the run was triggered so it skips its own pacing. Minimal input: the same fire with and without
+  // ctx.trigger (unit); a cron fire must not carry the field.
+  it('passes the host trigger to the hook input only when the run was triggered', async () => {
+    const { runner } = createRunner(vi.fn(async () => null) as never);
+    const trigger = { kind: 'watch' as const, source: 'pr-status', detail: 'https://github.com/o/r/pull/1' };
+    await runner.fire(baseSchedule({ workingDir: '/repo/project' }), { ...createFireContext(), trigger });
+    await runner.fire(baseSchedule({ workingDir: '/repo/project' }), createFireContext());
+    const payloads = mocks.executePreRunHook.mock.calls.map(([options]) => (options as { stdinPayload: Record<string, unknown> }).stdinPayload);
+    expect(payloads[0]).toMatchObject({ trigger });
+    expect(payloads[1]).not.toHaveProperty('trigger');
   });
 });

@@ -39,7 +39,7 @@ export interface ComposerRichInputConfig {
 /**
  * The editor intentionally has no network dependencies. Native owns the
  * semantic document; this page owns IME/selection and reports normalized DOM
- * changes after composition commits.
+ * changes without replacing the active IME's DOM on native acknowledgements.
  */
 export function buildComposerRichInputHtml(config: ComposerRichInputConfig): string {
   const bootstrap = JSON.stringify(config).replace(/</g, '\\u003c');
@@ -186,8 +186,7 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
   };
   const render = (documentValue, focusAfter) => {
     // Programmatic DOM replace (inserting a directory chip, applying a draft)
-    // can drop compositionend. If composing stays true, later input is visible
-    // but never posted, so the send button stays disabled.
+    // can drop compositionend. Clear its selection guard for the new document.
     composing = false;
     applying = true;
     reportUserSelection = false;
@@ -199,6 +198,8 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
     applying = false;
     lastSignature = JSON.stringify(readDocument());
     reportHeight();
+    // A replacement can keep the box size and scrollTop while the text edge changes.
+    reportScrollEdge();
     if (focusAfter) placeCaretAtEnd();
   };
   const pushText = (nodes, text, slashCommand) => {
@@ -308,8 +309,24 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
     lastReportedHeight = height;
     post({ type: 'height', height });
   };
+  // 文字滚到哪一端：原生侧据此决定按在文字上上下拖动是滚动还是调高输入框。
+  let lastScrollEdge = '';
+  const reportScrollEdge = () => {
+    // Sub-line overflow (padding rounding) still reads as fitting text.
+    const range = root.scrollHeight - root.clientHeight;
+    const fits = range < ${COMPOSER_TEXT_LINE_HEIGHT} / 2;
+    const atTop = fits || root.scrollTop <= 2;
+    const atBottom = fits || root.scrollTop >= range - 2;
+    const key = String(atTop) + String(atBottom);
+    if (key === lastScrollEdge) return;
+    lastScrollEdge = key;
+    post({ type: 'scroll-edge', atTop, atBottom });
+  };
+  root.addEventListener('scroll', reportScrollEdge, { passive: true });
   const notify = () => {
-    if (applying || composing) return;
+    // Preedit is visible draft content too. Native acknowledges these documents
+    // without rendering them back into this DOM, preserving the IME and caret.
+    if (applying) return;
     const value = readDocument();
     const signature = JSON.stringify(value);
     if (signature !== lastSignature) {
@@ -317,6 +334,7 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
       post(Object.assign({ type: 'change', document: value }, documentId ? { documentId } : {}));
     }
     reportHeight();
+    reportScrollEdge();
     reportSelection();
   };
   const setCaretAfter = (node, selection) => {
@@ -579,6 +597,12 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
 
   window.cindyComposer = {
     ping(id) { post({ type: 'pong', id }); },
+    snapshot(requestId) {
+      // A read barrier, not a blur/DOM replacement: Send must await this reply,
+      // even if the last input/change event is still crossing the native bridge.
+      const pendingPaste = Array.from(pasteMarkers.values()).some(({ marker }) => root.contains(marker));
+      post({ type: 'snapshot', requestId, documentId, document: readDocument(), pendingPaste });
+    },
     applyDocument(value, focusAfter, caret, nextDocumentId) {
       if (Number.isSafeInteger(nextDocumentId)) documentId = nextDocumentId;
       render(value, focusAfter === true && !caret);
@@ -609,9 +633,9 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
     insertNode(node) { insertAtSelection(node); },
     commitPaste(requestId, nodes) { commitPaste(requestId, nodes); },
     resolveSessionLink(href, label) { resolveSessionLink(href, label); },
-    setConfig(value) { applyConfig(value || {}); reportHeight(); },
+    setConfig(value) { applyConfig(value || {}); reportHeight(); reportScrollEdge(); },
   };
-  new ResizeObserver(reportHeight).observe(root);
+  new ResizeObserver(() => { reportHeight(); reportScrollEdge(); }).observe(root);
   render(config.document, false);
   post({ type: 'ready' });
 })();

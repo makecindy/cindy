@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { applyPendingAgentSwitchIfIdle, createPendingAgentSwitchRegistry, isUserPendingAgentSwitchIntent, type MakerSessionAgentSwitchHandlerDeps, type PendingAgentSwitchIntent } from '../sessionAgentSwitchHandler';
 import { parseOrcaRemoteLead } from '../../../shared/orcaRemoteWorker';
 import { acquireSendToSessionLock, withSendToSessionLock } from '../sendToSessionLock';
+import { takeOverLocalAgentVisibleSession } from '../../local-agent/visibleSessions';
 import { effectiveSourceIdForModel, findCatalogModel, type ProviderView } from '@cindy/model-providers';
 import { resolveSessionRuntimeAxes } from '../sessionRuntimeControl';
 import { parseScheduledModelBaseline } from '../../../shared/scheduledModelBaseline';
@@ -196,12 +197,15 @@ describe('complete selection commit boundaries', () => {
     await createScheduledModelScope(deps).begin('scheduled-task');
     profile = automatic;
     // A new scope instance also exercises a restart between turns.
+    const recoverRenamedSessionModelOnSend = vi.fn(async () => {});
     const adapter = compile(directSendAdapter, {
+      takeOverLocalAgentVisibleSession,
       scheduledModelScope: createScheduledModelScope(deps),
       acquireSendToSessionLock, agentSwitchPending: new Map(),
       isUserPendingAgentSwitchIntent, reconcileBotModelRoute: vi.fn(),
       applyPendingAgentSwitchIfIdle: vi.fn(), agentSwitchDeps: {},
-      applyScheduledProfile: apply, contextOverflowRolloverHolder: null,
+      recoverRenamedSessionModelOnSend,
+      applyScheduledProfile: apply, prepareUnhealthySessionForSend: vi.fn(async () => false),
       // 发送边界的预算对账（register.ts）：本用例只关心路由选择，注入 no-op。
       reconcileSessionContextWindowBudgetUnderLock: vi.fn(async () => {}),
       replayPendingSessionContextWindowBudgetUnderLock: vi.fn(async () => {}),
@@ -218,6 +222,7 @@ describe('complete selection commit boundaries', () => {
     expect(transitions).toEqual([route === 'ordinary' ? owner.model : automatic.model]);
     expect(profile.model).toBe(route === 'ordinary' ? owner.model : automatic.model);
     expect(baseline === null).toBe(route === 'ordinary');
+    expect(recoverRenamedSessionModelOnSend).toHaveBeenCalledTimes(route === 'ordinary' ? 1 : 0);
   });
 
   it('reads a picker intent staged while the direct send waits for the real route lock', async () => {
@@ -239,10 +244,12 @@ describe('complete selection commit boundaries', () => {
     const deps = { pendingSwitches: pending, getLiveSession: () => null, selectSameAgentModel: selected,
       bootstrapSwitchedSession: vi.fn(), log: { warn: vi.fn() } } as unknown as MakerSessionAgentSwitchHandlerDeps;
     const directSend = compile(directSendAdapter, { agentSwitchPending: pending, acquireSendToSessionLock,
+      takeOverLocalAgentVisibleSession,
       scheduledModelScope: { restore: vi.fn(async () => {}) },
       restoreArchivedSessionForSend: async () => { status = 'active'; },
       reconcileBotModelRoute: vi.fn(), applyPendingAgentSwitchIfIdle, isUserPendingAgentSwitchIntent,
-      agentSwitchDeps: deps, contextOverflowRolloverHolder: null,
+      recoverRenamedSessionModelOnSend: vi.fn(async () => {}),
+      agentSwitchDeps: deps, prepareUnhealthySessionForSend: vi.fn(async () => false),
       reconcileSessionContextWindowBudgetUnderLock: vi.fn(async () => {}),
       replayPendingSessionContextWindowBudgetUnderLock: vi.fn(async () => {}),
       appliedContextWindowBudgets: new Map<string, number | null>(),
@@ -340,10 +347,12 @@ describe('Orca model-only picker intent admission', () => {
       bootstrapSwitchedSession: vi.fn(), withCloseSuppressed: (_id: string, fn: () => Promise<unknown>) => fn(),
       log: { info: vi.fn(), warn: vi.fn() } } as unknown as MakerSessionAgentSwitchHandlerDeps;
     const directSend = compile(directSendAdapter, {
+      takeOverLocalAgentVisibleSession,
       scheduledModelScope: { restore: vi.fn(async () => {}) },
       agentSwitchPending: pending, restoreArchivedSessionForSend: restore,
       acquireSendToSessionLock: acquire, reconcileBotModelRoute: vi.fn(),
-      applyPendingAgentSwitchIfIdle, isUserPendingAgentSwitchIntent, agentSwitchDeps: deps, contextOverflowRolloverHolder: null,
+      applyPendingAgentSwitchIfIdle, isUserPendingAgentSwitchIntent, agentSwitchDeps: deps, prepareUnhealthySessionForSend: vi.fn(async () => false),
+      recoverRenamedSessionModelOnSend: vi.fn(async () => {}),
       reconcileSessionContextWindowBudgetUnderLock: vi.fn(async () => {}),
       replayPendingSessionContextWindowBudgetUnderLock: vi.fn(async () => {}),
       appliedContextWindowBudgets: new Map<string, number | null>(),

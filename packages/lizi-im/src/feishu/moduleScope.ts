@@ -30,8 +30,10 @@ export interface FeishuScopeOptions {
   secretKeyPrefix?: string;
   /** 是否注册 `feishuBot:*` 设置卡 IPC 并广播状态(只有设置页那份为 true)。 */
   ipc?: boolean;
-  /** 对外开放: 非主人的私聊与群 @ 进业务层(带非主人标记), 命令仍只认主人。 */
+  /** 允许非主人的群 @ 进业务层；不授予私聊权限，命令仍只认主人。 */
   guests?: boolean;
+  /** Runtime ownership is independent of the owner's saved announcement preference. */
+  shouldAnnounceLifecycle?: () => boolean;
 }
 
 export interface FeishuScope {
@@ -40,6 +42,7 @@ export interface FeishuScope {
   readonly secretKeyPrefix: string;
   readonly ipc: boolean;
   readonly guests: boolean;
+  readonly shouldAnnounceLifecycle?: () => boolean;
   readonly events: FeishuEventBus;
   /** 各模块的实例状态(scopeSlot 按 symbol 懒建)。 */
   readonly slots: Map<symbol, unknown>;
@@ -55,6 +58,7 @@ export function createFeishuScope(options: FeishuScopeOptions): FeishuScope {
     secretKeyPrefix: options.secretKeyPrefix ?? '',
     ipc: options.ipc !== false,
     guests: options.guests === true,
+    shouldAnnounceLifecycle: options.shouldAnnounceLifecycle,
     events: new FeishuEventBus(),
     slots: new Map(),
   };

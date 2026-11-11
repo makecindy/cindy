@@ -7,6 +7,9 @@ import {
   apiFetchRaw,
   registerAccountUnavailableHandler,
 } from '@/api/client';
+import { __testing as relayRoutingTesting, setActiveSelfHostedRelay } from '@/device-link/selfHostedRelayRouting';
+const nativeMedia = vi.hoisted(() => ({ request: vi.fn() }));
+vi.mock('@/device-link/agentNetMediaApi', () => ({ mobileAgentNetMediaRequest: nativeMedia.request }));
 
 // 文案已 i18n 化;固定 zh-CN 让字面量断言与语言环境解耦(全局 mock 默认 en-US)。
 beforeAll(async () => {
@@ -15,9 +18,37 @@ beforeAll(async () => {
 
 describe('apiFetchRaw', () => {
   afterEach(() => {
+    nativeMedia.request.mockReset();
     vi.useRealTimers();
     vi.unstubAllGlobals();
     setMobileDebugSink(undefined);
+  });
+  it('routes an encrypted reference through its native adapter without passing the account token to it or HTTP', async () => {
+    const fetch = vi.fn(); vi.stubGlobal('fetch', fetch);
+    const value = { getUrl: 'file:///unit-cache/decrypted', expiresAt: '2099-01-01T00:00:00Z' };
+    nativeMedia.request.mockResolvedValue({ handled: true, value });
+    await expect(apiFetchRaw('/api/device-link/media/presign-get', { baseUrl: 'https://relay.example.invalid',
+      method: 'POST', body: { key: 'agent-net-v3/public-unit-reference' }, token: 'unit-account-token' })).resolves.toBe(value);
+    expect(nativeMedia.request.mock.calls[0][1]).not.toHaveProperty('token');
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it('rejects a native media result when the caller scope changes while the native operation is pending', async () => {
+    let finish!: (result: unknown) => void, current = true;
+    nativeMedia.request.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    const work = apiFetchRaw('/api/device-link/media/presign-get', { baseUrl: 'https://relay.example.invalid', method: 'POST',
+      body: { key: 'agent-net-v3/public-unit-reference' }, assertCurrent: () => { if (!current) throw new Error('OWNER_CHANGED'); } });
+    const rejected = expect(work).rejects.toThrow('OWNER_CHANGED');
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'), { interval: 1, timeout: 80 });
+    current = false; finish({ handled: true, value: {} }); await rejected;
+  });
+
+  // Unit: invitation shares carry account authorization and may not follow
+  // redirects. Existing API coverage checked headers/cache, not redirect policy.
+  it('passes an explicit redirect refusal to the native transport', async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetch);
+    await apiFetchRaw('/api/shares', { baseUrl: 'https://share.example.invalid', redirect: 'error' });
+    expect(fetch.mock.calls[0]?.[1]).toMatchObject({ redirect: 'error' });
   });
 
   it.each([
@@ -281,5 +312,48 @@ describe('apiFetchRaw', () => {
     } finally {
       dispose();
     }
+  });
+});
+
+// Self-hosted relay (docs/self-hosted-relay-plan.md §5.3, §8): every device-link REST consumer goes
+// through apiFetchRaw, so this is where the account token must never reach a self-hosted relay and
+// where a relay 401 must lose any meaning for the Cindy account (no refresh code, no sign-out).
+describe('apiFetchRaw with a self-hosted relay', () => {
+  const RELAY = 'https://relay.home.example';
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    relayRoutingTesting.reset();
+  });
+
+  it('sends the relay credential instead of the account token; a relay 401 cannot sign the account out', async () => {
+    setActiveSelfHostedRelay({ relayId: 'relay-1', name: 'Home', baseUrl: RELAY, credential: 'relay-credential', signing: null });
+    const fetchMock = vi.fn(async () => new Response(
+      JSON.stringify({ error: { code: 'ACCOUNT_UNAVAILABLE' } }), { status: 401 },
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+    const terminal = vi.fn();
+    const dispose = registerAccountUnavailableHandler(terminal);
+    try {
+      await expect(apiFetchRaw('/api/device-link/devices', { baseUrl: RELAY, token: 'account-token' }))
+        .rejects.toMatchObject({ code: 'RELAY_CREDENTIAL_INVALID', status: 401 });
+      const headers = (fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].headers as Record<string, string>;
+      expect(headers.Authorization).toBe('CindyRelay relay-credential');
+      expect(JSON.stringify(headers)).not.toContain('account-token');
+      expect(terminal).not.toHaveBeenCalled();
+    } finally { dispose(); }
+  });
+
+  it('never sends the account token to a known relay without a usable credential', async () => {
+    const fetchMock = vi.fn(async () => new Response('{}'));
+    vi.stubGlobal('fetch', fetchMock);
+    // Credential missing on this phone (e.g. restored backup without THIS_DEVICE_ONLY keychain items).
+    setActiveSelfHostedRelay({ relayId: 'relay-1', name: 'Home', baseUrl: RELAY, credential: null, signing: null });
+    await expect(apiFetchRaw('/api/device-link/devices', { baseUrl: RELAY, token: 'account-token' }))
+      .rejects.toMatchObject({ code: 'RELAY_CREDENTIAL_UNAVAILABLE' });
+    // Switched back to the official relay: a late request still holding the relay address stays blocked.
+    setActiveSelfHostedRelay(null);
+    await expect(apiFetchRaw('/api/device-link/media', { baseUrl: 'https://RELAY.home.example/', token: 'account-token' }))
+      .rejects.toMatchObject({ code: 'RELAY_CREDENTIAL_UNAVAILABLE' });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

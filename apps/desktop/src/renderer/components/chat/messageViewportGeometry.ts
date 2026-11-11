@@ -1,3 +1,20 @@
+/** Fade cleanup only removes opacity/color animation hooks (globals.css).
+ * Require the renderer's word key and an exact removal: other classes, text,
+ * styles and batched layout changes must still invalidate row geometry.
+ */
+function isCompletedFade(record: MutationRecord): boolean {
+  if (record.type !== 'attributes' || !(record.target instanceof HTMLElement)
+    || !record.target.hasAttribute('data-wf-key')) return false;
+  const element = record.target;
+  if (record.attributeName === 'data-stream-marker') {
+    return element.tagName === 'LI' && record.oldValue !== null && !element.hasAttribute('data-stream-marker');
+  }
+  if (record.attributeName !== 'class' || element.tagName !== 'SPAN' || record.oldValue === null) return false;
+  const before = record.oldValue.split(/\s+/).filter(Boolean);
+  return before.includes('stream-word') &&
+    before.filter(name => name !== 'stream-word').join(' ') === Array.from(element.classList).join(' ');
+}
+
 /** Geometry is rebuilt on structural/width changes, and patched for dirty rows.
  * Scrolling only queries the ordered numeric offsets; it never scans row DOM.
  */
@@ -46,6 +63,7 @@ export class MessageViewportGeometry {
 
   mutations(records: MutationRecord[], items: HTMLElement) {
     for (const record of records) {
+      if (isCompletedFade(record)) continue;
       if (record.target === items) {
         if (record.type === 'childList') this.structure = true;
         else this.full = true;
@@ -72,25 +90,16 @@ export class MessageViewportGeometry {
     // change. Keep the full measurement fallback for this uncommon path.
     this.full ||= this.width !== width || this.itemsWidth !== itemsWidth ||
       (this.itemsHeight !== itemsHeight && this.dirty.size === 0);
-    if (!this.full && !this.dirty.size) return;
     const boxes = new Map<number, DOMRect>();
-    // Visual follow/entrance offsets are compositor projections, not row layout.
-    // Caching them as list geometry makes the virtualizer compensate them again.
-    const translationY = (element: HTMLElement) => {
-      const transform = getComputedStyle(element).transform;
-      return !transform || transform === 'none' ? 0 : new DOMMatrixReadOnly(transform).m42;
-    };
-    const flowOffset = translationY(items);
     const box = (index: number) => {
       let result = boxes.get(index);
-      if (!result) {
-        const row = this.rows[index];
-        const rect = row.getBoundingClientRect();
-        result = new DOMRect(rect.x, rect.y - flowOffset - translationY(row), rect.width, rect.height);
-        boxes.set(index, result);
-      }
+      if (!result) { result = this.rows[index].getBoundingClientRect(); boxes.set(index, result); }
       return result;
     };
+    // A header before items can resize without changing any indexed row or
+    // the items box. Refresh the origin independently of cached row sizes.
+    this.origin = this.rows.length ? box(0).top + root.scrollTop - root.getBoundingClientRect().top : 0;
+    if (!this.full && !this.dirty.size) return;
     const changed: number[] = [];
     for (let i = 0; i < this.rows.length; i++) if (this.full || this.dirty.has(this.rows[i])) changed.push(i);
     if (this.full) { this.sizes = []; this.gaps = []; }
@@ -109,7 +118,6 @@ export class MessageViewportGeometry {
       this.gaps[i] = i === 0 ? 0 : box(i).top - box(i - 1).bottom;
       if (i + 1 < this.rows.length) this.gaps[i + 1] = box(i + 1).top - box(i).bottom;
     }
-    this.origin = this.rows.length ? box(0).top + root.scrollTop - root.getBoundingClientRect().top : 0;
     this.tops = []; this.bottoms = [];
     let offset = 0;
     for (let i = 0; i < this.rows.length; i++) {
@@ -133,6 +141,7 @@ export class MessageViewportGeometry {
     let anchorIndex = findViewportRange(this.tops, this.bottoms, relative, relative + height).start;
     while (anchorIndex < this.rows.length && (this.bottoms[anchorIndex] <= relative || this.sizes[anchorIndex] === 0)) anchorIndex++;
     return { keys: this.keys.slice(start, end).filter(Boolean), lower, upper,
+      anchorElement: this.rows[anchorIndex] ?? null,
       anchor: anchorIndex < this.keys.length ? { key: this.keys[anchorIndex], offset: this.origin + this.tops[anchorIndex] - position } : null };
   }
 }

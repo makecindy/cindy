@@ -6,7 +6,8 @@ import { createPiKernelManager, type PiKernelManager } from './pi-kernel-manager
  * 2026-08 起 pi 也走本模块(整目录 tar.gz 分发,可选资产,失败由 pi-host 降级)。
  *
  * 公开 API (全部走 (kind, ...) 形态, 调用方不再分 claude/codex 各导一份):
- *   prepare(kind, opts?)             — splash 下载入口, 真做 dev fallback / OSS 下载 / SHA256 校验 / IPC 进度广播
+ *   prepare(kind, opts?)             — 启动安装入口，优先复用后台下载；首装/修复保留网络兜底
+ *   prefetch(kind, opts?)            — 后台/About 共用的下载缓存，不切换当前运行路径
  *   getCachedBinaryStatus(kind)      — 同步快查 (DropdownMenu 元 IPC 用), 不触发下载
  *   getReadyBinaryPath(kind)         — 读 prepare() 成功后写入的 cache 路径 (maker-host 构造期同步注入)
  *   peekNeedsDownload(kind)          — splash 顺序检查用
@@ -28,12 +29,12 @@ import { createPiKernelManager, type PiKernelManager } from './pi-kernel-manager
  */
 
 import path from 'node:path';
-import fs from 'node:fs';
 import { app, BrowserWindow } from 'electron';
 
 import { createBinaryProvisioner } from './factory.js';
-import { probeBinaryVersion } from './binary-version-probe.js';
+import { isBinaryVersionNotOlder, normalizeBinaryVersion, probeBinaryVersion } from './binary-version-probe.js';
 import { findDevBinary } from './dev-fallback.js';
+import { readCachedBinaryStatus } from './binaryStatus.js';
 import {
   findCachedLinuxRuntimeFallbackBinary,
   findUsableLinuxRuntimeFallbackBinary,
@@ -49,6 +50,7 @@ import {
 import { ProgressNormalizer } from '../updateProgressNormalizer.js';
 import { createLogger } from '../logger.js';
 import { consumeStartupBinaryUpdateMarker, type StartupBinaryUpdateScope } from './startup-update.js';
+import { clearPreparedBinaryDownloads, hasPreparedBinaryDownload } from './download-cache.js';
 
 let startupUpdateScope: StartupBinaryUpdateScope | undefined;
 
@@ -56,7 +58,10 @@ function resolveUpdateCheck(kind: AgentBinaryKind, checkForUpdates?: boolean): b
   startupUpdateScope ??= app.isPackaged
     && consumeStartupBinaryUpdateMarker(app.getPath('userData'), app.getVersion());
   if (checkForUpdates !== undefined) return checkForUpdates;
-  return startupUpdateScope === true || (Array.isArray(startupUpdateScope) && startupUpdateScope.includes(kind));
+  // Legacy application-update markers must not force a network upgrade anymore.
+  // prepare() adopts a completed background download, otherwise keeps the usable
+  // local runtime. Scoped markers from older About flows retain their repair path.
+  return Array.isArray(startupUpdateScope) && startupUpdateScope.includes(kind);
 }
 
 /**
@@ -265,6 +270,20 @@ export function getReadyBinaryPath(kind: AgentBinaryKind): string | undefined {
   return lastReadyPath.get(kind);
 }
 
+/** Background/About share the cache, while the running process keeps its path. */
+export async function prefetch(
+  kind: AgentBinaryKind,
+  opts: { manifest?: Manifest; signal?: AbortSignal } = {},
+): Promise<boolean> {
+  if (!app.isPackaged) return false;
+  // An explicit Pi selection (including an intentional downgrade) is authoritative.
+  if (kind === 'pi' && getPiKernelManager().hasSelection()) {
+    await clearPreparedBinaryDownloads('pi').catch(() => undefined);
+    return true;
+  }
+  return getBase(kind).prefetch(opts);
+}
+
 /**
  * spawn/execFile 前的执行侧复核:candidate 必须与本模块此刻能解析出的受管二进制
  * 路径完全一致。二进制路径本就只该出自本模块,这里再挡一层意外来源作为防御纵深
@@ -296,52 +315,29 @@ function formatBytes(bytes: number): string {
 export function getCachedBinaryStatus(kind: AgentBinaryKind): CachedBinaryStatus {
   const cfg = CONFIG[kind];
   const cachedReadyPath = lastReadyPath.get(kind);
-  if (cachedReadyPath) {
-    try {
-      fs.accessSync(cachedReadyPath, fs.constants.X_OK);
-      return { binaryReady: true, binaryPath: cachedReadyPath };
-    } catch {
-      lastReadyPath.delete(kind);
-    }
-  }
-
   // dev:优先查仓库本地 runtime(apps/<devBinDir>/<platform>/<devBinaryName>)。
-  if (!app.isPackaged) {
-    const devPath = findDevBinary({
-      vendorBinDir: cfg.devBinDir,
-      binaryName: cfg.devBinaryName ?? cfg.binaryName,
-    });
-    if (devPath) return { binaryReady: true, binaryPath: devPath };
-  }
-
+  const devPath = app.isPackaged
+    ? null
+    : findDevBinary({
+        vendorBinDir: cfg.devBinDir,
+        binaryName: cfg.devBinaryName ?? cfg.binaryName,
+      });
   // packaged Linux 同步快查只看已知私有路径；不能在 renderer-facing 路径
   // 里执行 CLI --version 或 PATH shell lookup。系统 CLI 由 async prepare 发现。
   // pi 不走 Linux runtime fallback(那条链是 cc/codex 官方 CLI 专用),Linux 上的
   // pi 与其它平台一致:只使用 manifest 管理的 CDN 资产。
-  if (kind !== 'pi') {
-    const linuxFallbackPath = findCachedLinuxRuntimeFallbackBinary(kind);
-    if (linuxFallbackPath) return { binaryReady: true, binaryPath: linuxFallbackPath };
-  }
-
-  // prod / dev fallback miss: 扫 userData/<installSubdir>/<version>/<binary> + .verified
-  try {
-    const installRoot = path.join(app.getPath('userData'), cfg.installSubdir);
-    const versions = fs
-      .readdirSync(installRoot, { withFileTypes: true })
-      .filter((e) => e.isDirectory())
-      .map((e) => e.name);
-    for (const v of versions) {
-      const p = path.join(installRoot, v, cfg.binaryName);
-      const verified = path.join(installRoot, v, '.verified');
-      if (fs.existsSync(p) && fs.existsSync(verified)) {
-        return { binaryReady: true, binaryPath: p };
-      }
-    }
-  } catch {
-    // fs 错 (目录不存在等) → 降级 false
-  }
-
-  return { binaryReady: false };
+  const status = readCachedBinaryStatus({
+    kind,
+    isPackaged: app.isPackaged,
+    userDataDir: app.getPath('userData'),
+    devCandidates: devPath ? [devPath] : [],
+    cachedPath: cachedReadyPath,
+    extraCandidate: kind === 'pi'
+      ? undefined
+      : () => findCachedLinuxRuntimeFallbackBinary(kind),
+  });
+  if (!status.binaryReady && cachedReadyPath) lastReadyPath.delete(kind);
+  return status;
 }
 
 // ── 主入口: prepare ──────────────────────────────────────────────────────────
@@ -421,13 +417,31 @@ export async function prepare(
     // 可能已拉取并缓存)→ 清标记走 CDN,CDN 资产可用时不该被旧标记跳过。
     if (getCachedManifest()) skipCdnUntilNextProbeSuccess = false;
     const cdnSkipped = skipCdnUntilNextProbeSuccess;
+    let usableLocalFallbackPath: string | undefined;
     if (opts.checkForUpdates === false) {
       const hasLocalCdnRuntime = getCachedManifest() && !await getBase(kind).peekNeedsDownload(opts);
       if (!hasLocalCdnRuntime) {
         const localPath = await findUsableLinuxRuntimeFallbackBinary(kind, opts.signal);
         if (localPath) {
-          lastReadyPath.set(kind, localPath);
-          return { ready: true, path: localPath, downloaded: false };
+          const manifest = getCachedManifest();
+          const asset = manifest && getVendorAsset(manifest, cfg.manifestField);
+          let usePreparedDownload = false;
+          if (asset && hasPreparedBinaryDownload(cfg.vendorKey, asset)) {
+            const localVersion = await probeBinaryVersion(localPath, opts.signal);
+            const targetVersion = normalizeBinaryVersion(asset.version);
+            // As with managed installs, adopt only a provably newer target.
+            // Failed/unknown probes keep the already usable system/private CLI.
+            usePreparedDownload = Boolean(localVersion && targetVersion
+              && !isBinaryVersionNotOlder(localVersion, targetVersion));
+          }
+          if (!usePreparedDownload) {
+            lastReadyPath.set(kind, localPath);
+            return { ready: true, path: localPath, downloaded: false };
+          }
+          // Try the completed cache first. A corrupt or locked cache falls back
+          // to the working system/private runtime without starting network IO.
+          usableLocalFallbackPath = localPath;
+          opts = { ...opts, allowDownload: false };
         }
       }
     }
@@ -448,6 +462,10 @@ export async function prepare(
       }
     }
     if (cdnResult.ready) return cdnResult;
+    if (usableLocalFallbackPath) {
+      lastReadyPath.set(kind, usableLocalFallbackPath);
+      return { ready: true, path: usableLocalFallbackPath, downloaded: false };
+    }
 
     if (broadcastProgress) {
       broadcastBinaryDownloadProgress({
@@ -536,7 +554,7 @@ async function prepareViaCdn(
 
   // ── 不广播 IPC 路径 (lazy 调用, 当前 desktop 不走) ────────────────────────
   if (!broadcastProgress) {
-    const result = await base.prepare({ signal: opts.signal, checkForUpdates: opts.checkForUpdates });
+    const result = await base.prepare({ signal: opts.signal, checkForUpdates: opts.checkForUpdates, allowDownload: opts.allowDownload });
     if (result.ready) {
       lastReadyPath.set(kind, result.binaryPath);
       return { ready: true, path: result.binaryPath };
@@ -602,6 +620,7 @@ async function prepareViaCdn(
     const result = await base.prepare({
       signal: effectiveSignal,
       checkForUpdates: opts.checkForUpdates,
+      allowDownload: opts.allowDownload,
       onProgress: (p: VendorRuntimeState) => {
         if (p.status === 'downloading') {
           didDownload = true;

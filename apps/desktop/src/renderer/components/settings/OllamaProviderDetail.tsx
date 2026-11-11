@@ -1,4 +1,5 @@
 import { Button } from '@/components/ui/button';
+import { localModelDescription } from '@cindy/model-providers';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -284,13 +285,7 @@ export function OllamaProviderDetail({ onChanged }: { onChanged: () => void }) {
         name={entry.name}
         packaging={<LocalPackagingTag libraryName={entry.libraryName} />}
         badge={badge}
-        description={
-          entry.descriptions?.[
-            (i18n.resolvedLanguage ?? i18n.language) as keyof NonNullable<typeof entry.descriptions>
-          ] ??
-          entry.descriptions?.en ??
-          ''
-        }
+        description={localModelDescription(entry.descriptions, i18n.resolvedLanguage ?? i18n.language) ?? ''}
         details={
           <>
             <span className="text-11" style={{ color: 'var(--text-tertiary)' }}>

@@ -11,7 +11,7 @@
   请求必须包含业务 requestId；保存、创建任务等写操作沿用同一个 requestId 查询/去重，
   超时不等于未执行，Host 不替作者盲目重发。
 - 电脑逻辑页收到手机业务消息时，Host 附上不透明 `mobilePageId`（覆盖页面自报的值）。
-  异步链显式保留它；confirm、notify、tasks、pick、workspace、preview、schedule 请求均原样附带。
+  异步链显式保留它；confirm、notify、tasks、pick、pickModel、workspace、preview、schedule 请求均原样附带。
   卡片动作消息也包含该字段。不要存为全局“最近手机”，也不能在后台复用过期来源。
 - 示例：`const origin = msg.mobilePageId; const answer = await cindy.confirm({ body: "应用调整？", ...(origin ? { mobilePageId: origin } : {}) });`
   只有 `answer.ok && answer.confirmed` 才能继续；页面关闭、覆盖、超时或撤权均不能当成同意。

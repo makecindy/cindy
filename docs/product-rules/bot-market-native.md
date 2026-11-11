@@ -26,7 +26,7 @@
 
 ## 文件责任与验证
 
-`main/bot-import/nativePackage.ts` 负责受信内置包解析与目录投影；`host.ts`、`transfer.ts` 沿用唯一导入请求与恢复；Desktop shared/preload 提供最小 typed IPC；`renderer/features/bots/BotMarketDialog.tsx` 实现列表/详情并沿原伙伴导航和删除确认。`resources/bot-packages` 只内置十包 0.5.1（工程交付、代码审计、产品巡检、选题策划、研究信号、视频剪辑、原型开发、投放监控、搜索广告复盘、游戏美术）。已从目录移除的包，已安装的伙伴按原回执照常使用与删除，目录不再列出它。旧版本构建源保存在设计资料目录，不随仓库分发。
+`main/bot-import/nativePackage.ts` 负责受信内置包解析与目录投影；`host.ts`、`transfer.ts` 沿用唯一导入请求与恢复；Desktop shared/preload 提供最小 typed IPC；`renderer/features/bots/BotMarketDialog.tsx` 实现列表/详情并沿原伙伴导航和删除确认。`resources/bot-packages` 只内置十包 0.5.2（工程交付、代码审计、产品巡检、选题策划、研究信号、视频剪辑、原型开发、投放监控、搜索广告复盘、游戏美术）。十语文案改变 manifest hash，随包版本同步递增；旧 0.5.1 的未完成导入继续使用原回执和持久快照，不覆盖已安装伙伴。已从目录移除的包，已安装的伙伴按原回执照常使用与删除，目录不再列出它。旧版本构建源保存在设计资料目录，不随仓库分发。
 
 每个内置包是离线编译器产出的「客户端发布版」，只含客户端会读的文件：`manifest.json`（紧凑 JSON，`integrity.files` 只列随包文件，例行任务不带 `sourcePaths`）、`assets/avatar.webp`、`knowledge/method.md` 和 `skills/<slug>/` 下各技能的全部文件（共 10 个文件）。身份提示读 manifest 里的 `profile.identitySource`，署名、来源、适配与行为评估等审计记录不随包进入仓库，留在设计资料目录的完整包里。`packageHash` 是 manifest 规范化 JSON 的哈希，与缩进、键序无关；发布版与完整包的 manifest 不同，所以哈希也不同。十个包合计约 409 KB（单文件均小于 100 KB），逐字节核对见 `nativePackage.test`。头像进入伙伴后沿既有路径：`avatarImageBase64` → `decodeBotAvatarImage`（PNG/JPEG/WebP 白名单）→ `toSdrAvatarImage`（SDR 原样保留）→ 托管媒体（`.webp`）；列表与详情的 `<img>`、云端头像上传（oss avatar 场景允许 webp）、通知头像（sharp 转 JPEG）和手机缩略图（本就是 WebP）都接受 WebP。
 
@@ -38,7 +38,7 @@
 | --- | --- | --- |
 | N1 | 十包内容入口 | 可信内置目录读取；原 manifest/integrity 全文件与资源校验；30 个完整技能（含每包 1 个开场设置技能）、10 个辅助脚本、10 份方法参考、10 个独立头像（256×256 有损 WebP，质量 80，无 ICC/EXIF/动画，只接受 WebP）、每包三项关键能力（图标白名单 14 个，与编译器一致）；不随包分发案例截图。外置案例未混入。 |
 | N2 | 唯一安装/恢复 owner | 在原回执追加 nativePackage 身份，以 owner/packageId 串行准入；同包返回原请求，部分失败续接原 checkpoint，来源扫描/私有授权/cron 接管跳过。同版本异 hash 拒绝，新版本不覆已有成长。 |
-| N3 | 安装与使用分开 | 身份只写 SOUL，不伪装用户记忆；方法参考遵从 memory 开关；18 个例行任务定义停用保存；30 个技能（每包含 1 个开场设置技能）。保存后沿原 invitation 登记一次 tools-disabled 欢迎，原 canonical/runtime 处理实际模型工作，不自动首任务。 |
+| N3 | 安装与使用分开 | 身份只写 SOUL，不伪装用户记忆；方法参考遵从 memory 开关；18 个例行任务定义停用保存（2026-11-08 起写成伙伴项目的暂停自动化）；30 个技能（每包含 1 个开场设置技能）。保存后沿原 invitation 登记一次 tools-disabled 欢迎，原 canonical/runtime 处理实际模型工作，不自动首任务。 |
 | N4 | 市场界面 | 伙伴添加菜单、列表、详情/邀请/打开、部分失败续接、原删除确认；已保存的伙伴主按钮一律是“打开伙伴”，部分失败时按条目名称（技能名、知识标题、例行任务名）说明哪几项没保存，“重新保存”为次要操作；工作工具只显示插件正式名称，不默许授权或安装。五语 UI、Light/Dark token、窄窗口滚动。 |
 | N5 | 外部 Add 接点 | Desktop 路由 /bots/market/:packageId 共用详情；只识别内置目录包，没有新增 URL 抓取、协议注册或分享服务。 |
 | N6 | 分发与端侧验证 | 入口对安装包（Beta / 正式版）与源码运行一致开放，包随 extraResources 分发。截图和当前代码测试结果随本次交付记录；真实 OAuth、模型成果、自动化启用/触发、手机及跨进程重启验收不得从静态测试推定通过。 |

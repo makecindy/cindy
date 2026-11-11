@@ -11,6 +11,9 @@ const mockToastError = vi.fn();
 const mockGatewayPricing = vi.fn();
 const mockModelContextLimit = vi.fn();
 const mockModelContextLimitTarget = vi.fn();
+const mockNavigate = vi.fn();
+
+vi.mock('react-router-dom', () => ({ useNavigate: () => mockNavigate }));
 
 vi.mock('@/lib/sessionService', () => ({
   update: (...args: unknown[]) => mockUpdate(...args),
@@ -86,6 +89,7 @@ vi.mock('@/components/ui/dropdown-menu', async () => {
 });
 
 import { ContextWindowBudgetChip, isBoundsCacheEntryStale, resetRemoteContextWindowBoundsCache, __clearAllBoundsCachesForTest, __expireAllBoundsCachesForTest } from '../ContextWindowBudgetChip';
+import { ContextCapacityRing } from '../ContextCapacityRing';
 
 const SESSION_ID = 'session-1';
 
@@ -138,8 +142,15 @@ async function openTierCard(): Promise<HTMLElement[]> {
   const trigger = document.querySelector('[data-context-window-budget-chip]');
   if (!trigger) throw new Error('context window chip trigger is missing');
   fireEvent.click(trigger);
+  expandWindowOptions();
   await waitFor(() => { expect(rows().length).toBeGreaterThan(0); });
   return rows();
+}
+
+function expandWindowOptions() {
+  document.querySelectorAll<HTMLDetailsElement>('[data-context-window-options]').forEach((details) => {
+    if (!details.open) fireEvent.click(details.querySelector('summary')!);
+  });
 }
 
 /** 触发器不再显示数值：当前档位的可读出处是 aria-label（`triggerLabel`）。 */
@@ -217,7 +228,7 @@ function renderChip(
     });
   }
   return render(
-    <ContextWindowBudgetChip
+    <ContextWindowBudgetChip children={<span>12%</span>}
       sessionId={SESSION_ID}
       contextTokens={0}
       model="grok-4.6"
@@ -230,6 +241,7 @@ function renderChip(
 }
 
 beforeEach(() => {
+  mockNavigate.mockReset();
   mockUpdate.mockReset();
   mockUpdate.mockResolvedValue({ id: SESSION_ID });
   mockGetModelsForVendor.mockReset();
@@ -253,6 +265,27 @@ afterEach(() => {
 });
 
 describe('ContextWindowBudgetChip', () => {
+  it('opens the current model settings from the expanded window controls without changing the task budget', async () => {
+    // The settings link must preserve the source/model/engine and must not submit a tier.
+    renderChip({ providerId: 'xd', agentKind: 'cc' });
+    await openTierCard();
+    const settings = screen.getByRole('button', { name: 'ccAgent.contextRingPanel.modelSettings' });
+    expect(settings.closest('[data-context-window-options]')).not.toBeNull();
+    fireEvent.click(settings);
+    expect(mockNavigate).toHaveBeenCalledWith('/settings?tab=providers&connect=xd&model=grok-4.6&agent=claude-code');
+    expect(mockUpdate).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByRole('radiogroup')).toBeNull());
+  });
+
+  it('does not open local model settings for a remote task', async () => {
+    vi.mocked(window.electronAPI.deviceLink.invoke).mockResolvedValue(boundsView());
+    renderChip({ providerId: 'xd', deviceId: 'remote-device' });
+    await openTierCard();
+    expect(await screen.findByText('ccAgent.contextRingPanel.remoteModelSettings')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'ccAgent.contextRingPanel.modelSettings' })).toBeNull();
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
   it('renders the catalog default window when no budget is saved', () => {
     renderChip();
     const chip = document.querySelector('[data-context-window-budget-chip]');
@@ -276,24 +309,49 @@ describe('ContextWindowBudgetChip', () => {
     });
   });
 
-  it('marks the trigger with a text bracket pair plus the current percentage', () => {
-    // 用户拍板：底栏不挂文字标签，但要「窗口框 + 百分比」；百分比与卡片行同口径（默认档 = 100%）。
-    renderChip();
-    const chip = document.querySelector('[data-context-window-budget-chip]');
-    // 文本标记（↕，与 `¥` / `1%` 同字号同基线），不是图标、不是括号。
-    expect(chip?.textContent).toContain('↕');
-    expect(chip?.textContent).toContain('optionPercent#{"percent":100}');
-    expect(chip?.textContent).not.toContain('menuTitle');
-    expect(chip?.querySelector('svg')).toBeNull();
-    // 当前值进可访问名：读屏要能听到绝对窗口。
-    expect(chip?.getAttribute('aria-label')).toBe(
-      'ccAgent.contextWindowBudget.triggerLabel#{"window":"1M"}',
-    );
-    const cls = String(chip?.className);
-    expect(cls).toContain('text-12');
-    expect(cls).toContain('font-medium');
-    expect(cls).toContain('text-[var(--msg-tool-card-chevron)]');
-    expect(cls).not.toContain('text-[var(--text-tertiary)]');
+  // PR #7460: replace the obsolete session-view source regex with observable
+  // colors from the extracted production ring (DESIGN.md §2/§10, unit tier).
+  // At 70/71/90/91%, both threshold boundaries must retain their semantic tokens.
+  it.each([
+    [70, 'msg-tool-card-chevron'], [71, 'warning-fg'],
+    [90, 'warning-fg'], [91, 'error-flat'],
+  ] as const)('renders the context ring at %s%% using %s', (pct, token) => {
+    const { container } = render(<ContextCapacityRing
+      contextTokens={pct * 10_000}
+      sdkContextWindow={1_000_000}
+      model="grok-4.6"
+      vendorKey="cc"
+    />);
+    expect(container.querySelectorAll('circle')[1]?.getAttribute('stroke')).toBe(`var(--${token})`);
+    expect(container.querySelector('span')?.textContent).toBe(`${pct}%`);
+  });
+
+  it('keeps budget choices inside the ring details and compacts only on explicit action', async () => {
+    // User decision 2026-10-27: one ring entry, with budget controls inside its details.
+    // Existing tests only covered the standalone chip; this exercises the merged surface.
+    const compact = vi.fn();
+    render(<ContextCapacityRing
+      sessionId={SESSION_ID}
+      contextTokens={120_000}
+      sdkContextWindow={1_000_000}
+      model="grok-4.6"
+      providerId="xd"
+      vendorKey="cc"
+      providers={routeCatalog}
+      onCompact={compact}
+    />);
+    const trigger = document.querySelector('[data-context-window-budget-chip]')!;
+    expect(trigger.textContent).toBe('12%');
+    expect(screen.queryByRole('radiogroup')).toBeNull();
+    fireEvent.click(trigger);
+    expect((await screen.findByRole('progressbar')).getAttribute('aria-valuenow')).toBe('12');
+    expect(document.querySelector<HTMLDetailsElement>('[data-context-window-options]')?.open).toBe(false);
+    expandWindowOptions();
+    expect(screen.getByRole('radiogroup')).toBeTruthy();
+    expect(compact).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'ccAgent.contextRingPanel.compact' }));
+    expect(compact).toHaveBeenCalledOnce();
+    await waitFor(() => expect(screen.queryByRole('radiogroup')).toBeNull());
   });
 
   it('keeps the card open when the trigger is clicked after hover opened it', async () => {
@@ -305,12 +363,14 @@ describe('ContextWindowBudgetChip', () => {
     // 悬浮路径：打开延迟 300ms（waitFor 轮询等待，不使用真实定时器睡眠）。
     fireEvent.pointerEnter(trigger);
     await waitFor(() => {
+      expandWindowOptions();
       expect(screen.queryAllByRole('radio').length).toBeGreaterThan(0);
     }, { timeout: 1500 });
     // 悬浮已展开后点击触发器：卡片必须仍然在（Radix 的 toggle 被 preventDefault 拦住）。
     // 点击若重新排入关闭定时器，宽限 200ms 后卡片消失 —— 用 waitFor 确认「稳定不关」。
     fireEvent.click(trigger);
     await waitFor(() => {
+      expandWindowOptions();
       expect(screen.queryAllByRole('radio').length).toBeGreaterThan(0);
     }, { timeout: 400 });
   });
@@ -330,6 +390,7 @@ describe('ContextWindowBudgetChip', () => {
     expect(trigger!.getAttribute('aria-disabled')).toBe('true');
     // 仍可展开；档位行全部不可选，且有「只读」说明。
     fireEvent.click(trigger!);
+    expandWindowOptions();
     const rows = screen.queryAllByRole('radio') as HTMLButtonElement[];
     await waitFor(() => { expect(rows.length).toBeGreaterThan(0); });
     for (const row of rows) expect(row.disabled).toBe(true);
@@ -354,22 +415,22 @@ describe('ContextWindowBudgetChip', () => {
     ).toBeTruthy();
   });
 
-  it('shows the saved tier percentage next to the marker', async () => {
-    // 存了 25% 档 → 触发器读 `↕ 25%`（绝对值在 aria-label / 卡片里）。
+  it('shows the saved tier percentage inside the ring details', async () => {
+    // 存了 25% 档 → 展开后选中的档位显示 25%，不占用底栏。
     // 档位来自权威边界查询（偏好文件里的条目），所以这里要等那次查询回来。
     renderChip({ budget: 250_000 });
-    const chip = document.querySelector('[data-context-window-budget-chip]');
+    await openTierCard();
     await waitFor(() => {
-      expect(chip?.textContent).toContain('optionPercent#{"percent":25}');
+      expect(chipText()).toContain('optionPercent#{"percent":25}');
     });
   });
 
   // 乐观记账的作用域与收口（Greptile 复审 P1）：预算是「按会话」存的偏好条目、与路由无关，
   // 所以切模型不该丢掉刚写的值；但同一张卡换到别的会话/设备时必须失效，而且只有**提交之后**
   // 回来的权威回答才有资格把它收口（保存后的那次 refresh 会丢弃之前 in-flight 的结果）。
-/** 触发器文本（`↕ 25%`）：百分比在文本里，绝对值在 aria-label（triggerLabel）里。 */
+/** 当前选择只显示在展开后的档位行里，底栏保留用量圆环。 */
 function chipText(): string {
-  return document.querySelector('[data-context-window-budget-chip]')?.textContent ?? '';
+  return document.querySelector('[role="radio"][aria-checked="true"]')?.textContent ?? '';
 }
 
   it('keeps the saved tier while the post-save authoritative answer is still in flight', async () => {
@@ -528,7 +589,7 @@ function chipText(): string {
 
     // 同一张卡换到另一个会话（新会话未存过档位）：乐观值必须失效，显示回默认档。
     view.rerender(
-      <ContextWindowBudgetChip
+      <ContextWindowBudgetChip children={<span>12%</span>}
         sessionId="another-session"
         contextTokens={0}
         model="grok-4.6"
@@ -690,11 +751,13 @@ function chipText(): string {
     expect(triggerLabel(chip)).toContain('1M');
   });
 
-  it('does not render when the route window is unknown', () => {
+  it('keeps context details available without inventing tiers when the route window is unknown', async () => {
     // 路由目录与扁平表都给不出默认窗口 → 没有档位可给，不渲染兜底控件。
     mockGetModelsForVendor.mockReturnValue([]);
-    renderChip({ providers: null, model: 'other-model' });
-    expect(document.querySelector('[data-context-window-budget-chip]')).toBeNull();
+    renderChip({ providers: null, model: 'other-model', details: 'Context usage' });
+    fireEvent.click(document.querySelector('[data-context-window-budget-chip]')!);
+    expect(await screen.findByText('Context usage')).toBeTruthy();
+    expect(screen.queryByRole('radiogroup')).toBeNull();
   });
 
   it('offers the route max tier so a session can raise the window again', async () => {
@@ -998,7 +1061,7 @@ function chipText(): string {
 
     // 模型选择器已切到目标模型（会话行还没落库）：chip 必须跟着换档位表与显示值。
     view.rerender(
-      <ContextWindowBudgetChip
+      <ContextWindowBudgetChip children={<span>12%</span>}
         sessionId={SESSION_ID}
         contextTokens={0}
         model="deepseek/deepseek-v4.1-flash"
@@ -1082,7 +1145,7 @@ function chipText(): string {
     });
 
     view.rerender(
-      <ContextWindowBudgetChip
+      <ContextWindowBudgetChip children={<span>12%</span>}
         sessionId={SESSION_ID}
         contextTokens={0}
         model="grok-4.6"
@@ -1142,13 +1205,14 @@ describe('ContextWindowBudgetChip — Greptile 2026-10-17 三条 P2', () => {
       .mockImplementationOnce(() => oldPending)                      // 旧实例的查询挂起
       .mockResolvedValue(boundsView({ budget: 500_000, budgetCustomized: true }))); // 新实例立刻回
     // 实例 A（挂起中）
-    const a = render(<ContextWindowBudgetChip sessionId={SESSION_ID} contextTokens={0}
+    const a = render(<ContextWindowBudgetChip children={<span>12%</span>} sessionId={SESSION_ID} contextTokens={0}
       model="grok-4.6" providerId="xd" agentKind="cc" providers={null} />);
     // 实例 B（同 key）：拿到新答案
-    const shellB = render(<ContextWindowBudgetChip sessionId={SESSION_ID} contextTokens={0}
+    const shellB = render(<ContextWindowBudgetChip children={<span>12%</span>} sessionId={SESSION_ID} contextTokens={0}
       model="grok-4.6" providerId="xd" agentKind="cc" providers={null} />);
     const triggerB = shellB.container.querySelector('[data-context-window-budget-chip]')!;
     fireEvent.click(triggerB);
+    expandWindowOptions();
     await waitFor(() => {
       const tokens = [...shellB.container.querySelectorAll('[role=radio]')]
         .map((el) => el.getAttribute('data-token'));
@@ -1160,10 +1224,11 @@ describe('ContextWindowBudgetChip — Greptile 2026-10-17 三条 P2', () => {
     await act(async () => { await Promise.resolve(); });
     // 新挂载的实例必须拿到**新**答案：500K 档在 1M 窗口下本来就在，**选中态**
     // 才能区分 —— budget=500K 时选中 500K；被旧响应覆盖回 null 时选中 1M 默认。
-    const shellC = render(<ContextWindowBudgetChip sessionId={SESSION_ID} contextTokens={0}
+    const shellC = render(<ContextWindowBudgetChip children={<span>12%</span>} sessionId={SESSION_ID} contextTokens={0}
       model="grok-4.6" providerId="xd" agentKind="cc" providers={null} />);
     const triggerC = shellC.container.querySelector('[data-context-window-budget-chip]')!;
     fireEvent.click(triggerC);
+    expandWindowOptions();
     await waitFor(() => {
       expect(checkedOf(shellC.container, '500000')).toBe(true);
     });
@@ -1176,14 +1241,15 @@ describe('ContextWindowBudgetChip — Greptile 2026-10-17 三条 P2', () => {
     let answer = boundsView({ budget: null, defaultEffectiveWindow: 1_000_000 });
     installElectronApi(vi.fn(async () => { const v = answer; return v; }));
     // 两实例先后渲染；注意两卡有互斥协调器（"唯一窗体"）—— 同屏只检查当前打开的那张。
-    const shellA = render(<ContextWindowBudgetChip sessionId={SESSION_ID} contextTokens={0}
+    const shellA = render(<ContextWindowBudgetChip children={<span>12%</span>} sessionId={SESSION_ID} contextTokens={0}
       model="grok-4.6" providerId="xd" agentKind="cc" providers={null} />);
-    const shellB = render(<ContextWindowBudgetChip sessionId={SESSION_ID} contextTokens={0}
+    const shellB = render(<ContextWindowBudgetChip children={<span>12%</span>} sessionId={SESSION_ID} contextTokens={0}
       model="grok-4.6" providerId="xd" agentKind="cc" providers={null} />);
 
     // ① 打开 A：500K 档在 1M 窗口下本来就在（50%），选中态是「1M 默认」。
     const triggerA = shellA.container.querySelector('[data-context-window-budget-chip]')!;
     fireEvent.click(triggerA);
+    expandWindowOptions();
     await waitFor(() => {
       expect(shellA.container.querySelectorAll('[role=radio]').length).toBeGreaterThan(0);
     });
@@ -1201,6 +1267,7 @@ describe('ContextWindowBudgetChip — Greptile 2026-10-17 三条 P2', () => {
     // 只断言「行存在」不足以证明同步（500K 行本来就存在）；1M 默认行不得同时选中。
     const triggerB = shellB.container.querySelector('[data-context-window-budget-chip]')!;
     fireEvent.click(triggerB);
+    expandWindowOptions();
     await waitFor(() => {
       expect(checkedOf(shellB.container, '500000')).toBe(true);
     });
@@ -1324,7 +1391,7 @@ describe('ContextWindowBudgetChip — Greptile 2026-10-24 三条 P2', () => {
 
     // 用户切到本地任务（同一组件实例，deviceId 消失）后才收到旧设备的拒绝。
     view.rerender(
-      <ContextWindowBudgetChip
+      <ContextWindowBudgetChip children={<span>12%</span>}
         sessionId={SESSION_ID}
         contextTokens={0}
         model="grok-4.6"

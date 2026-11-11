@@ -1,8 +1,5 @@
 import { registerCompanionImport } from '../../bot-import/registration.js';
 import { registerTaskTagsIpc } from './taskTags';
-import { registerRoutineRemoteResources } from '../../routines/remote.js';
-import { registerRoutinesIpc } from '../../routines/service.js';
-import { registerNightlyLearningIpc } from '../../routines/nightlyLearningIpc.js';
 /**
  * chat-data-localization F2/F5：聚合注册所有 localDb IPC handlers + ensure-ready。
  *
@@ -25,27 +22,29 @@ import {
 } from './sessions';
 import { registerMessageIpc } from './messages';
 import { registerOrcaWorkflowIpc } from './orcaTeams';
-import { registerSessionImportIpc } from './session-import';
+import { registerSessionImportIpc } from '../../session-import/ipc';
 import { registerSessionShareIpc } from './session-share';
 import { registerRecentWorkdirsIpc } from './recentWorkdirs';
 import { registerProjectAliasesIpc } from './projectAliases';
 import { registerRightSidebarTabsIpc } from './rightSidebarTabs';
 import { registerSubagentRunsIpc } from './subagentRuns';
-import { enqueueDurableWrite } from '../../messagePersistBroadcaster';
+import { enqueueDurableWrite } from '../../messagePersistBroadcaster.desktop';
 import { registerDevSqliteVecIpc } from './dev/sqliteVec';
-import { registerSearchIpc } from './search';
+import { registerSearchIpc } from './search.desktop';
 import { registerRemoteHistoryIpc } from './history';
 import { registerHistoryQueryIpc } from './historyQuery';
 import { recoverActiveTeammateInvitations, registerBotIpc } from './bots';
+import { registerBotSkillSettingsIpc } from './botSkillSettingsIpc';
 import { botRemoteManagement } from './botRemoteManagement';
 import { registerBotRemoteResourceProvider } from './botRemoteResourceProvider';
 
 import { createLogger } from '../../logger';
 import { recordDesktopDevLocalDbStartupResult } from '../../devStartupStatus';
 import { createOwnerEnsureCoordinator } from './ownerEnsureCoordinator';
+import { replyToEnsureReady, type EnsureReadyReply } from '../ensureReadyReply.js';
 import { reconcileSessionMediaRefsForDeletedSessions } from '../../cindy-media/sessionCleanup';
 import { reconcileGeneratedImageRecovery } from '../../cindy-media/generatedImageRecovery';
-import { reconcileMediaRefCompensationsForOwner } from '../../cindy-media/refCompensationJournal';
+import { reconcileMediaRefCompensationsForOwner } from '../../cindy-media/refCompensationJournal.desktop';
 import { setSessionRouteLockImplementation } from '../sessionRouteLock';
 import { LOCAL_DATA_OWNER_ID } from '../../appSessionState';
 import { ensureDialogueWorkspaceDir } from '../dialogueWorkspace';
@@ -205,57 +204,12 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
       await opts.discardStaleOwner?.(userId);
     },
   });
-  ipcMain.handle('local-db:ensure-ready', async (_e, userId: unknown) => {
-    const startedAt = performance.now();
-    log.info(
-      JSON.stringify({
-        event: 'localDb.ipc.ensure-ready.recv',
-        userId: typeof userId === 'string' ? userId : `<${typeof userId}>`,
-      }),
-    );
-    if (typeof userId !== 'string' || !userId) {
-      log.warn(
-        JSON.stringify({
-          event: 'localDb.ipc.ensure-ready.reject',
-          reason: 'invalid userId',
-        }),
-      );
-      const result = {
-        ready: false,
-        error: { code: 'DB_INIT_FAILED', message: 'invalid userId' },
-      } as const;
-      recordDesktopDevLocalDbStartupResult(result);
-      return result;
-    }
-    let result;
-    try {
-      result = await runEnsureReady(userId);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      log.error(
-        JSON.stringify({
-          event: 'localDb.ipc.ensure-ready.failed',
-          userId,
-          error: message,
-        }),
-      );
-      result = {
-        ready: false,
-        error: { code: 'DB_INIT_FAILED', message },
-      } as const;
-    }
-    recordDesktopDevLocalDbStartupResult(result);
-    log.info(
-      JSON.stringify({
-        event: 'localDb.ipc.ensure-ready.done',
-        userId,
-        ready: result.ready,
-        elapsedMs: Math.round(performance.now() - startedAt),
-        ...(result.ready ? {} : { error: result.error }),
-      }),
-    );
-    return result;
-  });
+  ipcMain.handle('local-db:ensure-ready', (_e, userId: unknown) =>
+    replyToEnsureReady(userId, {
+      run: (id) => runEnsureReady(id) as Promise<EnsureReadyReply>,
+      record: recordDesktopDevLocalDbStartupResult as (result: EnsureReadyReply) => void,
+      log,
+    }));
 
   registerSessionIpc(getCurrentDbClientUserId, {
     resolveContextWindow: opts.resolveContextWindow,
@@ -266,10 +220,8 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
   registerRemoteHistoryIpc();
   registerHistoryQueryIpc();
   registerBotIpc();
+  registerBotSkillSettingsIpc();
   registerCompanionImport();
-  registerRoutinesIpc();
-  registerNightlyLearningIpc();
-  registerRoutineRemoteResources(botRemoteManagement);
   registerBotRemoteResourceProvider(botRemoteManagement);
   registerSessionImportIpc();
   registerSessionShareIpc();

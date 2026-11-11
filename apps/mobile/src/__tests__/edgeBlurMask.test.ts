@@ -83,9 +83,10 @@ describe('composer edge backdrop placement', () => {
   });
 
   it('starts the iOS edge blur and the Android frost at the input, not at status rows above it', () => {
-    expect(source).toContain('height={Math.max(0, height - (sessionResourceCards.blocked ? 0 : inputTop))}');
+    expect(source).toContain('const composerBackdropTop = sessionResourceCards.blocked ? 0 : composerInputTop;');
+    expect(source).toContain('height={Math.max(0, bottomOverlayHeight - composerBackdropTop)}');
     const frost = source.slice(source.indexOf('{androidFrostedComposer ? ('), source.indexOf('testID="session.composerFrost"'));
-    expect(frost).toContain("sessionOperationLayout.composerSlot === 'editable' && !shareSelectionActive && { top: sessionResourceCards.blocked ? 0 : inputTop }");
+    expect(frost).toContain("sessionOperationLayout.composerSlot === 'editable' && !shareSelectionActive && { top: composerBackdropTop }");
   });
 
   it('frosts the activity pills with the shared chrome glass', () => {

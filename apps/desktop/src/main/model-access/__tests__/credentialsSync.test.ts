@@ -79,6 +79,67 @@ function makeHarness(overrides: Partial<CredentialsSyncDeps> = {}): Harness {
 }
 
 describe('credentialsSync', () => {
+  // Regression: a suspended Cindy provider must not provision/replace a key on
+  // login or 401 recovery. Existing tests only cover server-disabled access.
+  // Unit tier; the smallest input is a signed-in owner with the provider off.
+  it('does not fetch credentials while the provider is disabled and resumes after enabling', async () => {
+    let enabled = false;
+    const h = makeHarness({ isProviderEnabled: () => enabled });
+    h.setLocalKey('sk-kept');
+    h.fetchMock.mockResolvedValue({ endpoint: 'https://gateway.test.invalid', apiKey: 'sk-restored' });
+
+    h.sync.handleAuthChange({ isAuthenticated: true, userId: 'user-a' });
+    await h.sync.sync();
+    await h.sync.resyncAfterKeyRejection();
+    expect(h.fetchMock).not.toHaveBeenCalled();
+    expect(h.written).toEqual([]);
+    expect(h.sync.getStatus().state).toBe('idle');
+
+    enabled = true;
+    h.sync.handleProviderAccessChange();
+    await h.sync.sync();
+    expect(h.fetchMock).toHaveBeenCalledTimes(1);
+    expect(h.written).toEqual(['sk-restored']);
+    expect(h.sync.getStatus().state).toBe('ok');
+  });
+
+  it('discards an in-flight response after disabling, including after immediate re-enabling', async () => {
+    let enabled = true;
+    const h = makeHarness({ isProviderEnabled: () => enabled });
+    const pending: Array<(value: CredentialsPayload) => void> = [];
+    h.fetchMock.mockImplementation(() => new Promise(resolve => pending.push(resolve)));
+    h.sync.handleAuthChange({ isAuthenticated: true, userId: 'user-a' });
+    const first = h.sync.sync();
+
+    enabled = false;
+    h.sync.handleProviderAccessChange();
+    enabled = true;
+    h.sync.handleProviderAccessChange();
+    const second = h.sync.sync();
+    expect(h.fetchMock).toHaveBeenCalledTimes(2);
+
+    pending[0]({ endpoint: 'https://gateway.test.invalid', apiKey: 'sk-stale' });
+    await first;
+    expect(h.written).toEqual([]);
+    pending[1]({ endpoint: 'https://gateway.test.invalid', apiKey: 'sk-current' });
+    await second;
+    expect(h.written).toEqual(['sk-current']);
+  });
+
+  it('does not retry credentials after the provider is disabled during backoff', async () => {
+    let enabled = true;
+    const h = makeHarness({
+      isProviderEnabled: () => enabled,
+      sleep: async () => { enabled = false; },
+    });
+    h.fetchMock.mockRejectedValue(serverError('GATEWAY_ERROR', 502));
+
+    await h.sync.sync();
+
+    expect(h.fetchMock).toHaveBeenCalledTimes(1);
+    expect(h.written).toEqual([]);
+  });
+
   it('owner switch reloads endpoint metadata from the new owner namespace', () => {
     let owner = 'user-a';
     const contents = new Map<string, string>();

@@ -63,7 +63,6 @@ vi.mock('../features/cc-agent/sidebar/sections/UnclassifiedSection', () => ({
     </>
   ),
 }));
-vi.mock('@/features/bots/BotAvatar', () => ({ BotAvatar: () => <span>Bot avatar</span> }));
 vi.mock('../features/cc-agent/sidebar/SessionItem', () => ({ SessionItem: () => null }));
 vi.mock('../features/cc-agent/sidebar/SessionCard', () => ({ SessionCard: () => null }));
 vi.mock('../features/cc-agent/sidebar/AutomationSessionGroupItem', () => ({
@@ -77,8 +76,8 @@ function props(groupDevice: boolean): ProjectsSectionProps {
     dialogues: [],
     allKnownProjects: [],
     allProjectKeysForOrder: [],
-    bots: [],
     filter: {
+      creators: 'all', creatorOptions: [], toggleCreator: vi.fn(), setCreatorsAll: vi.fn(), setCreatorsNone: vi.fn(),
       groupBy: 'project',
       groupDialogue: true,
       groupDevice,
@@ -132,8 +131,7 @@ function props(groupDevice: boolean): ProjectsSectionProps {
     onCreateInProject: vi.fn(),
     onOpenConversationSearch: vi.fn(),
     onOpenInExplorer: vi.fn(),
-    onLinkCodexProject: vi.fn(),
-    linkingCodexProject: null,
+    onImportFromTools: vi.fn(),
     onBrowseFiles: vi.fn(),
     onArchiveAll: vi.fn(),
     onSearchDialogues: vi.fn(),
@@ -160,8 +158,22 @@ afterEach(() => {
 });
 
 describe('Online device headers without tasks', () => {
+  // #7237: unit regression through the real group headers. One unnamed host
+  // was covered, but two ID-as-name hosts previously had indistinguishable labels.
+  it('distinguishes unnamed device headers and folds only the selected device', () => {
+    render(<ProjectsSection {...props(true)} remoteDeviceIndex={new Map([
+      ['host-b', { name: 'host-b', online: true }],
+      ['host-a', { name: '', online: true }],
+    ])} />);
+    const first = screen.getByText('another computer (1)').closest('button')!;
+    const second = screen.getByText('another computer (2)').closest('button')!;
+    fireEvent.click(second);
+    expect(first.getAttribute('aria-expanded')).toBe('true');
+    expect(second.getAttribute('aria-expanded')).toBe('false');
+  });
+
   it('renders and folds an empty online device, then removes it when offline', () => {
-    const p = { ...props(true), bots: [], allProjectKeysForOrder: [] };
+    const p = { ...props(true), allProjectKeysForOrder: [] };
     const view = render(<ProjectsSection {...p} />);
     const header = screen.getByText('Remote device').closest('button')!;
     expect(header.getAttribute('aria-expanded')).toBe('true');
@@ -181,7 +193,7 @@ describe('Online device headers without tasks', () => {
   });
 
   it('does not show device headers when device grouping is disabled', () => {
-    render(<ProjectsSection {...props(false)} bots={[]} allProjectKeysForOrder={[]} />);
+    render(<ProjectsSection {...props(false)} allProjectKeysForOrder={[]} />);
     expect(screen.queryByText('Remote device')).toBeNull();
   });
 });
@@ -308,9 +320,9 @@ describe('Offline device header names', () => {
     expect(screen.queryByText('offline')).toBeNull();
   });
 
-  it('still falls back to the device ID when no name is known', () => {
+  it('uses a readable fallback when no device name is known', () => {
     render(<ProjectsSection {...cachedProjectProps()} />);
-    expect(screen.getByText('offline')).toBeTruthy();
+    expect(screen.getByText('another computer')).toBeTruthy();
   });
 
   it('does not enable device grouping when only disconnected devices remain', () => {

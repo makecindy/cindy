@@ -1,3 +1,5 @@
+import { getPluginToolUi, pluginHasToolUi, pluginToolVisible, pluginUiDomains, pluginUiPermissionsExpand } from '../toolUi.js';
+import { hostUiApprovalSubjects } from '../hostUi.js';
 import { describe, expect, it } from 'vitest';
 import {
   GHOST_MANUAL_DESCRIPTION_MAX_CHARS,
@@ -17,6 +19,7 @@ import {
   isVersionlessCindyVersion,
   supportsCindyVersion,
   validateGhostManifest,
+  validateStoredGhostManifest,
 } from '../manifest.js';
 
 const validManifest = {
@@ -31,6 +34,25 @@ const validManifest = {
 } as const;
 
 describe('Ghost manifest contract', () => {
+  it('validates static task prompt declarations while preserving older installed plugin behavior', () => {
+    const base = { ...validManifest, schemaVersion: 3, minCindyVersion: '0.1.61', slots: undefined };
+    expect(validateGhostManifest({ ...base, systemPrompt: [{ id: 'style', order: 0, text: 'Static', scope: 'selected-task' }] })).toMatchObject({ ok: true });
+    const historical = { ...base, systemPrompt: { vendorExtension: 'previously unknown' } };
+    expect(validateGhostManifest(historical).ok).toBe(false);
+    expect(validateStoredGhostManifest(historical)).toMatchObject({ ok: true, manifest: { tools: base.tools } });
+    const stored = validateStoredGhostManifest(historical);
+    if (stored.ok) expect(stored.manifest.systemPrompt).toBeUndefined();
+  });
+  // Runtime controls are on-demand entry points. Unlike message hooks, selecting
+  // one must not require a resident process (protocol contract, unit).
+  it('accepts on-demand runtime controls without making message hooks non-resident', () => {
+    const base = { ...validManifest, schemaVersion: 3, minCindyVersion: '0.1.61', slots: undefined };
+    const hooks = ['will-start-turn', 'will-model-request', 'will-compose-context', 'will-search-memory'];
+    const result = validateGhostManifest({ ...base, subscribe: { hooks } });
+    expect(result).toMatchObject({ ok: true, manifest: { subscribe: { hooks } } });
+    expect(validateGhostManifest({ ...base, subscribe: { hooks: ['will-user-message'] } }).ok).toBe(false);
+  });
+
   it.each([2, 3])('preserves the optional Host task card visibility flag in schema v%s', (schemaVersion) => {
     const base = {
       ...validManifest,
@@ -194,6 +216,33 @@ describe('Ghost manifest contract', () => {
   it('accepts and normalizes a valid schema v2 manifest', () => {
     const result = validateGhostManifest(validManifest);
     expect(result).toEqual({ ok: true, manifest: validManifest });
+  });
+
+  // Unit regression for the production validator: the existing 16KB protocol cap must use
+  // UTF-8 bytes. Shape coverage missed Chinese schemas accepted by the old UTF-16 length check.
+  it('enforces the tools parameters byte limit without rejecting the exact boundary', () => {
+    const schema = (description: string) => ({ type: 'object', description });
+    const utf8Bytes = (parameters: Record<string, unknown>) =>
+      new TextEncoder().encode(JSON.stringify(parameters)).length;
+    const emptySchemaBytes = utf8Bytes(schema(''));
+    const atLimit = schema('a'.repeat(16_384 - emptySchemaBytes));
+    const chineseDescription = '汉'.repeat(5_000);
+    const overLimit = schema(
+      `${chineseDescription}${'a'.repeat(16_385 - utf8Bytes(schema(chineseDescription)))}`,
+    );
+
+    expect(utf8Bytes(atLimit)).toBe(16_384);
+    expect(validateGhostManifest({
+      ...validManifest,
+      tools: [{ name: 'help', description: 'Help', parameters: atLimit }],
+    }).ok).toBe(true);
+
+    expect(JSON.stringify(overLimit).length).toBeLessThan(16_384);
+    expect(utf8Bytes(overLimit)).toBe(16_385);
+    expect(validateGhostManifest({
+      ...validManifest,
+      tools: [{ name: 'help', description: 'Help', parameters: overLimit }],
+    })).toEqual({ ok: false, reason: 'tools[].parameters 过大(上限 16KB)' });
   });
 
   it('keeps minCindyVersion optional for old plugins and validates declared versions', () => {
@@ -689,7 +738,7 @@ describe('Ghost manifest contract', () => {
         ...validManifest,
         locales: {
           en: 'locales/en.json',
-          fr: 'locales/fr.json',
+          it: 'locales/it.json',
         },
       }),
     ).toMatchObject({
@@ -1957,4 +2006,234 @@ it('validates independent target access without dropping the tasks dependency', 
   expect(validateGhostManifest({ ...base, agent: { tasks: true, targets: 'yes' } }).ok).toBe(false);
   const disabled = validateGhostManifest({ ...base, agent: { tasks: true, targets: false } });
   expect(disabled.ok && disabled.manifest.agent).toEqual({ tasks: true });
+});
+
+// Read-only observation is standalone; a non-boolean value must not install.
+it('validates read-only observe access without a tasks dependency', () => {
+  const base = { schemaVersion: 3, minCindyVersion: '0.1.0', id: 'observe-test', name: 'Observe', version: '1.0.0', entry: 'main.js' };
+  const approved = validateGhostManifest({ ...base, agent: { observe: true } });
+  expect(approved.ok && approved.manifest.agent).toEqual({ observe: true });
+  expect(validateGhostManifest({ ...base, agent: { observe: 'yes' } }).ok).toBe(false);
+  expect(validateGhostManifest({ ...base, agent: { observe: false } }).ok).toBe(false);
+});
+
+// Companion viewing is standalone; a non-boolean value must not install.
+it('validates companion viewing without a tasks dependency', () => {
+  const base = { schemaVersion: 3, minCindyVersion: '0.1.0', id: 'companions-test', name: 'Companions', version: '1.0.0', entry: 'main.js' };
+  const approved = validateGhostManifest({ ...base, agent: { companions: true } });
+  expect(approved.ok && approved.manifest.agent).toEqual({ companions: true });
+  expect(validateGhostManifest({ ...base, agent: { companions: 1 } }).ok).toBe(false);
+  expect(validateGhostManifest({ ...base, agent: { companions: false } }).ok).toBe(false);
+});
+
+describe('package release notes', () => {
+  const base = { schemaVersion: 3, minCindyVersion: '0.1.0', id: 'notes-test', name: 'Notes test', version: '1.0.0', entry: 'main.js' };
+  it('keeps old packages without notes installable', () => {
+    const result = validateGhostManifest(base);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.manifest).not.toHaveProperty('releaseNotes');
+  });
+  it('retains the complete package text without turning it into manifest summary', () => {
+    const releaseNotes = 'First change\nSecond change\n' + 'More changes '.repeat(500);
+    const result = validateGhostManifest({ ...base, releaseNotes });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.manifest.releaseNotes).toBe(releaseNotes);
+  });
+  it('rejects a non-text package releaseNotes', () => {
+    expect(validateGhostManifest({ ...base, releaseNotes: { version: '1' } }).ok).toBe(false);
+  });
+});
+
+// ui is a preserved v3 capability, not a change to existing tool declarations.
+// The old top-level extension tests cover preservation; these cases protect the new
+// page/reference/path/domain authority at the production validator. Tier: unit.
+describe('interactive page declarations', () => {
+  const base = { ...validManifest, schemaVersion: 3, slots: undefined, minCindyVersion: '0.1.0',
+    network: { hosts: ['api.example.com'] },
+    mcpApps: { ui: { resources: [{
+            uri: "ui://planner",
+            file: 'ui/planner.html',
+            csp: { connectDomains: ['https://api.example.com'] }
+        }], tools: { help: { resourceUri: "ui://planner", visibility: ['model', 'app'] } } } } };
+  it('preserves top-level pages while leaving the original tool declaration unchanged', () => {
+    const original = validateGhostManifest({ ...base, mcpApps: undefined });
+    const result = validateGhostManifest(base);
+    expect(result.ok).toBe(true);
+    if (!result.ok || !original.ok) throw new Error('invalid fixture');
+    expect(result.manifest.mcpApps).toEqual(base.mcpApps);
+    expect(result.manifest.tools).toEqual(original.manifest.tools);
+    expect(validateGhostManifest({ ...base, mcpApps: { ui: { resources: [], tools: { help: { visibility: ['app'] } } } } }).ok).toBe(true);
+  });
+  // New host placements reference the same resource catalog. They must not
+  // require a dummy business tool or accept references outside that catalog.
+  it('accepts a resource-only named view without changing existing tool declarations', () => {
+    const mcpApps = { ui: { resources: base.mcpApps.ui.resources, tools: {} }, host: {
+      views: [{ id: 'workspace', title: 'Workspace', resourceUri: 'ui://planner', scope: 'global' }],
+      contributions: [{ id: 'open', title: 'Open workspace', position: 'composer.toolbar', view: 'workspace' }],
+    } };
+    expect(validateGhostManifest({ ...base, mcpApps })).toMatchObject({ ok: true, manifest: { mcpApps } });
+  });
+  it('includes a declared message menu action in explicit host approval', () => {
+    const host = { contributions: [{ id: 'help-menu', title: 'Help', position: 'message.menu', tool: 'help' }] };
+    expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host } }).ok).toBe(true);
+    expect(hostUiApprovalSubjects(host)).toContainEqual(expect.objectContaining({ key: 'contribution:help-menu' }));
+  });
+  it('validates appearance resource declarations and grants only known fields', () => {
+    const host = { capabilities: ['appearance', 'app-icon'], appearance: { fields: ['bodyFont', 'appIcon', 'future-field'],
+      resources: [{ id: 'font', kind: 'font' as const, path: 'assets/font.woff2' }] } };
+    expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host } }).ok).toBe(true);
+    expect(hostUiApprovalSubjects(host).map(subject => subject.key)).toEqual([
+      'capability:appearance', 'appearance:bodyFont', 'appearance-resource:font',
+    ]);
+    for (const path of ['../font.woff2', '/font.woff2', 'assets/../../font.woff2']) {
+      expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps,
+        host: { ...host, appearance: { ...host.appearance, resources: [{ id: 'font', kind: 'font', path }] } },
+      } }).ok).toBe(false);
+    }
+  });
+  it('requires renewed approval to present a view in an entry popover', () => {
+    const entry = { id: 'open', title: 'Open', position: 'composer.toolbar', view: 'board' };
+    const host = { views: [{ id: 'board', title: 'Board', resourceUri: 'ui://planner' }], contributions: [entry] };
+    const popup = { ...host, contributions: [{ ...entry, presentation: 'popover' as const }] };
+    expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host: popup } }).ok).toBe(true);
+    expect(hostUiApprovalSubjects(popup)).not.toEqual(hostUiApprovalSubjects(host));
+    for (const position of ['message.menu', 'message.body', 'tool.body'])
+      expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps,
+        host: { ...popup, contributions: [{ ...popup.contributions[0], position }] },
+      } }).ok).toBe(false);
+  });
+  it.each([
+    { kind: 'status' },
+    { kind: 'select', tool: 'help', options: [{ label: 'Help', value: 'help' }] },
+  ])('rejects a non-action message menu declaration: %j', declaration => {
+    const host = { contributions: [{ id: 'help-menu', title: 'Help', position: 'message.menu', ...declaration }] };
+    expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host } }).ok).toBe(false);
+  });
+  it.each([
+    { views: [{ id: 'workspace', title: 'Workspace', resourceUri: 'ui://missing', scope: 'global' }] },
+    { views: [{ id: '../escape', title: 'Workspace', resourceUri: 'ui://planner', scope: 'global' }] },
+    { contributions: [{ id: 'open', title: 'Open', position: 'composer.toolbar', view: 'missing' }] },
+    { contributions: [{ id: 'open', title: 'Open', position: 'message.body', tool: 'help' }] },
+    { contributions: [{ id: 'one', title: 'One', position: 'composer.toolbar', tool: 'missing' }] },
+    { capabilities: ['context', 'context'] },
+  ])('rejects invalid host UI authority: %j', host => {
+    expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host } }).ok).toBe(false);
+  });
+  it.each([
+    { resources: [{
+            uri: "ui://planner",
+            file: '../outside.html'
+        }], tools: base.mcpApps.ui.tools },
+    { resources: base.mcpApps.ui.resources, tools: { missing: { resourceUri: "ui://planner" } } },
+    { resources: base.mcpApps.ui.resources, tools: { help: { resourceUri: "ui://unknown" } } },
+    { resources: [{
+            uri: "ui://planner",
+            file: 'ui/planner.html',
+            csp: { resourceDomains: ['https://outside.example'] }
+        }], tools: base.mcpApps.ui.tools },
+    { resources: base.mcpApps.ui.resources, tools: { help: { visibility: ['admin'] } } },
+    { resources: [{
+            uri: "ui://planner",
+            file: 'ui/planner.html',
+            csp: { connectDomains: null }
+        }], tools: base.mcpApps.ui.tools },
+    { resources: [{
+            uri: "ui://planner",
+            file: 'ui/planner.html',
+            csp: { connectDomains: ['https://api.example.com; unsafe-inline'] }
+        }], tools: base.mcpApps.ui.tools },
+  ])('rejects invalid page authority: %j', ui => {
+    expect(validateGhostManifest({ ...base, mcpApps: { ui } }).ok).toBe(false);
+  });
+  // Declared mcpApps extensions must survive normalization without becoming authority.
+  // Minimal inputs distinguish duplicate IDs, wrong URI scheme and inert standard metadata.
+  it('preserves future extensions and standard resource metadata without granting them', () => {
+    const resource = { ...base.mcpApps.ui.resources[0], domain: 'app.example.com', permissions: { camera: {} } };
+    const mcpApps = { future: { enabled: true }, ui: { ...base.mcpApps.ui, resources: [resource] } };
+    const result = validateGhostManifest({ ...base, mcpApps });
+    expect(result).toMatchObject({ ok: true, manifest: { mcpApps } });
+    expect(validateGhostManifest({ ...base, mcpApps: { future: { enabled: true } } })).toMatchObject({ ok: true });
+  });
+  it.each([
+    { uri: 'https://planner' }, { uri: 'ui://' }, { domain: false },
+    { permissions: { camera: true } }, { permissions: { camera: { allow: true } } },
+  ])('rejects malformed resource metadata: %j', patch => {
+    const resources = [{ ...base.mcpApps.ui.resources[0], ...patch }];
+    expect(validateGhostManifest({ ...base, mcpApps: { ui: { ...base.mcpApps.ui, resources } } }).ok).toBe(false);
+  });
+  it('rejects duplicate resource URIs even when their files differ', () => {
+    const resources = [base.mcpApps.ui.resources[0], { ...base.mcpApps.ui.resources[0], file: 'other.html' }];
+    expect(validateGhostManifest({ ...base, mcpApps: { ui: { ...base.mcpApps.ui, resources } } }).ok).toBe(false);
+  });
+  it('does not silently add page capabilities to schema v2', () => {
+    expect(validateGhostManifest({ ...base, schemaVersion: 2 }).ok).toBe(false);
+  });
+});
+
+// Unit: historical unknown mcpApps must stay inert; the strict authoring validator
+// already rejects these values, but capability checks previously accepted traversal.
+it.each(['../page.html', '/page.html', 'ui/../page.html', 'ui\\page.html', 'con.html'])(
+  'does not grant any page authority for historical path %s', file => {
+    const manifest = { schemaVersion: 3, tools: [{ name: 'help' }], network: { hosts: ['api.example.com'] },
+      mcpApps: { ui: { resources: [{ uri: 'ui://help', file, csp: { connectDomains: ['https://api.example.com'] } }],
+        tools: { help: { resourceUri: 'ui://help', visibility: ['app'] } } } } };
+    expect(getPluginToolUi(manifest)).toBeUndefined();
+    expect(pluginHasToolUi(manifest)).toBe(false);
+    expect(pluginToolVisible(manifest, 'help', 'model')).toBe(true);
+    expect(pluginToolVisible(manifest, 'help', 'app')).toBe(false);
+    expect(pluginUiDomains(manifest)).toEqual([]);
+    expect(pluginUiPermissionsExpand({}, manifest)).toBe(false);
+    const valid = { ...manifest, mcpApps: { ui: { ...manifest.mcpApps.ui, resources: [{ uri: 'ui://help', file: 'page.html' }] } } };
+    expect(pluginUiPermissionsExpand(manifest, valid)).toBe(true);
+  },
+);
+
+it('keeps a liveScreen declaration as a granted capability only in v3', () => {
+  const base = {
+    schemaVersion: GHOST_MANIFEST_SCHEMA_VERSION,
+    minCindyVersion: '0.1.116',
+    id: 'sim',
+    name: 'Simulator',
+    version: '1.0.0',
+    entry: 'main.js',
+    node: { entry: 'node/worker.cjs', protocol: 'json-rpc-stdio' },
+  };
+  const declared = validateGhostManifest({ ...base, liveScreen: true });
+  expect(declared.ok && declared.manifest.liveScreen).toBe(true);
+  const absent = validateGhostManifest(base);
+  expect(absent.ok && absent.manifest).not.toHaveProperty('liveScreen');
+  // Without a node worker the declaration could never run: refuse it at install.
+  const { node: _node, ...withoutNode } = base;
+  expect(validateGhostManifest({ ...withoutNode, liveScreen: true }).ok).toBe(false);
+});
+
+describe('tool approval declaration', () => {
+  it.each(['auto', 'each-call'] as const)('retains %s through protocol normalization', (approval) => {
+    const raw = { ...validManifest, tools: [{ name: 'run', description: 'Run', approval }] };
+    const result = validateGhostManifest(raw);
+    expect(result).toMatchObject({ ok: true, manifest: { tools: raw.tools } });
+    if (result.ok) expect(validateGhostManifest(result.manifest)).toEqual(result);
+  });
+  it('rejects an unknown approval policy', () => {
+    expect(validateGhostManifest({ ...validManifest, tools: [{ name: 'run', description: 'Run', approval: 'bypass' }] }))
+      .toMatchObject({ ok: false });
+  });
+});
+
+describe('readme declarations', () => {
+  // 作者契约(FORGE_GUIDE §2「详细介绍」):readme 规范化保留在 manifest 上,与已声明文件冲突时拒绝。
+  it('keeps a valid readme map and rejects paths that collide with other declared files', () => {
+    const readme = { en: 'README.md', 'zh-CN': 'README.zh-CN.md' };
+    expect(validateGhostManifest({ ...validManifest, readme })).toMatchObject({
+      ok: true,
+      manifest: { readme },
+    });
+    expect(
+      validateGhostManifest({
+        ...validManifest,
+        manual: { items: [{ dir: 'docs', name: 'docs', description: 'Docs' }] },
+        readme: { en: 'docs/README.md' },
+      }),
+    ).toMatchObject({ ok: false, reason: expect.stringContaining('readme.en') });
+  });
 });

@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { AGENT_KIND, EFFORT, EXECUTION_MODE, SCRIPT_CAPABILITY } from './_enums.js';
 import { assertCronAndTimezoneValid, buildJsonResult, withScheduler } from './_shared.js';
 import { isLocalDevice, runOnDevice, writeDeviceShape } from './_devices.js';
+import { assertWebhookReceiverAvailable, webhookSourceSchema } from './_webhook.js';
 import { LOCAL_SCHEDULE_AGENT_DEVICE } from './listModels.js';
 import type { LiziMcpSessionContext, SchedulerMcpDeps } from '../types.js';
 import type { SchedulerToolRegistry } from '../cindy_schedulerToolRegistry.js';
@@ -24,7 +25,7 @@ export function registerScheduleUpdateTool(
     name: 'schedule_update',
     category: 'scheduler',
     description:
-      '修改一条定时任务的部分字段（patch 形态）。默认改本机的；其它电脑上的任务传 device（此时不支持 bindToCurrentSession，也不支持用 null 清空 intervalMs 以外的字段；改 preRunHook 必须显式带 timeoutMs（数值，或 null 表示不限时）；targetSessionId 可传该电脑的 deviceId::sessionId 或其本机 id，不能指向别的电脑）。改 cronExpr / timezone 时 nextFireAt 会自动重算。要暂停 / 恢复请用 schedule_pause / schedule_resume，不要直接 patch status。把任务改成跟进**当前对话**的 heartbeat 请传 bindToCurrentSession=true（代码自动绑定本会话,无需也不要自己查 / 传 session id）。' +
+      '修改一条定时任务的部分字段（patch 形态）。默认改本机的；其它电脑上的任务传 device（此时不支持 bindToCurrentSession；null 可清空 intervalMs，以及支持模型位置选择的目标电脑上的 modelAgentDeviceId / modelAgentKind / model / providerId / effort，其它字段暂不支持；改 preRunHook 必须显式带 timeoutMs（数值，或 null 表示不限时）；targetSessionId 可传该电脑的 deviceId::sessionId 或其本机 id，不能指向别的电脑）。改 cronExpr / timezone 时 nextFireAt 会自动重算。要暂停 / 恢复请用 schedule_pause / schedule_resume，不要直接 patch status。把任务改成跟进**当前对话**的 heartbeat 请传 bindToCurrentSession=true（代码自动绑定本会话,无需也不要自己查 / 传 session id）。' +
       '**目标值缺失时先问用户，禁止盲猜**：用户指令模糊（如"改一下时间"没说改到几点、"换个模型"没说换哪个）时，先用 AskUserQuestion（或一句话追问）确认目标值再 patch；只改用户点名的字段，不要顺手"优化"其它字段。',
     inputShape: {
       id: z.string().min(1).describe('Schedule id'),
@@ -41,6 +42,9 @@ export function registerScheduleUpdateTool(
       timezone: z.string().min(1).optional(),
       recurring: z.boolean().optional(),
       agentKind: z.enum(AGENT_KIND).optional(),
+      modelAgentKind: z.enum(AGENT_KIND).nullable().optional().describe('显式模型选择的引擎；null 清除覆盖'),
+      fastMode: z.union([z.boolean(), z.literal('ultrafast')]).optional().describe('模型速度：false 标准、true 快速、ultrafast 超快；省略不修改'),
+      modelAgentDeviceId: z.string().nullable().optional().describe('模型运行位置必须与所选模型来源配套：明确选择本机模型时也要传空字符串，不能省略后误用绑定任务的远程电脑；远程或分享供应商传其 agentDeviceId；空字符串=自动化所在电脑（schedule_list_models 的 local 在此须转为空字符串），null=恢复沿用绑定任务及首次新建的 agentDeviceId 默认位置，省略=不修改。远程选择须同时指定 modelAgentKind、model、providerId；绑定任务或持续模式切回本机也须有 modelAgentKind 和 model，可沿用已保存的完整选择'),
       kind: z.literal('cron').optional(),
       model: z
         .string()
@@ -97,6 +101,26 @@ export function registerScheduleUpdateTool(
         .nullable()
         .optional()
         .describe('script 模式的脚本配置，语义见 schedule_create 同名字段。传 null = 清空（先/同时把 executionMode 切回 agent）；省略 = 不修改'),
+      preRunPlugin: z
+        .object({
+          pluginId: z.string().min(1).max(512),
+          onFailure: z.enum(['allow', 'skip', 'block']),
+        })
+        .nullable()
+        .optional()
+        .describe('插件前置检查，语义见 schedule_create 同名字段。传 null = 关闭；省略 = 不修改。只支持本机的定时任务。'),
+      webhookTrigger: z
+        .strictObject({
+          events: z
+            .array(z.string().min(1).max(100))
+            .max(32)
+            .optional()
+            .describe('只响应这些事件，每项为 event 或 event.action，例 "check_suite"、"pull_request.closed"；省略 = 全部'),
+          source: webhookSourceSchema,
+        })
+        .nullable()
+        .optional()
+        .describe('Webhook 触发，语义见 schedule_create 同名字段。传 null = 关闭（接收地址和密钥一并作废）；省略 = 不修改；修改筛选时地址和密钥不变。支持已登录且有接收服务的目标电脑。'),
       preRunHook: z
         .object({
           command: z.string().min(1),
@@ -117,10 +141,11 @@ export function registerScheduleUpdateTool(
           feishu: z.boolean(),
         })
         .optional(),
-      expireAt: z.number().int().optional(),
+      expireAt: z.number().int().nullable().optional().describe('Unix ms 截止时间戳；省略保留，null 清除。到期后不再自动触发，已开始的运行继续完成。'),
       ...writeDeviceShape,
     },
     handler: async ({ id, bindToCurrentSession, device, ...patch }) => {
+      const expected = deps.getApprovedScheduleGuard?.();
       if (!isLocalDevice(device)) {
         // 对方电脑的 IPC 入口自己做校验与 hook 路径稳定化;这里只拦跨 JSON 边界
         // 表达不了、或只对本机有意义的写法,明确报错而不是写出与意图不符的任务。
@@ -145,10 +170,13 @@ export function registerScheduleUpdateTool(
             // 语义相反;先读后写又会覆盖别处同时改的超时。要求调用方显式给出:数值或
             // null(不限时),由一次写入完成。
             ? '改其它电脑上的 preRunHook 必须显式传 timeoutMs(数值,或 null 表示不限时;先用 schedule_get 读到当前值)'
+          : (patch as { preRunPlugin?: unknown }).preRunPlugin !== undefined
+            ? '插件前置检查只能在本机设置（插件装在各自的电脑上）'
           : (patch as { agentDeviceId?: string | null }).agentDeviceId !== undefined
             ? '其它电脑上的定时任务不能设运行位置 agentDeviceId'
-          : Object.entries(patch).some(([key, value]) => value === null && key !== 'intervalMs')
-            ? '其它电脑上的定时任务暂不支持用 null 清空 intervalMs 以外的字段'
+          : Object.entries(patch).some(([key, value]) => value === null
+              && !['intervalMs', 'expireAt', 'webhookTrigger', 'modelAgentDeviceId', 'modelAgentKind', 'model', 'providerId', 'effort'].includes(key))
+            ? '其它电脑上的定时任务只支持用 null 清空间隔、截止时间、Webhook 和模型选择字段'
             : null;
         if (unsupported) {
           return buildJsonResult(
@@ -166,16 +194,18 @@ export function registerScheduleUpdateTool(
         }
         const hook = patch.preRunHook as { command: string; timeoutMs?: number | null } | undefined;
         // 不限时在对方入口的表达就是不带 timeoutMs 的整对象。
+        // Model-selection nulls must survive JSON; the receiving IPC clears them.
         const remotePatch = hook?.timeoutMs === null
           ? { ...patch, preRunHook: { command: hook.command } }
           : patch;
         return runOnDevice(deps, device, async () => undefined, {
           op: 'update',
-          args: [id, remotePatch],
+          args: expected ? [id, remotePatch, expected] : [id, remotePatch],
         });
       }
       return withScheduler(deps, async (scheduler) => {
         let input = patch as UpdateScheduleInput;
+        if (input.webhookTrigger) assertWebhookReceiverAvailable(deps);
         if ((patch as { targetSessionId?: string | null }).targetSessionId === null) {
           // JSON 边界的"解绑"表达:null → 归一成 undefined 但保留 key(storage patch
           // 按 hasOwnProperty 判定,key 在且 undefined = 清列 NULL,同 preRunHook 约定)。
@@ -197,7 +227,7 @@ export function registerScheduleUpdateTool(
         if (agentDeviceId === null || agentDeviceId === LOCAL_SCHEDULE_AGENT_DEVICE) {
           input = { ...input, agentDeviceId: undefined };
         }
-        for (const key of ['model', 'providerId', 'effort', 'workingDir'] as const) {
+        for (const key of ['model', 'providerId', 'effort', 'workingDir', 'modelAgentKind', 'modelAgentDeviceId'] as const) {
           if ((patch as Record<string, unknown>)[key] === null) {
             input = { ...input, [key]: undefined };
           }
@@ -272,7 +302,7 @@ export function registerScheduleUpdateTool(
               deps.hookScript.resolveSessionWorkDir ?? (async () => undefined),
             stabilizeCommand: deps.hookScript.stabilizeCommand,
           });
-        });
+        }, expected);
       });
     },
   });

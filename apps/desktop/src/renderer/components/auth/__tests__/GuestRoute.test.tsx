@@ -17,11 +17,12 @@ vi.mock('@/contexts/AuthContext', () => ({
 
 import { GuestRoute } from '../GuestRoute';
 
-function renderAt(path: string) {
+function renderAt(path: string, state?: { returnTo: string }) {
   return render(
-    <MemoryRouter initialEntries={[path]}>
+    <MemoryRouter initialEntries={[{ pathname: path, state }]}>
       <Routes>
         <Route path="/" element={<div data-testid="app-shell" />} />
+        <Route path="/plugins" element={<div data-testid="plugins-page" />} />
         <Route path="/login" element={<GuestRoute />}>
           <Route index element={<div data-testid="login-page" />} />
         </Route>
@@ -64,4 +65,20 @@ describe('GuestRoute', () => {
     expect(screen.getByTestId('app-shell')).toBeTruthy();
     expect(screen.queryByTestId('login-page')).toBeNull();
   });
+
+  it('restores the internal plugin destination after signing in', () => {
+    authState.current = { mode: 'cloud', isInitializing: false };
+    renderAt('/login', { returnTo: '/plugins?contribution=hello' });
+    expect(screen.getByTestId('plugins-page')).toBeTruthy();
+    expect(screen.queryByTestId('login-page')).toBeNull();
+  });
+
+  it.each(['https://example.com', '//example.com', '/login', '/login?returnTo=/plugins'])(
+    'rejects an external destination or login loop: %s', (returnTo) => {
+      authState.current = { mode: 'cloud', isInitializing: false };
+      renderAt('/login', { returnTo });
+      expect(screen.getByTestId('app-shell')).toBeTruthy();
+      expect(screen.queryByTestId('login-page')).toBeNull();
+    },
+  );
 });

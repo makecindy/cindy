@@ -86,8 +86,10 @@ class SpeakerFilterService {
   /**
    * The gate for one dictation run, or undefined when the filter is off or
    * not ready. Warms the worker so the first chunk is not held by model load.
+   * `onFiltered` runs each time a stretch of speech is muted, so the surface
+   * can tell the user why those words are missing.
    */
-  createGate(settings: SpeakerGateSettings): SpeakerGate | undefined {
+  createGate(settings: SpeakerGateSettings, onFiltered?: () => void): SpeakerGate | undefined {
     if (!settings.speakerFilterEnabled || !this.supported) return undefined;
     if (!this.models.getModelPaths()) return undefined;
     const profile = this.profiles.read();
@@ -115,6 +117,7 @@ class SpeakerFilterService {
           acceptedSoFar: accepted,
           rejectedSoFar: rejected,
         });
+        if (!decision.accepted) onFiltered?.();
       },
       onPassthrough: (reason) => {
         log.warn('speaker gate passthrough', { reason });

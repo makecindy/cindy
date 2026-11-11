@@ -8,6 +8,7 @@
 import {
   CODEX_HISTORY_OVERSIZED_REASON,
   CONTEXT_OVERFLOW_REASON,
+  REMOTE_COMPACT_ENCRYPTED_CONTENT_REASON,
   PI_REQUEST_BODY_RECOVERY_EXHAUSTED,
   type PiCacheCompatibility,
   isContextOverflowErrorMessage,
@@ -39,6 +40,7 @@ import { readMessageSourceDevice } from '@cindy/maker-shared/message-source';
 import { buildClientEnvironmentNote } from './mobileClientPromptNote.js';
 import { buildWireMessageSourceNote } from './messageSourceNote.js';
 import { isPiPromptRpcTimeoutError } from '../../shared/inputError.js';
+import { isEmptyModelChangeMarker } from './recoveryCoordinator.js';
 export { isPiPromptRpcTimeoutError } from '../../shared/inputError.js';
 
 const SYNTHETIC_TRIGGER_PREFIX = '[UI_ACTION_TRIGGER]';
@@ -72,7 +74,7 @@ export type OverflowRolloverPlan =
 export function isContextOverflowErrorData(data: unknown): boolean {
   if (!data || typeof data !== 'object') return false;
   const rec = data as { reason?: unknown; message?: unknown; sdkError?: unknown };
-  if (rec.reason === CONTEXT_OVERFLOW_REASON) return true;
+  if (rec.reason === CONTEXT_OVERFLOW_REASON || rec.reason === REMOTE_COMPACT_ENCRYPTED_CONTENT_REASON) return true;
   return [rec.message, rec.sdkError].some(
     (value) =>
       typeof value === 'string' &&
@@ -200,7 +202,7 @@ function isSyntheticUser(message: OverflowSourceMessage): boolean {
 }
 
 function hasTurnSideEffects(messagesAfterUser: OverflowSourceMessage[]): boolean {
-  return messagesAfterUser.some((message) => message.role !== 'error');
+  return messagesAfterUser.some((message) => message.role !== 'error' && !isEmptyModelChangeMarker(message));
 }
 
 export type OverflowReplayWireMessage =
@@ -411,6 +413,7 @@ export interface ContextOverflowRolloverDeps {
     botRole?: string | null;
     agentKind: string;
     remoteHostId: string | null;
+    agentDeviceId?: string | null;
     clearedAt: number | null;
     sdkSessionId?: string | null;
     contextTokens?: number | null;
@@ -419,6 +422,8 @@ export interface ContextOverflowRolloverDeps {
     providerId?: string | null;
     workingDir?: string | null;
   } | null>;
+  /** An idle runtime may need a fresh context when its subscription account was paused. */
+  needsNativeSessionHandoff?(sessionId: string, row: NonNullable<Awaited<ReturnType<ContextOverflowRolloverDeps['getSessionRow']>>>): Promise<boolean>;
   /** 发送前只读复核：旧错误不能把已经恢复健康的新线程再次重建。 */
   classifyCodexHistory?(threadId: string): Promise<'oversized' | 'healthy' | 'unknown'>;
   resolveVerifiedWindow?(
@@ -532,7 +537,7 @@ export type ContextRebuildReason =
 export function isBotChatContext(row: { source?: string | null; botRole?: string | null }): boolean {
   return (
     row.source === 'bot' &&
-    (row.botRole === 'canonical' || row.botRole === 'thread' || row.botRole === 'channel' || row.botRole === 'group')
+    (row.botRole === 'canonical' || row.botRole === 'thread' || row.botRole === 'routine' || row.botRole === 'channel' || row.botRole === 'group')
   );
 }
 
@@ -589,8 +594,9 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
   prepareUnhealthySession(sessionId: string): Promise<boolean>;
   prepareNativeSessionRecovery(
     sessionId: string,
-    // null is an explicit Bot restart: keep its route, including before the first native handle.
-    target: NativeSessionRecoveryTarget | null,
+    // null is an explicit Bot restart. retain-route carries an ordinary task to a
+    // different subscription account without changing its model or replaying input.
+    target: NativeSessionRecoveryTarget | 'retain-route' | null,
     assertCanCommit: () => void,
     signal?: AbortSignal,
   ): Promise<void>;
@@ -669,6 +675,9 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       // 不再带该字段），并重放同一轮用户消息。只做一次：已学过的 (provider, model)
       // 再失败就交给常规错误面，绝不循环重试。
       if (unsupportedOption) {
+        // Native provider recovery owns this failure, including the decision
+        // not to retry. Never stack a legacy process rebuild on top of it.
+        if ((errorData as { piCacheRecoveryHandled?: boolean }).piCacheRecoveryHandled) return false;
         if (!live && turnIdentity?.instanceId) return false;
         const compat = unsupportedRequestOptionCompatOverride(
           unsupportedRequestOptionErrorText(errorData),
@@ -1067,9 +1076,10 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     if (!sessionRow || sessionRow.status === 'deleted') return false;
     // SSH only; device-link 会话在被控桌面是本地 session,继续换窗。
     if (sessionRow.remoteHostId) return false;
-    if (!sessionRow.sdkSessionId) return false;
     const live = deps.getLiveSession(sessionId);
     if (live?.isTurnRunning() || (live?.listBackgroundTasks?.().length ?? 0) > 0) return false;
+    const accountHandoff = await deps.needsNativeSessionHandoff?.(sessionId, sessionRow) ?? false;
+    if (!sessionRow.sdkSessionId && !accountHandoff) return false;
     // All companion lanes use the ordinary Session recovery boundary. Healthy
     // contexts stay with the harness; age and companion identity do not rotate them.
     const botChat = isBotChatContext(sessionRow);
@@ -1110,7 +1120,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       compactFailed ||
       (botChat && isCompanionCompactFailure(lastError));
     const oversized = isOversizedHistoryErrorData(lastError);
-    const historyHealth = oversized && sessionRow.agentKind === 'codex'
+    const historyHealth = oversized && sessionRow.agentKind === 'codex' && sessionRow.sdkSessionId
       ? await deps.classifyCodexHistory?.(sessionRow.sdkSessionId)
       : undefined;
     const action = decideCindyCompression({
@@ -1118,7 +1128,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       bytes: piByteRecoveryFailed || historyHealth === 'oversized' || (oversized && historyHealth !== 'healthy') ? 'violated' : 'unknown',
       tokens: tokenViolated ? 'violated' : 'unknown',
     });
-    if (action !== 'rebuild') return false;
+    if (action !== 'rebuild' && !accountHandoff) return false;
     let lastUser: OverflowSourceMessage | undefined;
     let lastUserIndex = -1;
     for (let i = source.length - 1; i >= 0; i -= 1) {
@@ -1133,8 +1143,8 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       lastUser = (await deps.findLatestUser?.(sessionId)) ?? undefined;
       lastUserIndex = -1;
     }
-    if (!lastUser) return false;
-    const rebuildReason: ContextRebuildReason = isPiPromptRpcTimeoutError(lastError)
+    if (!lastUser && !accountHandoff) return false;
+    const rebuildReason: ContextRebuildReason = accountHandoff ? 'native-session-recovery' : isPiPromptRpcTimeoutError(lastError)
       ? 'pi-prompt-timeout'
       : 'context-overflow';
     // 待发出/失败的 user 还会由本次 send 或 Retry 再 wire 一次，交接里不能带。
@@ -1158,13 +1168,13 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       toLabel: label,
       sessionId,
       reason: botChat || isOversizedHistoryErrorData(lastError) ? 'native-session-recovery' : rebuildReason,
-      includeToolResults: botChat || isOversizedHistoryErrorData(lastError),
+      includeToolResults: accountHandoff || botChat || isOversizedHistoryErrorData(lastError),
       companion: botChat,
       ...(await companionRecall(sessionId, botChat)),
     });
     await deps.commitRebuild(sessionId, handoff, {
       reason: rebuildReason,
-      sourceUserClientId: lastUser.clientId,
+      sourceUserClientId: lastUser?.clientId ?? null,
       sourceAgentKind: normalizeOverflowDbAgentKind(sessionRow.agentKind),
       sourceModel: sessionRow.model ?? null,
       sourceProviderId: sessionRow.providerId ?? null,
@@ -1176,7 +1186,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     deps.log.info('unhealthy native session rebuilt before send; skip compact/resume', {
       sessionId,
       reason: rebuildReason,
-      sourceUserClientId: lastUser.clientId,
+      sourceUserClientId: lastUser?.clientId ?? null,
     });
     return true;
   };
@@ -1184,13 +1194,17 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
   return {
     async prepareNativeSessionRecovery(sessionId, target, assertCanCommit, signal) {
       if (inFlight.has(sessionId)) throw new Error('Native session recovery is already in progress');
-      inFlight.set(sessionId, undefined);
+      const controller = target === 'retain-route' ? new AbortController() : undefined;
+      if (controller) signal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+      inFlight.set(sessionId, controller);
+      const assertReady = () => { signal?.throwIfAborted(); assertCanCommit(); };
       try {
         await deps.withCloseSuppressed(sessionId, async () => {
           await deps.drainPersistQueue();
           const row = await deps.getSessionRow(sessionId);
           if (!row || row.status === 'deleted' ||
-              (target ? (!row.sdkSessionId || row.remoteHostId) : (row.source !== 'bot' || row.status !== 'active'))) {
+              (target === 'retain-route' ? !!row.remoteHostId
+                : target ? (!row.sdkSessionId || row.remoteHostId) : (row.source !== 'bot' || row.status !== 'active'))) {
             throw new Error('Native session recovery source is unavailable');
           }
           const generation = deps.readPendingHandoffGeneration?.(sessionId);
@@ -1198,20 +1212,20 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
           if (source.length === 0 && row.contextTokens !== 0) {
             throw new Error('Cindy history is unavailable for native session recovery');
           }
-          assertCanCommit();
+          assertReady();
           const live = deps.getLiveSession(sessionId);
-          if (target && live?.isTurnRunning()) {
-            throw new Error('Native session recovery cannot interrupt a running turn');
+          if (target && (live?.isTurnRunning() || (live?.listBackgroundTasks?.().length ?? 0) > 0)) {
+            throw new Error('Native session recovery cannot interrupt a running turn or background task');
           }
           // Manual restart closes the broken runtime without asking it to compact.
           if (live) await deps.closeSession(sessionId);
-          assertCanCommit();
+          assertReady();
           if (!target) {
             // Include any last output persisted while the old runtime was stopping.
             await deps.drainPersistQueue();
-            assertCanCommit();
+            assertReady();
             source = (await deps.listMessages(sessionId)).filter((message) => message.role !== 'error');
-            assertCanCommit();
+            assertReady();
           }
           // 显式重启(target=null)对伙伴的每段对话一视同仁: 主任务与 IM / 群专线按空闲间隔
           // 刷新同一口径写交接(isBotChatContext)。换路由恢复仍只认主任务。
@@ -1221,7 +1235,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
             toLabel: engineLabelForOverflow(row.agentKind),
             sessionId,
             reason: 'native-session-recovery',
-            includeToolResults: !target || isCanonicalBotContext(row),
+            includeToolResults: !target || target === 'retain-route' || isCanonicalBotContext(row),
             companion: companionChat,
             ...(await companionRecall(sessionId, companionChat)),
           });
@@ -1234,8 +1248,9 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
             sourceModel: row.model ?? null,
             sourceProviderId: row.providerId ?? null,
             expectedClearedAt: row.clearedAt,
-            ...(target ? { replacementRoute: { ...target, expectedSdkSessionId: row.sdkSessionId! } } : {}),
+            ...(target && target !== 'retain-route' ? { replacementRoute: { ...target, expectedSdkSessionId: row.sdkSessionId! } } : {}),
           }];
+          if (target === 'retain-route') assertReady();
           if (signal) commitArgs[3] = signal;
           await deps.commitRebuild(...commitArgs);
           deps.setPendingHandoff(sessionId, handoff, generation);

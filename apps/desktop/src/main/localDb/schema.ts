@@ -22,6 +22,21 @@ import {
 
 import type { SessionSource } from '../../shared/sessionSource.js';
 
+/** Rebuildable Chat Server projection inside the owner's database; namespace includes server and reader. */
+export const chatCacheRooms = sqliteTable('chat_cache_rooms', {
+  namespace: text('namespace').notNull(),
+  roomId: text('room_id').notNull(),
+  state: text('state').notNull(),
+  version: integer('version').notNull(),
+}, t => ({ pk: primaryKey({ columns: [t.namespace, t.roomId] }) }));
+
+export const chatCacheMessages = sqliteTable('chat_cache_messages', {
+  namespace: text('namespace').notNull(),
+  roomId: text('room_id').notNull(),
+  messageId: text('message_id').notNull(),
+  payload: text('payload').notNull(),
+}, t => ({ pk: primaryKey({ columns: [t.namespace, t.roomId, t.messageId] }) }));
+
 const speedSetting = customType<{ data: FastMode; driverData: number }>({
   dataType: () => 'integer',
   toDriver: fastModeToStorage,
@@ -47,13 +62,14 @@ export const pluginUsageSubjects = sqliteTable('plugin_usage_subjects', {
   byBinding: index('plugin_usage_subjects_binding_idx').on(t.ghostId, t.bindingRevision),
 }));
 
-/** Dispatch facts only: no arguments, response bodies, credentials or title snapshots. */
+/** Host-confirmed invocation facts; no content, credentials or title snapshots. */
 export const pluginUsageEvents = sqliteTable('plugin_usage_events', {
   callId: text('call_id').primaryKey(),
   subjectId: text('subject_id').notNull().references(() => pluginUsageSubjects.id),
   historyGeneration: integer('history_generation').notNull(),
   occurredAt: integer('occurred_at').notNull(),
   toolName: text('tool_name').notNull(),
+  entryKind: text('entry_kind').notNull().default('tool'),
   sessionId: text('session_id'),
   version: text('version'),
   releaseId: text('release_id'),
@@ -93,6 +109,7 @@ const SESSION_SOURCES = [
   'wechat',
   'dingtalk',
   'wecom',
+  'imessage',
   'scheduler',
   'learn',
   'review',
@@ -110,9 +127,11 @@ export const sessions = sqliteTable(
     id: text('id').primaryKey(),
     title: text('title').notNull().default('New Maker'),
     workingDir: text('working_dir'),
+    /** Explicit project membership; null retains the legacy cwd-based grouping. */
+    projectDir: text('project_dir'),
     /**
      * 产品归属语义, 与 working_dir 解耦:
-     * - project: working_dir 是项目目录, 参与侧边栏 Projects 分组。
+     * - project: 按 project_dir 归组；旧任务缺省回落 working_dir。
      * - dialogue: working_dir 是对话自己的运行/文件目录, 不作为项目展示。
      */
     workspaceKind: text('workspace_kind', { enum: ['project', 'dialogue'] })
@@ -167,6 +186,14 @@ export const sessions = sqliteTable(
      * 用量统计等全量口径不按此列过滤。
      */
     hiddenAt: integer('hidden_at'), // unix ms
+    /**
+     * 按任务静音通知。true = 用户在该任务的右键菜单里开了「消息免打扰」：
+     * 不再发系统通知（toast/声音）、不上 Agent 灵动岛、不推手机、不发 IM 消息。
+     * 任务内的未读与角标不受影响；存量行全部为 false。
+     */
+    notificationsMuted: integer('notifications_muted', { mode: 'boolean' })
+      .notNull()
+      .default(false),
     /**
      * 任务现状一句话摘要（仅置顶段卡片模式展示/生成）。
      * 由 main/sessionTaskSummary.ts 在置顶会话 turn 结束或置顶时经 oneShot 生成,
@@ -428,7 +455,7 @@ export const botSessionLinks = sqliteTable(
     profileVersion: integer('profile_version').notNull().default(1),
     // TS-only enum (SQLite `text`, no CHECK): `channel` = 伙伴接管的个人 IM 群 / 话题专线；
     // `thread` = 主人私聊里的话题（route_key = dm-thread:<根消息 Session>:<根消息 clientId>）。
-    role: text('role', { enum: ['canonical', 'history', 'delegation', 'group', 'channel', 'thread'] }).notNull(),
+    role: text('role', { enum: ['canonical', 'history', 'delegation', 'group', 'channel', 'thread', 'routine'] }).notNull(),
     routeKey: text('route_key'),
     createdAt: integer('created_at').notNull(),
     archivedAt: integer('archived_at'),
@@ -1081,19 +1108,68 @@ export const sessionPrRefs = sqliteTable(
     sessionId: text('session_id')
       .notNull()
       .references(() => sessions.id, { onDelete: 'cascade' }),
+    provider: text('provider', { enum: ['github', 'gitlab'] })
+      .notNull()
+      .default('github'),
+    host: text('host').notNull().default('github.com'),
     owner: text('owner').notNull(),
     repo: text('repo').notNull(),
     prNumber: integer('pr_number').notNull(),
     url: text('url').notNull(),
     firstSeenAt: integer('first_seen_at').notNull(), // unix ms
     lastSeenAt: integer('last_seen_at').notNull(), // unix ms
+    pinned: integer('pinned', { mode: 'boolean' }).notNull().default(false),
+    priority: integer('priority').notNull().default(0),
+    manuallyAdded: integer('manually_added', { mode: 'boolean' }).notNull().default(false),
+    associationSource: text('association_source').notNull().default('legacy'),
+    associationOrigin: text('association_origin'),
+    removedAt: integer('removed_at'),
   },
   (t) => ({
-    uniqRef: uniqueIndex('uniq_session_pr_refs').on(t.sessionId, t.owner, t.repo, t.prNumber),
+    uniqRef: uniqueIndex('uniq_session_pr_refs').on(
+      t.sessionId,
+      t.provider,
+      t.host,
+      t.owner,
+      t.repo,
+      t.prNumber,
+    ),
     idxSessionLastSeen: index('idx_session_pr_refs_session_last_seen').on(
       t.sessionId,
       t.lastSeenAt,
     ),
+  }),
+);
+
+/**
+ * 从其他工具导入的任务的来源记录（session-import）。一行对应一个导入任务。
+ *
+ * - (source, source_session_id) 唯一：同一来源任务只导入一次，中断后重试据此续上；
+ * - mode：native = 已复制原生历史、用同名引擎原样续做；handoff = 记录转成消息，
+ *   由 Cindy 引擎经交接接着做；
+ * - status：importing（任务行仍隐藏）/ ready / action（需要用户处理，issue 写原因）/ failed；
+ * - 只导入、不同步：source_fingerprint 记录导入时源文件的状态，之后不再读取源文件。
+ */
+export const sessionImports = sqliteTable(
+  'session_imports',
+  {
+    sessionId: text('session_id')
+      .primaryKey()
+      .references(() => sessions.id, { onDelete: 'cascade' }),
+    source: text('source').notNull(),
+    sourceSessionId: text('source_session_id').notNull(),
+    sourceFingerprint: text('source_fingerprint'),
+    sourceVersion: text('source_version'),
+    mode: text('mode', { enum: ['native', 'handoff'] }).notNull(),
+    status: text('status', { enum: ['importing', 'ready', 'action', 'failed'] }).notNull(),
+    issue: text('issue'),
+    originalCwd: text('original_cwd'),
+    requestId: text('request_id'),
+    importedAt: integer('imported_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => ({
+    uniqSource: uniqueIndex('uniq_session_imports_source').on(t.source, t.sourceSessionId),
   }),
 );
 
@@ -1396,6 +1472,8 @@ export const schedules = sqliteTable(
       .notNull()
       .default('agent'),
     scriptConfig: text('script_config'),
+    /** JSON ScheduleWebhookTrigger；NULL = 未开启。签名密钥不进数据库。 */
+    webhookTrigger: text('webhook_trigger'),
     source: text('source').default('user'),
     projectConfigId: text('project_config_id'),
     /**
@@ -1429,6 +1507,8 @@ export const schedules = sqliteTable(
     agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi'] }).notNull(),
     /** NULL preserves legacy bound-task Harness inheritance. */
     modelAgentKind: text('model_agent_kind', { enum: ['claude-code', 'codex', 'pi'] }),
+    /** NULL inherits a bound task; empty string explicitly selects the automation host. */
+    modelAgentDeviceId: text('model_agent_device_id'),
     model: text('model'),
     /**
      * 显式选定的供应商(来源)id。NULL = 回落该 agent 原生默认来源(no-break,
@@ -1478,6 +1558,13 @@ export const schedules = sqliteTable(
     preRunHookCommand: text('pre_run_hook_command'),
     /** 前置检查脚本超时毫秒。NULL = 不限时。仅 command 非空时有意义。 */
     preRunHookTimeoutMs: integer('pre_run_hook_timeout_ms'),
+    /**
+     * 插件前置检查:用户为本任务选定的插件实例 id。NULL = 未启用。与 preRunHookCommand
+     * 可并存(先问插件再跑脚本)。内存里与 on_failure 合成 `Schedule.preRunPlugin`。
+     */
+    preRunPluginId: text('pre_run_plugin_id'),
+    /** 插件没回应 / 出错 / 不可用时的处理:allow | skip | block。仅 plugin id 非空时有意义。 */
+    preRunPluginOnFailure: text('pre_run_plugin_on_failure'),
     /**
      * 跳过留痕承载会话 id(runner 管理)。前置检查拦截时合成的"已跳过"消息写进
      * 该会话;首次跳过创建、后续复用,避免高频任务每次跳过都新建会话。
@@ -1652,6 +1739,8 @@ export const scheduleRuns = sqliteTable(
     resultText: text('result_text'),
     /** 前置检查一次执行的结构化 JSON 结果；NULL 表示本轮未配置/未执行检查。 */
     preRunHookResult: text('pre_run_hook_result'),
+    /** 本轮触发来源；NULL = 定时或手动。 */
+    triggerSource: text('trigger_source'),
     readAt: integer('read_at'),
     /**
      * In-flight 心跳时间戳（毫秒）——跨实例的"仍有活实例在跑"租约信号。
@@ -1827,6 +1916,19 @@ export const dailySpend = sqliteTable(
   }),
 );
 
+/** Immutable request receipts; insertion and aggregate increments share one transaction. */
+export const piUsageReceipts = sqliteTable('pi_usage_receipts', {
+  sessionId: text('session_id').notNull(),
+  settlementId: text('settlement_id').notNull(),
+  receiptId: text('receipt_id').notNull(),
+  recordedAt: integer('recorded_at').notNull(),
+  priced: integer('priced', { mode: 'boolean' }).notNull().default(false),
+  pricingPayload: text('pricing_payload'),
+}, t => ({
+  pk: primaryKey({ columns: [t.sessionId, t.settlementId, t.receiptId] }),
+  pending: index('pi_usage_receipts_pending_idx').on(t.priced),
+}));
+
 /**
  * 每日按模型用量聚合表 (daily_model_usage) — 支撑首页用量仪表盘的"按模型拆分"。
  *
@@ -1835,7 +1937,7 @@ export const dailySpend = sqliteTable(
  *     costUsd 为 SDK 实报美元。
  *   - codex: done.data.usage 的 per-turn token 数 (SDK 不报 cost, costUsd 恒 0,
  *     美元在读取时用 modelPricing 价格表估算 — 价格会变, 不在写入时冻结)。
- *   - pi: done.data.usage 的 per-turn token/cache 数；订阅路由读时估值，API 路由写时记费。
+ *   - pi: 每个请求的 usage 回执增量入账，终态重放补漏；旧事件仍按 turn 入账。
  *
  * 与 daily_spend 的关系: daily_spend 仍是日总额 canonical 来源 (热力图 / streak 用它);
  * 本表只做按模型的拆分展示, 两边求和因舍入可能有微小差异 — 设计取舍。
@@ -2318,6 +2420,8 @@ export const hookGroupMessages = sqliteTable(
     text: text('text').notNull(),
     /** JSON string[];无附件为空。 */
     fileNames: text('file_names'),
+    /** JSON image locators received with this exact lane/message; no image bytes. */
+    imageRefs: text('image_refs'),
     /** IM 平台侧发送时刻(unix ms)。 */
     sentAt: integer('sent_at').notNull(),
     createdAt: integer('created_at').notNull(),
@@ -2339,6 +2443,7 @@ export const hookGroupMessages = sqliteTable(
 export const hookGroupMessageStats = sqliteTable('hook_group_message_stats', {
   provider: text('provider').primaryKey(),
   rowCount: integer('row_count').notNull(),
+  /** UTF-8 bytes of text + image_refs; retain the existing column/API name. */
   textBytes: integer('text_bytes').notNull(),
 });
 
@@ -2407,3 +2512,10 @@ export const pluginTaskRequests = sqliteTable('plugin_task_requests', {
   uniqueIndex('plugin_task_request_key').on(table.pluginId, table.operation, table.targetId, table.requestKey),
   index('plugin_task_target').on(table.targetId, table.pluginId),
 ]);
+
+/** Account-local observed facts and independent consumer cursors, never credentials. */
+export const githubObservations = sqliteTable('github_observations', {
+  key: text('key').primaryKey(),
+  state: text('state').notNull(),
+  updatedAt: integer('updated_at').notNull(),
+});

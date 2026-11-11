@@ -11,10 +11,16 @@ import { clearAllInteractionDrafts, readAskUserDraft, readPlanReviewDraft } from
 import { forwardNavigationLock } from '@/utils/navigationLock';
 import { ChatFilePathContext, type ChatFilePathContextValue } from '@/session/chatFilePathContext';
 import { QuestionReferenceText } from '@/session/QuestionReferenceText';
+import { ChatPathChipSpan } from '@/session/ChatPathChipSpan';
+import { classifyChatPathLinkTarget } from '@/session/chatPathCandidate';
+import { Text } from '@/components/AppText';
 import { _clearRemotePathVerdictCache } from '@/session/remotePathVerdict';
 import { i18n } from '@/i18n';
 import { AskCardAuthContext } from '@/session/askCardAuth';
 import { darkColors, lightColors } from '@/theme/tokens';
+
+// Markdown rendering/native media are exercised by the simulator; these tests cover decisions.
+vi.mock('@/session/MessageRenderer', () => ({ MarkdownBody: ({ text }: { text: string }) => <span>{text}</span> }));
 
 const voiceStarter = vi.hoisted(() => ({ start: vi.fn() }));
 const theme = vi.hoisted(() => ({ mode: 'light' as 'light' | 'dark' }));
@@ -48,19 +54,22 @@ vi.mock('@/device-link/useMobileMakerTransport', () => ({
 // 代输入 card has its own tests; its native modules (clipboard, secure store) are out of scope here.
 vi.mock('@/inputHandoff/InputHandoffCard', () => ({ InputHandoffCard: () => null }));
 vi.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 0, right: 0, bottom: 0, left: 0 }) }));
+vi.mock('@/components/PaperPlaneIcon', () => ({ PaperPlaneIcon: () => null }));
 vi.mock('react-native', async () => {
+  const window = { width: 390, height: 844, scale: 3, fontScale: 1 };
   const { createElement } = await import('react');
   const view = (tag: string) => ({ children, onPress, disabled, testID, accessibilityState, accessibilityLabel, style }: {
     children?: ReactNode; onPress?: () => void; disabled?: boolean; testID?: string; accessibilityState?: { busy?: boolean }; accessibilityLabel?: string; style?: unknown;
   }) => createElement(tag, { onClick: onPress, disabled, 'data-testid': testID, 'data-native-style': JSON.stringify(style), 'aria-busy': accessibilityState?.busy, 'aria-label': accessibilityLabel }, children);
   // Text keeps its onTextLayout so a test can report how many lines a label took.
-  const Text = ({ children, onTextLayout, onPress, testID }: { children?: ReactNode; onTextLayout?: (event: { nativeEvent: { lines: unknown[] } }) => void; onPress?: () => void; testID?: string }) => {
+  const Text = ({ children, onTextLayout, onPress, onLongPress, testID }: { children?: ReactNode; onTextLayout?: (event: { nativeEvent: { lines: unknown[] } }) => void; onPress?: () => void; onLongPress?: () => void; testID?: string }) => {
     if (onTextLayout) textLayouts.set(String(children), onTextLayout);
-    return createElement('span', { onClick: onPress, 'data-testid': testID }, children);
+    return createElement('span', { onClick: onPress, onContextMenu: onLongPress, 'data-testid': testID }, children);
   };
   return { View: view('div'), Text, Pressable: view('button'), Linking: { openURL: evidence.openURL },
     ScrollView: view('div'), Image: () => null, ActivityIndicator: () => null,
-    useWindowDimensions: () => ({ width: 390, height: 844 }),
+    useWindowDimensions: () => window,
+    Dimensions: { get: () => window, addEventListener: () => ({ remove() {} }) },
     StyleSheet: { create: (s: unknown) => s, hairlineWidth: 1 } };
 });
 vi.mock('@/components/AppText', async () => {
@@ -75,8 +84,8 @@ vi.mock('@/components/AppText', async () => {
 });
 vi.mock('lucide-react-native', async () => {
   const { createElement } = await import('react');
-  return { ShieldCheck: () => null, MessageCircle: () => null, ChevronDown: () => null, ChevronUp: () => null, Check: () => null, CornerDownLeft: () => null,
-    Maximize2: () => null, Minimize2: () => null, Minus: () => null, Mic: ({ color }: { color: string }) => createElement('span', { 'data-mic-color': color }), Pencil: () => null, Plus: () => null };
+  return { Globe2: () => null, ShieldCheck: () => null, MessageCircle: () => null, ChevronDown: () => null, ChevronUp: () => null, Check: () => null, CornerDownLeft: () => null,
+    Maximize2: () => null, Minimize2: () => null, Minus: () => null, Mic: ({ color }: { color: string }) => createElement('span', { 'data-mic-color': color }), Square: ({ color }: { color: string }) => createElement('span', { 'data-stop-color': color }), Pencil: () => null, Plus: () => null };
 });
 vi.mock('react-i18next', async (importOriginal) => ({
   ...await importOriginal<typeof import('react-i18next')>(),
@@ -133,7 +142,7 @@ async function type(id: string, value: string) {
 
 // #6778, unit: render the real card/hook and start/stop dictation. Earlier tests
 // only checked labels and clicks, missing the invisible inverse-colour mic.
-// Preserve the existing unfilled control; only startup replaces the mic.
+// Preserve the unfilled control; distinguish startup, recording and processing.
 // Minimal input: one question in each answer layout, in either theme.
 it.each(['light', 'dark'] as const)('keeps the recording mic visible in %s answer layouts', async (mode) => {
   theme.mode = mode;
@@ -167,7 +176,7 @@ it.each(['light', 'dark'] as const)('keeps the recording mic visible in %s answe
     expect(button().getAttribute('aria-label')).toBe('session.common.voiceStopRecording');
     expect(button().getAttribute('aria-busy')).toBe('false');
     expect(style()).toEqual(idleStyle);
-    expect(micColor()).toBe(colors.textSecondary);
+    expect(button().querySelector('[data-stop-color]')!.getAttribute('data-stop-color')).toBe(colors.textSecondary);
     await click('interaction.ask.voice');
     expect(button().getAttribute('aria-label')).toBe('session.screen.voiceStartInput');
     expect(style()).toEqual(idleStyle);
@@ -239,6 +248,38 @@ it('queues a submit before the voice handle exists without pretending to record'
   await act(async () => finish());
   expect(resolveInteraction).toHaveBeenCalledOnce();
   expect(JSON.stringify(resolveInteraction.mock.calls[0])).toContain('最终回答');
+});
+
+// Unit: real answer card/hook, fake microphone. Earlier fixtures never returned
+// the controller's caret with a transcript, so a second take inserted at the
+// stale selection instead of following the previous sentence.
+it('continues a second dictation after the first sentence and shows processing while stopping', async () => {
+  const selections: unknown[] = [];
+  let finish!: () => void;
+  voiceStarter.start.mockImplementation(async (input) => {
+    selections.push(input.getSelection());
+    input.onListening();
+    return {
+      stop: () => new Promise<void>((resolve) => {
+        finish = () => { input.setText('第一句', { start: 3, end: 3 }); resolve(); };
+      }),
+      cancel: async () => undefined,
+    };
+  });
+  remoteSessionStore.setPendingInteractions('s1', [{ request: {
+    kind: 'ask_user_question', requestId, questions: [{ question: 'Answer?' }],
+  } }]);
+  await act(async () => root.render(<AskCardAuthContext.Provider value={{
+    getAccessToken: async () => null, refreshAccessToken: async () => null, apiFetch: async () => null,
+  }}><Harness /></AskCardAuthContext.Provider>));
+  await click('interaction.ask.voice');
+  await click('interaction.ask.voice');
+  const button = host.querySelector('[data-testid="interaction.ask.voice"]')!;
+  expect(button.getAttribute('aria-busy')).toBe('true');
+  await act(async () => finish());
+  await click('interaction.ask.voice');
+  expect(selections).toEqual([{ start: 0, end: 0 }, { start: 3, end: 3 }]);
+  expect(resolveInteraction).not.toHaveBeenCalled();
 });
 
 it.each(['stop', 'live'] as const)('retains text and permits manual correction after a %s failure', async (failure) => {
@@ -409,7 +450,7 @@ it.each(['options', 'previous'])('protects the answer while submitting before th
 // Unit regression for PR #6306 review: a signed-out microphone tap used to
 // render hardcoded Chinese. Existing receipt tests never tapped this entry.
 // Exercise the real card and hook in each supported locale, without auth.
-it.each(['en', 'zh-CN', 'zh-TW', 'ja', 'ko'])('localizes the signed-out voice error in %s', async (locale) => {
+it.each(['en', 'zh-CN', 'zh-TW', 'ja', 'ko', "es", "fr", "de", "pt-PT", "pt-BR"])('localizes the signed-out voice error in %s', async (locale) => {
   const previousLanguage = i18n.language;
   try {
     await i18n.changeLanguage(locale);
@@ -479,6 +520,72 @@ it('keeps a changed question reference unclickable until its own verification', 
   expect(onOpenPath).not.toHaveBeenCalled();
 });
 
+// Unit regression: previous coverage only tested auto-detected references.
+// A missing authored file link must still reach the controlled device's preview
+// (which reports read failures), without lighting up the same bare reference.
+it.each([true, false])('keeps missing file links actionable only when authored: %s', async (explicitLink) => {
+  const onOpenPath = vi.fn();
+  const fileContext: ChatFilePathContextValue = {
+    deviceId: 'd1', sessionId: 's1', workdir: '/repo', onOpenPath,
+    statPath: vi.fn(async (absPath: string) => ({ kind: 'missing' as const, resolvedPath: absPath })),
+  };
+  await act(async () => root.render(
+    <ChatFilePathContext.Provider value={fileContext}>
+      <ChatPathChipSpan
+        candidate={classifyChatPathLinkTarget('/repo/missing.html')}
+        explicitLink={explicitLink}
+        display="查看报告" SpanText={Text} chipStyle={{ textDecorationLine: 'underline' }}
+        plainStyle={{}} usePathState={useState}
+      />
+    </ChatFilePathContext.Provider>,
+  ));
+  const link = host.querySelector<HTMLElement>('[data-testid="message.markdownPathChip"]');
+  expect(!!link).toBe(explicitLink);
+  if (link) {
+    await act(async () => link.click());
+    expect(onOpenPath).toHaveBeenCalledExactlyOnceWith({
+      kind: 'file', absPath: '/repo/missing.html', relPath: 'missing.html',
+    });
+  } else {
+    expect(onOpenPath).not.toHaveBeenCalled();
+  }
+});
+
+// #7303: an authored directory without a trailing slash can be tapped before
+// background stat completes. Wait for its actual kind before choosing a route.
+it.each(['open', 'menu', 'unmounted', 'outside'] as const)('waits for an authored directory kind before acting: %s', async (mode) => {
+  const onOpenPath = vi.fn();
+  const onLongPressPath = vi.fn();
+  let finishStat!: (value: { kind: 'dir'; resolvedPath: string }) => void;
+  const pending = new Promise<{ kind: 'dir'; resolvedPath: string }>((resolve) => { finishStat = resolve; });
+  const fileContext: ChatFilePathContextValue = {
+    deviceId: 'd1', sessionId: 's1', workdir: '/repo', onOpenPath, onLongPressPath,
+    statPath: vi.fn(() => pending),
+  };
+  await act(async () => root.render(
+    <ChatFilePathContext.Provider value={fileContext}>
+      <ChatPathChipSpan candidate={classifyChatPathLinkTarget(mode === 'outside' ? '/other/components' : 'src/components')} explicitLink
+        display="目录" SpanText={Text} chipStyle={{}} plainStyle={{}} usePathState={useState} />
+    </ChatFilePathContext.Provider>,
+  ));
+  const link = host.querySelector<HTMLElement>('[data-testid="message.markdownPathChip"]')!;
+  await act(async () => mode === 'menu'
+    ? link.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true }))
+    : link.click());
+  expect(onOpenPath).not.toHaveBeenCalled();
+  expect(onLongPressPath).not.toHaveBeenCalled();
+  if (mode === 'unmounted') await act(async () => root.render(null));
+  await act(async () => finishStat({ kind: 'dir', resolvedPath: '/repo/src/components' }));
+  if (mode === 'unmounted' || mode === 'outside') {
+    expect(onOpenPath).not.toHaveBeenCalled();
+    expect(onLongPressPath).not.toHaveBeenCalled();
+    return;
+  }
+  expect(mode === 'menu' ? onLongPressPath : onOpenPath).toHaveBeenCalledExactlyOnceWith({
+    kind: 'directory', absPath: '/repo/src/components', relPath: 'src/components',
+  });
+});
+
 it.each(['push-first', 'receipt-first', 'lost-receipt', 'other-client'] as const)(
   'finalizes retained answers without stale snapshot resurrection: %s',
   async (order) => {
@@ -524,7 +631,7 @@ it.each(['send', 'close', 'stopped', 'stopped-empty', 'already-answered', 'uncon
   await type('interaction.ask.textInput', '');
   const input = host.querySelector('[data-testid="interaction.ask.textInput"]');
   await act(async () => remoteSessionStore.setPendingInteractions('s1', [{
-    request: { kind: 'ask_user_question', requestId: 'new-question', questions: [{ question: 'New?' }] },
+    request: { kind: 'ask_user_question', requestId: 'new-question', delivery: 'async', questions: [{ question: 'New?' }] },
   }]));
   expect(host.querySelector('[data-testid="interaction.ask.textInput"]')).toBe(input);
   expect(host.textContent).toContain('Original?');
@@ -543,10 +650,10 @@ it.each(['send', 'close', 'stopped', 'stopped-empty', 'already-answered', 'uncon
   asyncReply.input.resume.mockResolvedValue({ ...projection, queuePaused: false });
   if (action === 'stopped') {
     await act(async () => remoteSessionStore.setInputProjection('s1', { ...projection, queuePaused: true }));
-    expect(host.textContent).toContain('interaction.panel.sendAndContinue');
+    expect(host.querySelector('[data-testid="interaction.ask.submitButton"]')?.getAttribute('aria-label')).toBe('interaction.panel.sendAndContinue');
   }
   if (action === 'stopped-empty') {
-    expect(host.textContent).toContain('interaction.panel.sendAndContinue');
+    expect(host.querySelector('[data-testid="interaction.ask.submitButton"]')?.getAttribute('aria-label')).toBe('interaction.panel.sendAndContinue');
     expect(asyncReply.input.enqueue).not.toHaveBeenCalled();
   }
   await click(action === 'close' ? 'interaction.ask.closeButton' : 'interaction.ask.submitButton');
@@ -561,8 +668,15 @@ it.each(['send', 'close', 'stopped', 'stopped-empty', 'already-answered', 'uncon
   if (action === 'send' || action === 'stopped' || action === 'stopped-empty') {
     expect(asyncReply.input.enqueue).toHaveBeenCalledOnce();
     expect(asyncReply.input.enqueue.mock.calls[0][1]).toMatchObject({
-      clientId: expect.stringMatching(/^question-reply:codex:test:0:[a-f0-9]{64}$/), text: '> Original?\n\nFinished',
+      clientId: expect.stringMatching(/^question-reply:codex:test:0:[a-f0-9]{64}$/),
     });
+    const text = asyncReply.input.enqueue.mock.calls[0][1].text;
+    expect(text.split('\n\n<cindy_question_context>')[0]).toBe('> Original?\n\nFinished');
+    expect(text).toContain('This is a delayed answer');
+    expect(text).toContain('do not repeat work already completed');
+    // The note is for the model only: the message people see is the question and the answer.
+    expect(asyncReply.input.enqueue.mock.calls[0][1].chatMessage.content).toBe('> Original?\n\nFinished');
+    expect(asyncReply.input.enqueue.mock.calls[0][1].persistedContent).not.toContain('cindy_question_context');
     expect(asyncReply.input.resume).toHaveBeenCalledTimes(action === 'stopped' ? 1 : 0);
   } else expect(asyncReply.input.enqueue).not.toHaveBeenCalled();
 });
@@ -623,10 +737,59 @@ it('submits the host-provided Codex session approval from the shared guest alway
 });
 
 it.each(['plugin_setup', 'issue_confirm', 'ghost_grant_confirm', 'rename_sessions_confirm'])('keeps shared guest %s confirmation read-only', async (kind) => {
-  remoteSessionStore.setPendingInteractions('s1', [{ request: { kind, requestId } }]);
+  remoteSessionStore.setPendingInteractions('s1', [{ request: { kind, requestId, remoteConfirmSupported: true } }]);
   await act(async () => root.render(<Harness deviceId={sharedTaskHostPeer('shared', 'd1')} />));
   expect(host.querySelector('[data-testid="interaction.readOnlyCard"]')).not.toBeNull();
   expect(resolveInteraction).not.toHaveBeenCalled();
+});
+
+// Regression: mobile previously rendered feedback as an unsupported desktop-only card.
+// Tier: UI unit; actual panel -> transport, including preview, collapse and public identity.
+it('reviews and submits feedback on mobile, retaining edits after a failed receipt', async () => {
+  remoteSessionStore.setPendingInteractions('s1', [{ request: { kind: 'issue_confirm', requestId,
+    remoteConfirmSupported: true, draft: { title: 'Bug', body: 'Steps', type: 'bug' },
+    env: { appVersion: '1', platform: 'darwin', arch: 'arm64', osVersion: '1' },
+    submissionIdentity: { kind: 'platform', login: 'bot' }, suggestedPublicName: 'Reporter',
+    githubUserIdentity: { kind: 'github-user', login: 'octocat' },
+  } }]);
+  await act(async () => root.render(<CollapsibleHarness />));
+  expect(host.querySelector('[data-testid="interaction.panelHeader"]')).toBeNull();
+  await click('interaction.panel.collapseButton');
+  expect(host.querySelector('[data-testid="interaction.panel.collapsedBar"]')).not.toBeNull();
+  await click('interaction.panel.collapsedBar');
+  expect(host.querySelector('[data-testid="interaction.issue.title"]')).toBeNull();
+  expect(resolveInteraction).not.toHaveBeenCalled();
+  await click('interaction.issue.edit');
+  await click('interaction.issue.feature');
+  await type('interaction.issue.title', 'Edited bug');
+  await type('interaction.issue.body', 'Edited steps');
+  expect(host.querySelector('[data-testid="interaction.issue.submit"]')).toBeNull();
+  await click('interaction.issue.done');
+  resolveInteraction.mockRejectedValueOnce(new Error('PERMISSION_DENIED'));
+  await click('interaction.issue.submit');
+  expect(resolveInteraction).toHaveBeenCalledWith(requestId, { kind: 'issue_confirm', confirmed: true,
+    title: 'Edited bug', body: 'Edited steps', type: 'feature', submissionIdentity: { kind: 'platform', login: 'bot' },
+    publicName: 'Reporter', uiLanguage: 'en' });
+  expect(host.textContent).toContain('Edited steps');
+  await click('interaction.issue.identity');
+  await click('interaction.issue.github-user');
+  resolveInteraction.mockResolvedValueOnce({ accepted: true });
+  await click('interaction.issue.submit');
+  expect(resolveInteraction).toHaveBeenLastCalledWith(requestId, expect.objectContaining({
+    submissionIdentity: { kind: 'github-user', login: 'octocat' }, type: 'feature',
+  }));
+  expect(resolveInteraction.mock.calls.at(-1)![1]).not.toHaveProperty('publicName');
+});
+
+it('cancels mobile feedback without requiring public-content approval', async () => {
+  remoteSessionStore.setPendingInteractions('s1', [{ request: { kind: 'issue_confirm', requestId,
+    remoteConfirmSupported: true, draft: { title: 'Bug', body: 'Steps', type: 'bug' },
+    env: {}, submissionIdentity: { kind: 'platform', login: 'bot' },
+  } }]);
+  await act(async () => root.render(<Harness />));
+  resolveInteraction.mockResolvedValueOnce({ accepted: true });
+  await click('interaction.issue.cancel');
+  expect(resolveInteraction).toHaveBeenCalledExactlyOnceWith(requestId, { kind: 'issue_confirm', confirmed: false });
 });
 
 // Bug #1493: collapse belongs to the caller and must survive a card being replaced.
@@ -796,6 +959,20 @@ it('keeps a typed custom answer when the pending request is refetched or the car
   expect(input()?.value).toBe('No, figure it out');
 });
 
+it('returns two same-title answers by stable question id', async () => {
+  remoteSessionStore.setPendingInteractions('s1', [{ request: { kind: 'ask_user_question', requestId, questions: [
+    { id: 'first', question: 'Choose?', options: [{ label: 'A' }, { label: 'B' }] },
+    { id: 'second', question: 'Choose?', options: [{ label: 'A' }, { label: 'B' }] },
+  ] } }]);
+  resolveInteraction.mockResolvedValueOnce({ accepted: true });
+  await act(async () => root.render(<Harness />));
+  await click('interaction.ask.option.1');
+  await click('interaction.ask.submitButton');
+  await click('interaction.ask.option.2');
+  await click('interaction.ask.submitButton');
+  expect(resolveInteraction).toHaveBeenCalledExactlyOnceWith(requestId, { kind: 'ask_user_question', answers: { first: 'A', second: 'B' } });
+});
+
 it('starts over when the same request replaces its questions', async () => {
   const first = { question: 'First?', options: [{ label: 'Yes' }, { label: 'No' }] };
   const second = { question: 'Second?', options: [{ label: 'A' }, { label: 'B' }] };
@@ -938,7 +1115,7 @@ it('opens only the target computer desktop without resolving or authorizing the 
   await click('interaction.pluginSetup.remoteDesktop');
   await click('interaction.pluginSetup.remoteDesktop');
   expect(push).toHaveBeenCalledTimes(1);
-  expect(push).toHaveBeenLastCalledWith({ pathname: '/devices/desktop/[deviceId]', params: { deviceId: 'd1', deviceName: 'd1' } });
+  expect(push).toHaveBeenLastCalledWith({ pathname: '/devices/desktop/[deviceId]', params: { deviceId: 'd1', deviceName: 'another computer' } });
   expect(resolveInteraction).not.toHaveBeenCalled(); expect(invoke).not.toHaveBeenCalled();
   expect(host.querySelector('input')).toBeNull();
   forwardNavigationLock.reset();
@@ -1002,4 +1179,110 @@ it('persistent setup cancellation waits for a host terminal update and allows re
   } } as unknown as NormalizedRemoteMessage} />));
   expect(cancel()).toBeNull();
   expect(host.textContent).toContain('interaction.pluginSetup.phase.cancelled');
+});
+
+// PR #9271 review, unit: actual mobile form + transport boundary. Invalid input
+// must leave both the card and previous field draft intact; enum Other is data.
+it('keeps MCP form validation local and preserves an exact Other enum', async () => {
+  remoteSessionStore.setPendingInteractions('s1', [{ request: { kind: 'ask_user_question', requestId, questions: [
+    { id: 'name', question: 'Name', answerConstraints: { required: true, minLength: 3, maxLength: 5 } },
+    { id: 'kind', question: 'Kind', options: [{ label: 'Personal' }, { label: 'Other' }],
+      answerConstraints: { required: true, choices: ['Personal', 'Other'] } },
+  ] } }]);
+  await act(async () => root.render(<Harness />));
+  await click('interaction.ask.skipButton');
+  expect(host.textContent).toContain('interaction.panel.validation.required');
+  await type('interaction.ask.textInput', 'ab');
+  await click('interaction.ask.submitButton');
+  expect(host.textContent).toContain('interaction.panel.validation.tooShort');
+  expect(host.querySelector<HTMLInputElement>('[data-testid="interaction.ask.textInput"]')!.value).toBe('ab');
+  await type('interaction.ask.textInput', 'abcdef');
+  await click('interaction.ask.submitButton');
+  expect(host.textContent).toContain('interaction.panel.validation.tooLong');
+  expect(resolveInteraction).not.toHaveBeenCalled();
+  await type('interaction.ask.textInput', 'Orbit');
+  await click('interaction.ask.submitButton');
+  expect(host.textContent).toContain('Other');
+  expect(host.querySelector('[data-testid="interaction.ask.showCustomButton"]')).toBeNull();
+  await click('interaction.ask.skipButton');
+  expect(resolveInteraction).not.toHaveBeenCalled();
+  await click('interaction.ask.option.2');
+  await click('interaction.ask.submitButton');
+  expect(resolveInteraction).toHaveBeenCalledWith(requestId,
+    { kind: 'ask_user_question', answers: { name: 'Orbit', kind: 'Other' } });
+});
+
+it('cancels an MCP form explicitly without submitting a partial draft', async () => {
+  remoteSessionStore.setPendingInteractions('s1', [{ request: { kind: 'ask_user_question', requestId, questions: [
+    { id: 'name', question: 'Name', answerConstraints: { required: true } },
+  ] } }]);
+  await act(async () => root.render(<Harness />));
+  await type('interaction.ask.textInput', 'unfinished');
+  await click('interaction.ask.cancelButton');
+  expect(resolveInteraction).toHaveBeenCalledWith(requestId, { kind: 'ask_user_question', answers: {} });
+});
+
+// Regression: model withdrawal must not discard typing or send without a user gesture.
+// Entry: remote push -> real store and interaction form. Tier: unit.
+it.each([
+  { edited: false, companion: false },
+  { edited: true, companion: false },
+  { edited: true, companion: true },
+])('handles model withdrawal with edited=$edited companion=$companion', async ({ edited, companion }) => {
+  remoteSessionStore.setPendingInteractions('s1', [{ persistId: 'original-row', request: {
+    kind: 'ask_user_question', requestId, delivery: 'async', questions: [{ question: 'Original?', header: 'Device' }],
+  } }]);
+  await act(async () => root.render(<Harness companion={companion} />));
+  if (edited) await type('interaction.ask.textInput', 'Finished');
+  const input = host.querySelector('[data-testid="interaction.ask.textInput"]');
+  await act(async () => remoteSessionStore.applyRemotePush('d1', 'maker:interaction-dismissed', {
+    sessionId: 's1', requestId, reason: 'question_withdrawn', withdrawalReason: '已从日志确认',
+  }));
+  // A snapshot requested before withdrawal must not bring the old card back.
+  await act(async () => remoteSessionStore.setPendingInteractions('s1', [{ persistId: 'original-row', request: {
+    kind: 'ask_user_question', requestId, delivery: 'async', questions: [{ question: 'Original?' }],
+  } }]));
+  expect(asyncReply.input.enqueue).not.toHaveBeenCalled();
+  if (!edited) {
+    expect(host.querySelector('[data-testid="interaction.ask.card"]')).toBeNull();
+    return;
+  }
+  expect(host.querySelector('[data-testid="interaction.ask.textInput"]')).toBe(input);
+  expect(host.textContent).toContain('interaction.panel.questionWithdrawn');
+  expect(host.querySelector('[data-testid="interaction.ask.withdrawn"]')).not.toBeNull();
+  expect(readAskUserDraft(requestId)?.customInput).toBe('Finished');
+  expect(host.querySelector('[data-testid="interaction.ask.submitButton"]')?.getAttribute('aria-label')).toBe('interaction.panel.sendSupplement');
+  expect(remoteSessionStore.getVisiblePendingInteractions('s1')[0].request.withdrawalReason).toBe('已从日志确认');
+  resolveInteraction.mockResolvedValue({ accepted: false });
+  asyncReply.aroundMessagesByClientId.mockResolvedValue([{ clientId: 'original-row', role: 'ask_user',
+    content: { requestId, status: 'cancelled', withdrawalReason: '已从日志确认' } }]);
+  asyncReply.getSession.mockResolvedValue({ id: 's1', agentKind: 'codex', model: 'test', effort: 'medium',
+    permissionMode: 'ask', workingDir: '/repo' });
+  asyncReply.input.steer.mockResolvedValue(false);
+  asyncReply.input.enqueue.mockResolvedValue(remoteSessionStore.getInputProjection('s1'));
+  await click('interaction.ask.submitButton');
+  expect(asyncReply.input.enqueue).toHaveBeenCalledOnce();
+  expect(readAskUserDraft(requestId)).toBeNull();
+});
+
+// Withdrawal converts choices into editable text and removes obsolete controls without submitting.
+it('preserves selected choices and custom text as a withdrawn supplement', async () => {
+  remoteSessionStore.setPendingInteractions('s1', [{ persistId: 'original-row', request: {
+    kind: 'ask_user_question', requestId, delivery: 'async', questions: [{ question: 'Choose?',
+      multiSelect: true, options: [{ label: 'A' }, { label: 'B' }] }],
+  } }]);
+  await act(async () => root.render(<Harness />));
+  await click('interaction.ask.option.1');
+  await click('interaction.ask.showCustomButton');
+  await type('interaction.ask.customInput', 'More detail');
+  await act(async () => remoteSessionStore.applyRemotePush('d1', 'maker:interaction-dismissed', {
+    sessionId: 's1', requestId, reason: 'question_withdrawn', withdrawalReason: 'Already handled',
+  }));
+  expect(host.querySelector('[data-testid="interaction.ask.option.1"]')).toBeNull();
+  expect(host.querySelector('[data-testid="interaction.ask.skipButton"]')).toBeNull();
+  expect(host.querySelector('[data-testid="interaction.ask.closeButton"]')).not.toBeNull();
+  expect(host.querySelector<HTMLTextAreaElement>('[data-testid="interaction.ask.textInput"]')?.value).toBe('A\nMore detail');
+  expect(readAskUserDraft(requestId)?.customInput).toBe('A\nMore detail');
+  expect(resolveInteraction).not.toHaveBeenCalled();
+  expect(asyncReply.input.enqueue).not.toHaveBeenCalled();
 });

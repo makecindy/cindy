@@ -112,7 +112,7 @@ describe('伙伴创建兼容旧创建链接', () => {
   const sidebar = readFileSync(resolve(__dirname, '..', 'TeammatesSection.tsx'), 'utf8');
 
   it('挂在 /bots/roster,且静态段排在 :botId 之前', () => {
-    expect(router).toContain("{ path: 'roster', element: <BotRosterView /> }");
+    expect(router).toMatch(/path: 'roster',\s*lazy: \(\) => import\('@\/features\/bots\/BotRosterView'\)/);
     expect(router.indexOf("path: 'roster'")).toBeLessThan(router.indexOf("path: ':botId'"));
   });
 
@@ -155,12 +155,8 @@ describe('Bot task creation cannot leave navigation permanently gated', () => {
 describe('Bot task route recovery', () => {
   const source = readFileSync(resolve(__dirname, '..', 'BotSessionView.tsx'), 'utf8');
 
-  it('keeps load failures visible and retryable instead of silently redirecting', () => {
-    expect(source).not.toContain('<Navigate');
-    expect(source).toContain("kind: 'error'");
-    expect(source).toContain('setReloadVersion');
-    expect(source).toContain('bots.sessionLoadFailedTitle');
-  });
+  // Retryable load failures are exercised through the rendered BotSessionView
+  // in botIslandVisibility.test.tsx. Valid stale URLs may redirect to their task.
 
   it('passes the live Bot roster and the teammate identity into the shared task composer', () => {
     expect(source).toContain('window.electronAPI.localDb.bots.list(');

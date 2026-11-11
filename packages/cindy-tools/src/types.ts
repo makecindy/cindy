@@ -365,13 +365,16 @@ export type CindyMediaToolRequest =
   | { action: 'request'; invocationId: string; body: Record<string, unknown> }
   | { action: 'poll'; invocationId: string };
 
+/** Host-owned connections: Grok login, or a messaging platform a teammate connects to itself. */
+export type CindyHostConnectionId = 'grok' | 'im-telegram' | 'im-feishu' | 'im-wecom' | 'im-dingtalk' | 'im-discord' | 'im-imessage';
+
 /** host 注入的依赖:总机的全部真实能力都在这几个回调里。 */
 export interface CindyGhostsMcpDeps {
   /** Cindy's own catalog, separate from installed plugins and provider app marketplaces. */
   searchMarket?(query: string): Promise<Record<string, unknown>>;
   installMarket?(request: { pluginId: string; releaseId: string }, signal?: AbortSignal): Promise<Record<string, unknown>>;
   /** Host-owned connection card. No URLs or credentials may be supplied by the model. */
-  connectAccount?(target: { kind: 'plugin'; id: string; namespace?: string | null; reauthorize?: boolean } | { kind: 'host'; id: 'grok'; reauthorize?: boolean }, signal?: AbortSignal): Promise<Record<string, unknown>>;
+  connectAccount?(target: { kind: 'plugin'; id: string; namespace?: string | null; reauthorize?: boolean } | { kind: 'host'; id: CindyHostConnectionId; reauthorize?: boolean }, signal?: AbortSignal): Promise<Record<string, unknown>>;
   /** Cindy Core 原生媒体调用器；能力本身不依赖任何插件。 */
   callMedia?(request: CindyMediaToolRequest): Promise<Record<string, unknown>>;
   /**
@@ -468,12 +471,19 @@ export interface CindyGhostsMcpDeps {
   /** 意识编写手册(markdown,随主机版本走;agent 写意识前先读)。 */
   forgeGuide(): Promise<string>;
   /**
+   * MCP Apps 页面生成手册(markdown,随主机版本走):ghost_forge_guide 传
+   * section "pages" 时整份返回。缺省 = 不提供,"pages" 按普通章节查找。
+   */
+  forgePageManual?(): Promise<string>;
+  /**
    * 在新的目标目录创建一份安全起步骨架。目标已存在时必须拒绝，绝不覆盖
    * 用户文件；Node 模板只生成随包源码，不安装依赖。
    */
   forgeScaffold(request: {
     dir: string;
     template: CindyForgeScaffoldTemplate;
+    /** Add a standard MCP Apps page bridging the existing main.js runtime. */
+    withUi?: boolean;
     id: string;
     name: string;
     description?: string;
@@ -505,6 +515,15 @@ export interface CindyGhostsMcpDeps {
   forgePublish(request: { token: string }): Promise<CindyForgePublishResult>;
   /** 查询一次后台发布传输的当前状态。 */
   forgePublishStatus(request: { transferId: string }): Promise<CindyForgePublishStatusResult>;
+  /** Ordinary personal community author capability, separate from organization Forge publishing. */
+  communityContribution?(request:
+    | { action: 'prepare'; ghostId: string; namespace?: string | null }
+    | { action: 'submit' | 'status' | 'cancel'; id: string }
+    | { action: 'list'; query?: string; filter?: 'all' | 'pending' | 'needs_action' | 'published'; cursor?: string }
+    | { action: 'detail'; pluginId: string; cursor?: string }
+    | { action: 'submission'; pluginId: string; submissionId: string }
+    | { action: 'cancel-review'; pluginId: string; release: { releaseId: string; sha256: string; revision: string } }
+  ): Promise<unknown>;
   logger?: {
     info: (msg: string, meta?: Record<string, unknown>) => void;
     warn: (msg: string, meta?: Record<string, unknown>) => void;

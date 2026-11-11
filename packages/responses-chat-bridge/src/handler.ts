@@ -10,7 +10,10 @@ import {
 import { classifySystemOrderError, shouldRetrySystemNormalization } from './system-order.js';
 import { coalesceLeadingSystemMessages, translateResponsesRequestWithContext } from './translate-request.js';
 import {
-  UnsupportedResponsesFeatureError,
+  isUnsupportedResponsesFeatureError,
+  unsupportedFeatureOf,
+} from './unsupported-feature.js';
+import {
   type ChatBridgeLogger,
   type ChatBridgeProviderConfig,
   type ChatMessage,
@@ -197,10 +200,10 @@ export function createResponsesChatHandler(
           },
         });
       } catch (error) {
-        if (error instanceof UnsupportedResponsesFeatureError) {
+        if (isUnsupportedResponsesFeatureError(error)) {
           log.warn?.('responses-chat bridge rejected unsupported feature', {
             model: request.model,
-            feature: error.feature,
+            feature: unsupportedFeatureOf(error),
           });
           writeJson(res, 400, responsesError(400, 'unsupported_feature', error.message));
           return;

@@ -5,8 +5,16 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
   owner: 'owner:1:global', current: true, readDeviceList: vi.fn(),
-  capabilities: vi.fn(), actors: vi.fn(),
+  capabilities: vi.fn(), actors: vi.fn(), cindyCompanionIds: vi.fn(),
+  disk: new Map<string, string>(),
 }));
+vi.mock('@react-native-async-storage/async-storage', () => ({ default: {
+  getItem: async (key: string) => h.disk.get(key) ?? null,
+  setItem: async (key: string, value: string) => { h.disk.set(key, value); },
+  removeItem: async (key: string) => { h.disk.delete(key); },
+  getAllKeys: async () => [...h.disk.keys()],
+  multiRemove: async (keys: string[]) => { keys.forEach(key => h.disk.delete(key)); },
+} }));
 vi.mock('react-native', () => ({ AppState: { addEventListener: () => ({ remove() {} }) } }));
 vi.mock('expo-router', async () => {
   const { useEffect } = await import('react');
@@ -15,24 +23,47 @@ vi.mock('expo-router', async () => {
 vi.mock('@/chat/useChatServer', async () => {
   const { useMemo } = await import('react');
   return { useChatClient: () => useMemo(() => ({ owner: h.owner, enabled: true,
-    current: () => h.current, client: { capabilities: h.capabilities, actors: h.actors } }), [h.owner]) };
+    userId: h.owner.split(':')[0], realm: h.owner.split(':')[2],
+    current: () => h.current, client: { capabilities: h.capabilities, actors: h.actors, cindyCompanionIds: h.cindyCompanionIds } }), [h.owner]) };
 });
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ readDeviceList: h.readDeviceList }) }));
 import { useCloudCompanionHome } from '@/chat/useCloudCompanion';
+import { clearRemoteResourceCache, cacheChatRoster, patchCachedCloudHome } from '@/device-link/remoteResourceCache';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root;
 let result: ReturnType<typeof useCloudCompanionHome>;
-function Probe() { result = useCloudCompanionHome(true); return null; }
+let renders = 0;
+function Probe() { renders++; result = useCloudCompanionHome(true); return null; }
 const render = () => act(async () => root.render(createElement(Probe)));
 const actor = { id: 'actor', kind: 'bot', externalId: 'writer', name: 'Writer', avatar: null, homeDeviceId: 'studio' };
-beforeEach(() => {
+beforeEach(async () => {
+  await clearRemoteResourceCache();
   vi.resetAllMocks(); h.owner = 'owner:1:global'; h.current = true;
+  h.cindyCompanionIds.mockResolvedValue([]);
   h.capabilities.mockResolvedValue({ companionHome: true }); h.actors.mockResolvedValue([actor]);
   h.readDeviceList.mockResolvedValue({ devices: [{ deviceId: 'studio', name: 'Mac Studio' }] });
   root = createRoot(document.createElement('div'));
 });
 afterEach(() => act(() => root.unmount()));
+
+it('keeps the whole cloud roster on remount while HTTP and the optional directory are unavailable', async () => {
+  await render();
+  expect(result.actors).toEqual([actor]);
+  act(() => root.unmount()); root = createRoot(document.createElement('div'));
+  h.capabilities.mockImplementation(() => new Promise(() => {}));
+  await render();
+  expect(result.supported).toBe(true);
+  expect(result.actors).toEqual([actor]);
+  expect(result.deviceNames.get('studio')).toBe('Mac Studio');
+});
+
+it('publishes the companion roster before a slow optional computer-name request completes', async () => {
+  h.readDeviceList.mockImplementation(() => new Promise(() => {}));
+  await render();
+  expect(result.actors).toEqual([actor]);
+  expect(result.error).toBeNull();
+});
 
 // Tier: behavior. A successful actor refresh plus a failed optional directory read
 // previously replaced a known computer name with its ID. Pure row tests miss this
@@ -63,4 +94,32 @@ it('ignores a late directory result after a newer refresh wins', async () => {
   await act(async () => result.refresh());
   await act(async () => { complete({ devices: [{ deviceId: 'studio', name: 'Old name' }] }); await pending; });
   expect(result.deviceNames.get('studio')).toBe('New name');
+});
+
+// Unit: delayed cloud identity must enrich without replacing independently read names.
+it('retains preset identities alongside computer labels and drops them across accounts', async () => {
+  let finish: (ids: string[]) => void = () => {};
+  h.cindyCompanionIds.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  await render();
+  expect(result.actors).toEqual([actor]);
+  expect(result.deviceNames.get('studio')).toBe('Mac Studio');
+  await act(async () => finish(['writer']));
+  expect(result.cindyIds).toEqual(['writer']);
+  expect(result.deviceNames.get('studio')).toBe('Mac Studio');
+  h.owner = 'another:2:global';
+  h.capabilities.mockImplementation(() => new Promise(() => {}));
+  await render();
+  expect(result.cindyIds).toEqual([]);
+});
+
+// Behavior/performance: unrelated task/chat writes must not repaint the companion header.
+it('isolates companion renders from ten unrelated roster updates and still publishes real changes', async () => {
+  await render();
+  const before = renders;
+  for (let i = 0; i < 10; i++) await act(async () => cacheChatRoster('owner', 'global', [], [String(i)]));
+  expect(renders - before).toBe(0);
+  await act(async () => patchCachedCloudHome('owner', 'global', { deviceNames: [['studio', 'Renamed']] }, () => true));
+  expect(result.deviceNames.get('studio')).toBe('Renamed');
+  await act(async () => clearRemoteResourceCache());
+  expect(result.actors).toEqual([]);
 });

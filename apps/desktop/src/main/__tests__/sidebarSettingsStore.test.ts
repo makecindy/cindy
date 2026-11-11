@@ -4,6 +4,8 @@ import path from 'node:path';
 
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { buildManualPinnedReorder } from '@/features/cc-agent/hooks/helpers/sidebarFilterCore';
+
 type TestMode = 'signed-out' | 'local' | 'cloud';
 
 const harness = vi.hoisted(() => ({
@@ -859,6 +861,71 @@ describe('sidebarSettingsStore', () => {
       pinnedOrder: ['legacy-session'],
       hiddenProjectKeys: ['local:/workspace/hidden'],
     });
+  });
+
+  // #6345, unit: production drag builder -> registered IPC -> durable owner file.
+  // Existing rebase tests rank every visible pin first; remotely observed pins
+  // can have pinnedAt without a rank on the displaying computer.
+  it.each([
+    {
+      name: 'moves a ranked pin below the first unranked pin',
+      ranked: ['ranked-a', 'ranked-b'],
+      desired: ['ranked-a', 'unranked-a', 'ranked-b', 'unranked-b'],
+    },
+    {
+      name: 'moves a later unranked pin above the first unranked pin',
+      ranked: ['ranked-a', 'ranked-b'],
+      desired: ['ranked-a', 'ranked-b', 'unranked-b', 'unranked-a'],
+    },
+    {
+      name: 'persists a first drag with no previously ranked pins',
+      ranked: [],
+      desired: ['unranked-b', 'ranked-a', 'ranked-b', 'unranked-a'],
+    },
+  ])('$name', async ({ ranked, desired }) => {
+    const active = ['ranked-a', 'ranked-b', 'unranked-a', 'unranked-b'];
+    await pinnedHandler(request({ mutation: { kind: 'migrate-legacy', order: ranked } }));
+    const drag = buildManualPinnedReorder(ranked, active, desired);
+
+    await expect(
+      pinnedHandler(request({ mutation: { kind: 'reorder', ...drag } })),
+    ).resolves.toEqual(desired);
+    expect(loadSnapshot().pinnedOrder).toEqual(desired);
+    expect(JSON.parse(fs.readFileSync(ownerFile(), 'utf-8')).pinnedOrder).toEqual(desired);
+  });
+
+  it('ranks observed pins while preserving hidden slots and concurrent pin changes', async () => {
+    const ranked = ['ranked-pin', 'hidden-pin'];
+    await pinnedHandler(request({ mutation: { kind: 'migrate-legacy', order: ranked } }));
+    const drag = buildManualPinnedReorder(
+      ranked,
+      ['ranked-pin', 'hidden-pin', 'observed-a', 'observed-b'],
+      ['observed-b', 'observed-a', 'ranked-pin'],
+    );
+    await pinnedHandler(request({ mutation: { kind: 'promote', entryId: 'concurrent-pin' } }));
+    await pinnedHandler(request({ mutation: { kind: 'remove', entryId: 'ranked-pin' } }));
+
+    const expected = ['concurrent-pin', 'observed-b', 'hidden-pin', 'observed-a'];
+    await expect(
+      pinnedHandler(request({ mutation: { kind: 'reorder', ...drag } })),
+    ).resolves.toEqual(expected);
+    expect(loadSnapshot().pinnedOrder).toEqual(expected);
+  });
+
+  it('preserves ranked pins outside the currently loaded status catalogue', async () => {
+    const ranked = ['ranked-a', 'not-loaded', 'ranked-b'];
+    await pinnedHandler(request({ mutation: { kind: 'migrate-legacy', order: ranked } }));
+    const drag = buildManualPinnedReorder(
+      ranked,
+      ['ranked-a', 'ranked-b', 'observed-pin'],
+      ['ranked-b', 'observed-pin', 'ranked-a'],
+    );
+    const expected = ['ranked-b', 'not-loaded', 'observed-pin', 'ranked-a'];
+
+    await expect(
+      pinnedHandler(request({ mutation: { kind: 'reorder', ...drag } })),
+    ).resolves.toEqual(expected);
+    expect(loadSnapshot().pinnedOrder).toEqual(expected);
   });
 
   it('rebases a stale drag without losing a pin from another window', async () => {

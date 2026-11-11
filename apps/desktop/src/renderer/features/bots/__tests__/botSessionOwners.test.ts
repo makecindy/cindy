@@ -1,20 +1,9 @@
-/**
- * 伙伴任务在侧栏里怎么归组。
- *
- * 两条硬要求:
- *   1. **一个伙伴的任务聚在一起**,不按工作目录散进项目组 —— 同一个伙伴可以在
- *      多个项目里干活,按目录分会把它的对话切碎。
- *   2. **归属表还没到的时候,任务不能消失**。会话行本身不带 botId,归属只有伙伴
- *      档案知道;档案迟到的那一瞬间宁可落到未分类,也不能整个不见。
- */
+/** 伙伴任务的归属查找与入口路由。 */
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { groupSessions } from '@/features/cc-agent/lib/projectGrouping';
-import type { Session } from '@/lib/ccAgent.types';
 import {
   botRouteForOwnedSession,
-  buildBotSessionOwners,
   createSessionEntryNavigator,
   findBotProfileForSession,
   remoteBotRouteForSession,
@@ -22,23 +11,6 @@ import {
   type BotSessionEntryTarget,
 } from '../botSessionOwners';
 import type { BotProfile } from '../botStore';
-
-function session(id: string, over: Partial<Session> = {}): Session {
-  return {
-    id,
-    title: id,
-    source: 'bot',
-    workingDir: '/w/project-a',
-    status: 'active',
-    createdAt: '2026-08-22T00:00:00.000Z',
-    updatedAt: '2026-08-22T00:00:00.000Z',
-    userSendAt: '2026-08-22T00:00:00.000Z',
-    pinnedAt: null,
-    workspaceKind: 'project',
-    _count: { messages: 3 },
-    ...over,
-  } as unknown as Session;
-}
 
 function profile(over: Partial<BotProfile> = {}): BotProfile {
   return {
@@ -68,20 +40,20 @@ describe('伙伴归属表', () => {
     });
   });
 
-  it('主对话、渠道任务、归档历史三种都收', () => {
-    const owners = buildBotSessionOwners([profile()]);
-    expect([...owners.keys()].sort()).toEqual(['s-main', 's-old', 's-telegram']);
-    expect(owners.get('s-telegram')).toEqual({
-      botId: 'bot-a',
-      displayName: '小柴',
-      avatar: 'shiba',
-      avatarColor: 'violet',
-    });
+  // Regression: kind=chat used to win over the unique durable canonical role.
+  // Unit, production route; the older fixture put canonical first and missed this ordering.
+  it('keeps old chat links and ambiguous canonical projections on their original task', () => {
+    const bot = profile({ sessions: [
+      { id: 'old', kind: 'chat', role: 'history' },
+      { id: 'current', kind: 'chat', role: 'canonical' },
+    ] as BotProfile['sessions'] });
+    expect(botRouteForOwnedSession([bot], 'old')?.route).toBe('/cc-agent/old');
+    expect(botRouteForOwnedSession([bot], 'current')?.route).toBe('/bots/bot-a/session/current');
+    bot.sessions.push({ id: 'duplicate', role: 'canonical' } as BotProfile['sessions'][number]);
+    expect(botRouteForOwnedSession([bot], 'current')?.route).toBe('/cc-agent/current');
   });
 
   it('没有注册表投影时不使用兼容镜像认领任务', () => {
-    const owners = buildBotSessionOwners([profile({ sessions: [] })]);
-    expect(owners.has('s-main')).toBe(false);
     expect(findBotProfileForSession([profile({ sessions: [] })], 's-main')).toBeUndefined();
   });
 
@@ -103,7 +75,7 @@ describe('伙伴归属表', () => {
         { id: 's-lane', role: 'group', kind: 'group' },
       ] as unknown as BotProfile['sessions'],
     });
-    expect(botRouteForOwnedSession([bot], 's-main')).toEqual({ route: '/bots/bot%2Fa', consumesAlert: false });
+    expect(botRouteForOwnedSession([bot], 's-main')).toEqual({ route: '/bots/bot%2Fa/session/s-main', consumesAlert: false });
     expect(botRouteForOwnedSession([bot], 's-telegram')).toEqual({ route: '/cc-agent/s-telegram', consumesAlert: false });
     expect(botRouteForOwnedSession([bot], 's-old')).toEqual({ route: '/cc-agent/s-old', consumesAlert: false });
     expect(botRouteForOwnedSession([bot], 's-task')).toEqual({ route: '/cc-agent/s-task', consumesAlert: false });
@@ -114,7 +86,7 @@ describe('伙伴归属表', () => {
 
   it('通知点击把主任务送回伙伴页，子任务保留自己的任务地址', () => {
     const bot = profile({ id: 'bot/a' });
-    expect(botRouteForOwnedSession([bot], 's-main')).toEqual({ route: '/bots/bot%2Fa', consumesAlert: false });
+    expect(botRouteForOwnedSession([bot], 's-main')).toEqual({ route: '/bots/bot%2Fa/session/s-main', consumesAlert: false });
     expect(botRouteForOwnedSession([bot], 's-telegram')).toEqual({
       route: '/cc-agent/s-telegram',
       consumesAlert: false,
@@ -149,7 +121,7 @@ describe('伙伴归属表', () => {
   it('主力电脑在别的设备上的伙伴，点击回到那台设备的伙伴页', () => {
     const remote = [{ id: 'opus', deviceId: 'mac studio', sessionId: 's-remote' }];
     expect(remoteBotRouteForSession(remote, 's-remote')).toEqual({
-      route: '/bots/remote/mac%20studio/opus',
+      route: '/bots/remote/mac%20studio/opus/session/s-remote',
       consumesAlert: false,
     });
     expect(remoteBotRouteForSession(remote, 's-other')).toBeNull();
@@ -191,7 +163,7 @@ describe('通知入口在伙伴投影未加载时的路由', () => {
       expect(readKnownBotRoute).not.toHaveBeenCalled();
       expect(openBotRoute).not.toHaveBeenCalled();
     } else {
-      expect(openBotRoute).toHaveBeenCalledWith('/bots/local', undefined);
+      expect(openBotRoute).toHaveBeenCalledWith('/bots/local', undefined, 'message-1', 'same');
       expect(openOrdinary).not.toHaveBeenCalled();
     }
   });
@@ -229,7 +201,7 @@ describe('通知入口在伙伴投影未加载时的路由', () => {
   it('投影已含该任务时直接回伙伴页，不重载', async () => {
     const { deps: d, loadProfiles } = deps({ current: [profile()] });
     await expect(resolveBotRouteForSessionEntry('s-main', d)).resolves.toEqual({
-      route: '/bots/bot-a',
+      route: '/bots/bot-a/session/s-main',
       consumesAlert: false,
     });
     expect(loadProfiles).not.toHaveBeenCalled();
@@ -312,6 +284,34 @@ describe('通知入口在伙伴投影未加载时的路由', () => {
     expect(isSecondLatest()).toBe(false);
   });
 
+  it('preserves message anchors through a late companion correction and cancels on owner change or manual navigation', async () => {
+    let currentOwner = true;
+    let resolve!: (value: BotSessionEntryTarget | null) => void;
+    const openOrdinary = vi.fn();
+    const openBotRoute = vi.fn();
+    const open = createSessionEntryNavigator({
+      captureOwner: () => () => currentOwner,
+      readKnownBotRoute: () => null,
+      resolveBotRoute: () => new Promise(done => { resolve = done; }),
+      openOrdinary, openBotRoute, consumeAlert: vi.fn(),
+    });
+    open('original', 'reply');
+    resolve({ route: '/bots/b/session/original', consumesAlert: false });
+    await Promise.resolve();
+    expect(openBotRoute).toHaveBeenLastCalledWith('/bots/b/session/original', undefined, 'reply', 'original');
+    openBotRoute.mockClear();
+    open('old-owner', 'reply');
+    currentOwner = false;
+    resolve({ route: '/bots/b/session/old-owner', consumesAlert: false });
+    await Promise.resolve();
+    expect(openBotRoute).not.toHaveBeenCalled();
+    expect(openOrdinary.mock.lastCall![2]()).toBe(false);
+    currentOwner = true;
+    open('slow');
+    open.locationCommitted('/settings');
+    expect(openOrdinary.mock.lastCall![2]()).toBe(false);
+  });
+
   it('后台任务走普通任务入口，保留消息锚点与灵动岛上报，也不重读投影', async () => {
     const openBotRoute = vi.fn();
     const openOrdinary = vi.fn();
@@ -357,7 +357,7 @@ describe('通知入口在伙伴投影未加载时的路由', () => {
       open.locationCommitted('/cc-agent/s-lane');
       resolve(lane);
       await Promise.resolve();
-      expect(openBotRoute).toHaveBeenCalledWith('/bots/groups/g-1', undefined);
+      expect(openBotRoute).toHaveBeenCalledWith('/bots/groups/g-1', undefined, undefined, 's-lane');
       open.locationCommitted('/bots/groups/g-1');
       expect(consumeAlert).toHaveBeenCalledWith('s-lane', 'entry-1');
     });
@@ -368,7 +368,7 @@ describe('通知入口在伙伴投影未加载时的路由', () => {
       open('s-lane');
       resolve(lane);
       await Promise.resolve();
-      expect(openBotRoute).toHaveBeenCalledWith('/bots/groups/g-1', undefined);
+      expect(openBotRoute).toHaveBeenCalledWith('/bots/groups/g-1', undefined, undefined, 's-lane');
       expect(isOrdinaryLatest()).toBe(false);
     });
 
@@ -411,7 +411,7 @@ describe('通知入口在伙伴投影未加载时的路由', () => {
   describe('灵动岛点击的处置等目标地址提交后才发', () => {
     const targets: Record<string, BotSessionEntryTarget> = {
       's-lane': { route: '/bots/groups/g-1', consumesAlert: true },
-      's-main': { route: '/bots/bot-a', consumesAlert: false },
+      's-main': { route: '/bots/bot-a/session/s-main', consumesAlert: false },
       's-old': { route: '/cc-agent/s-old', consumesAlert: false },
     };
     function setup(over: { openBotRoute?: (route: string, islandEntryId?: string) => void } = {}) {
@@ -437,7 +437,7 @@ describe('通知入口在伙伴投影未加载时的路由', () => {
       open.locationCommitted('/cc-agent/new');
       open('s-lane', undefined, 'entry-1');
       await settle();
-      expect(openBotRoute).toHaveBeenCalledWith('/bots/groups/g-1', undefined);
+      expect(openBotRoute).toHaveBeenCalledWith('/bots/groups/g-1', undefined, undefined, 's-lane');
       expect(consumeAlert).not.toHaveBeenCalled();
       open.locationCommitted('/bots/groups/g-1');
       expect(consumeAlert).toHaveBeenCalledTimes(1);
@@ -517,60 +517,5 @@ describe('通知入口在伙伴投影未加载时的路由', () => {
       loadProfiles: vi.fn(async () => { throw new Error('not ready'); }),
     };
     await expect(resolveBotRouteForSessionEntry('s-main', d)).resolves.toBeNull();
-  });
-});
-
-describe('侧栏按伙伴分组', () => {
-  it('同一个伙伴在不同项目里的任务聚在一组,不按目录切碎', () => {
-    const owners = buildBotSessionOwners([profile()]);
-    const result = groupSessions(
-      [
-        session('s-main', { workingDir: '/w/project-a' }),
-        session('s-telegram', { workingDir: '/w/project-b' }),
-        session('s-other', { workingDir: '/w/project-a', source: 'desktop' }),
-      ],
-      { botOwnerBySessionId: owners },
-    );
-    expect(result.bots).toHaveLength(1);
-    expect(result.bots[0]!.displayName).toBe('小柴');
-    expect(result.bots[0]!.sessions.map((s) => s.id).sort()).toEqual(['s-main', 's-telegram']);
-    // 普通会话照旧按目录进项目组,一点没受影响。
-    expect(result.projects.flatMap((p) => p.sessions.map((s) => s.id))).toEqual(['s-other']);
-  });
-
-  it('归属表还没到时任务不消失 —— 走原来的分组,宁可落到别处也不能不见', () => {
-    const result = groupSessions([session('s-main')], {});
-    const seen = [
-      ...result.bots.flatMap((b) => b.sessions.map((s) => s.id)),
-      ...result.projects.flatMap((p) => p.sessions.map((s) => s.id)),
-      ...result.unclassified.map((s) => s.id),
-      ...result.dialogues.map((s) => s.id),
-    ];
-    expect(seen).toContain('s-main');
-  });
-
-  it('用户 pin 过的伙伴任务仍然只出现在置顶区', () => {
-    const owners = buildBotSessionOwners([profile()]);
-    const result = groupSessions(
-      [session('s-main', { pinnedAt: '2026-08-22T01:00:00.000Z' }), session('s-telegram')],
-      { botOwnerBySessionId: owners },
-    );
-    expect(result.pinned.map((s) => s.id)).toEqual(['s-main']);
-    expect(result.bots[0]!.sessions.map((s) => s.id)).toEqual(['s-telegram']);
-  });
-
-  it('多个伙伴按最近活动倒序', () => {
-    const owners = buildBotSessionOwners([
-      profile(),
-      profile({ id: 'bot-b', name: '林律', canonicalSessionId: 's-b', sessions: [{ id: 's-b' }] as never }),
-    ]);
-    const result = groupSessions(
-      [
-        session('s-main', { updatedAt: '2026-08-22T00:00:00.000Z', userSendAt: '2026-08-22T00:00:00.000Z' }),
-        session('s-b', { updatedAt: '2026-08-22T09:00:00.000Z', userSendAt: '2026-08-22T09:00:00.000Z' }),
-      ],
-      { botOwnerBySessionId: owners },
-    );
-    expect(result.bots.map((b) => b.displayName)).toEqual(['林律', '小柴']);
   });
 });

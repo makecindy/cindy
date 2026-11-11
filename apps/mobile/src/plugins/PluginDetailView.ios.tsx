@@ -222,6 +222,9 @@ export function PluginDetailView(p: PluginDetailViewProps) {
               </VStack>
             ) : null}
             {status}
+            {p.uiApprovalNotice ? (
+              <VStack modifiers={[listRowSeparator("hidden")]}><PluginNativeNotice {...p.uiApprovalNotice} /></VStack>
+            ) : null}
             {p.managementNotice ? (
               <VStack modifiers={[listRowSeparator("hidden")]}>
                 <PluginNativeNotice {...p.managementNotice} />
@@ -330,6 +333,15 @@ export function PluginDetailView(p: PluginDetailViewProps) {
                   </Text>
                 ) : null}
               </VStack>
+            ) : null}
+            {!p.settingsOpen && model.readme && p.onOpenReadme ? (
+              <ComposerNativeRow
+                title={t("plugins.detail.readme")}
+                accessory={chevron}
+                disabled={!p.online}
+                onPress={p.onOpenReadme}
+                testID="plugins.readme"
+              />
             ) : null}
             {p.settingsContent ? (
               <VStack

@@ -200,7 +200,8 @@ export function stepToRequest(step: RecipeStep, vars: Record<string, unknown>): 
       if (!step.extract) throw new Error('extract step requires `extract`');
       return {
         action: 'act',
-        request: { kind: 'evaluate', fn: buildExtractFnSource(step.extract as ExtractSpec), timeoutMs: step.timeoutMs },
+        request: { kind: 'evaluate', fn: buildExtractFnSource(step.extract as ExtractSpec),
+          domRead: { kind: 'extract', extract: step.extract as ExtractSpec }, timeoutMs: step.timeoutMs },
       };
     case 'evaluate':
       // Raw page-context JS (function-expression source). Unlike `extract` (which
@@ -396,6 +397,9 @@ export async function runRecipe(
           if (!((${guard.request!.fn})())) return { matched: false };
           return { matched: true, value: await ((${extractFn})()) };
         }` } };
+        // The fixed read path ignores fn, so a composite guard must use the
+        // regular evaluate path instead of bypassing its identity check.
+        delete req.request!.domRead;
         combinedGuard = true;
       } else if (guard) {
         let matched = false;

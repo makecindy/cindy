@@ -1,7 +1,5 @@
 import { botLearningTracker } from './botLearningTracker.js';
-import { countNightlyLearningTurn } from './botNightlyLearningCounter.js';
 import { learningTurnIdentity } from './botLearningFeedback.js';
-import type { BotDelegationService } from './botDelegationService.js';
 import { settleBotGroupLaneTerminal, type BotGroupChatService, type BotGroupLaneTerminal } from './botGroupChatService.js';
 import type { AgentEvent, Session } from '@cindy/maker-core';
 
@@ -30,8 +28,8 @@ import {
   reserveTurnErrorPersistId,
   resetTurnPersistState,
   saveTurnStartedAtForDeferred,
-} from '../messagePersistBroadcaster.js';
-import { AgentInputCoordinator } from './agent-input-coordinator.js';
+} from '../messagePersistBroadcaster.desktop.js';
+import { AgentInputCoordinator } from './agent-input-coordinator.desktop.js';
 import { MAKER_PUSH } from './channels.js';
 import { type OrcaTeamService } from './orcaTeamService.js';
 import {
@@ -61,7 +59,7 @@ import {
 } from './productTurnFailureOwner.js';
 export interface FinishSessionTerminalEventDeps {
   readonly sessionListActivityTracker: SessionListActivityTracker;
-  readonly onPluginTaskTerminal?: (sessionId: string, execution: { instanceId: string; generation: number }, outcome: 'completed' | 'failed' | 'cancelled' | 'interrupted', outputMessageId?: string) => void;
+  readonly onPluginTaskTerminal?: (sessionId: string, execution: { instanceId: string; generation: number }, outcome: 'completed' | 'failed' | 'cancelled' | 'interrupted', outputMessageId?: string, inputClientIds?: string[]) => void;
   readonly onSuccessfulProductTurn?: (
     sessionId: string,
     owner?: ProductTurnFailureOwner,
@@ -72,7 +70,6 @@ export interface FinishSessionTerminalEventDeps {
   ) => Promise<void>;
   /** Hold a recovery-owned terminal until its final failure surface settles. */
   readonly deferUnsuccessfulProductTurn?: (owner: ProductTurnFailureOwner) => void;
-  readonly botDelegationServiceHolder: Pick<BotDelegationService, 'settleSession'> | null;
   /** Resolves a Bot group member turn when its hidden group lane finishes. */
   readonly botGroupChatServiceHolder?: Pick<BotGroupChatService, 'settleLaneTurn'> | null;
   readonly pendingFailedTurnAssistantPersistId: Map<string, string>;
@@ -147,7 +144,7 @@ export interface FinishSessionTerminalEventDeps {
     ReturnType<typeof createWorkerTurnStartSequencer>,
     'waitForStart'
   >;
-  readonly orcaTeamServiceForEvents: Pick<OrcaTeamService, 'handleWorkerTerminalTurn'> | null;
+  readonly orcaTeamServiceForEvents: Pick<OrcaTeamService, 'handleWorkerTerminalTurn' | 'noteWorkerProductTerminal'> | null;
 }
 
 export function finishSessionTerminalEvent(
@@ -170,7 +167,7 @@ export function finishSessionTerminalEvent(
   const { persistId, workerTerminalCapture, providerGroupHoldId } = delivery;
   const terminalOwner =
     event.type === 'done' || isTerminalTurnErrorEvent(event)
-      ? captureProductTurnFailureOwner(session, event, eventAgentMeta)
+      ? captureProductTurnFailureOwner(session, event, eventAgentMeta, prepared.pluginTargetInputIds)
       : undefined;
   // done / 终止型 error 持久化边界:把在飞 assistant 落库(与 text isFinal 互斥幂等)。
   // tool_use 边界的 flush 已在上面 broadcast 前做(需先于 tool_use 落库);
@@ -660,11 +657,6 @@ export function finishSessionTerminalEvent(
       !deps.agentInputCoordinatorHolder?.isAutoResumePending(session.id) &&
       !deps.agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id)
     ) {
-      // 夜间学习只在这里计一次数（不调用模型）；非伙伴、自动输入与重放的终态由计数模块自己排除。
-      if (turnBoundaryAssistantPersistId && !session.remoteHostId) {
-        void countNightlyLearningTurn(session.id, turnBoundaryAssistantPersistId).catch(() =>
-          deps.log.warn('Nightly learning turn count did not complete'));
-      }
       const callback = deps.onSuccessfulProductTurn;
       if (callback && terminalOwner) {
         void callback(session.id, terminalOwner).catch(() =>
@@ -688,7 +680,7 @@ export function finishSessionTerminalEvent(
         deps.onPluginTaskTerminal?.(session.id, {
           instanceId: event.sessionInstanceId ?? session.instanceId,
           generation: event.sessionTurnGeneration,
-        }, outcome, turnAssistantPersistId ?? undefined);
+        }, outcome, turnAssistantPersistId ?? undefined, prepared.pluginTargetInputIds.length ? prepared.pluginTargetInputIds : undefined);
       }
       if (
         unsuccessfulBoundary &&
@@ -697,47 +689,6 @@ export function finishSessionTerminalEvent(
       ) {
         notifyUnsuccessfulProductTurn();
       }
-      // Group lane turns are attributed by the accepted input, captured before the queue drains.
-      const botDelegationPendingInputClientIds =
-        deps.agentInputCoordinatorHolder
-          ?.getQueueControlSnapshot(session.id)
-          .pendingQueue.flatMap((item) => [
-            item.clientId,
-            ...(item.supersedesUserClientId ? [item.supersedesUserClientId] : []),
-            ...(item.retrySourceClientId ? [item.retrySourceClientId] : []),
-          ]) ?? [];
-      void (async () => {
-        try {
-          const doneData = event.data as {
-            result?: unknown;
-            message?: unknown;
-            reason?: unknown;
-          } | null;
-          await deps.botDelegationServiceHolder?.settleSession({
-            childSessionId: session.id,
-            execution:
-              typeof event.sessionTurnGeneration === 'number'
-                ? {
-                    instanceId: event.sessionInstanceId ?? session.instanceId,
-                    generation: event.sessionTurnGeneration,
-                  }
-                : null,
-            outcome: isTerminalTurnErrorEvent(event) ? 'error' : 'done',
-            resultText: typeof doneData?.result === 'string' ? doneData.result : '',
-            error: [doneData?.message, doneData?.reason].find(
-              (value): value is string => typeof value === 'string' && value.length > 0,
-            ),
-            hadPendingInputAtTerminal: botDelegationPendingInputClientIds.length > 0,
-            pendingInputClientIds: botDelegationPendingInputClientIds,
-            resultMessageClientId: turnAssistantPersistId,
-          });
-        } catch (error) {
-          deps.log.warn('Bot delegation terminal settlement failed', {
-            sessionId: session.id,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-      })();
       if (
         groupTerminal && deps.botGroupChatServiceHolder &&
         !providerGroupHeldWorkerTerminal
@@ -753,6 +704,7 @@ export function finishSessionTerminalEvent(
       if (providerGroupHeldWorkerTerminal) {
         // 已与产品终态一起暂存，由同一次恢复登记结算。
       } else {
+        deps.orcaTeamServiceForEvents?.noteWorkerProductTerminal(workerTerminalCapture);
         void (async () => {
           try {
             await deps.workerTurnStartSequencer.waitForStart(session.id);

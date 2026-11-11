@@ -26,6 +26,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import { stripWindowsDriveUriSlash } from '../shared/pathText';
+import { isWindowsPathLike } from '../shared/workingDir';
+
 export type ResolvePathStatus = 'unique' | 'multiple' | 'none';
 
 export interface ResolvePathResult {
@@ -37,6 +40,8 @@ export interface ResolvePathResult {
 }
 
 export interface ResolveOptions {
+  /** Explicit user retry: bypass the shared TTL entry and replace it with a fresh result. */
+  refresh?: boolean;
   /** Optional path-allowlist guard, applied to every candidate. */
   isPathAllowed?: (absPath: string) => boolean;
   /** Stop BFS after this many file matches. Default 10. */
@@ -137,6 +142,39 @@ function normalizeForSuffix(p: string): string {
 }
 
 /**
+ * Ignored directories that a lookup names on its own path. `renders/out/clip.mp4`
+ * can only be found by entering an `out` directory, so the ignore list must not
+ * hide it. Entries are `<parent>/<ignored>` pairs: only the `out` under a
+ * `renders` directory opens, every other `out` (build output elsewhere) is still
+ * skipped. An ignored name in the first segment stays ignored, since allowing it
+ * would open every same-named directory in the tree.
+ */
+function namedIgnoredDirs(hrefs: readonly string[], ignoreDirs: ReadonlySet<string>): Set<string> {
+  const named = new Set<string>();
+  for (const href of hrefs) {
+    const segments = normalizeForSuffix(href).split('/').filter(Boolean);
+    for (let i = 1; i < segments.length - 1; i++) {
+      if (ignoreDirs.has(segments[i])) named.add(`${segments[i - 1]}/${segments[i]}`);
+    }
+  }
+  return named;
+}
+
+function ignoredDirPair(parent: string, name: string): string {
+  return `${normalizeForSuffix(path.basename(parent))}/${normalizeForSuffix(name)}`;
+}
+
+function skipsDirectory(
+  parent: string,
+  name: string,
+  ignoreDirs: ReadonlySet<string>,
+  named: ReadonlySet<string>,
+): boolean {
+  if (!ignoreDirs.has(name)) return false;
+  return !named.has(ignoredDirPair(parent, name));
+}
+
+/**
  * BFS-walk `root` looking for files whose absolute path ends with `/<href>`.
  * Stops when `maxCandidates` matches are found OR the queue empties.
  *
@@ -154,6 +192,7 @@ export function bfsFindBySuffix(
   const isPathAllowed = options.isPathAllowed ?? (() => true);
 
   const suffix = '/' + normalizeForSuffix(href).replace(/^\/+/, '');
+  const named = namedIgnoredDirs([href], ignoreDirs);
   const out: string[] = [];
   // Depth-tagged queue so we can cut off at maxDepth without recursion.
   const queue: Array<{ dir: string; depth: number }> = [{ dir: root, depth: 0 }];
@@ -170,7 +209,7 @@ export function bfsFindBySuffix(
       if (out.length >= maxCandidates) break;
       if (ent.isDirectory()) {
         if (depth >= maxDepth) continue;
-        if (ignoreDirs.has(ent.name)) continue;
+        if (skipsDirectory(dir, ent.name, ignoreDirs, named)) continue;
         queue.push({ dir: path.join(dir, ent.name), depth: depth + 1 });
       } else if (ent.isFile()) {
         const abs = path.join(dir, ent.name);
@@ -203,8 +242,14 @@ export async function resolveWorkspacePath(
   const decodedHref = safeDecodeHrefForLookup(href);
   if (decodedHref === null) return { status: 'none', candidates: [] };
   // Expand a leading `~` first; for any non-`~` input `probe === href`, so the
-  // path below is unchanged for every existing case.
-  const probe = expandTilde(decodedHref, options.homeDir ?? os.homedir());
+  // path below is unchanged for every existing case. `/D:/x` — a Windows drive
+  // path in URI-pathname form (#8726) — is normalized before the absolute
+  // check: on Windows the raw form stats as a broken `\D:\x` drive-relative
+  // path and silently falls through to 'none'. The drive-letter spelling only
+  // names a drive for a Windows file owner (same gate as the renderer's
+  // normalizeWindowsDriveHref) — on POSIX `/D:` is a legal path of its own.
+  let probe = expandTilde(decodedHref, options.homeDir ?? os.homedir());
+  if (isWindowsPathLike(workingDir)) probe = stripWindowsDriveUriSlash(probe);
 
   // Path 1: probe is absolute (incl. an expanded `~`) — just stat it. A `~`
   // path that misses returns 'none' here rather than falling through to the
@@ -274,7 +319,7 @@ export async function resolveWorkspacePathCached(
   const key = makeCacheKey(workingDir, href);
   const now = Date.now();
   const hit = cache.get(key);
-  if (hit && hit.expireAt > now) return hit.result;
+  if (!options.refresh && hit && hit.expireAt > now) return hit.result;
   if (hit) cache.delete(key);
 
   const result = await resolveWorkspacePath(href, workingDir, options);
@@ -292,7 +337,7 @@ export async function resolveWorkspacePathCached(
  * Async BFS that resolves MANY href suffixes in a SINGLE directory-tree walk.
  *
  * Each href gets its own candidate bucket (capped at `maxCandidates`). Every
- * file visited is suffix-tested against all not-yet-full buckets, so one walk
+ * file visited is suffix-tested against buckets with the same basename, so one walk
  * answers every href at once. The walk stops early when all buckets are full,
  * otherwise when the queue drains or `maxDepth` is reached.
  *
@@ -311,16 +356,32 @@ export async function bfsFindManyBySuffix(
   const isPathAllowed = options.isPathAllowed ?? (() => true);
 
   // One bucket per unique href; suffix precomputed for the endsWith test.
-  const buckets = new Map<string, { suffix: string; out: string[] }>();
+  // `named` stays per href: the walk enters an ignored directory any href
+  // names, but only that href may match files under it, so every bucket ends
+  // up with what `bfsFindBySuffix` would return for its href alone.
+  type Bucket = { suffix: string; named: Set<string>; out: string[] };
+  const buckets = new Map<string, Bucket>();
   for (const href of hrefs) {
     if (buckets.has(href)) continue;
     buckets.set(href, {
       suffix: '/' + normalizeForSuffix(href).replace(/^\/+/, ''),
+      named: namedIgnoredDirs([href], ignoreDirs),
       out: [],
     });
   }
   const result = new Map<string, string[]>();
   for (const [href, bucket] of buckets) result.set(href, bucket.out);
+  const byBasename = new Map<string, Bucket[]>();
+  for (const bucket of buckets.values()) {
+    const basename = bucket.suffix.slice(bucket.suffix.lastIndexOf('/') + 1);
+    const matching = byBasename.get(basename) ?? [];
+    matching.push(bucket);
+    byBasename.set(basename, matching);
+  }
+  const enterable = new Set<string>();
+  for (const bucket of buckets.values()) {
+    for (const pair of bucket.named) enterable.add(pair);
+  }
 
   const allFull = (): boolean => {
     for (const bucket of buckets.values()) {
@@ -330,9 +391,15 @@ export async function bfsFindManyBySuffix(
   };
 
   // Depth-tagged queue so we can cut off at maxDepth without recursion.
-  const queue: Array<{ dir: string; depth: number }> = [{ dir: root, depth: 0 }];
-  while (queue.length > 0 && !allFull()) {
-    const { dir, depth } = queue.shift()!;
+  // `crossed` lists the ignored directories entered on the way down.
+  const queue: Array<{ dir: string; depth: number; crossed: readonly string[] } | undefined> = [
+    { dir: root, depth: 0, crossed: [] },
+  ];
+  let visited = 0;
+  for (let cursor = 0; cursor < queue.length && !allFull(); cursor++) {
+    const { dir, depth, crossed } = queue[cursor]!;
+    // Release consumed paths without shifting the pending breadth-first queue.
+    queue[cursor] = undefined;
     let entries: fs.Dirent[];
     try {
       entries = await fs.promises.readdir(dir, { withFileTypes: true });
@@ -340,15 +407,24 @@ export async function bfsFindManyBySuffix(
       continue;
     }
     for (const ent of entries) {
+      // A single very wide directory also needs to leave room for main IPC.
+      if (++visited % 512 === 0) await new Promise<void>((resolve) => setImmediate(resolve));
       if (ent.isDirectory()) {
         if (depth >= maxDepth) continue;
-        if (ignoreDirs.has(ent.name)) continue;
-        queue.push({ dir: path.join(dir, ent.name), depth: depth + 1 });
+        if (skipsDirectory(dir, ent.name, ignoreDirs, enterable)) continue;
+        queue.push({
+          dir: path.join(dir, ent.name),
+          depth: depth + 1,
+          crossed: ignoreDirs.has(ent.name) ? [...crossed, ignoredDirPair(dir, ent.name)] : crossed,
+        });
       } else if (ent.isFile()) {
+        const matching = byBasename.get(normalizeForSuffix(ent.name));
+        if (!matching) continue;
         const abs = path.join(dir, ent.name);
         const norm = normalizeForSuffix(abs);
-        for (const bucket of buckets.values()) {
+        for (const bucket of matching) {
           if (bucket.out.length >= maxCandidates) continue;
+          if (!crossed.every((pair) => bucket.named.has(pair))) continue;
           if (norm.endsWith(bucket.suffix) && isPathAllowed(abs)) {
             bucket.out.push(abs);
           }
@@ -381,6 +457,9 @@ export async function resolveWorkspacePathBatch(
   }
   const isPathAllowed = options.isPathAllowed ?? (() => true);
   const homeDir = options.homeDir ?? os.homedir();
+  // `/D:/x` URI-pathname drive form is normalized like in the single resolver —
+  // and likewise only when the workspace is Windows-owned.
+  const driveUriEnabled = isWindowsPathLike(workingDir);
 
   const needBfs: string[] = [];
   const decodedNeedBfs = new Map<string, string>();
@@ -400,7 +479,8 @@ export async function resolveWorkspacePathBatch(
     }
     // Expand a leading `~`; non-`~` hrefs are unchanged (probe === href). The
     // result key stays the original href so the renderer cache lines up.
-    const probe = expandTilde(decodedHref, homeDir);
+    let probe = expandTilde(decodedHref, homeDir);
+    if (driveUriEnabled) probe = stripWindowsDriveUriSlash(probe);
     if (path.isAbsolute(probe)) {
       try {
         const s = await fs.promises.stat(probe);
@@ -455,11 +535,16 @@ export async function resolveWorkspacePathBatch(
  * each href from the shared TTL cache; only misses go through one
  * `resolveWorkspacePathBatch` pass, and their results are written back so later
  * single-point (`resolveWorkspacePathCached`) and batch calls share them.
+ *
+ * `revalidateNegative` treats cached `none` / `multiple` entries as misses: a
+ * reply can cite an output file before it is written, and the caller re-checks
+ * such paths at its own boundaries (new mount, stream end, window focus).
  */
 export async function resolveWorkspacePathBatchCached(
   hrefs: readonly string[],
   workingDir: string,
   options: ResolveOptions = {},
+  revalidateNegative = false,
 ): Promise<Record<string, ResolvePathResult>> {
   const now = Date.now();
   const out: Record<string, ResolvePathResult> = {};
@@ -471,7 +556,7 @@ export async function resolveWorkspacePathBatchCached(
     seen.add(href);
     const key = makeCacheKey(workingDir, href);
     const hit = cache.get(key);
-    if (hit && hit.expireAt > now) {
+    if (hit && hit.expireAt > now && !(revalidateNegative && hit.result.status !== 'unique')) {
       out[href] = hit.result;
     } else {
       if (hit) cache.delete(key);

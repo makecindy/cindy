@@ -106,6 +106,8 @@ import * as messageService from '@/lib/messageService';
 import * as sessionService from '@/lib/sessionService';
 import * as sessionsBus from '@/lib/sessionsBus';
 import { setRemoteOptimisticAttachmentUrls } from '@/lib/composerDraftStore';
+import { getToastSnapshot, toast } from '@/lib/toast';
+import i18n from '@/i18n';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import {
   __resetStickySessionOriginForTest,
@@ -524,6 +526,48 @@ const flushPromises = async () => {
 };
 
 describe('makerChatStore text delta batching', () => {
+  // #9498 review: old Hosts send raw text after the event has localized it or
+  // appended an HTTP status. These paired terminal inputs still own one row (unit).
+  it.each([
+    { reason: undefined, errorStatus: 503 },
+    { reason: 'turn-failed', errorStatus: undefined },
+    { reason: 'empty-response', errorStatus: undefined },
+  ])('retains the legacy Host error identity after presentation formatting ($reason, $errorStatus)', ({ reason, errorStatus }) => {
+    const unsubscribe = makerChatStore.subscribeLight(SESSION_ID, vi.fn());
+    try {
+      onEvent?.({ sessionId: SESSION_ID, persistId: 'legacy-error-row', event: {
+        type: 'error', source: 'claude-code',
+        data: { isTerminal: true, message: 'failed', reason, errorStatus },
+      } });
+      expect(makerChatStore.getLightSnapshot(SESSION_ID)).toMatchObject({
+        error: reason === 'turn-failed' ? i18n.t('logic.errors.turnFailed')
+          : reason === 'empty-response' ? i18n.t('logic.errors.emptyResponse') : 'failed (HTTP 503)',
+        errorPersistId: 'legacy-error-row',
+      });
+      onEvent?.({ sessionId: SESSION_ID, event: { type: 'done', source: 'claude-code', data: {} } });
+      onInputProjection?.(projection(SESSION_ID, { error: 'failed', errorReason: reason }));
+      expect(makerChatStore.getLightSnapshot(SESSION_ID).errorPersistId).toBe('legacy-error-row');
+    } finally { unsubscribe(); }
+  });
+
+  // #8147 follow-up: a recreated renderer gets history + projection, not the old
+  // terminal event. The exact row ID must reach light subscribers (unit).
+  it('restores the active error row ID from a snapshot without replaying its terminal event', () => {
+    const notify = vi.fn();
+    const unsubscribe = makerChatStore.subscribeLight(SESSION_ID, notify);
+    onInputProjection?.({ ...projection(SESSION_ID, { error: 'failed' }), errorPersistId: 'error-current' });
+    expect(makerChatStore.getLightSnapshot(SESSION_ID).errorPersistId).toBe('error-current');
+    onInputProjection?.(projection(SESSION_ID, { error: 'failed' }));
+    expect(makerChatStore.getLightSnapshot(SESSION_ID).errorPersistId).toBe('error-current');
+    onInputProjection?.(projection(SESSION_ID, { error: 'replacement failure' }));
+    expect(makerChatStore.getLightSnapshot(SESSION_ID).errorPersistId).toBeNull();
+    onInputProjection?.({ ...projection(SESSION_ID, { error: 'failed' }), errorPersistId: 'error-next' });
+    expect(makerChatStore.getLightSnapshot(SESSION_ID).errorPersistId).toBe('error-next');
+    onInputProjection?.({ ...projection(SESSION_ID), errorPersistId: 'error-next' });
+    expect(makerChatStore.getLightSnapshot(SESSION_ID).errorPersistId).toBeNull();
+    unsubscribe();
+  });
+
   // #7119: UI eligibility must survive the actual projection -> light subscriber
   // path and disappear when an older host omits the optional field (unit).
   it('projects host continuation eligibility to light subscribers and revokes missing eligibility', () => {
@@ -2085,6 +2129,37 @@ describe('makerChatStore text delta batching', () => {
     vi.advanceTimersByTime(32);
     expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
       expect.objectContaining({ clientId: 'assistant-1', content: 'complete answer', isStreaming: false }),
+    ]);
+  });
+
+  // #8005, unit: an already displayed import has a distinct clientId and a
+  // later timestamp than the live reply. Exercise the real push consumer;
+  // transaction tests alone cannot prove the visible copy is removed.
+  it.each(['local', 'remote'] as const)('removes a reconciled Codex import copy through %s ingress', (source) => {
+    if (source === 'remote') remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    const send = (channel: string, payload: unknown) => {
+      if (source === 'remote') onRemotePush?.({ deviceId: 'device-1', channel, payload });
+      else if (channel === 'local-db:messages:created') onDbMessageCreated?.(payload);
+      else onDbMessageDeleted?.(payload);
+    };
+    for (const [clientId, createdAt] of [
+      ['codex-import:thread:1', '2026-06-15T00:00:06.000Z'],
+      ['live-answer', '2026-06-15T00:00:05.000Z'],
+    ]) send('local-db:messages:created', { sessionId: SESSION_ID, message: {
+      id: clientId, clientId, role: 'assistant', content: 'Same answer', createdAt,
+    } });
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toHaveLength(2);
+    send('local-db:messages:deleted', { sessionId: SESSION_ID,
+      clientId: 'codex-import:thread:1', clientIds: ['codex-import:thread:1'],
+    });
+    const enriched = 'Same answer\n<oai-mem-citation><citation_entries>MEMORY.md:1[note]</citation_entries></oai-mem-citation>';
+    send('local-db:messages:created', { sessionId: SESSION_ID, message: {
+      id: 'live-answer', clientId: 'live-answer', role: 'assistant', content: enriched,
+      createdAt: '2026-06-15T00:00:05.000Z', agentMeta: { assistantPhase: 'final_answer', totalCostUsd: 1 },
+    } });
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+      expect.objectContaining({ clientId: 'live-answer', content: enriched,
+        assistantPhase: 'final_answer' }),
     ]);
   });
 
@@ -5991,6 +6066,56 @@ describe('makerChatStore text delta batching', () => {
       deviceLinkInvoke.mock.calls.some(([, channel]) => channel === 'maker:input:enqueue'),
     ).toBe(false);
     expect(restore).toHaveBeenCalledTimes(1);
+  });
+
+  // #2281 / unit: exercise the public steer entry with each explicit mirror
+  // guard. Existing rejection tests protect error recovery, not immediate user
+  // feedback or the no-send boundary. ChatInput's false-result restore path is
+  // covered by chatInputAnnotationAbort.test.tsx.
+  it.each([
+    { steeringQueueClientIds: ['steer-in-flight'] },
+    { queueAbortPending: true },
+  ])('immediately reports an unsent composer steer without dispatching: %j', async (guard) => {
+    onInputProjection?.(projection(SESSION_ID, guard));
+    // A delayed refresh must not delay feedback or retry the rejected input.
+    let resolveProjection!: (value: AgentInputProjection) => void;
+    input.getProjection.mockReturnValueOnce(new Promise<AgentInputProjection>((resolve) => {
+      resolveProjection = resolve;
+    }));
+    const before = makerChatStore.getSnapshot(SESSION_ID);
+    const onInputCreated = vi.fn();
+    const beforeEnqueue = vi.fn(async () => true);
+    const file: AttachedFile = {
+      id: 'draft-image', name: 'draft.png', path: 'draft.png', ext: '.png',
+      size: 10, category: 'image', mimeType: 'image/png',
+      annotationStrokes: [{ points: [{ x: 0.1, y: 0.2 }, { x: 0.3, y: 0.4 }] }],
+    };
+    try {
+      const result = makerChatStore.steerMessage(
+        SESSION_ID, 'keep my draft', MODEL, EFFORT, PERMISSION_MODE, WORKING_DIR,
+        [file], undefined, { onInputCreated, beforeEnqueue },
+      );
+      expect(getToastSnapshot()).toContainEqual(expect.objectContaining({
+        variant: 'warning', message: i18n.t('newChat.chatInput.steerNotSent'),
+      }));
+      await expect(result).resolves.toBe(false);
+      expect(makerChatStore.getSnapshot(SESSION_ID)).toBe(before);
+      expect(input.getProjection).toHaveBeenCalledWith(SESSION_ID);
+      resolveProjection(projection(SESSION_ID));
+      await flushPromises();
+      expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual(before.messages);
+      expect(makerChatStore.getSnapshot(SESSION_ID).pendingQueue).toEqual(before.pendingQueue);
+      expect(input.steer).not.toHaveBeenCalled();
+      expect(input.enqueue).not.toHaveBeenCalled();
+      expect(onInputCreated).not.toHaveBeenCalled();
+      expect(beforeEnqueue).not.toHaveBeenCalled();
+      expect(messageService.create).not.toHaveBeenCalled();
+      expect(sessionService.touchUserSend).not.toHaveBeenCalled();
+      expect(window.electronAPI.cacheMediaForSession).not.toHaveBeenCalled();
+    } finally {
+      toast.dismissAll();
+      vi.advanceTimersByTime(300);
+    }
   });
 
   it('drops a standalone late projection when the data owner changes', async () => {

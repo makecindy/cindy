@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/device-link/deviceName';
 import {
   REMOTE_RESOURCE_GET_CHANNEL,
   REMOTE_RESOURCE_INVOKE_CHANNEL,
@@ -40,17 +41,14 @@ export const MOBILE_REMOTE_RESOURCE_PRIMITIVES = [
  */
 const RICH_REMOTE_RESOURCE_PRIMITIVES: readonly string[] = [
   'form',
-  'routine-list',
-  'routine-detail',
   BOT_GROUP_CHAT_PRIMITIVE,
   'plugin-capabilities',
   'plugin-card-actions',
   'plugin-card-forms',
   'mail-message',
-  'teammate-todos',
 ];
 
-/** Routines remain a desktop feature; other portable collections stay available. */
+/** Teammate routines are gone; a stale `routines` link from an older desktop stays unsupported. */
 export function isMobileRemoteCollectionSupported(collectionId: string): boolean {
   return collectionId !== 'routines';
 }
@@ -88,7 +86,7 @@ export function remoteResourceDiscoveryTargets(
   const known = new Set(previous.flatMap((collection) => collection.targets.map((host) => host.deviceId)));
   return devices
     .filter((device) => device.canOpen || (device.state === 'offline' && known.has(device.deviceId)))
-    .map((device) => ({ deviceId: device.deviceId, deviceName: device.name,
+    .map((device) => ({ deviceId: device.deviceId, deviceName: deviceDisplayName(device.deviceId, device.name, devices),
       ...(!device.canOpen ? { offline: true } : {}),
     }));
 }
@@ -185,9 +183,12 @@ function normalizeRemoteDisplay(value: unknown): RemoteResourceDisplay | null {
     title,
     ...(subtitle ? { subtitle } : {}),
     ...(preview ? { preview } : {}),
+    ...(boundedString(recordOf(record.teammateActivity)?.phase, 80)
+      ? { teammateActivity: { phase: boundedString(recordOf(record.teammateActivity)?.phase, 80)! } } : {}),
     ...(generationPhase ? { generation: { phase: generationPhase, startedAt: generationStartedAt ?? null } } : {}),
     ...(timestamp !== undefined ? { timestamp } : {}),
     ...(normalizeRemoteTimestamp(record.lastReplyAt) !== undefined ? { lastReplyAt: record.lastReplyAt as number } : {}),
+    ...(normalizeRemoteTimestamp(record.lastReadAt) !== undefined ? { lastReadAt: record.lastReadAt as number } : {}),
     ...(avatar ? { avatar } : {}),
     ...(status ? { status } : {}),
     ...(Array.isArray(record.badges) ? { badges: record.badges.slice(0, 8).flatMap(value => {
@@ -538,7 +539,7 @@ export function parseRemoteResourceTargets(value: unknown): RemoteResourceHostTa
       ) {
         return [];
       }
-      return [{ deviceId, deviceName: deviceName || deviceId }];
+      return [{ deviceId, deviceName: deviceDisplayName(deviceId, deviceName) }];
     });
   } catch {
     return [];

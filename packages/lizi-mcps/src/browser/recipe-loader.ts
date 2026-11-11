@@ -1,3 +1,5 @@
+/// <reference path="../vite-env.d.ts" />
+
 /**
  * Site Recipe + SiteGuide registry.
  *
@@ -79,6 +81,8 @@ export const RecipeSchema = z.object({
   /** Host substrings this recipe applies to (advisory, surfaced via siteguide). */
   match: z.array(z.string()).optional(),
   description: z.string().optional(),
+  /** Advisory URL path prefixes: literal segments or :parameters, never regex. */
+  recommendationPaths: z.array(z.string().startsWith("/")).optional(),
   inputs: z.record(z.string(), z.object({ required: z.boolean().optional(), type: z.string().optional(), default: z.unknown().optional(), description: z.string().optional(), choices: z.array(z.string()).optional() })).optional(),
   /** A fixed bundled command id, never an arbitrary module path. */
   adapter: z.string().optional(),
@@ -90,12 +94,26 @@ export const RecipeSchema = z.object({
   /** Host-owned state; authored drafts cannot supply this. Legacy files remain runnable. */
   validation: z.object({
     site: z.string(),
-    state: z.enum(['active', 'suspended']),
+    state: z.enum(['candidate', 'active', 'suspended']),
+    /** Newly learned recipes stay in their browser profile; legacy files omit it. */
+    profile: z.string().optional(),
   }).optional(),
 }).refine(recipe => recipe.adapter ? recipe.steps.length === 0 : recipe.steps.length > 0, 'recipe requires steps or a bundled adapter, exclusively');
 
 export type Recipe = z.infer<typeof RecipeSchema>;
 export type RecipeStep = z.infer<typeof RecipeStepSchema>;
+
+/** Deferred candidates can only compose known read primitives, never authored
+ * page code or interactive steps. This is a capability check, not a promise
+ * about a remote site's GET side effects; normal recipe approval still applies. */
+export function deferredRecipeIssue(recipe: Recipe): string | undefined {
+  if (recipe.access !== 'read') return '延后验证仅支持声明为 read 的新流程';
+  if (recipe.adapter || recipe.steps.some(step => step.fn !== undefined
+    || !['navigate', 'wait', 'extract', 'requests', 'responseBody'].includes(step.action))) {
+    return '延后验证仅支持 navigate、无 fn 的 wait、extract、requests、responseBody；交互、evaluate 或脚本步骤必须在当次真实操作中验证后再保存，不能为测试重放写操作';
+  }
+  return undefined;
+}
 
 /** SiteGuide is loose, agent-facing knowledge; we validate only the shape we rely on. */
 export const SiteGuideSchema = z
@@ -252,10 +270,11 @@ export function loadSiteGuides(): Map<string, SiteGuide> {
   // reviews) without replacing its upstream guide or duplicating the site.
   for (const recipe of loadRecipes().values()) {
     if (recipe.adapter) continue;
-    const host = recipe.match?.find(host => guides.has(host));
-    if (!host) continue;
-    const guide = guides.get(host)!;
-    guide.recipes = [...new Set([...(guide.recipes ?? []), recipe.id])];
+    for (const host of recipe.match ?? []) {
+      const guide = guides.get(host) ?? { site: host, recipes: [] };
+      guide.recipes = [...new Set([...(guide.recipes ?? []), recipe.id])];
+      guides.set(host, guide);
+    }
   }
   return guides;
 }

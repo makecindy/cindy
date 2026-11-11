@@ -63,33 +63,31 @@ export function useComposerOverlayMetrics(overlayEl: HTMLElement | null): Compos
     };
     const ro = new ResizeObserver(() => measure(true));
     let observedTargets = new Set<HTMLElement>();
-    let centerOccupied = false;
-    const syncResizeTargetsAndMeasure = (sync: boolean) => {
+    const syncResizeTargets = () => {
       const nextTargets = new Set(getMessageStreamIndicatorResizeTargets(overlayEl));
-      let changed = nextTargets.size !== observedTargets.size;
       for (const target of observedTargets) {
         if (!nextTargets.has(target)) ro.unobserve(target);
       }
       for (const target of nextTargets) {
-        if (!observedTargets.has(target)) { ro.observe(target); changed = true; }
+        if (!observedTargets.has(target)) ro.observe(target);
       }
       observedTargets = nextTargets;
-      const occupied = (overlayEl.querySelector('[data-composer-center-group]')?.childElementCount ?? 0) > 0;
-      changed ||= occupied !== centerOccupied;
-      centerOccupied = occupied;
-      // Text/token mutations do not imply a new size. Reading geometry in that
-      // microtask forces layout ahead of ResizeObserver, repeatedly during send.
-      // New/removed absolute targets and an empty center lane need an immediate
-      // measurement; actual size changes remain owned by ResizeObserver.
-      if (!sync || changed) measure(sync);
     };
 
     // Seed with the current geometry so the first paint after remount does not
     // reuse stale state. The plan flyout is absolutely positioned and mounts
     // only on hover/click, so its insertion does not resize the center group;
     // resync observed targets whenever that subtree changes.
-    syncResizeTargetsAndMeasure(false);
-    const mutationObserver = new MutationObserver(() => syncResizeTargetsAndMeasure(true));
+    syncResizeTargets();
+    measure(false);
+    const mutationObserver = new MutationObserver(() => {
+      syncResizeTargets();
+      // Reading geometry here forces layout after each React commit. Request a
+      // fresh observation instead: the browser batches it after layout, before
+      // paint. Re-observing also catches position-only changes with equal sizes.
+      ro.unobserve(overlayEl);
+      ro.observe(overlayEl);
+    });
     mutationObserver.observe(overlayEl, { childList: true, subtree: true });
     return () => {
       mutationObserver.disconnect();

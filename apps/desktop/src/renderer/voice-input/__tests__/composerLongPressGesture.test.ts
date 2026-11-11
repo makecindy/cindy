@@ -59,18 +59,24 @@ describe('createComposerLongPressVoiceGesture', () => {
     vi.useRealTimers();
   });
 
-  it('按住不动到时长才开始录音，松开结束', async () => {
+  // Regression: a short composer click opened the Bluetooth microphone before
+  // recording, interrupting other apps' audio (user report, 2026-10-26).
+  // Unit: exercise the production gesture at 599/600ms. Previously these cases
+  // only guarded start/stop, allowing prepare to acquire the device too early.
+  it('按住不动到时长才准备麦克风并开始录音，松开结束', async () => {
     const { gesture, start, stop, getState, prepare, releasePreparation } = setup();
 
     gesture.press(origin);
-    expect(prepare).toHaveBeenCalledOnce();
+    expect(prepare).not.toHaveBeenCalled();
     vi.advanceTimersByTime(COMPOSER_LONG_PRESS_VOICE_INPUT_MS - 1);
     await settle();
+    expect(prepare).not.toHaveBeenCalled();
     expect(start).not.toHaveBeenCalled();
     expect(releasePreparation).not.toHaveBeenCalled();
 
     vi.advanceTimersByTime(1);
     await settle();
+    expect(prepare).toHaveBeenCalledOnce();
     expect(start).toHaveBeenCalledOnce();
     expect(releasePreparation).toHaveBeenCalledOnce();
     expect(getState()).toBe('listening');
@@ -83,29 +89,31 @@ describe('createComposerLongPressVoiceGesture', () => {
   });
 
   it('没到时长就松开是普通点击，不录音', async () => {
-    const { gesture, start, stop, releasePreparation } = setup();
+    const { gesture, start, stop, prepare, releasePreparation } = setup();
 
     gesture.press(origin);
     vi.advanceTimersByTime(COMPOSER_LONG_PRESS_VOICE_INPUT_MS / 2);
     gesture.release();
-    expect(releasePreparation).toHaveBeenCalledOnce();
+    expect(releasePreparation).not.toHaveBeenCalled();
     vi.advanceTimersByTime(COMPOSER_LONG_PRESS_VOICE_INPUT_MS);
     await settle();
 
+    expect(prepare).not.toHaveBeenCalled();
     expect(start).not.toHaveBeenCalled();
     expect(stop).not.toHaveBeenCalled();
   });
 
   it('等待期间拖动超出容差视为选字，放弃长按', async () => {
-    const { gesture, start, releasePreparation } = setup();
+    const { gesture, start, prepare, releasePreparation } = setup();
 
     gesture.press(origin);
     gesture.move({ x: origin.x + COMPOSER_LONG_PRESS_MOVE_TOLERANCE_PX, y: origin.y });
     gesture.move({ x: origin.x + COMPOSER_LONG_PRESS_MOVE_TOLERANCE_PX + 1, y: origin.y });
-    expect(releasePreparation).toHaveBeenCalledOnce();
+    expect(releasePreparation).not.toHaveBeenCalled();
     vi.advanceTimersByTime(COMPOSER_LONG_PRESS_VOICE_INPUT_MS);
     await settle();
 
+    expect(prepare).not.toHaveBeenCalled();
     expect(start).not.toHaveBeenCalled();
   });
 
