@@ -85,6 +85,26 @@ Host 直接复用 Desktop 的 `GhostManager`（同一实现），只注入 owner
 命名空间迁移、常驻进程拉起等安全相关适配保持默认（fail closed）。Web 与 Electron 客户端的
 插件列表都来自这里。
 
+## 窗口本地处理的“电脑使用”通道
+
+设置页「电脑使用」的 10 个 `maker:computer:*` 通道（驱动状态、安装与更新、授权引导、拖拽授权）
+在客户端模式下由窗口自己处理。它们管理的是本机 CuaDriver，而 Host 在有窗口连接时把电脑使用的
+工具调用转给窗口执行（`apps/host/src/platform/tools.ts`）。注册集中在 `maker-ipc/register.ts`
+的 `registerComputerUseIpc`：内嵌模式仍在 `registerMakerIpc` 原位置调用，客户端模式在 splash 之后、
+`registerMakerIpcsAfterSplash` 的客户端分支里调用。处理函数与内嵌模式逐字相同；状态、安装、更新
+等通道在两种模式下都不校验发送方，与原来一致。
+
+仍有的缺口：
+
+- `maker:browser:status`、`maker:browser:open-for-login` 不在窗口注册，继续返回
+  `UNSUPPORTED_CAPABILITY`。客户端模式下 Agent 用的浏览器由 Host 自己的浏览器运行时管理
+  （`profileDir/browser-runtime`），窗口再开一个会争用同一个 Chrome 用户目录，以后由 Host 提供。
+  通道清单（`scripts/host-channel-coverage.mjs`）合入后，这两个改归“要 Host 做的”，Host 待接总数 985 → 987。
+- 启用开关走插件开关（`maker:plugins:set-enabled`），客户端模式下仍未支持，所以设置页里只有
+  状态、安装、更新与授权可用。
+- 驱动安装、更新与授权引导在窗口进程里执行。客户端升级换窗口时，释放检查（`host-platform/client.desktop.ts`
+  的 `freeze`，`canReleaseClient` 一段）没有把它们算进去，换窗口会打断正在进行的安装。归窗口交接任务处理。
+
 ## 明确未迁移（客户端模式下会显式失败）
 
 `maker:send`、`maker:list-active`、中断/告警、MCP、插件执行、scheduler、device-link、

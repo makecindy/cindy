@@ -25870,6 +25870,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
   });
 
+  registerComputerUseIpc();
+
+  // ── Plugin hub (Phase 2) ──────────────────────────────────────────────────
+
+  log.info('maker:* IPC handlers registered');
+}
+
+/**
+ * Settings →「电脑使用」的 10 个 `maker:computer:*` 通道（驱动状态、安装与更新、授权引导）。
+ *
+ * 它们管理的是本机 CuaDriver，客户端模式下 Host 仍把电脑使用的工具调用转给窗口执行，
+ * 所以两种模式都由窗口处理：内嵌模式在 `registerMakerIpc` 原位置调用，客户端模式由
+ * bootstrap 在 splash 之后的同一时刻调用。只用模块级依赖，不闭合 `registerMakerIpc` 的状态。
+ */
+export function registerComputerUseIpc(): void {
   // ── Local desktop computer-use (Settings →「电脑使用」) ─────────────────
   // Probe the installed CuaDriver used by the phase-one Computer Use runtime.
   ipcMain.handle(
@@ -26017,10 +26032,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
     },
   );
-
-  // ── Plugin hub (Phase 2) ──────────────────────────────────────────────────
-
-  log.info('maker:* IPC handlers registered');
 }
 
 const generatedImageDelivery = createGeneratedImageDelivery({
