@@ -3,8 +3,7 @@
  * iOS 见 MobilePermissionPickerList.ios.tsx)。
  *
  * 每行 = 权限图标(`permissionPresentation`,与桌面 PermissionSelector 对齐)+ 文案 + 选中勾号。
- * 选中态与 iOS 同口径:只有选中行的图标按档位着色(`permissionAccentColor`,auto / bypass
- * 有语义色,其余中性),文字与勾号不着色,也不铺整行底色。不含容器/ScrollView —— 由调用方套。
+ * 所有模式保持中性，以勾号标记当前选择，每项直接显示说明。
  */
 import { Pressable, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import { useTranslation } from 'react-i18next';
@@ -35,6 +34,13 @@ const makeStyles = (c: ThemeColors) =>
       gap: spacing.md,
       minHeight: 48,
       paddingHorizontal: spacing.sm,
+    },
+    optionContent: { flex: 1, minWidth: 0, paddingVertical: spacing.sm },
+    description: {
+      color: c.textSecondary,
+      fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
+      fontWeight: fontWeight.regular,
     },
     separator: {
       backgroundColor: c.border,
@@ -74,6 +80,7 @@ export function MobilePermissionPickerList({
             {index > 0 ? <View style={styles.separator} /> : null}
             <Pressable
               accessibilityLabel={t('interaction.permission.pickerSelect', { mode: presentation.label })}
+              accessibilityHint={presentation.description}
               accessibilityRole="button"
               accessibilityState={{ selected, disabled }}
               disabled={disabled}
@@ -90,9 +97,10 @@ export function MobilePermissionPickerList({
                 size={iconSize.action}
                 strokeWidth={iconStroke.regular}
               />
-              <Text numberOfLines={1} style={styles.optionText}>
-                {presentation.label}
-              </Text>
+              <View style={styles.optionContent}>
+                <Text style={styles.optionText}>{presentation.label}</Text>
+                <Text style={styles.description}>{presentation.description}</Text>
+              </View>
               {selected ? (
                 <Check color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.medium} />
               ) : null}

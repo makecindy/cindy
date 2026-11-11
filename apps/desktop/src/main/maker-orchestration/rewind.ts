@@ -248,7 +248,7 @@ async function loadRewindContext(
     if (row?.agentKind !== 'cc' || activeSdkSessionId(row.sdkSessionId ?? undefined)) {
       throw rewindError(
         'NO_LIVE_QUERY',
-        '会话未激活——请先发送任意一条消息（即使是 "ok"），让 SDK 起来后再 rewind',
+        '任务运行环境未能恢复，无法回退',
       );
     }
     detached = true;
