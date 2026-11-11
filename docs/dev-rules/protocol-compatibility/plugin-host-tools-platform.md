@@ -14,6 +14,8 @@ Node Host 与桌面控制端沿用上述工具签名、manifest 和 receipt。lo
 撤回 channel 可用，不占用或推进任务事件序号。旧客户端不协商就不投递此类帧；旧 Host
 忽略额外 query，任务事件流保持原行为。回答沿用同名 preload 契约，经已认证控制端绑定
 到原窗口确认桥；断线取消，不重试写操作。不改变 device-link 或自建中转 wire payload。
+新增确认 SSE writer 在发送积压超过 1 MiB，或 `write` 返回 false 且未排空时按无法送达
+拒绝本次确认；不排队、不重试、不关闭其它客户端，原任务事件流不变。
 Node Host 的本机 `history` 查询增量接入相同回调和 owner 数据库，沿用原工具参数、分页、
 错误与来源范围。任务动作的输入快照与确认复用共享实现，不新增身份字段、任务副本或批准记录。
 Node Host 未装配的服务返回 MCP `UNSUPPORTED_CAPABILITY`，附当前执行环境不支持的说明；当前包括生产调度器。
