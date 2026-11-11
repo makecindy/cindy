@@ -66,8 +66,17 @@ export function createTurnExecutor(deps) {
         catch (failure) { turn.persistenceError = errorText(failure); deps.onPersistenceError(sessionId, turn.persistenceError); }
       }
       turn.running = false;
-      if (turns.get(sessionId) === turn) deps.onTerminal(sessionId,
-        error ? 'error' : 'done', error, turn.terminalMeta);
+      if (turns.get(sessionId) === turn) {
+        // Some providers become idle after abort without emitting done. Publish
+        // the settled input receipt after persistence drains, never fake a
+        // successful provider result or close another queued input's stream.
+        if (!event && turn.abortRequested && typeof turn.clientId === 'string'
+          && !turn.interruptedByShutdown && deps.isCurrent()) {
+          deps.hub.publish({ type: 'input_receipt', sessionId, inputClientId: turn.clientId,
+            clientId: turn.clientId, status: 'interrupted' });
+        }
+        deps.onTerminal(sessionId, error ? 'error' : 'done', error, turn.terminalMeta);
+      }
     });
     return turn.settlement;
   }

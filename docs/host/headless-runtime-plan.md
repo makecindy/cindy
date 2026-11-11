@@ -747,3 +747,23 @@ Host 对账后保留原输入的 `planMode`；更新已有 Session 的模型等�
 `sdkSessionId`，`applyPendingAgentSwitch` 也调用此入口。该问题早于本轮对账抽取；完整
 切引擎接线需使用桌面的原生会话交接/关闭/落库合同，并补切换后的首条发送验收，不能
 把当前路由更新及假依赖的 HTTP 测试称为已验证引擎切换。
+
+### 隔离实跑发现的停止收尾修复（2026-11-11）
+
+上个检查点的超时已修复。provider 在 abort 后进入 idle 却没有发出 `done` 时，原 Host
+只结算队列，`/chat` 仍等待供应商终态。现在在持久写队列排空后，为这条输入发布已有
+`input_receipt` 合同的 `interrupted` 回执；HTTP 流按精确输入 ID 结束，不伪造成功答复。
+provider 尚未确认 idle、持久写入尚在进行时，以及旧账号或关闭中的运行时，均不提前
+发出该回执。写入失败仍保留队列暂停和恢复状态；「中断」不宣称回复已完整保存。
+
+测试价值：扩充原「晚到 idle 与持久写入」用例，验证写完前没有回执、写完后只结算旧输入；
+失败 abort 仍无回执。既有 chat 测试文件增加按输入 ID 关闭流的用例，明确不产生 `done`。
+两个新增行为断言先红后绿（`/tmp/cindy-stop-receipt-red.log`），分别覆盖真实队列生产入口
+和 HTTP 处理器，模型与响应 IO 为假依赖，tier 为 unit。
+
+- Host 全部 208 项通过（4.61 秒），类型检查通过；桌面生产文件与测试均未改变。
+- 原生隔离流程重新通过发送、UUID/回复落库、插话、运行时重开与停止，以及网关/自定义
+  供应商和运行中 key 轮换；日志 `/tmp/cindy-stop-receipt-native.log`，退出 0、两条 PASS。
+  这次仍为真实 Host/SQLite/原生 Codex 加模拟上游，不代替真实账号、模型或打包运行验收。
+- 完整日志为 `/tmp/cindy-stop-receipt-{host-tests,host-types,native}.log`；该修复独立提交，
+  未推送。后续切引擎及其他装配缺口不因本次实跑通过而视作已完成。

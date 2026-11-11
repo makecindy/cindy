@@ -781,6 +781,7 @@ test('failed abort retains the active turn and does not start a second message',
   await enqueue(h, 'task-stop', { clientId: 'b', text: 'later' });
   await assert.rejects(h.queue.stop('task-stop'), /abort failed/);
   assert.equal(h.queue.projection('task-stop').turnInProgress, true);
+  assert.equal(h.events.some(event => event.type === 'input_receipt'), false);
   assert.deepEqual(session.sent, ['long']);
   session.emit({ type: 'text', data: { text: 'finished after failed abort', isFinal: true } });
   session.emit({ type: 'done' });
@@ -813,11 +814,15 @@ test('late provider idle after stop saves the partial reply before draining', as
   t.mock.timers.tick(250);
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(session.sent, ['first']);
+  assert.equal(h.events.some(event => event.type === 'input_receipt'), false, 'do not settle before the reply write finishes');
   releaseWrite();
   await new Promise(resolve => setImmediate(resolve));
   t.mock.timers.tick(250);
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(session.sent, ['first', 'second']);
+  assert.deepEqual(h.events.filter(event => event.type === 'input_receipt'), [{
+    type: 'input_receipt', sessionId: 'late-stop', inputClientId: 'a', clientId: 'a', status: 'interrupted',
+  }]);
   await h.queue.dispose();
 });
 
