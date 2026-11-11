@@ -1464,9 +1464,17 @@ export class Maker {
   async closeSessionIfCurrent(
     session: Session,
     reason: Exclude<MakerSessionCloseReason, 'unexpected'> = 'requested',
-    opts?: { afterCurrentTurn?: boolean; failureEvent?: () => AgentEvent },
+    opts?: { afterCurrentTurn?: boolean; failureEvent?: () => AgentEvent; onlyIfIdle?: boolean },
   ): Promise<'closed' | 'deferred' | void> {
     if (this.activeSessions.get(session.id) !== session) return;
+    let idleClose: Promise<boolean> | undefined;
+    if (opts?.onlyIfIdle) {
+      if (session.hasStartedClosing()) return;
+      // closeIfIdle synchronously reserves teardown or refuses it. Record the
+      // cause only for an accepted close, before its first async completion.
+      idleClose = session.closeIfIdle();
+      if (!session.hasStartedClosing()) return;
+    }
     // Deferred internal retirement is only intent. An explicit closer may
     // take ownership until Session actually starts teardown; after that the
     // cause stays fixed even if exit confirmation fails or another close races.
@@ -1480,6 +1488,10 @@ export class Maker {
         reason,
         transient: this.lifecycleHooks.isTransientCloseRequest?.(session.id) ?? false,
       });
+    }
+    if (idleClose) {
+      await idleClose;
+      return 'closed';
     }
     if (opts?.afterCurrentTurn) return session.closeAfterCurrentTurn(opts);
     await session.close();

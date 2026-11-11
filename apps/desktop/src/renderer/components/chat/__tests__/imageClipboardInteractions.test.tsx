@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from "@/cindy-brain/PluginUiContributions";
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Tooltip } from '@/components/ui/tooltip';
@@ -102,7 +103,7 @@ describe('shared production image interactions', () => {
         <MemoryRouter>
           <Tooltip.Provider>
             <ConfirmDialogProvider>
-              <AssistantMessage
+              <AssistantMessage pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
                 workingDir="/fixture"
                 content="![preview](/fixture/preview.png)"
                 simplifiedBotConversation={simplified}

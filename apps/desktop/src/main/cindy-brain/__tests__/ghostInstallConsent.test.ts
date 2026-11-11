@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   validateGhostManifest,
+  getApprovedGhostHostUi,
+  ghostHostUiApprovalTokens,
   type GhostInstallApproval,
   type GhostManifest,
   type InstalledGhost,
@@ -14,6 +16,7 @@ import {
   confirmedAutoTools,
   confirmedTaskCapability,
   confirmedUiCapability,
+  confirmedHostUiPermissions,
   type GhostInstallConsentPrompt,
   isGhostInstallConsentRequiredError,
   obtainGhostInstallConsent,
@@ -57,6 +60,40 @@ const userPrompt = (answer: boolean | Error) =>
   });
 
 const reviewedDigest = 'a'.repeat(64);
+
+// Host UI extends the existing receipt boundary. Old preserved declarations and
+// a standard-page grant cannot silently grant newly understood Host access (unit).
+it('asks for Host UI authority preserved by an older Host while keeping its page grant', async () => {
+  const next: GhostManifest = { ...manifest(['api.weather.test']), mcpApps: {
+    ui: { resources: [{ uri: 'ui://workspace', file: 'ui/workspace.html' }], tools: {} },
+    host: { views: [{ id: 'workspace', title: 'Workspace', resourceUri: 'ui://workspace' }], capabilities: ['context'] },
+  } };
+  const old = { ...installed(next), uiCapabilityApproved: true as const };
+  expect(getApprovedGhostHostUi(old)).toBeUndefined();
+  const prompt = Object.assign(vi.fn<GhostInstallConsentPrompt>(async () => true), { hostUiCapabilityApproval: true });
+  const decision = await obtainGhostInstallConsent({ mode: 'prompt', prompt, initiator: 'user', origin: 'local-file' }, old, next, reviewedDigest);
+  expect(prompt).toHaveBeenCalledOnce();
+  const facts = prompt.mock.calls[0][0].facts;
+  expect(facts.kind === 'update' && facts.added.every(item => item.key.startsWith('ui:host:'))).toBe(true);
+  const approvedHostUi = confirmedHostUiPermissions(decision, old, next);
+  expect(approvedHostUi).toEqual(ghostHostUiApprovalTokens(next));
+  expect(getApprovedGhostHostUi({ ...old, approvedHostUi })).toMatchObject({ views: [{ id: 'workspace' }], capabilities: ['context'] });
+});
+
+it('keeps unknown Host UI capabilities inert and binds approvals to the exact resource', () => {
+  const next: GhostManifest = { ...manifest(['api.weather.test']), mcpApps: {
+    ui: { resources: [{ uri: 'ui://one', file: 'one.html' }, { uri: 'ui://two', file: 'two.html' }], tools: {} },
+    host: { views: [{ id: 'workspace', title: 'Workspace', resourceUri: 'ui://one' }], capabilities: ['context', 'future-capability'] },
+  } };
+  const approvedHostUi = ghostHostUiApprovalTokens(next);
+  const old = { ...installed(next), approvedHostUi };
+  expect(getApprovedGhostHostUi(old)?.capabilities).toEqual(['context']);
+  const changed = { ...next, mcpApps: { ...next.mcpApps as object, host: {
+    views: [{ id: 'workspace', title: 'Workspace', resourceUri: 'ui://two' }], capabilities: ['context', 'future-capability'],
+  } } };
+  expect(getApprovedGhostHostUi({ ...old, manifest: changed })?.views).toEqual([]);
+  expect(confirmedHostUiPermissions({ mode: 'unprompted' }, old, changed)).toEqual([]);
+});
 // Contract: the Host grants auto tools only when the exact tool permission was shown.
 // A predeclared auto tool with no receipt grant is the minimal old-Host input (unit).
 it('grants only auto tools included in the install or update confirmation', async () => {

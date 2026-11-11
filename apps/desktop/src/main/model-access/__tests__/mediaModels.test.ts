@@ -35,7 +35,7 @@ vi.mock('../../cindy-brain/mediaDisplayVisibility.js', () => ({
 import {
   fetchMediaInvocationGuide,
   isMediaModelExecutable,
-  isMediaModelExecutableForGuide,
+  isMediaModelExecutableForLegacyInput,
   listAvailableMediaModels,
   listExecutableMediaModels,
   MediaGuideCompatibilityError,
@@ -229,14 +229,13 @@ describe('listAvailableMediaModels', () => {
     });
   });
 
-  it('只用 modelId 获取 Cindy Server Guide', async () => {
+  it('按模型与连接已有的接口格式读取公开协议资料，不附带账号 token', async () => {
     serverApiFetchMock.mockResolvedValueOnce({
       modelId: 'image-with-guide',
       guide: {
         schemaVersion: 1,
         guideId: 'images-v1',
         revision: '2026-08-13.1',
-        connection: { providerId: 'xd' },
         operations: [
           {
             capability: 'image.generate',
@@ -274,19 +273,18 @@ describe('listAvailableMediaModels', () => {
       guide: { guideId: 'images-v1', revision: '2026-08-13.1' },
     });
     expect(serverApiFetchMock).toHaveBeenLastCalledWith(
-      '/api/model-access/invocation-guide?modelId=image-with-guide',
-      expect.any(Object),
+      '/api/model-access/invocation-guide?modelId=image-with-guide&protocol=gateway',
+      expect.objectContaining({ token: null, skipAutoRefresh: true, skipSessionInvalidation: true }),
     );
   });
 
-  it('只在 Guide 查询边界移除 modelId namespace', async () => {
+  it('私有模型别名保持完整，由 Server 根据接口格式选择说明', async () => {
     serverApiFetchMock.mockResolvedValueOnce({
-      modelId: 'gpt-image-2',
+      modelId: 'custom/image',
       guide: {
         schemaVersion: 1,
         guideId: 'openai-images-v1',
         revision: '2026-08-20.1',
-        connection: { providerId: 'xd' },
         operations: [
           {
             capability: 'image.generate',
@@ -319,12 +317,12 @@ describe('listAvailableMediaModels', () => {
       },
     });
 
-    await expect(fetchMediaInvocationGuide('openai/gpt-image-2')).resolves.toMatchObject({
-      modelId: 'gpt-image-2',
+    await expect(fetchMediaInvocationGuide('custom/image', 'openai')).resolves.toMatchObject({
+      modelId: 'custom/image',
       guide: { guideId: 'openai-images-v1' },
     });
     expect(serverApiFetchMock).toHaveBeenLastCalledWith(
-      '/api/model-access/invocation-guide?modelId=gpt-image-2',
+      '/api/model-access/invocation-guide?modelId=custom%2Fimage&protocol=openai',
       expect.any(Object),
     );
   });
@@ -373,7 +371,7 @@ describe('listAvailableMediaModels', () => {
           },
           instructions: '按协议组装请求。',
           exampleBody: { prompt: 'hello' },
-          inputSchema: { type: 'object' },
+          inputSchema: { type: 'object', properties: { prompt: { type: 'string' } }, required: ['prompt'] },
           officialDocs: 'https://example.com/images-api',
         },
       ],
@@ -414,11 +412,19 @@ describe('listAvailableMediaModels', () => {
       listExecutableMediaModels(['image.generate'], { forceRefresh: true }),
     ).resolves.toMatchObject({ models: [] });
     expect(
-      isMediaModelExecutableForGuide(modelId, 'openai-images-v1', 'image.generate'),
+      isMediaModelExecutableForLegacyInput(modelId, 'image.generate'),
     ).toBe(true);
+    guide.guideId = 'opaque-server-metadata';
+    await listExecutableMediaModels(['image.generate'], { forceRefresh: true });
     expect(
-      isMediaModelExecutableForGuide(modelId, 'other-images-v1', 'image.generate'),
+      isMediaModelExecutableForLegacyInput(modelId, 'image.generate'),
+    ).toBe(true);
+    guide.operations[0].inputSchema.required = ['native_parameter'];
+    await listExecutableMediaModels(['image.generate'], { forceRefresh: true });
+    expect(
+      isMediaModelExecutableForLegacyInput(modelId, 'image.generate'),
     ).toBe(false);
+    expect(isMediaModelExecutable(modelId, 'image.generate')).toBe(true);
     expect(isMediaModelExecutable(paidModelId, 'image.generate')).toBe(false);
   });
 });

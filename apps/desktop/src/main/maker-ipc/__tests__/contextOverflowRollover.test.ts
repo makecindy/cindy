@@ -609,6 +609,48 @@ describe('createContextOverflowRollover', () => {
     expect(assertCurrent).toHaveBeenCalledTimes(2);
   });
 
+  // Unit: disabling an account carries ordinary task context, including completed
+  // tools, without replay; earlier recovery coverage only allowed Bot restart or a route change.
+  it.each(['native-a', null])('retains ordinary task history for an account switch with native id %s', async sdkSessionId => {
+    const deps = makeDeps([
+      msg('user', 'continue building the game', 'u1'),
+      { ...msg('tool_result', { fullText: 'Saved zombie model successfully' }, 'r1'), toolUseId: 'save-1' },
+      msg('assistant', 'Next: verify the scene', 'a1'),
+    ]);
+    deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), source: 'desktop', sdkSessionId });
+    await createContextOverflowRollover(deps).prepareNativeSessionRecovery('s1', 'retain-route', vi.fn());
+    const handoff = deps.setPendingHandoff.mock.calls[0]![1];
+    expect(handoff).toContain('continue building the game');
+    expect(handoff).toContain('Saved zombie model successfully');
+    expect(handoff).toContain('Next: verify the scene');
+    expect(deps.commitRebuild).toHaveBeenCalledWith('s1', expect.any(String),
+      expect.not.objectContaining({ replacementRoute: expect.anything() }), expect.any(AbortSignal));
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
+
+  // Regression #9964: an idle root turn can still own background builds/tests.
+  // Earlier recovery tests only covered foreground work; closing here kills that work.
+  it.each(['retain-route', { model: 'new-model', providerId: 'openai', effort: null, fastMode: false }] as const)(
+    'does not close background work during native recovery (%j)', async target => {
+      const deps = makeDeps([msg('user', 'keep the build running', 'u1')]);
+      deps.getLiveSession.mockReturnValue({ isTurnRunning: () => false, listBackgroundTasks: () => [{}] });
+      await expect(createContextOverflowRollover(deps).prepareNativeSessionRecovery('s1', target, vi.fn()))
+        .rejects.toThrow('running');
+      expect(deps.closeSession).not.toHaveBeenCalled();
+      expect(deps.commitRebuild).not.toHaveBeenCalled();
+      expect(deps.setPendingHandoff).not.toHaveBeenCalled();
+    });
+
+  it('does not commit an account handoff after the user stops recovery', async () => {
+    const deps = makeDeps([msg('user', 'keep this context', 'u1')]);
+    const recovery = createContextOverflowRollover(deps);
+    deps.closeSession.mockImplementationOnce(async () => { recovery.cancelRecovery('s1'); });
+    await expect(recovery.prepareNativeSessionRecovery('s1', 'retain-route', vi.fn())).rejects.toThrow();
+    expect(deps.commitRebuild).not.toHaveBeenCalled();
+    expect(deps.setPendingHandoff).not.toHaveBeenCalled();
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
+
   it('keeps the original native binding when the recorded conversation cannot be loaded', async () => {
     const deps = makeDeps([]);
     deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), contextTokens: 1200 });
@@ -638,7 +680,15 @@ describe('createContextOverflowRollover', () => {
   it.each(['cc', 'pi'] as const)(
     'rebuilds %s native context before a pressured 500K → 272K model switch',
     async (agentKind) => {
+      // #9973, unit: exercise the real smaller-window entry with an early long
+      // request; the former two short rows never exercised lossy early history.
+      const initial = `${'background '.repeat(25)}Keep the production database read-only.${'context '.repeat(25)}`;
       const deps = makeDeps([
+        msg('user', initial, 'initial', 0),
+        ...Array.from({ length: 3 }, (_, i) => [
+          msg('user', `Progress ${i}`, `early-u${i}`, i + 1),
+          msg('assistant', 'Checking', `early-a${i}`, i + 1),
+        ]).flat(),
         msg('user', '先做 A', 'u1', 1),
         msg('assistant', '做完 A', 'a1', 2),
       ]);
@@ -676,6 +726,7 @@ describe('createContextOverflowRollover', () => {
       );
       const commitCalls = deps.commitRebuild.mock.calls as unknown as Array<[string, string]>;
       const handoff = String(commitCalls[0]?.[1] ?? '');
+      expect(handoff).toContain(initial);
       expect(handoff).toContain('switching to a model with a smaller context window');
       expect(handoff).not.toContain("exceeded the model's context window");
       expect(deps.setPendingHandoff).toHaveBeenCalled();

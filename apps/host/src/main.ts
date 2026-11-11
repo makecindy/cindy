@@ -37,9 +37,12 @@ import { OwnerSessionStorage } from '../../desktop/src/main/localDb/sessionStora
 import { getDbClient, setCurrentDbClient, clearCurrentDbClient, getCurrentDbClientSnapshot } from '../../desktop/src/main/localDb/client/current.ts';
 import { loadAgentInputQueueSnapshot, saveAgentInputQueueSnapshot, getPersistedInputClientIds } from '../../desktop/src/main/localDb/agentInputQueueSnapshots.ts';
 import { touchUserSendRow } from '../../desktop/src/main/localDb/sessionQueries.ts';
-import { markSessionTurnStarted, markSessionTurnEnded, drainSessionActiveTurnWrites,
+import { markSessionTurnStartedDurable, markSessionTurnEnded, drainSessionActiveTurnWrites, ackSessionTurnEndedDurable,
   hasAssistantProgressAfterMessage, getRecoveryContextSnapshot,
 } from '../../desktop/src/main/localDb/sessionActiveTurn.ts';
+import { readSessionExtraDirsFromDb, readSessionWritableDirsFromDb } from '../../desktop/src/main/maker-host/session-storage.js';
+import { createProviderGroupStore } from '../../desktop/src/main/provider-group/storeCore.js';
+import { createProviderGroupBindings } from '../../desktop/src/main/provider-group/bindings.js';
 import { AGENT_BINARY_LAYOUT, readCachedBinaryStatus } from '../../desktop/src/main/agent-binaries/binaryStatus.js';
 import { openOwnerDatabase, OwnerDatabaseError } from '../../desktop/src/main/localDb/startupCore.js';
 import { discoverHostOwner, ownerDatabasePath, resolveHostDataDir, resolveHostRegion, resolveHostAppDataDir } from './profile-path.mjs';
@@ -103,10 +106,11 @@ import { applyLiveSessionSettings } from './agent/session-settings.mjs';
 import { createInteractionBroker } from './agent/interactions.mjs';
 import { messageToCamel, sessionToCamel } from '../../desktop/src/main/localDb/mapper.ts';
 import { readHostSessionList, readHostSession } from './session-reads.js';
-import { createHostMessageStore } from './message-store.js';
+import { createHostMessageStore, createHostMessageRecovery } from './message-store.js';
+import { createHostAttachments } from './attachments.js';
 import { createSubagentReadService } from '../../desktop/src/main/localDb/ipc/subagentReadService.js';
 import { configureUserDataDir, configureAppDataDir, getUserDataDir } from '../../desktop/src/main/userDataPath.js';
-import { messages as messageTable, projectAliases as projectAliasTable, sessions as sessionTable } from '../../desktop/src/main/localDb/schema.js';
+import { botSessionLinks, messages as messageTable, projectAliases as projectAliasTable, sessions as sessionTable } from '../../desktop/src/main/localDb/schema.js';
 import { and, eq, isNull } from 'drizzle-orm';
 import { projectHistoryView } from '@cindy/maker-shared/message-window';
 import { isDefaultDraftSessionTitle, normalizeAutoTitle } from '@cindy/maker-shared/session-title';
@@ -697,14 +701,26 @@ setSessionOpeningModelAdmission(async body => {
   return { ...body, ...execution, effort: execution.effort ?? '',
     agentKind: execution.agentKind === 'claude-code' ? 'cc' : execution.agentKind };
 });
+// Read the same owner-scoped group facts as Desktop. Host does not yet have the
+// assignment service, so no mutation port may report a successful group change.
+const hostProviderGroups = createProviderGroupStore({
+  withAvailabilityPolicyMutation: async () => { throw new Error('[UNSUPPORTED_CAPABILITY] Host cannot change provider groups'); },
+});
+const hostProviderBindings = createProviderGroupBindings(hostProviderGroups);
 const readSessionForRun = async (sessionId: string) => {
-  const rows = await getDbClient().drizzle.select().from(sessionTable)
+  const db = getDbClient();
+  const rows = await db.drizzle.select().from(sessionTable)
     .where(eq(sessionTable.id, sessionId)).limit(1);
   const row = rows[0];
   if (!row || row.status !== 'active') throw new Error('session is not active');
+  const [botLink] = await db.drizzle.select({ botId: botSessionLinks.botId })
+    .from(botSessionLinks).where(eq(botSessionLinks.sessionId, sessionId)).limit(1);
   const agentKind = row.agentKind === 'codex' ? 'codex' : row.agentKind === 'pi' ? 'pi' : 'claude-code';
   return {
     id: row.id,
+    status: row.status, source: row.source, botId: botLink?.botId ?? null,
+    remoteHostId: row.remoteHostId, agentDeviceId: row.agentDeviceId,
+    orcaRole: row.orcaRole, orcaRemoteLead: row.orcaRemoteLead,
     agentKind,
     model: row.model,
     workingDir: row.workingDir,
@@ -790,8 +806,14 @@ const interactions = {
 const insertSessionMessage = createHostMessageStore({ getOwner: getCurrentDbClientSnapshot,
   publish: (event: unknown) => eventHub.publish(event) });
 
+const messageRecovery = createHostMessageRecovery({ getOwner: getCurrentDbClientSnapshot,
+  publish: (event: unknown) => eventHub.publish(event) });
+
 const inputQueue = createInputQueue({
   getOwner: getCurrentDbClientSnapshot,
+  createAttachments: ({ assertCurrent }: { assertCurrent(): void }) => createHostAttachments({
+    getOwner: getCurrentDbClientSnapshot, assertCurrent,
+  }),
   interactions,
   getMaker: () => {
     if (!agentGraph) throw new Error('agent runtime is not ready');
@@ -804,14 +826,23 @@ const inputQueue = createInputQueue({
     if (kind === 'codex') await agentGraph?.gatewayRestart.flushBeforeLocalCodexSessionStart();
   },
   readSession: readSessionForRun,
+  assertProviderExecutionSupported: (id: string, providerId?: string | null) => {
+    if (hostProviderBindings.readProviderGroupBinding(id)
+      || (providerId && hostProviderGroups.readProviderGroup(providerId))) {
+      throw new Error('[UNSUPPORTED_CAPABILITY] Host does not yet support provider groups');
+    }
+  },
+  readSessionExtraDirs: readSessionExtraDirsFromDb,
+  readSessionWritableDirs: readSessionWritableDirsFromDb,
+  readMcpAppModelContext: async (id: string) => (await pluginGateway?.modelContext(id))
+    ?? { text: '', async assertCurrent() {}, consume() {} },
+  ackInterruptedTurnDispatched: ackSessionTurnEndedDurable,
+  ...messageRecovery,
   persistMessage: insertSessionMessage,
   persistQueueSnapshot: saveAgentInputQueueSnapshot,
   loadQueueSnapshot: loadAgentInputQueueSnapshot,
   getPersistedClientIds: getPersistedInputClientIds,
-  markStarted: async (sessionId: string) => {
-    markSessionTurnStarted(sessionId);
-    await drainSessionActiveTurnWrites(sessionId);
-  },
+  markStarted: markSessionTurnStartedDurable,
   markEnded: async (sessionId: string, endedAt: number) => {
     markSessionTurnEnded(sessionId, endedAt);
     await drainSessionActiveTurnWrites(sessionId);

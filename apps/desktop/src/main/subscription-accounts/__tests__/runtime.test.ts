@@ -88,6 +88,7 @@ import {
   readSubscriptionPool,
   disconnectSubscriptionPool,
   readSubscriptionPoolUsage,
+  readSubscriptionPoolModelAvailability,
   readLegacySubscriptionPoolUsage,
   readSubscriptionSessionUsage,
   readSubscriptionSessionAccount,
@@ -99,6 +100,14 @@ import { providerGroupMemberUsageState, providerGroupCodexUsageFromReads, provid
 import { readLegacySubscriptionQuota } from '../legacyQuota.js';
 import { withSubscriptionAccounts } from '../agent.js';
 import { getSessionSubscriptionAccount } from '../session.js';
+import { prepareSubscriptionAccountForSend } from '../prepareSend.js';
+import type { SessionRowSnapshot } from '../../localDb/sessionDispatchSnapshot.js';
+import { createProviderGroupDirectory } from '../../provider-group/directory.js';
+import { createProviderGroupRouter, type ProviderGroupPersistedCooling } from '../../provider-group/router.js';
+import { createProviderGroupService, type ProviderGroupSessionRow } from '../../provider-group/service.js';
+import type { ProviderGroupBinding } from '../../provider-group/bindings.js';
+import { normalizeProviderGroupConfig } from '../../../shared/providerGroup.js';
+import type { ProviderView } from '@cindy/model-providers';
 const account = (id: string) => ({ id, paused: false, limit: 1, weight: 1 });
 let generation = 0;
 beforeEach(() => {
@@ -177,6 +186,42 @@ describe('tasks using imported Codex connections', () => {
     remote?.release();
   });
 
+  // PR #9837 review / unit: a healthy imported account cannot clear a group's
+  // cooldown for a new route its original grants deny. Prior tests only gated
+  // allocation. Two accounts (exhausted default + healthy imported) reproduce it.
+  it.each([false, true])('checks imported-account grants before recovering pool cooling (remote=%s)', async (remote) => {
+    const model = 'chatgpt/gpt-6-astra';
+    h.pools.openai = {
+      strategy: 'order', accounts: [account('default'), account('imported')],
+      legacyCodexAccounts: { 'openai-old': 'imported' },
+    };
+    let grant = 'all';
+    h.accountAllowed.mockImplementation((_provider, target, options) =>
+      !options.newRoute || (target === model && (grant === 'all' || (grant === 'local' && !options.remote))));
+    h.usage.mockImplementation(async (_provider, dir) => {
+      if (dir.endsWith('imported')) grant = 'denied'; // Revoked while the first quota read is in flight.
+      return { codexUsage: {
+        appServerBuckets: { codex: { limitId: 'codex', updatedAt: Date.now(),
+          primary: { usedPercent: dir.endsWith('default') ? 100 : 10,
+            resetsAt: Date.now() / 1000 + 3600, windowMinutes: 300 }, secondary: null } },
+        webSnapshot: null, nativeAccountPool: true,
+      } };
+    });
+    const options = { remote };
+    expect(await readSubscriptionPoolModelAvailability('openai', model, options)).toBe(false);
+    await expect(acquireSubscriptionAccount('openai', model, [], false, options)).rejects.toThrow('No subscription account');
+    grant = 'local';
+    expect(await readSubscriptionPoolModelAvailability('openai', model, options)).toBe(!remote);
+    grant = 'all';
+    expect(await readSubscriptionPoolModelAvailability('openai', model, options)).toBe(true);
+    expect(h.bindings.size).toBe(0);
+    const lease = await acquireSubscriptionAccount('openai', model, [], false, options);
+    expect(lease?.account.configDir).toBe('openai/imported');
+    lease?.release();
+    grant = 'denied';
+    expect(await readSubscriptionPoolModelAvailability('openai', model, options)).toBe(false);
+  });
+
   it('pins an explicit old connection without task keys and does not persist a denied assignment', async () => {
     h.pools.openai = {
       strategy: 'least', accounts: [account('default'), account('imported')],
@@ -196,11 +241,19 @@ describe('tasks using imported Codex connections', () => {
 
   // PR #9900 review, standard: an existing remote lease must track the actual
   // model after a hot switch. Earlier coverage only revoked the startup model.
+  // PR #9837 merge regression: a completed switch followed by grant revocation
+  // must also keep quota failures on the new model after access is restored.
+  // Earlier tests checked permissions and quota tracking separately.
   it.each(['codex', 'claude-code', 'pi'] as const)('checks the current and target remote model for %s', async kind => {
     h.pools.openai = {
-      strategy: 'least', accounts: [account('imported')],
+      strategy: 'least', accounts: [account('imported'), { ...account('second'), paused: true }],
       legacyCodexAccounts: { 'openai-old': 'imported' },
     };
+    h.usage.mockResolvedValue({ codexUsage: { appServerBuckets: { codex: {
+      limitId: 'codex', updatedAt: Date.now(),
+      primary: { usedPercent: 10, windowMinutes: 300, resetsAt: Date.now() / 1000 + 3600 },
+      secondary: null,
+    } }, webSnapshot: null } });
     const allowed = new Set(['model-a']);
     h.accountAllowed.mockImplementation((_provider, model, options) => !options.remote || allowed.has(model));
     const setModel = vi.fn<NonNullable<AgentSessionHandle['setModel']>>(async () => {});
@@ -240,6 +293,11 @@ describe('tasks using imported Codex connections', () => {
     await expect(handle.setModel!('model-c')).rejects.toThrow('remote access was revoked');
     await expect(handle.send({ type: 'user', content: 'revoked during switch' })).rejects.toThrow('remote access was revoked');
     expect(send).toHaveBeenCalledTimes(2);
+    allowed.add('model-c');
+    send.mockRejectedValueOnce(Object.assign(new Error('usage limit'), { codexErrorInfo: 'usageLimitExceeded' }));
+    await expect(handle.send({ type: 'user', content: 'restored model c' })).rejects.toThrow('usage limit');
+    expect(await readSubscriptionPoolModelAvailability('openai', 'model-c')).toBe(false);
+    expect(await readSubscriptionPoolModelAvailability('openai', 'model-b')).toBe(true);
     await handle.close();
   });
 
@@ -263,6 +321,34 @@ describe('tasks using imported Codex connections', () => {
 });
 
 describe('native account assignment on the executing computer', () => {
+  // Regression: a pinned exhausted account was reported as login-or-reset even
+  // when another account was ready. Unit: exercise acquisition, not UI heuristics.
+  it.each([null, 3600])('reports the bound account limit and only its trusted reset (%s)', async delay => {
+    const now = Date.now();
+    const resetAt = delay === null ? null : Math.floor(now / 1000) + delay;
+    h.bindings.set('task:existing', { providerId: 'anthropic', accountId: 'second' });
+    h.usage.mockImplementation(async (_provider, directory) => directory === 'anthropic/second'
+      ? { claudeUsage: { updatedAt: now, fiveHour: { utilization: 100, resetsAt: resetAt }, sevenDay: null, scoped: [] } }
+      : {});
+    const error = await acquireSubscriptionAccount('anthropic', 'claude-sonnet-4-6', ['task:existing']).catch(e => e);
+    expect(error.message).toContain('[SUBSCRIPTION_ACCOUNT_LIMITED]');
+    if (resetAt) expect(error.message).toContain(`resetAtMs=${resetAt * 1000}`);
+    else expect(error.message).not.toContain('resetAtMs=');
+    expect(h.bindings.get('task:existing')?.accountId).toBe('second');
+  });
+
+  it.each(['signed-out', 'unavailable', 'removed'] as const)('distinguishes %s from exhaustion', async state => {
+    h.bindings.set('task:existing', { providerId: 'anthropic', accountId: 'second' });
+    if (state === 'removed') h.pools.anthropic!.accounts = [account('default')];
+    else h.read.mockImplementation(async (_provider, directory) => {
+      if (directory !== 'anthropic/second') return { authenticated: true };
+      if (state === 'unavailable') throw new Error('temporary CLI failure');
+      return { authenticated: false };
+    });
+    await expect(acquireSubscriptionAccount('anthropic', undefined, ['task:existing']))
+      .rejects.toThrow(state === 'signed-out' ? '[SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED]' : '[SUBSCRIPTION_ACCOUNT_UNAVAILABLE]');
+  });
+
   it('projects the task binding without selecting, reserving or unpausing an account', async () => {
     h.pools.anthropic!.accounts[0].paused = true;
     h.bindings.set('task:existing', { providerId: 'anthropic', accountId: 'default' });
@@ -967,18 +1053,20 @@ describe('native account assignment on the executing computer', () => {
     expect(ordered!.account.configDir).toBe('anthropic/default');
     ordered!.release();
   });
-  it('keeps a resumed task on its original account, including a paused account, and refuses removed accounts', async () => {
+  it('refuses paused or removed native resumes instead of sending with disabled credentials', async () => {
     const original = await acquireSubscriptionAccount('anthropic', undefined, []);
     await original!.bind(['native:thread-a']);
     original!.release();
     h.pools.anthropic!.accounts[0].paused = true;
-    const resumed = await acquireSubscriptionAccount('anthropic', undefined, ['native:thread-a']);
-    expect(resumed!.account.id).toBe(original!.account.id);
-    resumed!.release();
+    await expect(acquireSubscriptionAccount('anthropic', undefined, ['native:thread-a'])).rejects.toThrow();
+    // History inspection/fork control may still read the original home.
+    const control = await acquireSubscriptionAccount('anthropic', undefined, ['native:thread-a'], true);
+    expect(control!.account.id).toBe(original!.account.id);
+    control!.release();
     h.pools.anthropic!.accounts.shift();
     await expect(
       acquireSubscriptionAccount('anthropic', undefined, ['native:thread-a']),
-    ).rejects.toThrow('requires login');
+    ).rejects.toThrow('[SUBSCRIPTION_ACCOUNT_UNAVAILABLE]');
   });
   it('skips exhausted accounts with the same model-specific quota policy as provider groups', async () => {
     h.usage.mockImplementation(async (_provider: string, dir: string) =>
@@ -1037,6 +1125,211 @@ describe('native account assignment on the executing computer', () => {
       0, 0,
     ]);
   });
+  // #9833, unit: the actual account pool and group router must agree after an
+  // old task cools the member. Existing tests exercised these layers separately.
+  it.each(['persisted', 'terminal', 'startup'] as const)('assigns a new same-model task to the healthy account after a %s cooldown', async (failure) => {
+    const now = Date.now();
+    const model = 'claude-sonnet-5-5';
+    h.usage.mockImplementation(async (_provider: string, dir: string) => ({ claudeUsage: {
+      updatedAt: now,
+      fiveHour: { utilization: 10, resetsAt: now / 1000 + 3600 },
+      sevenDay: { utilization: dir.endsWith('default') ? 100 : 20, resetsAt: now / 1000 + 86400 },
+      scoped: [],
+    } }));
+    h.bindings.set('native:old', { providerId: 'anthropic', accountId: 'default' });
+    const config = normalizeProviderGroupConfig({ members: [{ kind: 'local' }] }, 'anthropic')!;
+    const directory = createProviderGroupDirectory({
+      listLocalProviders: async () => [{ id: 'anthropic', name: 'Anthropic', connected: true,
+        agents: ['claude-code'], auth: { method: 'oauth', native: 'claude' },
+        models: { 'claude-code': [{ id: model, name: model, efforts: [], defaultEffort: null }] },
+        routing: { 'claude-code': {} },
+      } as unknown as ProviderView],
+      localDeviceName: () => 'local', listDevices: async () => [], readDeviceProviders: async () => [],
+      listReceivedShares: () => [], isMobilePlatform: () => false,
+      readClaudeUsage: async () => (await readSubscriptionPoolUsage('anthropic'))?.claudeUsage ?? null,
+      now: () => now,
+    });
+    const bindings = new Map<string, ProviderGroupBinding>();
+    const router = createProviderGroupRouter({ directory, readGroup: () => config,
+      listBindings: () => Object.fromEntries(bindings), isTurnRunning: () => false, now: () => now, random: () => 0,
+      readPoolModelAvailability: async () => readSubscriptionPoolModelAvailability('anthropic', model),
+      coolingStore: { read: (): ProviderGroupPersistedCooling => failure === 'persisted'
+        ? { anthropic: { local: { 'claude:sonnet': now + 1_800_000 } } } : {}, write: vi.fn() },
+    });
+    const row: ProviderGroupSessionRow = { agentKind: 'claude-code', model, providerId: 'anthropic',
+      agentDeviceId: null, remoteHostId: null, sdkSessionId: null };
+    const switchAgentLocation = vi.fn();
+    const service = createProviderGroupService({ router, directory, readGroup: () => config,
+      readBinding: (id) => bindings.get(id) ?? null,
+      writeBinding: async (id, binding) => {
+        if (binding) bindings.set(id, { providerId: binding.providerId, memberKey: binding.memberKey, at: now });
+        else bindings.delete(id);
+      },
+      isReleased: () => false, markReleased: vi.fn(), readSessionRow: async (id) => ({ ...row, sdkSessionId: id === 'old' ? 'native:old' : null }),
+      resolveImplicitProvider: async () => 'anthropic', persistRoute: vi.fn(), hasAssistantHistory: async () => false,
+      isFailoverEligible: async () => true, leaseRecovery: () => ({}), isLeaseCurrent: () => true,
+      rearmContinue: () => 2, cancelContinue: vi.fn(), switchAgentLocation, isTurnRunning: () => false, hasLiveSession: () => false,
+      continueSession: async () => 'resumed', fallback: vi.fn(), readResetAt: () => null,
+      now: () => now, sleep: async () => {}, log: { info: vi.fn(), warn: vi.fn() },
+    });
+    if (failure !== 'persisted') {
+      bindings.set('old', { providerId: 'anthropic', memberKey: 'local', at: now });
+      if (failure === 'terminal') await service.onTurnError('old', { sdkError: 'rate_limit' }, 1);
+      else {
+        const context = await service.assignBeforeStart({ sessionId: 'old', agentKind: 'claude-code', model });
+        expect(context).not.toBeNull();
+        await service.nextAfterStartFailure(context!, new Error("You've hit your usage limit"));
+      }
+      expect(router.coolingUntil('anthropic', 'local', model)).toBe(now + 1_800_000);
+    }
+    expect(await service.assignBeforeStart({ sessionId: 'new', agentKind: 'claude-code', model }))
+      .toMatchObject({ member: { key: 'local' } });
+    const next = await acquireSubscriptionAccount('anthropic', model, ['task:new']);
+    expect(next?.account.configDir).toBe('anthropic/second');
+    next?.release();
+    await expect(acquireSubscriptionAccount('anthropic', model, ['native:old'])).rejects.toThrow('[SUBSCRIPTION_ACCOUNT_LIMITED]');
+    expect(h.bindings.get('native:old')?.accountId).toBe('default');
+    expect(switchAgentLocation).not.toHaveBeenCalled();
+  });
+  // PR #9837 / unit: an actual CLI failure without account_usage must outrank
+  // optimistic cached quota. The previous group regression pre-exhausted it.
+  it.each([
+    ['startup', 'exhausted'], ['terminal', 'unknown'], ['send', 'healthy'],
+  ] as const)('does not reuse the failed account after %s with a %s backup', async (failure, backup) => {
+    const model = 'claude-sonnet-5-5';
+    const now = Date.now();
+    h.pools.anthropic!.strategy = 'order';
+    h.usage.mockImplementation(async (_provider: string, dir: string) =>
+      dir.endsWith('second') && backup === 'unknown' ? {} : { claudeUsage: {
+        updatedAt: now, fiveHour: { utilization: 10, resetsAt: now / 1000 + 3600 },
+        sevenDay: { utilization: dir.endsWith('second') ? backup === 'exhausted' ? 100 : 40 : 20,
+          resetsAt: now / 1000 + 86400 },
+      } });
+    const error = new AgentStartupStoppedError(new Error("You've hit your usage limit"));
+    const start = vi.fn(async () => {
+      if (failure === 'startup') throw error;
+      return { id: 'failed-native', close: async () => {},
+        send: async () => { if (failure === 'send') throw error; },
+        events: async function* () { yield { type: 'error', data: { sdkError: 'rate_limit' } }; },
+      } as unknown as AgentSessionHandle;
+    });
+    const agent = withSubscriptionAccounts({ kind: 'claude-code', startSession: start } as unknown as BaseAgent);
+    const options: StartSessionOptions = { providerId: 'anthropic', model, sessionId: 'failed-task', workingDir: '/work',
+      ...(failure === 'terminal' ? { deviceHosted: { workingDir: '/controller/work', extraDirs: [], writableDirs: [],
+        platform: 'win32' as const, shell: 'powershell', isGitRepo: false, tunnelUrl: 'http://127.0.0.1:1',
+        tunnelToken: 'unused-test-token', mcpServers: [] } } : {}) };
+    if (failure === 'startup') await expect(agent.startSession(options)).rejects.toThrow('usage limit');
+    else {
+      const handle = await agent.startSession(options);
+      if (failure === 'send') await expect(handle.send({ type: 'user', content: 'hello' })).rejects.toThrow('usage limit');
+      else for await (const _event of handle.events()) { /* Consume the actual wrapper. */ }
+      await handle.close();
+      expect(h.bindings.get('native:failed-native')?.accountId).toBe('default');
+      const pinned = await acquireSubscriptionAccount('anthropic', model, ['native:failed-native']);
+      expect(pinned?.account.configDir).toBe('anthropic/default'); // manual retry stays pinned
+      pinned?.release();
+    }
+    expect(await readSubscriptionPoolModelAvailability('anthropic', model)).toBe(backup === 'healthy');
+    if (backup === 'healthy') {
+      const next = await acquireSubscriptionAccount('anthropic', model, ['task:new']);
+      expect(next?.account.configDir).toBe('anthropic/second');
+      next?.release();
+    } else if (backup === 'exhausted') {
+      await expect(acquireSubscriptionAccount('anthropic', model, ['task:new'])).rejects.toThrow('No subscription account');
+    }
+    expect(await readSubscriptionPoolModelAvailability('anthropic', 'claude-opus-5-5')).toBe(true);
+  });
+
+  // Unit: the account failure must follow model switches and expire at the real
+  // reset (or the existing fallback), without treating retryable/overload as quota.
+  it.each([60_000, null])('expires account failure evidence after %s ms and ignores stale-owner events', async (resetDelay) => {
+    vi.useFakeTimers();
+    try {
+      const now = Date.now();
+      const sonnet = 'claude-sonnet-5-5';
+      const opus = 'claude-opus-5-5';
+      h.pools.anthropic!.accounts[1].paused = true;
+      h.usage.mockImplementation(async () => ({ claudeUsage: { updatedAt: Date.now(),
+        fiveHour: { utilization: 10, resetsAt: now / 1000 + 3600 },
+        sevenDay: { utilization: 20, resetsAt: now / 1000 + 86400 },
+      } }));
+      let data: Record<string, unknown> = { sdkError: 'rate_limit', willRetry: true };
+      const agent = withSubscriptionAccounts({ kind: 'claude-code', startSession: async () => ({
+        id: 'switching', close: async () => {}, setModel: async () => {},
+        events: async function* () { yield { type: 'error', data }; },
+      }) } as unknown as BaseAgent);
+      const handle = await agent.startSession({ providerId: 'anthropic', model: sonnet } as StartSessionOptions);
+      await handle.setModel!(opus);
+      const consume = async () => { for await (const _event of handle.events()) { /* real dispatch */ } };
+      await consume();
+      expect(await readSubscriptionPoolModelAvailability('anthropic', opus)).toBe(true);
+      data = { sdkError: 'rate_limit', errorStatus: 529 };
+      await consume();
+      expect(await readSubscriptionPoolModelAvailability('anthropic', opus)).toBe(true);
+      data = { sdkError: 'rate_limit', ...(resetDelay === null ? {} : { usageResetAt: now + resetDelay }) };
+      await consume();
+      expect(await readSubscriptionPoolModelAvailability('anthropic', opus)).toBe(false);
+      expect(await readSubscriptionPoolModelAvailability('anthropic', sonnet)).toBe(true);
+      const duration = resetDelay ?? 1_800_000;
+      vi.setSystemTime(now + duration - 1);
+      expect(await readSubscriptionPoolModelAvailability('anthropic', opus)).toBe(false);
+      vi.setSystemTime(now + duration);
+      expect(await readSubscriptionPoolModelAvailability('anthropic', opus)).toBe(true);
+      h.owner += '-new';
+      await consume(); // This old lease cannot poison the new owner's pool.
+      expect(await readSubscriptionPoolModelAvailability('anthropic', opus)).toBe(true);
+      await handle.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Unit: the same native OpenAI account serves Codex and ChatGPT bridge aliases;
+  // an alias must not evade the failure recorded by the executing host.
+  it('shares account failure evidence across native OpenAI model aliases', async () => {
+    h.pools.openai = { strategy: 'order', accounts: [account('default'), account('second')] };
+    h.usage.mockResolvedValue({ codexUsage: { appServerBuckets: { codex: {
+      limitId: 'codex', updatedAt: Date.now(),
+      primary: { usedPercent: 10, windowMinutes: 300, resetsAt: Date.now() / 1000 + 3600 },
+      secondary: null,
+    } }, webSnapshot: null } });
+    const agent = withSubscriptionAccounts({ kind: 'codex', startSession: async () => ({
+      id: 'codex-failed', close: async () => {},
+      events: async function* () { yield { type: 'error', data: { codexErrorInfo: 'usageLimitExceeded' } }; },
+    }) } as unknown as BaseAgent);
+    const handle = await agent.startSession({ providerId: 'openai', model: 'gpt-6-astra' } as StartSessionOptions);
+    for await (const _event of handle.events()) { /* actual host wrapper */ }
+    await handle.close();
+    const next = await acquireSubscriptionAccount('openai', 'chatgpt/gpt-6-astra', []);
+    expect(next?.account.configDir).toBe('openai/second');
+    next?.release();
+    h.pools.openai!.accounts[1].paused = true;
+    expect(await readSubscriptionPoolModelAvailability('openai', 'chatgpt/gpt-6-astra')).toBe(false);
+    await runSubscriptionAccountCommand({ action: 'login', providerId: 'openai', accountId: 'default', loginKey: 'reconnect' });
+    expect(await readSubscriptionPoolModelAvailability('openai', 'chatgpt/gpt-6-astra')).toBe(true);
+  });
+
+  // #9833, unit: only an eligible account with known capacity may remove a
+  // member cooldown. Pool aggregate tests did not cover this positive proof.
+  it.each(['paused', 'removed', 'auth', 'unknown', 'exhausted', 'disconnected', 'single'] as const)(
+    'does not recover a member when the alternate account is %s', async (reason) => {
+      const now = Date.now();
+      h.usage.mockImplementation(async (_provider: string, dir: string) => reason === 'unknown' && dir.endsWith('second') ? {} : ({ claudeUsage: {
+        updatedAt: now, fiveHour: { utilization: 10, resetsAt: now / 1000 + 3600 },
+        sevenDay: { utilization: dir.endsWith('default') || reason === 'exhausted' ? 100 : 20, resetsAt: now / 1000 + 86400 },
+      } }));
+      h.read.mockImplementation(async (_provider: string, dir: string) => {
+        // Mutations happen while the CLI read is in flight, after the pool was captured.
+        if (reason === 'paused') h.pools.anthropic!.accounts[1].paused = true;
+        if (reason === 'removed') h.pools.anthropic!.accounts = h.pools.anthropic!.accounts.slice(0, 1);
+        if (reason === 'disconnected') h.pools.anthropic!.disconnected = true;
+        return { authenticated: !(reason === 'auth' && dir.endsWith('second')) };
+      });
+      if (reason === 'single') h.pools.anthropic!.accounts = [account('default')];
+      expect(await readSubscriptionPoolModelAvailability('anthropic', 'claude-sonnet-5-5'))
+        .toBe(reason === 'single' ? null : false);
+    },
+  );
   it('publishes usable model-specific Claude quota instead of the first account’s exhausted bucket', async () => {
     h.pools.anthropic!.strategy = 'order';
     h.usage.mockImplementation(async (_provider: string, dir: string) => ({
@@ -1122,6 +1415,125 @@ describe('native account assignment on the executing computer', () => {
     expect(await readSubscriptionPoolAccountUsages('anthropic')).toBeUndefined();
     expect((await readSubscriptionPool('anthropic')).accounts.every((a) => !a.usage)).toBe(true);
   });
+  // User-reported quota oscillation / unit: frequent SDK events used to renew
+  // the cache clock forever. Existing tests never cross endpoint TTL with events.
+  it('refreshes authoritative Claude percentages despite continuous SDK events', async () => {
+    let now = 1_800_000_000_000;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      h.pools.anthropic = { strategy: 'order', accounts: [account('default')] };
+      const reset = now / 1000 + 604800;
+      h.usage.mockResolvedValue({ claudeUsage: {
+        source: 'oauth-endpoint', updatedAt: now, sevenDay: { utilization: 22, resetsAt: reset },
+      } });
+      const lease = await acquireSubscriptionAccount('anthropic', 'claude-sonnet', []);
+      for (let i = 0; i < 5; i++) {
+        now += 31_000;
+        observeSubscriptionAccountUsage(lease!.account, {
+          rateLimitType: 'seven_day', utilization: 0.2, resetsAt: reset, status: 'allowed',
+        });
+        expect((await readSubscriptionPool('anthropic')).accounts[0].usage?.claude?.sevenDay?.utilization).toBe(22);
+      }
+      expect(h.usage).toHaveBeenCalledTimes(1);
+      now += 31_000;
+      h.usage.mockResolvedValue({ claudeUsage: {
+        source: 'oauth-endpoint', updatedAt: now, sevenDay: { utilization: 24, resetsAt: reset },
+      } });
+      observeSubscriptionAccountUsage(lease!.account, {
+        rateLimitType: 'seven_day', utilization: 0.2, resetsAt: reset, status: 'allowed',
+      });
+      expect((await readSubscriptionPool('anthropic')).accounts[0].usage?.claude?.sevenDay?.utilization).toBe(24);
+      expect(h.usage).toHaveBeenCalledTimes(2);
+      lease!.release();
+    } finally { clock.mockRestore(); }
+  });
+
+  // #9951 P1 / unit: list reads yield to auth and quota I/O. Existing TTL tests
+  // complete I/O immediately and cannot detect a rejected event being overwritten.
+  it.each(['anthropic', 'openai'] as const)('retains %s quota events during auth, endpoint and failed endpoint reads', async (provider) => {
+    let now = 1_800_000_000_000;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    let releaseRead: (() => void) | undefined;
+    try {
+      h.pools[provider] = { strategy: 'order', accounts: [account('default')] };
+      const reset = now / 1000 + 86400;
+      const initial = provider === 'anthropic'
+        ? { claudeUsage: { source: 'oauth-endpoint', updatedAt: now, fiveHour: { utilization: 20, resetsAt: reset } } }
+        : { codexUsage: { appServerBuckets: {
+            codex: { limitId: 'codex', updatedAt: now,
+              primary: { usedPercent: 20, windowMinutes: 300, resetsAt: reset },
+              secondary: { usedPercent: 25, windowMinutes: 10080, resetsAt: reset } },
+            spark: { limitId: 'spark', updatedAt: now,
+              primary: { usedPercent: 15, windowMinutes: 300, resetsAt: reset }, secondary: null },
+          }, webSnapshot: null } };
+      h.usage.mockResolvedValue(initial);
+      const lease = await acquireSubscriptionAccount(provider, provider === 'anthropic' ? 'claude-sonnet' : 'gpt-6', []);
+      for (const phase of ['auth', 'endpoint', 'failed-endpoint', 'new-window']) {
+        now += phase === 'auth' ? 31_000 : 181_000;
+        let started!: () => void;
+        const reading = new Promise<void>(resolve => { started = resolve; });
+        const paused = new Promise<void>(resolve => { releaseRead = resolve; });
+        if (phase === 'auth') h.read.mockImplementationOnce(async () => {
+          started(); await paused; return { authenticated: true, identity: 'account' };
+        });
+        else h.usage.mockImplementationOnce(async () => {
+          started(); await paused;
+          if (phase === 'failed-endpoint') throw new Error('endpoint unavailable');
+          return provider === 'anthropic' ? { claudeUsage: {
+            source: 'oauth-endpoint', updatedAt: now + 1,
+            fiveHour: { utilization: 30, resetsAt: phase === 'new-window' ? reset + 18000 : reset },
+            sevenDay: { utilization: 45, resetsAt: reset },
+            scoped: [{ modelDisplayName: 'Opus', utilization: 60, resetsAt: reset }],
+          } } : { codexUsage: { appServerBuckets: {
+            codex: { limitId: 'codex', updatedAt: now + 1,
+              primary: { usedPercent: 30, windowMinutes: 300, resetsAt: phase === 'new-window' ? reset + 18000 : reset },
+              secondary: { usedPercent: 45, windowMinutes: 10080, resetsAt: reset } },
+            spark: { limitId: 'spark', updatedAt: now + 1,
+              primary: { usedPercent: 60, windowMinutes: 300, resetsAt: reset }, secondary: null },
+          }, webSnapshot: null }, codexCredits: { hasCredits: true, unlimited: false, balance: '8.50' } };
+        });
+        const view = readSubscriptionPool(provider);
+        await reading;
+        observeSubscriptionAccountUsage(lease!.account, provider === 'anthropic'
+          ? { rateLimitType: 'five_hour', utilization: 1, resetsAt: reset, status: 'rejected' }
+          : { limitId: 'codex', primary: { usedPercent: 100, windowMinutes: 300, resetsAt: reset } });
+        releaseRead!();
+        const usage = (await view).accounts[0].usage;
+        if (phase === 'new-window') {
+          if (provider === 'anthropic') {
+            expect(usage?.claude?.fiveHour?.resetsAt).toBe(reset + 18000);
+            expect(usage?.claude?.rateLimitStatus).toBeUndefined();
+          } else expect(usage?.codex?.buckets.codex.primary).toMatchObject({ usedPercent: 30, resetsAt: reset + 18000 });
+          const nextLease = await acquireSubscriptionAccount(provider, provider === 'anthropic' ? 'claude-sonnet' : 'gpt-6', []);
+          expect(nextLease).toBeTruthy();
+          nextLease!.release();
+          continue;
+        }
+        if (provider === 'anthropic') expect(usage?.claude?.rateLimitStatus).toBe('rejected');
+        else expect(usage?.codex?.buckets.codex.primary?.usedPercent).toBe(100);
+        if (phase === 'endpoint') {
+          // #9951 P2: a concurrent event must not discard successful read fields
+          // or keep the endpoint TTL expired. Prior tests only checked rejection.
+          if (provider === 'anthropic') expect(usage?.claude).toMatchObject({
+            fiveHour: { utilization: 30 }, sevenDay: { utilization: 45 },
+            scoped: [{ modelDisplayName: 'Opus', utilization: 60 }],
+          });
+          else expect(usage?.codex).toMatchObject({
+            buckets: { codex: { secondary: { usedPercent: 45 } }, spark: { primary: { usedPercent: 60 } } },
+            credits: { balance: '8.50' },
+          });
+          const readCount = h.usage.mock.calls.length;
+          now += 31_000;
+          await readSubscriptionPool(provider);
+          expect(h.usage).toHaveBeenCalledTimes(readCount);
+        }
+        await expect(acquireSubscriptionAccount(provider, provider === 'anthropic' ? 'claude-sonnet' : 'gpt-6', []))
+          .rejects.toThrow('No subscription account is available');
+      }
+      lease!.release();
+    } finally { releaseRead?.(); clock.mockRestore(); }
+  });
+
   it('keeps Codex credits for the account card when quota events update its buckets', async () => {
     h.pools.openai = { strategy: 'order', accounts: [account('default')] };
     h.usage.mockResolvedValue({
@@ -1247,5 +1659,99 @@ describe('native account assignment on the executing computer', () => {
     await agent.startSession(options);
     expect(start).toHaveBeenCalledExactlyOnceWith(options);
     expect(h.read).not.toHaveBeenCalled();
+  });
+});
+
+// Unit regression (2026-11-11): retry reused a disabled account despite another account
+// having quota. Existing lease tests did not exercise pre-send context transfer.
+// The production entry must change only task ownership after durable history recovery.
+describe('disabled task account recovery before send', () => {
+  async function fixture() {
+    const original = await acquireSubscriptionAccount('anthropic', 'claude-model', []);
+    await original!.bind(['task:task-a', 'native:native-a']);
+    original!.release();
+    h.pools.anthropic!.accounts[0].paused = true;
+    const row = { status: 'active', providerId: 'anthropic', agentKind: 'cc',
+      model: 'claude-model', sdkSessionId: 'native-a' } as SessionRowSnapshot;
+    const deps = {
+      readSession: vi.fn(async () => row),
+      isRunning: vi.fn(() => false),
+      rebuild: vi.fn(async (_id: string, assertCurrent: () => void) => {
+        assertCurrent();
+        row.sdkSessionId = null;
+      }),
+    };
+    return { row, deps, original: original! };
+  }
+  it.each(['paused', 'removed'] as const)('moves a %s task to a usable account while retaining original native history ownership', async cause => {
+    const { row, deps } = await fixture();
+    if (cause === 'removed') h.pools.anthropic!.accounts.shift();
+    expect(await prepareSubscriptionAccountForSend('task-a', deps)).toBe(true);
+    expect(row.sdkSessionId).toBeNull();
+    expect(h.bindings.get('task:task-a')?.accountId).toBe('second');
+    expect(h.bindings.get('native:native-a')?.accountId).toBe('default');
+    const resumed = await acquireSubscriptionAccount('anthropic', row.model!, ['task:task-a']);
+    expect(resumed?.account.configDir).toBe('anthropic/second');
+    resumed?.release();
+    await expect(acquireSubscriptionAccount('anthropic', row.model!, ['task:task-a', 'native:native-a']))
+      .rejects.toThrow('account changed');
+    expect(await prepareSubscriptionAccountForSend('task-a', deps)).toBe(false);
+    expect(deps.rebuild).toHaveBeenCalledOnce();
+  });
+  it('recovers an older Claude task whose original default home has no persisted binding', async () => {
+    const { deps } = await fixture();
+    h.bindings.clear();
+    expect(await prepareSubscriptionAccountForSend('task-a', deps)).toBe(true);
+    expect(h.bindings.get('task:task-a')?.accountId).toBe('second');
+    expect(h.bindings.has('native:native-a')).toBe(false);
+  });
+  it.each(['codex', 'cc', 'pi'])('uses the same account transfer for OpenAI %s tasks', async agentKind => {
+    const { row, deps } = await fixture();
+    row.providerId = 'openai';
+    row.agentKind = agentKind;
+    h.pools.openai = h.pools.anthropic;
+    h.bindings.set('task:task-a', { providerId: 'openai', accountId: 'default' });
+    h.bindings.set('native:native-a', { providerId: 'openai', accountId: 'default' });
+    expect(await prepareSubscriptionAccountForSend('task-a', deps)).toBe(true);
+    expect(h.bindings.get('task:task-a')).toEqual({ providerId: 'openai', accountId: 'second' });
+    expect(h.bindings.get('native:native-a')?.accountId).toBe('default');
+  });
+  it.each(['no-replacement', 'busy', 'rebuild-failed', 'owner-changed', 'target-disabled'] as const)('preserves the original binding on %s', async failure => {
+    const { row, deps } = await fixture();
+    if (failure === 'no-replacement') h.pools.anthropic!.accounts[1].paused = true;
+    if (failure === 'busy') deps.isRunning.mockReturnValue(true);
+    if (failure === 'rebuild-failed') deps.rebuild.mockRejectedValueOnce(new Error('disk full'));
+    if (failure === 'owner-changed') deps.readSession.mockImplementationOnce(async () => { h.owner = 'other-owner'; return row; });
+    if (failure === 'target-disabled') deps.rebuild.mockImplementationOnce(async (_id, assertCurrent) => {
+      h.pools.anthropic!.accounts[1].paused = true;
+      assertCurrent();
+    });
+    await expect(prepareSubscriptionAccountForSend('task-a', deps)).rejects.toThrow();
+    expect(row.sdkSessionId).toBe('native-a');
+    expect(h.bindings.get('task:task-a')?.accountId).toBe('default');
+    expect(h.bindings.get('native:native-a')?.accountId).toBe('default');
+    if (failure !== 'owner-changed')
+      expect((await readSubscriptionPool('anthropic')).accounts.every(a => a.running === 0)).toBe(true);
+  });
+  it.each(['enabled', 'ssh', 'remote-agent', 'different-provider'] as const)('does not transfer a task when %s', async kind => {
+    const { row, deps } = await fixture();
+    if (kind === 'enabled') h.pools.anthropic!.accounts[0].paused = false;
+    if (kind === 'ssh') row.remoteHostId = 'remote-host';
+    if (kind === 'remote-agent') row.agentDeviceId = 'other-computer';
+    if (kind === 'different-provider') row.providerId = 'custom';
+    expect(await prepareSubscriptionAccountForSend('task-a', deps)).toBe(false);
+    expect(deps.rebuild).not.toHaveBeenCalled();
+    expect(h.bindings.get('task:task-a')?.accountId).toBe('default');
+  });
+  it('blocks the next send on an already-live handle after its account is disabled', async () => {
+    const send = vi.fn(async () => {});
+    const agent = withSubscriptionAccounts({ kind: 'claude-code', startSession: async () => ({
+      id: 'native-a', send, close: async () => {},
+    }) } as unknown as BaseAgent);
+    const handle = await agent.startSession({ providerId: 'anthropic', sessionId: 'task-a' } as StartSessionOptions);
+    await runSubscriptionAccountCommand({ action: 'configure', providerId: 'anthropic', accountId: 'default', paused: true });
+    await expect(handle.send({ type: 'user', content: 'continue' })).rejects.toThrow('disabled');
+    expect(send).not.toHaveBeenCalled();
+    await handle.close();
   });
 });

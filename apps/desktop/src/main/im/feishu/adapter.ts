@@ -281,8 +281,8 @@ export function buildFeishuAdapter(
     },
     queuedEmoji: 'OneSecond',
     buildVendorOptions: (userId) => ({ feishuChatId: userId, source: 'feishu' }),
-    // 伙伴自有连接: TOFU 认定的主人私聊进主任务; 群 / 话题按 lane 一条专线; 对外开放
-    // 后的外部用户私聊(transport guests)按用户一条专线。
+    // 伙伴自有连接: TOFU 认定的主人私聊进主任务; 群 / 话题按 lane 一条专线。
+    // guest-dm 路由保留兼容旧专线；新陌生私信由 transport 在派发前拒绝。
     companionLane: (userId) => {
       const lane = decodeFeishuLaneUserId(userId);
       if (lane) return { kind: 'group', chatId: lane.chatId, threadId: lane.threadId };
