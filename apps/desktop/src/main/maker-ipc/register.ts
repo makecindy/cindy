@@ -580,6 +580,7 @@ import {
   scheduleWorktreeRecycleForStatusChange,
   setSessionRuntimeCleanup,
 } from '../localDb/ipc/sessions.js';
+import { readSessionSource } from '../localDb/sessionDispatchSnapshot.js';
 // sidebar-card-mode: turn-done 后刷新列表预览,并按需生成置顶卡片摘要
 
 import {
@@ -1221,7 +1222,7 @@ import {
 } from '../usage/accountUsageLimit.js';
 import { UsageLimitAutoResume } from './usageLimitAutoResume.js';
 import { createUsageLimitRecoveryStore, type SavedUsageLimitWait } from './usageLimitRecoveryStore.js';
-import { type MakerSessionCreateOpts, withCreateSessionStderr } from './sessionRequest.js';
+import { type MakerSessionCreateOpts, createSessionStderrOptions, isSessionRunningError } from './sessionRequest.js';
 import { persistAndHydrateSessionProvider } from './sessionProviderBootstrap.js';
 import { registerMakerSessionSendHandler } from './sessionSendHandler.js';
 import {
@@ -8651,21 +8652,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   type CreateOpts = MakerSessionCreateOpts;
 
-  function buildCreateOptsWithStderr(o: CreateOpts) {
-    // 把 vendor 子进程 stderr 引到主进程日志,否则 "process exited with code 1" 之类
-    // 的失败信息会被默默丢掉。renderer 仍可以通过 vendorOptions 自定义,这里只在缺省时兜底。
-    return withCreateSessionStderr(o, (agentKind, line) =>
-      log.warn(`[${agentKind}/stderr] ${line}`),
-    );
-  }
-
-  function isSessionRunningError(err: unknown): boolean {
-    if (!err || typeof err !== 'object') return false;
-    const code = (err as { code?: unknown }).code;
-    if (code === 'SESSION_RUNNING') return true;
-    const message = (err as { message?: unknown }).message;
-    return typeof message === 'string' && message.startsWith('SESSION_RUNNING:');
-  }
+  const buildCreateOptsWithStderr = createSessionStderrOptions(log);
 
   // SEND lazy-create owns its non-Orca cache write here (line below); direct
   // CREATE_SESSION uses markKnownNonOrcaIfApplicable outside this function.
@@ -8723,15 +8710,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       throwIpcError('UNSUPPORTED_CAPABILITY', 'Review tasks are local-only in this version');
     }
     enforceReviewCreateOptions(o);
-  }
-
-  async function readSessionSource(sessionId: string): Promise<string | null> {
-    const [row] = await getDbClient()
-      .drizzle.select({ source: sessions.source })
-      .from(sessions)
-      .where(eq(sessions.id, sessionId))
-      .limit(1);
-    return row?.source ?? null;
   }
 
   async function assertReviewExternalInputAllowed(sessionId: string): Promise<void> {

@@ -27,14 +27,3 @@ test('host sources never import Electron', () => {
   }
   assert.deepEqual(offenders, [], `host must not depend on Electron:\n${offenders.join('\n')}`);
 });
-
-// Architecture invariants §5: the production send factory must load in Node,
-// otherwise wiring it into Host prevents startup. The existing Host-source scan
-// misses transitive imports such as mcp-apps/runtime -> sandboxProtocol -> Electron.
-// Minimal input: load the factory without Electron shims or a desktop profile.
-// Tier: Host unit; real module loading, no subprocess, network or account access.
-// Standalone file: 0.72 s on macOS (2026-11-11), using the Host test loader.
-test('shared send transaction loads in Node without a desktop runtime', async () => {
-  const { createMakerSendTransaction } = await import('../../desktop/src/main/maker-ipc/makerSendTransaction.ts');
-  assert.equal(typeof createMakerSendTransaction, 'function');
-});

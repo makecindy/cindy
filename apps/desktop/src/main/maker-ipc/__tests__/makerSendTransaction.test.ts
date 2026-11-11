@@ -374,6 +374,58 @@ function createDeps(overrides: Partial<MakerSendTransactionDeps> = {}) {
   return { deps, session };
 }
 
+// Host recovery must durably mark a turn before the provider starts, or a crash
+// can replay it. Existing App guard tests cover revocation but no launcher write.
+// Production entry: sendToAgentAccepted; minimal input: one turn with an async
+// startup write that completes, rejects, or is invalidated. Unit: injected I/O.
+describe('launcher pre-provider persistence', () => {
+  it.each(['ready', 'write-failed', 'cancelled', 'app-revoked'] as const)(
+    'waits for the launcher fence and prevents dispatch when %s', async (phase) => {
+      const controller = new AbortController();
+      const effects: string[] = [];
+      let appCurrent = true;
+      const { deps, session } = createDeps({
+        readMcpAppModelContext: async () => ({
+          text: phase === 'app-revoked' ? 'App context' : '',
+          consume() {},
+          async assertCurrent() {
+            if (!appCurrent) throw new Error('MCP_APP_CARD_UNAVAILABLE');
+          },
+        }),
+        beforeProviderStart: async () => {
+          await Promise.resolve();
+          effects.push('durable-start');
+          if (phase === 'write-failed') throw new Error('start marker write failed');
+          if (phase === 'cancelled') controller.abort(new Error('input stopped'));
+          if (phase === 'app-revoked') appCurrent = false;
+        },
+      });
+      vi.mocked(session.send).mockImplementation(async (_message, opts) => {
+        await opts?.beforeProviderStart?.();
+        await opts?.onAccepted?.();
+        effects.push('provider');
+        return { accepted: true };
+      });
+      const sending = createMakerSendTransaction(deps).sendToAgentAccepted(
+        'session-1', 'Read this file', undefined, {
+          signal: controller.signal,
+          persistUserMessage: { clientId: 'durable-start-input', content: 'Read this file' },
+        },
+      );
+      if (phase === 'ready') {
+        await sending;
+        expect(effects).toEqual(['durable-start', 'provider']);
+      } else {
+        const reason = { 'write-failed': 'start marker write failed', cancelled: 'input stopped',
+          'app-revoked': 'MCP_APP_CARD_UNAVAILABLE' }[phase];
+        await expect(sending).rejects.toThrow(reason);
+        expect(effects).toEqual(['durable-start']);
+        expect(deps.createDbMessage).not.toHaveBeenCalled();
+      }
+    },
+  );
+});
+
 describe('MCP App message authorization', () => {
   it.each(['claude-code', 'pi', 'codex'] as const)(
     'keeps App slash text literal and includes its source note for %s',

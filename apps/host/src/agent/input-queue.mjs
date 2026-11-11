@@ -124,6 +124,8 @@ export function createInputQueue(deps) {
     }
     const executor = createTurnExecutor({ ...deps,
       assertCurrent, isCurrent,
+      isClearBoundaryCurrent: (id, boundary, generation) => coordinator.getClearBoundaryMs(id) === boundary
+        && (generation === undefined || coordinator.isGenerationCurrent(id, generation)),
       isExecutionPaused: id => coordinator.isExecutionPaused(id),
       isStoppingRuntime: () => closing,
       persistMessage: deps.persistMessage ?? (async () => {}),
@@ -153,10 +155,18 @@ export function createInputQueue(deps) {
         await opts[MCP_APP_MESSAGE_GUARD]?.();
         await opts.beforeProviderStart?.();
         assertCurrent(); opts.signal?.throwIfAborted();
+        await executor.readExecutionSession(id);
+        assertCurrent(); opts.signal?.throwIfAborted();
         const session = deps.getMaker().getSession(id);
         if (!session) throw new Error('NO_ACTIVE_TURN');
-        const result = await session.steer(message, autoReviewAuthorizationOptions(opts));
-        if (!result || result.accepted === false) throw new Error(result?.reason || 'steer rejected');
+        // Session.steer resolves void on acceptance; rejection is an exception.
+        await session.steer(message, { ...autoReviewAuthorizationOptions(opts), signal: opts.signal,
+          beforeProviderStart: async () => {
+            await opts[MCP_APP_MESSAGE_GUARD]?.();
+            await opts.beforeProviderStart?.();
+            assertCurrent(); opts.signal?.throwIfAborted();
+          },
+        });
       },
       abortSession: id => {
         const promise = executor.abort(id);

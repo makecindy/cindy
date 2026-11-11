@@ -28,10 +28,24 @@ function createFakeMaker() {
     async getSessionMeta(id) {
       return { id, agentKind: 'claude-code', model: 'stored-model', workDir: '/tmp' };
     },
+    async closeSession(id) { sessions.delete(id); },
+    async closeSessionIfCurrent(session) {
+      if (sessions.get(session.id) === session) sessions.delete(session.id);
+    },
     async createSession(opts) {
       const listeners = new Set();
       const session = {
         id: opts.id,
+        instanceId: `runtime-${opts.id}-${Math.random()}`,
+        agentKind: opts.agentKind,
+        workDir: opts.workingDir,
+        remoteHostId: opts.remoteHostId ?? null,
+        running: false,
+        generation: 0,
+        get stablePermissionModeState() { return { mode: session.options.permissionMode ?? 'ask', generation: 0 }; },
+        get stablePlanModeState() { return { enabled: session.options.planMode ?? false, generation: 0 }; },
+        isTurnRunning() { return session.running; },
+        getTurnGeneration() { return session.generation; },
         options: opts,
         sent: [],
         sendOptions: [],
@@ -46,21 +60,26 @@ function createFakeMaker() {
           return () => listeners.delete(listener);
         },
         emit(event) {
+          if (event.type === 'done' || event.type === 'error') session.running = false;
           for (const listener of [...listeners]) listener(event);
         },
         async send(text, opts = {}) {
+          opts.onTurnReserved?.(++session.generation);
           await opts.beforeProviderStart?.();
           await opts.onAccepted?.(opts.signal);
+          await opts.resolveAutoReviewUserIntent?.();
+          opts.onDispatching?.();
+          session.running = true;
           session.sent.push(typeof text === 'string' ? text : text.content);
           session.sendOptions.push(opts);
           return { accepted: true };
         },
         async abort() {
           session.aborted += 1;
+          session.running = false;
         },
         async steer(text) {
           session.sent.push(`steer:${text}`);
-          return { accepted: true };
         },
       };
       sessions.set(opts.id, session);
@@ -76,6 +95,9 @@ function createHarness(overrides = {}) {
   const queue = createInputQueue({
     getMaker: () => maker,
     hub: { publish: (event) => events.push(event) },
+    // Unit fixture: all bound working directories exist; filesystem-specific
+    // regressions below override this port with the directory state they need.
+    statDirectory: async () => ({ isDirectory: () => true }),
     readSession: async (sessionId) => ({
       id: sessionId,
       status: 'active',
@@ -257,7 +279,9 @@ test('stopping a task cancels the real file-confirmation bridge before awaiting 
 // actual send boundary before asserting agent side effects.
 async function enqueue(h, id, item) {
   await h.queue.enqueue(id, item);
-  await waitFor(() => h.maker.getSession(id)?.sent.length > 0);
+  await waitFor(() => h.maker.getSession(id)?.sent.length > 0).catch(error => {
+    throw new Error(`${error.message}: ${JSON.stringify(h.queue.projection(id))}`);
+  });
   return h.queue.projection(id);
 }
 
@@ -285,6 +309,99 @@ test('applies the next queued model and permission choice before reusing a sessi
   assert.equal(session.options.permissionMode, 'acceptEdits');
   await h.queue.dispose();
 });
+
+// Shared-send wiring, unit: the previous direct sender never refreshed a live
+// runtime. A cwd/resource change must retain the queued turn, bind replies to
+// the replacement, and release the queue only after that runtime's terminal.
+// Minimum input: complete one turn, change cwd/resources, then send once more.
+for (const refresh of ['working-directory', 'project-resources']) {
+  test(`shared send preserves replies and queue ownership across ${refresh} refresh`, async t => {
+    let cwd = '/tmp/original';
+    const h = createHarness({ readSession: async id => ({ id, agentKind: 'claude-code',
+      workingDir: cwd, model: 'stored', providerId: 'xd', sdkSessionId: 'same-transcript' }) });
+    t.after(() => h.queue.dispose());
+    await enqueue(h, 'refresh', { clientId: 'first', text: 'one' });
+    const previous = h.maker.getSession('refresh');
+    previous.emit({ type: 'done' });
+    await waitFor(() => !h.queue.isTurnRunning('refresh'));
+    if (refresh === 'working-directory') cwd = '/tmp/moved';
+    else previous.hasRecyclableProjectResourceDrift = () => true;
+    await h.queue.enqueue('refresh', { clientId: 'second', text: 'two', model: 'chosen', permissionMode: 'ask' });
+    await waitFor(() => h.maker.getSession('refresh') !== previous && h.maker.getSession('refresh')?.sent.length === 1);
+    const current = h.maker.getSession('refresh');
+    assert.notEqual(current, previous);
+    assert.equal(current.options.model, 'chosen');
+    assert.equal(current.options.permissionMode, 'ask');
+    assert.equal(current.options.resumeSessionId, 'same-transcript');
+    assert.equal(current.workDir, cwd);
+    await h.queue.enqueue('refresh', { clientId: 'third', text: 'three' });
+    previous.emit({ type: 'text', data: { text: 'stale reply', isFinal: true } });
+    previous.emit({ type: 'done' });
+    assert.equal(h.queue.isTurnRunning('refresh'), true);
+    assert.equal(current.sent.length, 1);
+    current.emit({ type: 'text', data: { text: 'replacement reply', isFinal: true },
+      agentMeta: { uuid: 'replacement-assistant' }, sessionTurnGeneration: current.generation });
+    current.emit({ type: 'done', sessionTurnGeneration: current.generation });
+    await waitFor(() => current.sent.length === 2);
+    assert.equal(h.persisted.filter(row => row.content === 'replacement reply').length, 1);
+    assert.equal(h.persisted.some(row => row.content === 'stale reply'), false);
+    const third = h.persisted.find(row => row.clientId === 'third');
+    assert.equal(third.agentMeta.uuid, current.sendOptions[1].messageUuid);
+    assert.equal(third.agentMeta.transcriptParentUuid, 'replacement-assistant');
+  });
+}
+
+// Worker B3: queue acceptance alone cannot prove that provider execution began.
+// Exercise the real queue/transaction with a blocked or failed durable marker:
+// no provider/user row before it settles; failed storage retains a retryable head.
+for (const writeFails of [false, true]) {
+  test(`shared send awaits the durable startup marker (${writeFails ? 'write fails' : 'write succeeds'})`, async t => {
+    let release, entered;
+    const writing = new Promise(resolve => { entered = resolve; });
+    const gate = new Promise(resolve => { release = resolve; });
+    const h = createHarness({ markStarted: async () => {
+      entered(); await gate;
+      if (writeFails) throw new Error('startup marker write failed');
+    } });
+    t.after(() => h.queue.dispose());
+    await h.queue.enqueue('durable-start', { clientId: 'one', text: 'run once' });
+    await writing;
+    assert.equal(h.maker.getSession('durable-start').sent.length, 0);
+    assert.equal(h.persisted.length, 0);
+    release();
+    if (writeFails) {
+      await waitFor(() => Boolean(h.queue.projection('durable-start').error));
+      assert.equal(h.maker.getSession('durable-start').sent.length, 0);
+      assert.equal(h.persisted.length, 0);
+      assert.equal(h.queue.projection('durable-start').pendingQueue[0].clientId, 'one');
+    } else {
+      await waitFor(() => h.maker.getSession('durable-start').sent.length === 1);
+      const row = h.persisted.find(message => message.clientId === 'one');
+      assert.match(row.agentMeta.uuid, /^[0-9a-f-]{36}$/);
+      assert.equal(row.agentMeta.uuid, h.maker.getSession('durable-start').sendOptions[0].messageUuid);
+    }
+  });
+}
+
+// Host has no remote/teammate/Orca/group launcher yet. Persisted task facts,
+// not a forgeable wire field, must reject before runtime creation (unit).
+for (const facts of [{ remoteHostId: 'ssh-host' }, { agentDeviceId: 'another-device' },
+  { orcaRole: 'lead' }, { botId: 'teammate' }, { source: 'review' }, { grouped: true }]) {
+  test(`shared send refuses an unsupported stored task: ${JSON.stringify(facts)}`, async t => {
+    const h = createHarness({ readSession: async id => ({ id, agentKind: 'claude-code',
+      model: 'm', workingDir: '/tmp', providerId: 'xd', ...facts }),
+      assertProviderExecutionSupported: () => {
+        if (facts.grouped) throw new Error('[UNSUPPORTED_CAPABILITY] Host does not yet support provider groups');
+      },
+    });
+    t.after(() => h.queue.dispose());
+    await h.queue.enqueue('unsupported', { clientId: 'one', text: 'do work' });
+    await waitFor(() => Boolean(h.queue.projection('unsupported').error));
+    assert.match(h.queue.projection('unsupported').error, /Host does not yet support/);
+    assert.equal(h.maker.getSession('unsupported'), null);
+    assert.equal(h.persisted.length, 0);
+  });
+}
 
 test('dispatches a queued message and stores the user and assistant rows', async () => {
   const h = createHarness();
@@ -444,6 +561,52 @@ test('a remote input keeps its source device and tells the model', async () => {
   await waitFor(() => h.maker.getSession('local-note')?.sent.length === 1);
   assert.equal(h.maker.getSession('local-note').sent[0], 'from here');
 });
+
+// Unit, shared send: unchanged environment notes are sent once per native
+// context, while provenance stays on every stored row. Previously Host rebuilt
+// the note for every input; the one-message provenance test cannot catch that.
+test('a remote device note is deduplicated until the native context is compacted', async t => {
+  const h = createHarness(); t.after(() => h.queue.dispose());
+  const send = async (clientId, count) => {
+    await runDeviceLinkInvokeContext({ controllerDeviceId: 'phone', controllerPlatform: 'ios', channel: 'maker:input:enqueue' },
+      () => h.queue.enqueue('notes', { clientId, text: clientId }));
+    await waitFor(() => h.maker.getSession('notes')?.sent.length === count);
+  };
+  await send('first', 1);
+  const session = h.maker.getSession('notes');
+  assert.notEqual(session.sent[0], 'first');
+  session.emit({ type: 'done' });
+  await send('second', 2);
+  assert.equal(session.sent[1], 'second');
+  session.emit({ type: 'compact_boundary', data: {} });
+  session.emit({ type: 'done' });
+  await send('third', 3);
+  assert.notEqual(session.sent[2], 'third');
+  for (const clientId of ['first', 'second', 'third']) {
+    assert.deepEqual(h.persisted.find(row => row.clientId === clientId).agentMeta.sourceDevice,
+      { deviceId: 'phone', platform: 'mobile' });
+  }
+});
+
+// Unit, attachment handoff: preserve local file support through the shared
+// sender; unresolved transfer references cannot appear accepted with no file.
+for (const attachmentPath of ['/tmp/host-attachment.txt', 'oss://unresolved-attachment']) {
+  test(`shared send handles attachment reference ${attachmentPath}`, async t => {
+    const h = createHarness(); t.after(() => h.queue.dispose());
+    await h.queue.enqueue('attachment', { clientId: 'attached', text: 'read this',
+      files: [{ path: attachmentPath, name: 'host-attachment.txt', category: 'file', ext: 'txt' }] });
+    if (attachmentPath.startsWith('/')) {
+      await waitFor(() => h.maker.getSession('attachment')?.sent.length === 1);
+      assert.ok(h.maker.getSession('attachment').sent[0].some(block => block.type === 'file' && block.path === attachmentPath));
+      assert.equal(h.persisted.filter(row => row.clientId === 'attached').length, 1);
+    } else {
+      await waitFor(() => Boolean(h.queue.projection('attachment').error));
+      assert.match(h.queue.projection('attachment').error, /attachment needs a materializer/);
+      assert.equal(h.maker.getSession('attachment').sent.length, 0);
+      assert.equal(h.persisted.length, 0);
+    }
+  });
+}
 
 // PR #9621 review: the user's authored text reaches the Session separately
 // from the expanded model input, so quoted content cannot authorize anything.
@@ -751,10 +914,11 @@ test('deleting a task aborts its turn and prevents queued or later messages', as
   const h = createHarness();
   await enqueue(h, 's', { clientId: 'a', text: 'first' });
   await enqueue(h, 's', { clientId: 'b', text: 'second' });
+  const session = h.maker.getSession('s');
   await h.queue.disposeSession('s');
-  h.maker.getSession('s').emit({ type: 'done' });
+  session.emit({ type: 'done' });
   await h.queue.resume('s');
-  assert.deepEqual(h.maker.getSession('s').sent, ['first']);
+  assert.deepEqual(session.sent, ['first']);
   assert.equal(h.queue.projection('s').pendingQueue.length, 0);
   await assert.rejects(h.queue.enqueue('s', { text: 'late' }), /closed/);
 });

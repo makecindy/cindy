@@ -493,16 +493,18 @@ withAccountFreeOwnerCommit：主线 notify=false 只发 pending，分支补发�
 
 - 两端已共用 `AgentInputCoordinator`，差异在发送/插话端口；不要另造队列。
 - 发送事务原有 **66** 个依赖端口（不是 65）。本检查点新增语言、文体、MCP App 上下文
-  三个必需端口，共 69；桌面在原位置注入原实现，按调用时读取，不冻结模块加载时的值。
+  三个必需端口，共 69；发送接线再增加可选的异步启动前持久钩子，共 70。
+  桌面在原位置注入原实现，按调用时读取，不冻结模块加载时的值；桌面不注入新钩子。
 - 除 `i18n.desktop` 外，`mcp-apps/runtime → sandboxProtocol → electron` 也是实际运行期
   依赖。必须把 App 上下文读取交给启动器，不能只改语言 import 后声称可在 Node 使用。
-- Host gateway 已持有独立 `createMcpAppsRuntime`，将来使用它的 `modelContext`，不再建
+- Host gateway 已持有独立 `createMcpAppsRuntime`，使用 `pluginGateway.modelContext`，不再建
   registry。此上下文仍是外部应用数据，不等于用户授权。首批不注入 `readAutoReviewHistory`，
-  MCP App 消息继续按空历史恢复，不获得历史用户意图。
+  MCP App、调度和带委托标记的回合均按空历史恢复；普通输入只认本条亲写文本。
+  因此自动化无人值守时可能比桌面更早等待确认；接上历史不是默认补全，而是另行讨论的权限变更。
 - `main.ts` 尚未构造 `createSchedulerHost`；现有 `schedulerQueue()` 与 scheduler e2e
   只是队列桥和隔离服务验证，不能称正式 Host 自动化已启动。
 
-### 端口对照（目标接法，尚未完成 Host 接线）
+### 端口对照（目标接法；实际已接与剩余项见本节末尾）
 
 「真实实现」指必须接到实际服务，**不是已经实现**；「不适用」可以不注入，但只在注明
 的能力范围内成立；「暂不支持」需要从当前 owner 的持久任务事实判断并明确拒绝，不能
@@ -511,15 +513,15 @@ withAccountFreeOwnerCommit：主线 notify=false 只发 pending，分支补发�
 
 | 端口 | 合同 | Host 目标处理 | 依据/边界 |
 | --- | --- | --- | --- |
-| `getResolvedMainLocale` | 必需 | 真实实现 | 启动器语言读取；桌面动态读原值，Host 从自己的设置读，不加载 desktop 装配。 |
+| `getResolvedMainLocale` | 必需 | 真实实现 | 桌面动态读原值；Host 尚未接入界面语言偏好时返回 null，不把服务器 OS 语言冒充用户选择。 |
 | `getMainClassicalStyle` | 必需 | 真实实现 | 同上，保留当前经典文体偏好。 |
-| `readMcpAppModelContext` | 必需 | 真实实现 | 注入各启动器已有 App registry；Host 候选为 plugins.modelContext，不能新建第二份 registry 或借此恢复历史授权。 |
+| `readMcpAppModelContext` | 必需 | 真实实现 | 注入各启动器已有 App registry；Host 使用 pluginGateway.modelContext，不能新建第二份 registry 或借此恢复历史授权。 |
 | `getSession` | 必需 | 真实实现 | 现有 Maker.getSession，保留精确 runtime 身份。 |
-| `closeSession` | 必需 | 真实实现 | 现有 Maker.closeSession，加上 Host 监听与事件落库收尾。 |
+| `closeSession` | 必需 | 真实实现 | 只解绑旧监听并关闭 Maker runtime；不得结算或删除当前 turn，也不清历史持久状态。 |
 | `closeSessionIfCurrent` | 必需 | 真实实现 | 复用 runtime-refresh 关闭语义和 rehydrate 抑制，不能当作任务终止。 |
 | `preflightBotRuntimeResources` | 必需 | 暂不支持 | 先按持久任务来源判定伙伴任务；不得用空函数放行。 |
 | `getSessionMeta` | 必需 | 真实实现 | 现有 Maker.getSessionMeta。 |
-| `readAutoReviewHistory` | 可选 | 不适用 | Host 首批刻意不注入，MCP App 保持空历史恢复、不给历史授权；不是待补的默认回退。 |
+| `readAutoReviewHistory` | 可选 | 不适用 | 首批刻意不注入：App/委托/调度为空历史，普通回合仅本条亲写文本；不是待补的默认回退。 |
 | `readScheduledPermissions` | 可选 | 真实实现 | 读当前持久 permissionMode / planModeEnabled，不沿用队列过期值。 |
 | `assertScheduledDispatchRoute` | 可选 | 真实实现 | 核对最终本机路由；非本机/供应商组执行明确拒绝，不静默改成本机。 |
 | `ensureRemoteReadyForSessionStart` | 必需 | 暂不支持 | 非空 remoteHostId 不能直接本机执行；入口准入和恢复快照都须核对。 |
@@ -530,15 +532,15 @@ withAccountFreeOwnerCommit：主线 notify=false 只发 pending，分支补发�
 | `readSessionWorkingDirFromDb` | 必需 | 真实实现 | 当前 owner DB 的权威目录。 |
 | `readSessionWorkingDirState` | 可选 | 真实实现 | 区分缺行与显式空目录。 |
 | `isOrcaMcpHydrated` | 必需 | 暂不支持 | 首批不启动 Orca；拒绝后此分支不可达，不伪装为已注入。 |
-| `buildCreateOptsWithStderr` | 必需 | 真实实现 | 首批已有 Host 创建选项；原样返回前必须确认只缺日志装配，不缺权限/配置。第二批共用原闭包。 |
+| `buildCreateOptsWithStderr` | 必需 | 真实实现 | 原 stderr 包装器已移到 sessionRequest，共用同一逻辑、各注入自己的 logger。 |
 | `synthesizeOrcaVendorOptionsFromDb` | 必需 | 暂不支持 | 同 Orca 准入；不能返回 false 后继续发送 Orca 任务。 |
 | `readSessionExtraDirsFromDb` | 必需 | 真实实现 | 复用既有目录读取服务；不丢只读授权。 |
 | `readSessionWritableDirsFromDb` | 可选 | 真实实现 | 读持久可写授权，禁止信任 wire 自报。 |
 | `withRehydrateCloseSuppressed` | 必需 | 真实实现 | 复用既有共享模块。 |
-| `bootstrapSession` | 必需 | 真实实现 | 首批 Host createSession + listen + 配置快照；需覆盖创建期间停止与 owner 变化，第二批抽取共用启动。 |
+| `bootstrapSession` | 必需 | 真实实现 | 首批 Host createSession + listen + 配置快照；bootstrap 和 onVendorTurnReserved 都绑定实际 Session，创建的 signal 传给 Maker 第二个参数。完整启动后续抽取。 |
 | `markOrcaRoleIfNeeded` | 必需 | 暂不支持 | 非空角色拒绝；普通任务无角色时才允许无操作。 |
-| `broadcastSessionCreated` | 必需 | 真实实现 | 接 Host hub 原有事件，不重复创建 DB 行。 |
-| `prepareSendUserMessage` | 必需 | 真实实现 | 复用附件/引用标准化入口；首批不能把任意对象强转成 UserMessage。 |
+| `broadcastSessionCreated` | 必需 | 真实实现 | 只发布已有任务的 session_changed，不标 action:create，不重复创建 DB 行。 |
+| `prepareSendUserMessage` | 必需 | 真实实现 | 当前保留文本、mention 和本机绝对文件路径；需要缓存/OSS/base64 物化的引用明确拒绝，下一步抽取原标准化入口。 |
 | `materializeDirectSendOssAttachments` | 可选 | 真实实现 | 复用原物化服务与失败清理；未接通的直发附件明确拒绝，不能跳过。 |
 | `createDbMessage` | 必需 | 真实实现 | 现有 persistMessage / durable write，完整透传 agentMeta、清空边界及广播条件。 |
 | `captureCindyLearnInvocation` | 可选 | 暂不支持 | 未接入原捕获器前不授予 /learn 的隐式能力；不伪造授权。 |
@@ -548,15 +550,16 @@ withAccountFreeOwnerCommit：主线 notify=false 只发 pending，分支补发�
 | `readPiUserEntry` | 可选 | 真实实现 | 复用 Pi 已持久消息入口；无条目为 undefined，读取失败不能吞成空。 |
 | `beforeDispatchDirectUserTurn` | 可选 | 不适用 | Host 当前无 Git 保存点服务；本批不宣称支持文件回退，不能生成伪造保存点。 |
 | `prepareProductTurn` | 可选 | 不适用 | Cindy Make 升级产品生命周期不在 Host 首批，相关任务需准入核对。 |
+| `beforeProviderStart` | 可选 | 真实实现 | Host 在 provider 启动前 await markStarted 落盘，失败/取消不执行；桌面不注入。 |
 | `assertBeforeVendorDispatch` | 可选 | 真实实现 | owner、停止信号、clear、generation 最后同步闸门；不能在最后一个 await 之前检查完就放行。 |
 | `onUndispatchedDirectUserTurn` | 可选 | 不适用 | 与 Git 保存点成对；未装配就不产生该生命周期。 |
-| `ackInterruptedTurnDispatched` | 可选 | 真实实现 | 复用 markEnded 与 active-turn 持久链；不能把尚未受理的发送标完成。 |
+| `ackInterruptedTurnDispatched` | 可选 | 真实实现 | 直接注入 ackSessionTurnEndedDurable，只确认旧的中断边界，不用 markEnded 拼装。 |
 | `previewUserPrompt` | 可选 | 不适用 | 桌面提示预览 UI；不替代用户消息持久事件。 |
 | `dispatchUserPromptPreview` | 可选 | 不适用 | 同一桌面预览事务，无预览时省略。 |
 | `commitUserPromptPreview` | 可选 | 不适用 | 同上。 |
 | `rollbackUserPromptPreview` | 可选 | 不适用 | 同上。 |
 | `isSessionRunningError` | 必需 | 真实实现 | 抽取/复用原错误判据，保持 coordinator 的排队与拒绝语义。 |
-| `reconcileCreateOptsWithDb` | 可选 | 真实实现 | 第二批共用 DB 配置对账；首批不得用九字段快照覆盖其余配置。 |
+| `reconcileCreateOptsWithDb` | 可选 | 不适用 | Host 每条输入的模型/权限选择优先，首批不注入。若改为任务行为准，须先讨论并在受理时写回选择。 |
 | `applyPendingAgentSwitch` | 可选 | 真实实现 | 先核对现有 Host 切引擎路径；沿用已选配置，不能丢交接或授权。 |
 | `onModelDispatched` | 可选 | 真实实现 | 复用实际派发模型落库，不能用界面选择值回填历史。 |
 | `prepareUnhealthySession` | 可选 | 真实实现 | 复用不健康 runtime 关闭与恢复；避免对旧 handle 发送。 |
@@ -565,7 +568,7 @@ withAccountFreeOwnerCommit：主线 notify=false 只发 pending，分支补发�
 | `peekPendingHandoff` | 可选 | 真实实现 | 同一 agentHandoff 注册表，失败不消费。 |
 | `consumePendingHandoff` | 可选 | 真实实现 | 只在已受理后消费。 |
 | `peekWorkingDirectoryRecoveryNote` | 可选 | 真实实现 | 读取工作目录恢复服务本轮说明。 |
-| `readWorkingDirectoryRecoveryCreateOpts` | 必需 | 真实实现 | 从 owner DB 生成完整恢复选项；storedSessionOptions 仅为现状，不能当作完整实现。 |
+| `readWorkingDirectoryRecoveryCreateOpts` | 必需 | 真实实现 | 保留当前输入的选择，只从 owner DB 修复 cwd 和同引擎 resume 身份；完整启动偏好仍待后续共用。 |
 | `consumeWorkingDirectoryRecoveryNote` | 可选 | 真实实现 | 只在受理后消费对应说明。 |
 | `peekPlanReconcileNote` | 可选 | 真实实现 | 复用计划对账服务，不能把缺端口当作无计划。 |
 | `consumeSealedPlanReconcileNote` | 可选 | 真实实现 | 沿用计划对账的一次性消费语义。 |
@@ -585,16 +588,17 @@ withAccountFreeOwnerCommit：主线 notify=false 只发 pending，分支补发�
 
 1. **纯依赖检查点**：语言/文体/App context 端口，桌面原装配接回；保留全部现有测试断言。
    Node 真实加载成功只能证明依赖可用，不能证明 Host 已使用该事务。
-2. **发送与插话**：先实现表中已支持路径的真实端口，再切换 Host executor；保留事件监听、
-   终态落库和 owner 生命周期，删掉被替代的权限/来源说明。插话工厂单独提交，对照
-   `steerToAgentAccepted` 原函数体；业务判定和等待顺序不夹带改写。
-3. **启动准备**：`prepareUserMessageForAgent`（附件/引用标准化）、
-   `buildCreateOptsWithStderr`（stderr 路由）、`isSessionRunningError`（错误分类）、
-   `readSessionSource`（持久来源）先抽取最小完整闭包；只抽取，不复制成第二实现。
-4. **配置与启动事务**：`reconcileCreateOptsAgainstDb` 保留 DB 真值覆盖顺序、
-   `bootstrapSession` 保留目录授权、供应商/账号代次、监听绑定和失败清理；
-   `createUserMessageDurably` 保留持久队列、clear/generation 闸门。
-   每项先给出闭包依赖清单再搬动。`readAutoReviewHistory` 可供桌面复用，但 Host 不接线。
+2. **发送前置与接线**：先搬 `buildCreateOptsWithStderr`、`isSessionRunningError`、
+   `readSessionSource`，加入可选的启动前持久钩子；Host 准入、runtime-only 关闭、turn 绑定
+   就绪后切换发送。保留每条输入选择，不注入 DB 覆盖和历史授权恢复。
+3. **插话与媒体/历史服务**：`steerToAgentAccepted` 单独提交，只搬原函数体和依赖；
+   从 `normalizeAttachments.ts`、`localDb/ipc/messages.ts`、`localDb/ipc/sessions.ts`
+   抽取实际依赖 Electron 的最小边界，再接附件物化、清空回退、Pi 条目与归档恢复。
+4. **配置与启动事务**：`bootstrapSession` 的 325 行闭包最后分步拆，保留目录授权、
+   供应商/账号代次、监听和失败清理；复用 `sessionProviderBootstrap` 与
+   `sessionRuntimeCleanup` 的创建取消机制。`reconcileCreateOptsAgainstDb` 可抽成共享模块，
+   但 Host 是否采用 DB 优先仍需决定。`createUserMessageDurably` 不整体搬给 Host，
+   避免连带桌面用量/自动恢复单例；Host 自己的持久队列补元数据与 clear 闸门。
    这一步完成前，不宣称九字段 `storedSessionOptions` 已被完整替代。
 5. **后台生命周期**：在同一 owner 创建/切换/退出服务图上装配调度器，停止先阻止新任务，
    再排空持久写入与结束子进程。伙伴主力电脑和 IM 单实例归属继续独立核实，不能由
@@ -624,3 +628,41 @@ withAccountFreeOwnerCommit：主线 notify=false 只发 pending，分支补发�
   `CINDY_TEST_CODEX_BINARY` 全部跳过，**不是通过**；没有自动寻找正式安装的运行时或凭证。
 - 尚未做本批 Host 实际发送/插话/停止、真实模型与打包运行。已有隔离验收属于上一批，
   不可当作本次接线的证据。正式 Cindy 未重启、正式 profile 未使用。
+
+
+### 发送接线检查点（2026-11-11，待独立复核）
+
+Host 发送已调用 `createMakerSendTransaction`，不再自行拼发送的权限、设备与来源说明。
+插话仍待抽为共用工厂；本检查点只修正原 Host 插话对 Session 返回值的错误判断。
+
+- 运行时刷新只关闭旧 Session，不清当前 turn/历史；新建和复用 Session 都重新绑定事件。
+  目录或项目资源漂移后，新回复能落库、旧 Session 终态不释放新队列。
+- Host 在模型启动前等待 active-turn 标记持久化，写入失败不执行；桌面不注入此钩子。
+  共享事务的取消、App 撤权和落库失败回归先红后绿；旧中断确认使用原 durable ack。
+- 每条输入选择继续优先，已存活 Session 仍应用队列选择；不注入桌面的 DB 配置覆盖。
+  当前 owner 的任务行、伙伴关联、组配置及绑定用于准入。普通供应商 ID 不代表供应商组。
+- 用户行补共享 UUID/来源元数据，等待前序回复写入，并附已有 assistant transcriptParentUuid；
+  设备说明按原生上下文去重，压缩/重建后重新发送。正式入口读已有 pluginGateway 的 App
+  上下文；未初始化或无 App 返回空上下文，未增加历史授权。
+- 真实原生测试发现 `Session.steer()` 成功返回 void，原 Host 错判为拒绝，导致已送达插话
+  不落库。已按真实合同处理，取消/授权钩子继续传到异步准备之后的最终执行边界。
+- 本机绝对路径附件仍保留；缓存、OSS、base64 物化、Pi 条目读写、归档恢复、完整启动
+  配置、工作目录恢复与交接/目标/计划说明仍未全部接通。Host 当前没有历史清空入口；
+  只接了 coordinator 的 clear/generation 检查，消息回退端口须随历史服务抽取落地。
+  以上缺口不代表桌面功能降级，也不构成 Host 全功能完成声明。
+
+验证记录（完整日志在本机 `/tmp/cindy-host-shared-send-*.log`）：
+
+- 既有 Host 输入回归原行为断言通过；新增目录/资源刷新、持久标记失败、实际任务准入、
+  UUID、设备说明去重和附件引用行为覆盖。原 Node 单独加载测试已被真实 Host 发送入口
+  的加载与执行覆盖，移除重复用例；原静态 Electron 边界检查保留。
+- Host 全部 198 项通过（4.81 秒），Host 类型检查通过；测试规范检查通过，文件数保持
+  346 个且未上调基线。文档合同 11 项通过。
+- Desktop 发送事务 302 项、sessionRequest 12 项、协调器 680 项、语言说明 7 项通过。
+  Desktop 类型检查通过（`/tmp/cindy-host-shared-send-desktop-types-confirmed.log`）。
+  本批没有跑桌面全量，未把上一批的全量结果当成本批证据。
+- 扩展已有 `codex-runtime.e2e.mjs`：真实 Codex 二进制 + HTTP/chat + Host 队列/Maker +
+  隔离 SQLite + 本机模拟上游，发送/回复落库/UUID/插话/运行时重开/停止通过。
+  插话断言先失败，修正后通过；模拟上游不是真实模型，运行时重开不是进程重启。
+- 源码 Host 独立临时 profile 的启动、重复实例排斥、受保护停止、信号退出与进程重启通过。
+  未使用正式 profile、真实登录和凭证，未重启正式 Cindy。Windows、手机和本批打包版未验收。

@@ -5,6 +5,15 @@ import { createLogger } from '../logger.js';
 
 const log = createLogger('sessions');
 
+export async function readSessionSource(sessionId: string): Promise<string | null> {
+  const [row] = await getDbClient()
+    .drizzle.select({ source: sessions.source })
+    .from(sessions)
+    .where(eq(sessions.id, sessionId))
+    .limit(1);
+  return row?.source ?? null;
+}
+
 export interface SessionRowSnapshot {
   status: string;
   /** Bound schedule cold resumes preserve the owner's permission choice. */
