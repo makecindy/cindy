@@ -16,6 +16,11 @@ export function parseSubscriptionAccountCommand(raw: unknown): SubscriptionAccou
   const loginKey = value.loginKey;
   const accountId = value.accountId;
   const validLoginKey = typeof loginKey === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(loginKey);
+  if (value.action === 'read' && value.taskId !== undefined) {
+    if (typeof value.taskId !== 'string' || !/^[A-Za-z0-9_-]{1,256}$/.test(value.taskId))
+      throwIpcError('INVALID_PARAMS', 'Invalid task');
+    return { action: 'read', providerId, taskId: value.taskId };
+  }
   if (value.action === 'read' || value.action === 'preview')
     return { action: value.action, providerId };
   if (

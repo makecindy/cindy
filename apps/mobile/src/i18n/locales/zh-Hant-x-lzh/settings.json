@@ -1,4 +1,31 @@
 {
+  "pushDiagnostics": {
+    "title": "推播診斷",
+    "read": "讀取推播狀態",
+    "busy": "讀取中…",
+    "failed": "無法讀取推播狀態，請重試。",
+    "copyFailed": "無法複製權杖。",
+    "copied": "權杖已複製。",
+    "bundle": "App ID",
+    "build": "組建編號",
+    "environment": "APNs 環境",
+    "permission": "系統權限",
+    "alerts": "橫幅提示",
+    "lockScreen": "鎖定畫面",
+    "notificationCenter": "通知中心",
+    "copy": "複製 APNs 權杖",
+    "hide": "隱藏結果",
+    "unknown": "未知",
+    "on": "已開啟",
+    "off": "已關閉",
+    "hint": "僅點選後讀取。APNs 權杖只在本頁顯示，不寫入診斷記錄，也不由此工具上傳；離開頁面或切至背景後隱藏。複製僅用於 Apple 推播控制台；已複製的內容仍保留在剪貼簿。",
+    "permissions": {
+      "granted": "已允許",
+      "denied": "已拒絕",
+      "undetermined": "尚未請求",
+      "provisional": "靜音傳送"
+    }
+  },
   "localLogs": {
     "upload": "上呈日誌",
     "uploadResult": {
@@ -135,11 +162,16 @@
     "permissionDenied": "告之權柄未開，請於系統設定中允許 Cindy 傳送通知。",
     "unregisterQueued": "已闔，連網後自動完成註銷。",
     "preview": "示訊之先覽",
-    "background": "於背景保持訊之連線",
+    "background": "背景通知",
     "backgroundActive": "方於背景收訊",
     "backgroundStop": "止收",
-    "backgroundHint": "背景連線不依賴 Google，將示常駐之告；可隨時於通知欄止之。",
-    "googleUnavailable": "Google 推播暫不可用。可啟背景訊之連線以收訊。"
+    "backgroundHint": "Google 推播或不可用時，Cindy 自維背景之連，連通時常駐示之。",
+    "googleUnavailable": "Google 推播暫不可用，將依通知之設維背景之連。",
+    "backgroundModes": {
+      "auto": "自動",
+      "on": "常啟",
+      "off": "關閉"
+    }
   },
   "about": {
     "sectionTitle": "關於此手機",

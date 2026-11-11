@@ -36,6 +36,8 @@ import {
   HOOK_FEATURE_SLACK_TOOLS,
   HOOK_FEATURE_TELEGRAM_CARD_OPS,
   HOOK_FEATURE_TELEGRAM_COMMANDS,
+  HOOK_FEATURE_FEISHU_FINAL_OPS,
+  HOOK_FEATURE_FEISHU_PROGRESS_OPS,
   HOOK_FEATURE_TELEGRAM_FINAL_OPS,
   HOOK_FEATURE_TELEGRAM_PROGRESS_OPS,
   HOOK_FEATURE_TURN_DELIVERY,
@@ -814,8 +816,9 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
   };
 
   // 官方飞书 / Lark(同一 provider, 品牌跟随组织的应用, 不随 Cindy 版本区域)。
-  // 第一里程碑由服务端排版: 进度 / 终稿 / 交互卡都走 legacy turn.progress /
-  // turn.end / interaction.request, 所以不声明 msg-op-v1 与任何 telegram-* 能力;
+  // 进度卡与不带附件的成功终稿由本端用个人飞书 bot 同一份排版经 msg.op 发布(服务端同时
+  // 宣告才启用, 见 dispatcher 的 feishuTurnCarrier); 交互卡、失败 / 取消 / 带附件的终稿
+  // 仍走 turn.end / interaction.request 由服务端排版。不声明任何 telegram-* 能力;
   // 也没有群消息中继(群上下文随 task.dispatch 的 source.threadContext 下发)。
   // 不声明 session-picker-v1: 飞书服务由多个组织的应用共用, query.request 不带收件身份,
   // 不能凭它交出本机任务列表(飞书侧也不查)。
@@ -832,8 +835,14 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     notConfiguredError: 'Feishu service endpoint is not configured',
     requiredFeatures: feishuProviderFeatures,
     // 与 Telegram 相同: 服务端按 hello.features 判定 provider 协商结果, 客户端
-    // 要求的基础能力必须全部自报。
-    helloFeatures: feishuProviderFeatures,
+    // 要求的基础能力必须全部自报。电脑排版的三项是可选增量: 旧服务端不宣告时照旧由
+    // 服务端排版, 不影响连接。
+    helloFeatures: [
+      ...feishuProviderFeatures,
+      HOOK_FEATURE_MESSAGE_OPS,
+      HOOK_FEATURE_FEISHU_PROGRESS_OPS,
+      HOOK_FEATURE_FEISHU_FINAL_OPS,
+    ],
     isEnabled: () => store.get().feishuEnabled,
     setEnabled: (enabled) => {
       store.setProviderEnabled('feishu', enabled);

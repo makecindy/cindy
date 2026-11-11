@@ -14,16 +14,36 @@ export const COMPANION_MEMORY_PREFIX = 'companion.memory.v1:';
 export const COMPANION_SKILL_PREFIX = 'companion.skill.v1:';
 /** Which room files hold what sits beside a skill's SKILL.md (skillFiles.ts). */
 export const COMPANION_SKILL_FILES_PREFIX = 'companion.skill-files.v1:';
-/** One open (or recently closed) todo per key; the whole file would not fit one value. */
+/** Teammates no longer keep todos. Still owned, so this computer clears its old rows in the cloud. */
 export const COMPANION_TODO_PREFIX = 'companion.todo.v1:';
-/** One routine definition per key (run history stays on the computer it ran on). */
+/**
+ * One V1 routine definition per key. Teammates' scheduled work is now their project's automations:
+ * nothing is uploaded under it any more, but it stays owned so this computer clears its old rows in
+ * the cloud. Rows from a computer still on V1 are still applied on arrival (host.ts).
+ */
 export const COMPANION_ROUTINE_PREFIX = 'companion.routine.v1:';
 /** Workbench folders (with the computer each is on) and portable judgments. */
 export const COMPANION_WORKBENCH_KEY = 'companion.workbench.v1';
 /** Capability setup that means the same on any computer (capabilities.ts); never the permission level. */
 export const COMPANION_CAPABILITIES_KEY = 'companion.capabilities.v1';
+/**
+ * A V2 teammate's project rules: its `AGENTS.md`, `{ content }` (project.ts). The project's files
+ * stay on the main computer; only the rules travel. Older computers do not know the key.
+ */
+export const COMPANION_PROJECT_RULES_KEY = 'companion.project-rules.v1';
+/**
+ * One automation of a V2 teammate's project per key (`<configId>` of its `schedules.json`):
+ * `{ config, paused, originDeviceId? }` (project.ts). Older computers do not know the prefix.
+ */
+export const COMPANION_AUTOMATION_PREFIX = 'companion.automation.v1:';
+/**
+ * The unfinished V1 work its upgrade wrote into the project (`CARRYOVER.md`, `{ content }`): its
+ * rules point to it, so it travels with them. Older computers do not know the key.
+ */
+export const COMPANION_PROJECT_CARRYOVER_KEY = 'companion.project-carryover.v1';
 const OWNED_PREFIXES = [COMPANION_PROFILE_KEY, COMPANION_MEMORY_PREFIX, COMPANION_SKILL_PREFIX, COMPANION_SKILL_FILES_PREFIX,
-  COMPANION_TODO_PREFIX, COMPANION_ROUTINE_PREFIX, COMPANION_WORKBENCH_KEY, COMPANION_CAPABILITIES_KEY];
+  COMPANION_TODO_PREFIX, COMPANION_ROUTINE_PREFIX, COMPANION_WORKBENCH_KEY, COMPANION_CAPABILITIES_KEY,
+  COMPANION_PROJECT_RULES_KEY, COMPANION_AUTOMATION_PREFIX, COMPANION_PROJECT_CARRYOVER_KEY];
 const MAX_KEY_LENGTH = 160;
 export const COMPANION_VALUE_MAX_BYTES = 60 * 1024;
 /** A value over the size limit was not uploaded (thrown only when every value is required). */
@@ -33,7 +53,7 @@ const STORE_REFUSALS = new Set(['MEDIA_STORAGE_UNAVAILABLE', 'VALUE_TOO_LARGE', 
 
 /**
  * One value to upload. `unread` marks a key prefix that could not be read this cycle (e.g. the
- * routine engine is not ready): its server values stay as they are and nothing under it is
+ * workbench): its server values stay as they are and nothing under it is
  * tombstoned; a hand-over, which needs everything, fails instead.
  */
 export interface CompanionPreferenceValue {

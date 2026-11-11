@@ -69,8 +69,6 @@ export interface HistoryCompanion {
   id: string;
   role: string;
   channel?: string;
-  /** Routine lanes (`role = 'routine'`): the standing rule this Session runs. Absent on older hosts. */
-  routineId?: string;
 }
 
 export interface HistorySession {

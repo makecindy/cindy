@@ -19,6 +19,7 @@ import { McpAppCard } from './McpAppCard';
 import { RichContentContext } from './richContentContext';
 import { RichContentRuntime } from './richContentRuntime';
 import { MessageListItemViewableContext, MessageListVisibility, MessageListVisibilityContext, useMessageListItemVisible } from './messageListVisibility';
+import { LegendListRowContext, useRowStateHook } from './listRowState';
 import { MessageContentLongPressContext } from './messageContentLongPress';
 import { CompanionLearningFooter } from './CompanionLearningFooter';
 import { CompanionTaskResultCard } from './CompanionTaskResultCard';
@@ -279,7 +280,7 @@ import {
   useRemoteSessionMessages,
 } from '@/session/remoteSessionStore';
 import {
-  isCrossDeviceSourceSessionId,
+  parseSourceSessionTarget,
   shouldShowSourceDevice,
   type MessageSourceDevice,
   type MessageSourcePlugin,
@@ -3304,11 +3305,13 @@ const RenderListItemView = memo(function RenderListItemView({
     ...(openPayloadFromItem ? { onOpenPayload: (next: MessagePayload) => openPayloadFromItem(next, item.key) } : {}),
   }), [actions, companionTurnContinuation, item.key, openPayloadFromItem]);
   return (
+    <LegendListRowContext.Provider value>
     <MessageListItemViewableContext.Provider value={isViewable}>
     <MessageHeavyContentVisibilityContext.Provider value={heavyContentVisible}>
       <RenderItemView actions={itemActions} focused={focused} item={item} />
     </MessageHeavyContentVisibilityContext.Provider>
     </MessageListItemViewableContext.Provider>
+    </LegendListRowContext.Provider>
   );
 });
 
@@ -3386,7 +3389,7 @@ function SessionOriginLabel({
       idText={sourceIdText(sourceMeta)
         ?? (senderSessionId ? t('message.renderer.sourceSessionId', { id: senderSessionId }) : undefined)}
       label={sessionOriginLabel(origin)}
-      onPress={onOpen && senderSessionId && !isCrossDeviceSourceSessionId(senderSessionId)
+      onPress={onOpen && senderSessionId && parseSourceSessionTarget(senderSessionId)
         ? () => onOpen(senderSessionId)
         : undefined}
       openHint={t('message.renderer.openSessionOrigin')}
@@ -3943,7 +3946,7 @@ function MessageBubble({
     />
   ) : null;
   const hasBubbleContent = !!(
-    item.message.systemCardType || displayBubbleBody || item.message.secondaryBody ||
+    hookSource || item.message.systemCardType || displayBubbleBody || item.message.secondaryBody ||
     // A quote or reply target alone still needs the bubble, e.g. an attachment-only reply.
     (companionQuote && (replyQuote || replyTarget))
   );
@@ -6130,7 +6133,10 @@ function MarkdownBodyBase({
   // Android RN Text 在 stretch 宽度下测高正确;钉宽靠换 key 重挂文本,会让每条
   // agent 回复挂载两遍,所以只在 iOS 测宽。外层 stretch 两端保留,版面宽度一致。
   const measuresSettledWidth = pinContentWidth && Platform.OS === 'ios';
-  const [contentWidth, setContentWidth] = useRecyclingState(0);
+  // Group chats, threads and cloud companions render this body in a plain ScrollView;
+  // LegendList row state throws there, so only list rows use the recycling hook.
+  const useRowState = useRowStateHook();
+  const [contentWidth, setContentWidth] = useRowState(0);
   const handleSettledWidthLayout = useCallback((event: LayoutChangeEvent) => {
     if (!measuresSettledWidth) return;
     const nextWidth = Math.round(event.nativeEvent.layout.width);
@@ -6221,10 +6227,11 @@ function MarkdownBodyBase({
           label={label}
           onOpen={onOpenPayload ? () => openMarkdownImage(inline.url, inline.alt) : undefined}
           onResolveRemoteMedia={resolveMarkdownMedia}
+          usePreviewState={useRowState}
         />
       </View>
     );
-  }, [layout, managedImagePreviewUrl, onOpenPayload, openMarkdownImage, resolveMarkdownMedia]);
+  }, [layout, managedImagePreviewUrl, onOpenPayload, openMarkdownImage, resolveMarkdownMedia, useRowState]);
   // Preserve the inline renderer while streaming or unrelated task metadata
   // changes; referenced task title changes still refresh every affected chip.
   const sessionLinkTitles = useMarkdownSessionLinkTitles(text);

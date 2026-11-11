@@ -2,6 +2,7 @@
 import React from 'react';
 import { render, renderHook, screen, fireEvent, cleanup, act } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ModelPoolQuotaSummary } from '@/components/new-chat/ModelPoolQuota';
 import type { ProviderShareReceived } from '@cindy/device-link';
 import type { ProviderShareInsights } from '../../shared/providerShareInsights';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
@@ -10,7 +11,7 @@ import type { ProviderView } from '@cindy/model-providers';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
 
 // Account generations are driven explicitly below; no full auth host is needed.
-vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null, useOptionalAuthDeviceId: () => 'self-a' }));
+vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null, useOptionalAuthDeviceId: () => 'self-a', useOptionalDataOwnerGeneration: () => 0 }));
 
 const sharing = vi.hoisted(() => ({ received: [] as ProviderShareReceived[] }));
 vi.mock('@/features/provider-share/providerShareStore', () => ({
@@ -51,6 +52,7 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 import { UnifiedModelRail } from '@/components/new-chat/UnifiedModelRail';
+import { ModelSourceDetails, ModelSourceUsageProvider } from '@/components/new-chat/ModelSourceDetails';
 import {
   codexWeeklyQuota,
   localCodexQuotaView,
@@ -88,6 +90,71 @@ afterEach(() => {
 });
 
 describe('provider weekly quota identity and windows', () => {
+  // User report: an unallocated pool still has known per-account quota. Busy
+  // accounts remain visible; no pooled percentage or paused default is invented.
+  it.each(['anthropic', 'openai'] as const)('shows each %s account quota before allocation in both rail and model row', async providerId => {
+    reads.codex.mockReturnValue({ snapshot: null });
+    reads.claude.mockReturnValue(null);
+    const account = (id: string, used: number, paused = false) => ({
+      id, identity: `${id}@example.test`, paused, status: 'ready', running: id === 'a' ? 4 : 0, limit: 4,
+      usage: { claude: { sevenDay: { utilization: used } }, codex: { buckets: { codex: { secondary: { windowMinutes: 10080, usedPercent: used } } } } },
+    });
+    const command = vi.fn().mockResolvedValue({ providerId, configured: true,
+      accounts: [account('a', 66), account('b', 20), account('paused', 1, true)] });
+    Object.assign(window, { electronAPI: { subscriptionAccounts: { command, onChanged: () => () => {} } } });
+    const providers = [provider(providerId, { auth: { method: 'oauth', native: providerId === 'anthropic' ? 'claude' : 'codex' } })];
+    const view = render(<ModelSourceUsageProvider providers={providers} scope={{ deviceId: null }}>
+      <UnifiedModelRail items={[{ kind: 'provider', providerId }]} active={{ kind: 'all' }}
+        providers={providers} providerLabel={() => 'Provider'} onSelect={() => {}} providerUsage={{ deviceId: null }} />
+      <ModelPoolQuotaSummary providerId={providerId}/>
+      <ModelSourceDetails providerId={providerId} label="Provider" modelId={providerId === 'anthropic' ? 'claude-sonnet' : 'chatgpt/gpt-5.6'} />
+    </ModelSourceUsageProvider>);
+    await act(async () => {});
+    const button = screen.getByRole('button', {name:'Provider · providerGroup.member.accountCount'});
+    expect(screen.getByRole('button',{name:'subscriptionAccounts.quotaAverage'})).toBeTruthy();
+    expect(button.getAttribute('aria-description')).toContain('a@example.test · 每周 · 剩余 34%');
+    expect(button.getAttribute('aria-description')).toContain('b@example.test · 每周 · 剩余 80%');
+    expect(button.getAttribute('aria-description')).not.toContain('paused@example.test');
+    expect(button.querySelector('[data-weekly-remaining="57"]')).not.toBeNull();
+    expect(view.container.textContent).not.toContain('34% / 80%');
+    expect(view.container.querySelector('[data-model-source-details]')?.getAttribute('title')).toContain('a@example.test');
+    expect(view.container.querySelector('[data-model-source-details]')?.getAttribute('title')).toContain('b@example.test');
+    // Native pool bridges use the same account buckets as runtime admission.
+    expect(view.container.querySelector('[data-model-source-details]')?.getAttribute('title')).toContain('34%');
+  });
+  // #9711 / unit: rail and row must consume the same pool snapshot, not an
+  // identity from B beside a weekly bar borrowed from paused default account A.
+  it.each(['anthropic', 'openai'] as const)('shares %s candidate identity and quota across rail and rows without a per-entry opt-in', async (providerId) => {
+    reads.codex.mockReturnValue({ snapshot: null });
+    reads.claude.mockImplementation(enabled => enabled ? { sevenDay: { utilization: 93 }, subscriptionType: 'pro' } : null);
+    const command = vi.fn().mockResolvedValue({ providerId, configured: true, accounts: [
+      { id: 'default', identity: 'a@example.test', paused: true, status: 'ready', running: 0, limit: 4 },
+      { id: 'b', identity: 'b@example.test', plan: providerId === 'anthropic' ? 'max' : 'pro', paused: false, status: 'ready', running: 0, limit: 4,
+        usage: { claude: { sevenDay: { utilization: 0 } }, codex: { buckets: { codex: { secondary: { windowMinutes: 10080, usedPercent: 0 } } } } } },
+    ] });
+    Object.assign(window, { electronAPI: { subscriptionAccounts: { command, onChanged: () => () => {} } } });
+    const providers = [provider(providerId, { auth: { method: 'oauth', native: providerId === 'anthropic' ? 'claude' : 'codex' }, subscriptionAccount: { source: 'oauth', identity: 'a@example.test' } })];
+    const scope = { deviceId: null };
+    const view = render(
+      <ModelSourceUsageProvider providers={providers} scope={scope}>
+        <UnifiedModelRail items={[{ kind: 'provider', providerId }]} active={{ kind: 'all' }}
+          providers={providers} providerLabel={() => 'Claude'} onSelect={() => {}} providerUsage={scope} />
+        <ModelSourceUsageProvider providers={providers} scope={scope}>
+          <ModelSourceDetails providerId={providerId} label="Claude" accountIdentity="a@example.test" modelId={providerId === 'anthropic' ? 'claude-sonnet' : 'gpt-5.6'} />
+        </ModelSourceUsageProvider>
+      </ModelSourceUsageProvider>,
+    );
+    await act(async () => {});
+    const button = screen.getByRole('button', { name: 'Claude · b@example.test' });
+    expect(button.querySelector('[data-weekly-remaining="100"]')).not.toBeNull();
+    expect(view.container.textContent).toContain(providerId === 'anthropic' ? 'b@example.test · Max' : 'b@example.test · Pro');
+    expect(view.container.textContent).not.toContain('a@example.test');
+    expect(command.mock.calls).toEqual([
+      [{ action: 'preview', providerId }],
+      [{ action: 'read', providerId }],
+    ]);
+  });
+
   // #8010 merge regression / unit: main added Kimi after self-source normalization.
   // Run the real quota + account hooks; existing tests only covered other vendors.
   // Minimum input: A's explicit device ID and a Kimi provider read from B's catalog.

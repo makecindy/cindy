@@ -3,6 +3,11 @@ import { createElement, act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { UnifiedModelPickerSheet } from '@/session/UnifiedModelPickerSheet';
+import {
+  providerShareFavoriteSource,
+  providerShareFavoriteWireKey,
+  type ProviderShareFavoriteSource,
+} from '@cindy/device-link';
 import { resolveStoredModelEntry } from '@cindy/model-providers';
 import {
   __flushForTest as flushRemoteAgentModelMemory,
@@ -23,7 +28,7 @@ const test = vi.hoisted(() => ({ view: null as any, favoritesReady:true, quotas:
   // 按传入的目录派生(供应商组用例:每台电脑的供应商各有自己的行与正在用的来源);缺省用上面的固定值。
   entriesFor: null as null | ((providers: any[]) => any[]), activeSource: null as null | ((input: any) => string | null) }));
 vi.mock('@/session/UnifiedModelPickerView', () => ({ UnifiedModelPickerView: (p:any) => {test.view=p;return null;} }));
-vi.mock('@/session/useMobileModelQuotas',()=>({useMobileModelQuotas:()=>({quotas:test.quotas,now:0})}));
+vi.mock('@/session/useMobileModelQuotas',()=>({useMobileModelQuotas:()=>({quotas:test.quotas,now:0,quotaOf:(device:string,id:string)=>test.quotas[JSON.stringify([device,id])]})}));
 vi.mock('@/session/mobileModelPreferences', async () => {
   const {useReducer} = await import('react');
   return {useMobileModelPreferences:()=>{
@@ -117,9 +122,41 @@ it('attaches account remaining quota only to the matching source filter',async()
   expect(test.view.filters.find((item:any)=>item.id==='account').quota).toMatchObject({remaining:37});
   expect(test.view.filters.filter((item:any)=>item.id==='all'||item.id==='favorites').every((item:any)=>item.quota===undefined)).toBe(true);
 });
+// Unit: one account snapshot must label both the source choice and the model
+// row; equal provider ids on different computers must not share identity/quota.
+it('uses the same account identity in source choices and rows for each computer',async()=>{
+  test.quotas={account:{accountIdentity:'local-second@example.test',remaining:80,source:'claude',raw:{sevenDay:{utilization:20}}},
+    '["device-studio-mac","account"]':{accountIdentity:'remote-second@example.test',remaining:60,source:'claude',raw:{sevenDay:{utilization:40}}}};
+  await mountRemote(null,undefined,{...studioCatalog,providers:[{...studioCatalog.providers[0],subscriptionAccount:{identity:'old-default@example.test'}}]});
+  const local=test.view.groups.flatMap((group:any)=>group.rows).find((row:any)=>!row.remoteDevice);
+  const remote=test.view.groups.flatMap((group:any)=>group.rows).find((row:any)=>row.remoteDevice);
+  expect(local.subtitle).toContain('local-second@example.test');
+  expect(remote.subtitle).toContain('remote-second@example.test');
+  expect(remote.subtitle).not.toContain('old-default');
+  expect(remote.quotaLabel).toBe('60%');
+  expect(test.view.filters.find((item:any)=>item.id==='account').label).toContain('local-second@example.test');
+  expect(test.view.filters.find((item:any)=>item.id===remoteId)).toMatchObject({
+    quota:{remaining:60},remote:{providerLabel:'Studio Provider · remote-second@example.test'},
+  });
+});
 it('does not show an empty or full quota bar when account quota is unknown',async()=>{
   await mount();
   expect(test.view.filters.find((item:any)=>item.id==='account').quota).toBeUndefined();
+});
+it('shows one pool average above models and separate source details',async()=>{
+  test.quotas={account:{accountIdentity:null,source:'claude',raw:null,members:[
+    {accountIdentity:'first@example.test',source:'claude',raw:{sevenDay:{utilization:66}},remaining:34},
+    {accountIdentity:'second@example.test',source:'claude',raw:{sevenDay:{utilization:20}},remaining:80},
+  ]}};
+  await mount();
+  expect(test.view.groups[0].rows[0].quotaLabel).toBeNull();
+  expect(test.view.groups[0].quota).toMatchObject({remaining:57,summary:'models.unified.quotaAverage',resetSoon:false});
+  const source=test.view.filters.find((item:any)=>item.id==='account');
+  expect(source.quota.remaining).toBe(57);
+  expect(source.quota.members.map((member:any)=>member.remaining)).toEqual([34,80]);
+  expect(source.quota.label).toContain('first@example.test');
+  expect(source.quota.label).toContain('second@example.test');
+  expect(source.label).toContain('models.unified.accountCount');
 });
 
 it('silences background favorite sync failures',async()=>{
@@ -849,7 +886,9 @@ it('hides a favorite whose computer is not in the list without deleting it',asyn
   expect(test.view.groups.map((g:any)=>g.key)).toEqual(['recommended',remoteId]);
   expect(test.save).not.toHaveBeenCalled();
 });
-it('does not offer favorites for providers shared by another account',async()=>{
+// model-selector-unified §1.5：分享收藏与桌面同一键，写在被控电脑收藏里。
+// 旧电脑不带 favoriteSource 时星标保持不可用，不能拿别的成员身份代替。
+it('does not offer favorites for a shared provider whose host did not send an identity',async()=>{
   const onSelect=vi.fn(async()=>true);
   await act(async()=>root.render(createElement(UnifiedModelPickerSheet,{
     visible:true,onClose:vi.fn(),providers:[{id:'account',name:'Provider',models:{},connected:true}],agentKind:'codex',capabilities:{hasFastMode:true},
@@ -860,6 +899,62 @@ it('does not offer favorites for providers shared by another account',async()=>{
   } as any)));
   await act(async()=>test.view.onOptions(test.view.groups[1].rows[0]));
   expect(test.view.options.favoritesDisabled).toBe(true);
+});
+const shareFavoriteSource = {
+  shareId:'abc', memberId:'member-1', providerId:'account', owner:{ region:'global' as const },
+};
+const shareFavoriteKey = providerShareFavoriteSource(shareFavoriteSource);
+async function mountShare(favoriteSource: ProviderShareFavoriteSource | undefined = shareFavoriteSource, extra: Record<string, unknown> = {}) {
+  const onSelect=vi.fn(async()=>true);
+  await act(async()=>root.render(createElement(UnifiedModelPickerSheet,{
+    visible:true,onClose:vi.fn(),providers:[{id:'account',name:'Provider',models:{},connected:true}],agentKind:'codex',capabilities:{hasFastMode:true},
+    activeModelId:'codex/model',selectedProviderId:'account',selectedEffort:'medium',selectedFastMode:false,
+    existingSessionRoute:true,modelMemory:{getEffort:()=>undefined,getFast:()=>undefined,setEffort:vi.fn(),setFast:vi.fn()},
+    unified:{scope:'user-device',agents:['codex','claude-code'],loadCapabilities:async()=>({hasFastMode:true}),onSelect,
+      remote:{catalogs:[{...studioCatalog,deviceId:'share:abc',name:'Shared',...(favoriteSource?{favoriteSource}:{}),...extra}],selectedDeviceId:null}},
+  } as any)));
+  return {onSelect};
+}
+it('favorites and removes a shared provider model with the desktop share and member key',async()=>{
+  const {onSelect}=await mountShare();
+  await act(async()=>test.view.onOptions(test.view.groups[1].rows[0]));
+  expect(test.view.options.favoritesDisabled).toBe(false);
+  expect(test.view.options.isFavorite).toBe(false);
+  await act(async()=>test.view.options.onFavorite());
+  expect(test.save).toHaveBeenLastCalledWith(expect.objectContaining({favorites:[
+    {uid:expect.any(String),providerId:shareFavoriteKey,modelId:'model',agent:'codex',effort:'medium',fast:false},
+  ]}));
+  expect(test.view.options.isFavorite).toBe(true);
+  await act(async()=>test.view.onBack());
+  const favorite=test.view.groups.find((group:any)=>group.key==='favorites').rows[0];
+  expect(favorite.remoteDevice).toEqual({deviceId:'share:abc',name:'Shared'});
+  await act(async()=>test.view.onSelect(favorite));
+  expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({providerId:'account',modelId:'codex/model'}),{deviceId:'share:abc'});
+  await mountShare();
+  await act(async()=>test.view.onOptions(test.view.groups.find((group:any)=>group.key==='favorites').rows[0]));
+  await act(async()=>test.view.options.onFavorite());
+  expect(test.save).toHaveBeenLastCalledWith(expect.objectContaining({favorites:[]}));
+});
+it('does not treat another membership or an offline share as the saved favorite',async()=>{
+  test.prefs.favorites=[{uid:'share',providerId:shareFavoriteKey,modelId:'model',agent:'codex',effort:'medium',fast:false}];
+  await mountShare({...shareFavoriteSource, memberId:'someone-else'});
+  expect(test.view.groups.some((group:any)=>group.key==='favorites')).toBe(false);
+  await act(async()=>test.view.onOptions(test.view.groups[1].rows[0]));
+  expect(test.view.options.isFavorite).toBe(false);
+  expect(test.save).not.toHaveBeenCalled();
+  await mountShare(shareFavoriteSource,{offline:true});
+  expect(test.view.groups.some((group:any)=>group.key==='favorites')).toBe(false);
+  expect(test.prefs.favorites).toHaveLength(1);
+});
+it('does not offer a star when the share key cannot round-trip on the favorites channel',async()=>{
+  const favoriteSource={
+    shareId:'s'.repeat(240), memberId:'m'.repeat(240), providerId:'account', owner:{region:'global' as const},
+  };
+  expect(providerShareFavoriteWireKey(favoriteSource)).toBeNull();
+  await mountShare(favoriteSource);
+  await act(async()=>test.view.onOptions(test.view.groups[1].rows[0]));
+  expect(test.view.options.favoritesDisabled).toBe(true);
+  expect(test.save).not.toHaveBeenCalled();
 });
 
 // 供应商组(provider-groups.md §10,与桌面同口径):Mac Mini 把 Anthropic 建成了组(Mac Mini 自己 + grok-bot-vm),
@@ -1000,4 +1095,21 @@ it('saves and edits a Mobile gateway shortcut without downgrading its exact stor
   await act(async () => test.view.options.onChange({ ...test.view.options.row.config, effort: 'high' }));
   await act(async () => test.view.options.onSaveEdit());
   expect(test.prefs.favorites[0]).toMatchObject({ modelId: '["magpie-route","foo"]', effort: 'high' });
+});
+
+it('keeps a reset warning when another account makes the pool average unknown', async()=>{
+  test.quotas={account:{accountIdentity:null,source:'claude',raw:null,members:[
+    {accountIdentity:'unknown@example.test',source:'claude',raw:null},
+    {accountIdentity:'soon@example.test',source:'claude',raw:null,remaining:80,resetsAt:21600},
+  ]}};
+  await mount();
+  const quota=test.view.groups[0].quota;
+  expect(quota.remaining).toBeUndefined();
+  expect(quota.summary).toBe('models.unified.quotaUpdating');
+  expect(quota.resetDescription).toBe('models.unified.quotaResetIn · session.menu.usage.remaining');
+  expect(quota.reset).toEqual({remaining:80,time:'6h',level:'crit'});
+  expect(quota.resetSoon).toBe(true);
+  expect(quota.label).toContain('soon@example.test');
+  expect(quota.label).toContain('models.unified.quotaResetSoon');
+  expect(test.view.groups[0].rows[0].quotaLabel).toBeNull();
 });

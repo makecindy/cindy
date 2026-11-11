@@ -566,6 +566,7 @@ export function getBrowserMcpDeps(): {
   getRuntime(): BrowserControlRuntime;
   resolveProfile: NonNullable<BrowserMcpDeps['resolveProfile']>;
   getBackendScope: NonNullable<BrowserMcpDeps['getBackendScope']>;
+  getBackendKind: NonNullable<BrowserMcpDeps['getBackendKind']>;
   resolveScreenshot: NonNullable<BrowserMcpDeps['resolveScreenshot']>;
   compressInlineImage: NonNullable<BrowserMcpDeps['compressInlineImage']>;
   setBackend(kind: BackendKind): Promise<BackendKind>;
@@ -612,6 +613,7 @@ export function getBrowserMcpDeps(): {
     resolveProfile: (profile) => resolveBackendProfile(backendController.kind, profile, () =>
       activeManagedProfileName(readBrowserBackendSettings().useRealProfile)),
     getBackendScope: () => backendController.getBackendScope(),
+    getBackendKind: () => backendController.getCurrentBackendKind(),
     resolveScreenshot: (result) =>
       resolveBrowserScreenshot(result, {
         runtimeDir: process.env.XDT_BROWSER_RUNTIME_DIR,

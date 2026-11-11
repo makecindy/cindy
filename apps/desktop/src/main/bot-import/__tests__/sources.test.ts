@@ -56,7 +56,8 @@ it('indexes aliases and script subtrees while preserving dependency order and in
   const item = normalizeAutomation(source, { id: 'report', skills: ['folder', 'alias'], script: 'reports/run.py', monitor_script: 'reports/data/check.py', schedule: { kind: 'interval', minutes: 5 } }, dependencies, 'UTC');
   expect(item.view.dependsOn).toEqual(['mcp', 'skill', 'main', 'data']);
   expect(item.envDependencies?.names).toEqual(['SKILL_TOKEN', 'SCRIPT_TOKEN']);
-  expect(item.view.issues).toEqual(['SOURCE_TOOL_POLICY_NEEDS_MAPPING', 'AUTOMATION_MODEL_NEEDS_MAPPING']);
+  // A script job also stays at its source: project automations only run a prompt.
+  expect(item.view.issues).toEqual(['SOURCE_TOOL_POLICY_NEEDS_MAPPING', 'AUTOMATION_CONTEXT_NEEDS_MAPPING', 'AUTOMATION_MODEL_NEEDS_MAPPING']);
   expect(normalizeAutomation(source, { id: 'missing', script: 'reports/missing.py' }, dependencies, 'UTC').view.issues).toContain('AUTOMATION_SCRIPT_MISSING');
 });
 
@@ -74,21 +75,21 @@ it.each([
   const task = snapshot.items.find(item => item.automation)!;
   const transfer: TransferDeps = { assertOwner: vi.fn(), readReceipt: vi.fn(async () => undefined), saveReceipt: vi.fn(async () => {}),
     createCompanion: vi.fn(async () => {}), importItem: vi.fn(async () => {}), saveEnvironment: vi.fn(async () => {}), saveCheckpoint: vi.fn(async () => {}),
-    createConversation: vi.fn(async () => 'chat'), createRoutine: vi.fn(async () => 'routine'),
-    verifyAutomation: vi.fn(async () => ({ verified: true })), pauseSource: vi.fn(async () => {}), resumeSource: vi.fn(async () => {}), enableRoutine: vi.fn(async () => {}) };
+    createConversation: vi.fn(async () => 'chat'), createAutomation: vi.fn(async () => 'routine'),
+    verifyAutomation: vi.fn(async () => ({ verified: true })), pauseSource: vi.fn(async () => {}), resumeSource: vi.fn(async () => {}), enableAutomation: vi.fn(async () => {}) };
   const result = await transferCompanion(snapshot, { requestId: 'fixture-model-request', previewId: 'preview', name: 'Ada', entryIds: snapshot.items.filter(item => item.view.selected).map(item => item.view.id), takeover: true }, transfer);
-  expect(transfer.createRoutine).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ enabled: false }), expect.any(String), task);
+  expect(transfer.createAutomation).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ enabled: false }), expect.any(String), task);
   if (blocked) {
     expect(task.view.issues).toContain('AUTOMATION_MODEL_NEEDS_MAPPING');
     expect(result.checks.find(check => check.entryId === task.view.id)).toMatchObject({ status: 'needs-attention', message: 'AUTOMATION_MODEL_NEEDS_MAPPING' });
     expect(transfer.verifyAutomation).not.toHaveBeenCalled();
     expect(transfer.pauseSource).not.toHaveBeenCalled();
-    expect(transfer.enableRoutine).not.toHaveBeenCalled();
+    expect(transfer.enableAutomation).not.toHaveBeenCalled();
   } else {
     expect(task.view.issues).toBeUndefined();
     expect(result.checks.find(check => check.entryId === task.view.id)?.status).toBe('taken-over');
     expect(transfer.pauseSource).toHaveBeenCalledOnce();
-    expect(transfer.enableRoutine).toHaveBeenCalledOnce();
+    expect(transfer.enableAutomation).toHaveBeenCalledOnce();
   }
 });
 
@@ -391,7 +392,8 @@ it('preserves every script while tracking only actual entry and monitor dependen
   const reader = deps(); const [source] = await discoverImportSources(reader);
   const snapshot = await inspectImportSource(source!, reader);
   const automation = snapshot.items.find(item => item.automation)!;
-  expect(automation.view.issues).toBeUndefined();
+  // Kept for the record; the job itself stays at its source (project automations only run a prompt).
+  expect(automation.view.issues).toEqual(['AUTOMATION_CONTEXT_NEEDS_MAPPING']);
   const files = snapshot.items.filter(item => item.asset);
   expect(files.filter(item => item.view.selected).map(item => item.asset!.name).sort()).toEqual([
     'scripts/monitor/check.sh', 'scripts/monitor/data/value.txt', 'scripts/reports/daily.sh', 'scripts/reports/data/template.txt', 'scripts/reports/helper.sh', 'scripts/reports-unused/other.sh',
@@ -842,7 +844,8 @@ it('preserves native commands, heartbeat jobs and their instruction document', a
   expect(tasks).toHaveLength(3);
   expect(tasks[0]?.automation?.input).toMatchObject({ name: 'Command report', enabled: false });
   expect(tasks[0]?.automation?.original.payload).toEqual(command);
-  expect(tasks[0]?.view.issues).toBeUndefined();
+  // A native command stays at its source: project automations only run a prompt.
+  expect(tasks[0]?.view.issues).toEqual(['AUTOMATION_CONTEXT_NEEDS_MAPPING']);
   expect(tasks[1]?.automation?.input).toMatchObject({ enabled: false, triggers: [{ kind: 'interval', intervalMs: 60000 }] });
   expect(tasks[1]?.automation?.original.payload).toEqual({ kind: 'heartbeat' });
   expect(tasks[1]?.view.issues).toContain('AUTOMATION_CONTEXT_NEEDS_MAPPING');
