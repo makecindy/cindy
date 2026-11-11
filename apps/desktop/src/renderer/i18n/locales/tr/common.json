@@ -2260,7 +2260,7 @@
         "desktopBlurLabel": "Masaüstü Bulanıklığı",
         "desktopVisibilityHint": "Cindy'nin arkasındaki masaüstünü ve pencereleri gösterin. Metin ve kontroller net kalır.",
         "desktopVisibilityLabel": "Masaüstü Saydamlığı",
-        "desktopBlurSwitchHint": "Windows sistem efektini kullanarak pencerenin arkasındaki masaüstünü bulanıklaştırın. Windows 11 sürüm 22H2 veya üzeri gerekir."
+        "desktopBlurSwitchHint": "Pencerenin arkasındaki masaüstünü Windows sistem efektiyle bulanıklaştırın. Windows 11 sürüm 22H2 veya üzeri gerekir. Kapattıktan sonra değişikliğin geçerli olması için uygulamayı yeniden başlatın."
       },
       "layout": {
         "label": "Panel düzeni",
