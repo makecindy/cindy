@@ -397,6 +397,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     return result.ok;
   };
 
+  const sessionShare = createDesktopSessionShareCallbacks();
   const withAccountDataAccess = async <T>(sessionId: string | undefined, operation: (assertCurrent: () => Promise<void>) => Promise<T>): Promise<T> => {
     const dbClient = tryGetDbClient();
     const plugin = !sessionId ? getPluginHostToolCaller() : undefined;
@@ -414,7 +415,6 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     return result;
   };
 
-  const sessionShare = createDesktopSessionShareCallbacks();
   const providers = createLiziMcpProviders({
     // 先传完整内置列表；按会话启停由下面的 isEnabled 包装处理。
     enabled: BUILTIN_LIZI_MCP_IDS,
