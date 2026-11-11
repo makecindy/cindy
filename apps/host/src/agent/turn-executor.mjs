@@ -277,9 +277,18 @@ export function createTurnExecutor(deps) {
       return entry;
     } : undefined,
     linkPiUserEntry: deps.linkPiUserEntry ? (id, clientId, entryId) =>
-      historyFor(id).enqueueDurableWrite(`pi-entry-link:${id}:${clientId}`, () => {
+      historyFor(id).enqueueDurableWrite(`pi-entry-link:${id}:${clientId}`, async () => {
         deps.assertCurrent();
-        return deps.linkPiUserEntry(id, clientId, entryId);
+        try {
+          return await deps.linkPiUserEntry(id, clientId, entryId);
+        } catch (error) {
+          // This optional identity patch follows the accepted user row in the
+          // same FIFO. Catch inside it so a failed link cannot pause subsequent
+          // reply writes; Desktop likewise falls back to legacy Pi recovery.
+          log.warn('send: Pi transcript entry link failed (non-fatal)', {
+            sessionId: id, clientId, err: errorText(error),
+          });
+        }
       }) : undefined,
     readTaskSource: async id => (await readExecutionSession(id)).source ?? null,
     readHostDeviceIdentity: deps.readHostDeviceIdentity,

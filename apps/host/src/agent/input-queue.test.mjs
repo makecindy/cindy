@@ -754,6 +754,36 @@ test('Pi native entry is linked after persistence and reused by explicit retry',
   assert.equal(h.persisted.filter(row => row.clientId === 'first').length, 1);
 });
 
+// Unit, real queue/send/persistence core with a fake Pi callback: an optional
+// transcript link failure used to pause reply writes and all subsequent inputs.
+// Desktop treats this as non-fatal. The existing happy-path retry test missed
+// SQLITE_BUSY after acceptance; missing-row linking must behave the same way.
+for (const failure of ['database error', 'missing row']) {
+  test(`Pi entry ${failure} does not pause reply persistence or the next input`, async t => {
+    const h = createHarness({
+      readSession: async id => ({ id, status: 'active', agentKind: 'pi', model: 'fixture-model', workingDir: '/tmp' }),
+      linkPiUserEntry: async () => {
+        if (failure === 'database error') throw new Error('SQLITE_BUSY: database is locked');
+        return false;
+      },
+    });
+    t.after(() => h.queue.dispose());
+    await enqueue(h, 'pi-link-failure', { clientId: 'first', text: 'perform task' });
+    const session = h.maker.getSession('pi-link-failure');
+    await session.sendOptions[0].onTranscriptUserEntry('pi-native-entry');
+    assert.equal(h.queue.projection('pi-link-failure').error, null);
+    await h.queue.enqueue('pi-link-failure', { clientId: 'second', text: 'next message' });
+    session.emit({ type: 'text', data: { text: 'completed answer', isFinal: true } });
+    session.emit({ type: 'done', sessionTurnGeneration: session.generation });
+    await waitFor(() => session.sent.length === 2);
+    assert.deepEqual(session.sent, ['perform task', 'next message']);
+    assert.equal(h.persisted.filter(row => row.clientId === 'first').length, 1);
+    assert.deepEqual(h.persisted.filter(row => row.role === 'assistant').map(row => row.content), ['completed answer']);
+    assert.equal(h.queue.projection('pi-link-failure').queuePaused, false);
+    assert.equal(h.queue.projection('pi-link-failure').error, null);
+  });
+}
+
 // Shared steer must carry protected coordinator metadata and use the send
 // transaction's note memory. Prior direct Host steer lost both (unit, real queue).
 test('steer shares note memory and preserves question classification and persisted UUID', async t => {
