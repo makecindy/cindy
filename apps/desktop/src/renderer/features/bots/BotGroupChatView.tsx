@@ -1,4 +1,5 @@
 import { copyChatSelection } from '@/components/chat/chatSelectionClipboard';
+import { usePluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
 import { useProcessDisclosureScroll } from './useProcessDisclosureScroll';
 import { RemoveChatFromListButton } from './RemoveChatFromListButton';
 import { ChatInviteDialog } from './ChatInviteDialog';
@@ -222,6 +223,7 @@ export function BotGroupChatView() {
 }
 
 function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boolean }) {
+  const pluginUi = usePluginUiMessageCandidates();
   const { t, i18n } = useTranslation();
   const locale = i18n.language;
   const controlledBy = useControlledBy();
@@ -1432,6 +1434,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
               <Fragment key={adoptedKeysRef.current.get(message.id) ?? message.id}>
                 {rowLayout?.dateDivider != null ? <BotGroupDateDivider timestamp={rowLayout.dateDivider} locale={locale} /> : null}
                 <BotGroupTimelineItem
+                  pluginUi={pluginUi}
                   message={message}
                   continued={rowLayout?.continued ?? false}
                   authorName={authorName}

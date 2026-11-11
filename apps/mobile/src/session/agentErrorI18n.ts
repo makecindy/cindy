@@ -1,5 +1,5 @@
 import { parseOutputLimitDetails, isReasoningDominatedOutputLimit } from '@cindy/maker-shared';
-import { isResponsesLiteParallelToolCallsError, parseAgentErrorCode, isRemoteCompactEncryptedContentError } from '@cindy/maker-shared/error-redaction';
+import { isResponsesLiteParallelToolCallsError, localizeSubscriptionAccountError, parseAgentErrorCode, isRemoteCompactEncryptedContentError } from '@cindy/maker-shared/error-redaction';
 import { requiresAgentErrorConfigurationChange as requiresConfigurationChange } from '@cindy/maker-shared/error-redaction';
 import { i18n } from '@/i18n';
 import { describeAgentAuthError } from '@/device-link/remoteStatus';
@@ -75,6 +75,8 @@ export function localizeAgentError(
   message = '',
   outputLimit?: unknown,
 ): string | null {
+  const subscriptionGuidance = localizeSubscriptionAccountError(message, i18n.t, i18n.resolvedLanguage ?? i18n.language);
+  if (subscriptionGuidance) return subscriptionGuidance;
   if (isRemoteCompactEncryptedContentError(message, reason)) return i18n.t('session.tail.remoteCompactEncryptedContent');
   if (reason === 'yield-continuation-incomplete') return i18n.t('session.tail.executionResultUnavailable');
   if (reason === 'output-limit') {
@@ -129,5 +131,6 @@ export function remoteActionErrorI18nKey(message: string): string | null {
 }
 
 export function localizeUnclassifiedAgentError(message: string, sessionSource?: unknown): string {
-  return i18n.t(unclassifiedAgentErrorI18nKey(message, sessionSource));
+  return localizeSubscriptionAccountError(message, i18n.t, i18n.resolvedLanguage ?? i18n.language)
+    ?? i18n.t(unclassifiedAgentErrorI18nKey(message, sessionSource));
 }

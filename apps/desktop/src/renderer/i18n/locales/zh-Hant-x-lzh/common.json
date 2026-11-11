@@ -8098,6 +8098,8 @@
         "mcpUiDomains": "頁面可連之網域：{{domains}}",
         "mcpAppOnly": "唯頁面可用",
         "uiPageAccess": "頁面：{{pages}}；網域：{{domains}}；頁面可召之工具：{{tools}}",
+        "uiHost": "於 Cindy 提供介面及宿主操作",
+        "uiHostAccess": "{{subject}}：{{access}}",
         "subscribeRoutineRun": "可於君所擇之同僚例行差事運行前行檢",
         "subscribeRoutineRunDetail": "凡於「預檢」擇之之例行差事，每番觸發必先詢之。其可見差事之指令与觸發事件之內容，可令此番略過或止之，不能代君准允。",
         "subscribeScheduleRun": "可於君所擇之自動化運行前行檢",
@@ -14429,6 +14431,14 @@
       "replied": "覆書",
       "toggle": "啟閉「{{title}}」之覆書",
       "openTask": "啟差事"
+    },
+    "subscriptionAccountError": {
+      "limited": "此差事所用訂閱帳號，用量已盡。可待用量重設後再試，或另選模型來源。此差事仍繫原帳號，不自動更換。",
+      "limitedUntil": "此差事所用訂閱帳號，用量已盡，預計 {{resetAt}} 重設。可待重設後再試，或另選模型來源。此差事仍繫原帳號，不自動更換。",
+      "loginRequired": "此差事所用訂閱帳號需要重新登入。請在執行差事的電腦上重新登入該帳號，再重試。",
+      "signingIn": "此差事所用訂閱帳號正在登入，請完成登入後重試。",
+      "unavailable": "此差事所繫訂閱帳號，無法用於本次請求。請於執行差事的電腦檢查模型供方的帳號設定，或另選模型來源。",
+      "legacy": "此差事所繫訂閱帳號，暫不可用。請於執行差事的電腦檢查登入與用量，或另選模型來源。此差事不自動更換帳號。"
     }
   },
   "ccAgent": {
@@ -19390,6 +19400,12 @@
       "failed": "存之未成，請再試。",
       "restore": "復預設"
     }
+  },
+  "pluginUi": {
+    "display": "示法",
+    "original": "原文",
+    "menu": "法器頁面與指令",
+    "actionFailed": "此法器操作未成，請重試。"
   },
   "mcpApps": {
     "sharedTaskReadOnly": "此卡唯差事之主可操作。",

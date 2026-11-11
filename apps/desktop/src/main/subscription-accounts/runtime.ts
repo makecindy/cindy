@@ -822,6 +822,10 @@ export async function acquireSubscriptionAccount(
       ...a,
       paused: control ? false : a.paused,
       key: a.id,
+      loggingIn,
+      auth: info?.auth,
+      unavailable: info?.unavailable,
+      usage,
       usable: !loggingIn && info?.auth.authenticated === true && (control || (!usage.limited
         && (Boolean(binding) || latest.accounts.length < 2 || !accountCooling(state, provider, a.id, model))))
         && (control || !imported || legacyAccess?.legacyCodexAccountCanRun(imported, model, {
@@ -850,12 +854,23 @@ export async function acquireSubscriptionAccount(
     throw new Error(SUBSCRIPTION_ACCOUNTS_FULL_ERROR);
   if (!selected && !pinned && providerGroupMembersFull(members, { exclude: options.exclude }))
     throw new Error(SUBSCRIPTION_ACCOUNTS_FULL_ERROR);
-  if (!selected || !member || !member.usable || (!control && member.paused))
-    throw new Error(
-      pinned
-        ? 'The task subscription account requires login or quota reset'
-        : 'No subscription account is available',
-    );
+  if (!selected || !member || !member.usable || (!control && member.paused)) {
+    if (!pinned) throw new Error('No subscription account is available');
+    // Keep account affinity and admission unchanged; report the actual reason.
+    // Do not include identity or configDir: errors also reach shared viewers.
+    if (!member || member.unavailable || !member.auth || member.auth.errorReason === 'codex_provider_managed_auth')
+      throw new Error('[SUBSCRIPTION_ACCOUNT_UNAVAILABLE] The task subscription account is unavailable');
+    if (member.loggingIn)
+      throw new Error('[SUBSCRIPTION_ACCOUNT_SIGNING_IN] The task subscription account is signing in');
+    if (!member.auth.authenticated)
+      throw new Error('[SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED] The task subscription account requires login');
+    if (!control && member.usage.limited) {
+      const reset = member.usage.resetAtMs;
+      throw new Error('[SUBSCRIPTION_ACCOUNT_LIMITED] The task subscription account is waiting for its usage window to reset'
+        + (reset && Number.isFinite(reset) && reset > Date.now() ? `\nresetAtMs=${reset}` : ''));
+    }
+    throw new Error('[SUBSCRIPTION_ACCOUNT_UNAVAILABLE] The task subscription account cannot be used for this request');
+  }
   if (options.dryRun) return null;
   const token = randomUUID();
   const key = keyOf(provider, selected);

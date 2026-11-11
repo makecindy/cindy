@@ -8127,7 +8127,9 @@
         "mcpUi": "可在对话中显示交互页面",
         "mcpUiDomains": "页面可连接域名：{{domains}}",
         "mcpAppOnly": "仅页面可用",
-        "uiPageAccess": "页面：{{pages}}；域名：{{domains}}；页面可调用的工具：{{tools}}"
+        "uiPageAccess": "页面：{{pages}}；域名：{{domains}}；页面可调用的工具：{{tools}}",
+        "uiHost": "在 Cindy 中提供界面和宿主操作",
+        "uiHostAccess": "{{subject}}：{{access}}"
       },
       "connections": {
         "confirmTitle": "添加连接地址",
@@ -14429,6 +14431,14 @@
       "replied": "回信",
       "toggle": "展开或收起「{{title}}」的回信",
       "openTask": "打开任务"
+    },
+    "subscriptionAccountError": {
+      "limited": "此任务使用的订阅账号用量已达上限。可等用量重置后重试，或选择其他模型来源。此任务仍绑定原账号，不会自动换号。",
+      "limitedUntil": "此任务使用的订阅账号用量已达上限，预计于 {{resetAt}} 重置。可等重置后重试，或选择其他模型来源。此任务仍绑定原账号，不会自动换号。",
+      "loginRequired": "此任务使用的订阅账号需要重新登录。请在执行任务的电脑上重新登录该账号，再重试。",
+      "signingIn": "此任务使用的订阅账号正在登录，请完成登录后重试。",
+      "unavailable": "此任务绑定的订阅账号无法用于本次请求。请在执行任务的电脑上检查模型供应商中的账号设置，或选择其他模型来源。",
+      "legacy": "此任务绑定的订阅账号暂不可用。请在执行任务的电脑上检查该账号的登录与用量状态，或选择其他模型来源。此任务不会自动换号。"
     }
   },
   "ccAgent": {
@@ -19390,6 +19400,12 @@
       "failed": "保存失败，请重试。",
       "restore": "恢复默认"
     }
+  },
+  "pluginUi": {
+    "display": "显示方式",
+    "original": "原始内容",
+    "menu": "插件视图与命令",
+    "actionFailed": "未能完成这项插件操作，请重试。"
   },
   "mcpApps": {
     "sharedTaskReadOnly": "此卡片仅任务主人可操作。",

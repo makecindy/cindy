@@ -8242,7 +8242,9 @@
         "mcpUi": "Afficher des pages interactives dans la conversation",
         "mcpUiDomains": "Domaines accessibles aux pages : {{domains}}",
         "mcpAppOnly": "Page uniquement",
-        "uiPageAccess": "Pages : {{pages}} ; domaines : {{domains}} ; outils disponibles aux pages : {{tools}}"
+        "uiPageAccess": "Pages : {{pages}} ; domaines : {{domains}} ; outils disponibles aux pages : {{tools}}",
+        "uiHost": "Fournir des interfaces et des actions hôte dans Cindy",
+        "uiHostAccess": "{{subject}} : {{access}}"
       },
       "connections": {
         "confirmTitle": "Ajouter une adresse de connexion",
@@ -14630,6 +14632,14 @@
       "replied": "a répondu",
       "toggle": "Afficher ou masquer la réponse de « {{title}} »",
       "openTask": "Ouvrir la tâche"
+    },
+    "subscriptionAccountError": {
+      "limited": "Le compte avec abonnement utilisé par cette tâche a atteint sa limite d’utilisation. Attendez sa réinitialisation ou choisissez une autre source de modèles. Le compte n’est pas changé automatiquement.",
+      "limitedUntil": "Le compte avec abonnement utilisé par cette tâche a atteint sa limite d’utilisation. Réinitialisation prévue : {{resetAt}}. Attendez cette date ou choisissez une autre source de modèles. Le compte n’est pas changé automatiquement.",
+      "loginRequired": "Le compte avec abonnement utilisé par cette tâche nécessite une nouvelle connexion. Reconnectez-vous sur l’ordinateur qui exécute la tâche, puis réessayez.",
+      "signingIn": "La connexion au compte avec abonnement utilisé par cette tâche est en cours. Réessayez une fois la connexion terminée.",
+      "unavailable": "Le compte avec abonnement affecté à cette tâche ne peut pas être utilisé pour cette demande. Vérifiez le compte dans les paramètres du fournisseur de modèles sur l’ordinateur d’exécution, ou choisissez une autre source de modèles.",
+      "legacy": "Le compte avec abonnement affecté à cette tâche est indisponible. Vérifiez sa connexion et son utilisation sur l’ordinateur d’exécution, ou choisissez une autre source de modèles. Le compte n’est pas changé automatiquement."
     }
   },
   "ccAgent": {
@@ -19636,6 +19646,12 @@
       "failed": "Impossible d'enregistrer. Réessayez.",
       "restore": "Réinitialiser"
     }
+  },
+  "pluginUi": {
+    "display": "Affichage",
+    "original": "Original",
+    "menu": "Vues et commandes du plugin",
+    "actionFailed": "Cette action du plugin n’a pas pu être effectuée. Réessayez."
   },
   "mcpApps": {
     "sharedTaskReadOnly": "Seul le propriétaire de la session peut interagir avec cette carte.",
