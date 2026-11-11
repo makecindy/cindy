@@ -184,6 +184,7 @@ vi.mock('@/lib/makerChatStore', () => ({
 }));
 
 import { TodaySpendChip } from '../TodaySpendChip';
+import { SessionSubscriptionAccountProvider } from '@/components/new-chat/SessionSubscriptionAccount';
 
 function renderRemoteChip(providerId: string | null) {
   return render(
@@ -670,5 +671,100 @@ describe('existing UI with remote account data', () => {
       modelId="claude-fable-5[1m]" deviceLinkDeviceId="device-abc" />);
     expect(container.textContent).toContain('5h 剩余 88%');
     expect(mocks.remoteProviderIds).toContain('second-account');
+  });
+});
+
+// 2026-11-11 user report (unit/jsdom): with several subscription accounts, the usage under the
+// composer showed the CLI default account (this computer) or the next pool pick (a provider-group
+// computer), not the account the task is pinned to. Existing chip cases have one account per
+// provider. Minimal input: the default/next pick at 90% 5h used, the task's account at 30%.
+describe('TodaySpendChip on a subscription account pool', () => {
+  it.each([
+    { where: 'this computer', deviceId: null },
+    { where: 'a provider-group computer', deviceId: 'device-abc' },
+  ])('shows the task account and its quota on $where', async ({ deviceId }) => {
+    const reply = {
+      providerId: 'anthropic',
+      state: 'bound',
+      account: {
+        isDefault: false, number: 2, identity: 'b@example.test', paused: false, status: 'ready',
+        usage: { claude: { source: 'oauth-endpoint', fiveHour: { utilization: 30 } } },
+      },
+    };
+    const defaultAccount = { id: 'anthropic', subscriptionAccount: { source: 'local' as const, identity: 'a@example.test' } };
+    mocks.localProviders = [defaultAccount];
+    mocks.deviceProviders = [defaultAccount];
+    mocks.localClaudeSnapshot = { source: 'oauth-endpoint', fiveHour: { utilization: 90 } };
+    mocks.remoteClaudeSnapshot = { source: 'oauth-endpoint', fiveHour: { utilization: 90 } };
+    const sessionAccount = vi.fn().mockResolvedValue(reply);
+    const invoke = vi.fn().mockResolvedValue(reply);
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        openExternal: mocks.openExternal,
+        subscriptionAccounts: { sessionAccount, onChanged: () => () => {} },
+        deviceLink: { invoke, onPresenceChanged: () => () => {}, onStatusChanged: () => () => {} },
+      },
+    });
+    const { container } = render(
+      <SessionSubscriptionAccountProvider providerId="anthropic" deviceId={deviceId} sessionId="session-pool" nativeSessionId={`sdk-${deviceId}`}>
+        <TodaySpendChip vendorKey="cc" providerId="anthropic" modelId="claude-fable-5[1m]" sessionId="session-pool"
+          {...(deviceId ? { deviceLinkDeviceId: deviceId } : {})} />
+      </SessionSubscriptionAccountProvider>,
+    );
+    // While the executing computer is asked, the other account's quota is not shown.
+    expect(container.textContent).not.toContain('10%');
+    await act(async () => {});
+    expect(container.textContent).toContain('5h 剩余 70%');
+    expect(container.textContent).not.toContain('10%');
+    fireEvent.mouseEnter(screen.getAllByRole('button')[0]);
+    act(() => vi.advanceTimersByTime(300));
+    const card = screen.getByTestId('quota-hover-card');
+    expect(card.textContent).toContain('b@example.test');
+    expect(card.textContent).not.toContain('a@example.test');
+    expect(deviceId ? invoke : sessionAccount).toHaveBeenCalled();
+  });
+
+  // 2026-11-11 user report on a real group: the executing Mac ran an older build without the
+  // task-account action, so the chip fell back to the default-account read (its first account,
+  // weekly 0% left) while the task was pinned elsewhere. Older hosts (2026-11-07+) still answer
+  // the reset lookup's native-session scope; it must be used instead of the default read.
+  it.each(['anthropic', 'openai'] as const)('reads the %s task account through the native-session scope on an older executing computer', async (providerId) => {
+    const claude = providerId === 'anthropic';
+    const channel = claude ? 'maker:usage:claude-subscription' : 'maker:usage:account';
+    mocks.deviceProviders = [{ id: providerId, subscriptionAccount: { source: 'local', identity: 'a@example.test' } }];
+    mocks.remoteClaudeSnapshot = { source: 'oauth-endpoint', fiveHour: { utilization: 90 } };
+    mocks.remoteCodexPayload = { primary: { usedPercent: 90, windowMinutes: 300 } };
+    const invoke = vi.fn(async (_device: string, requestedChannel: string, args: unknown[]) => {
+      if (requestedChannel === 'maker:subscription-accounts') throw new Error('[INVALID_PARAMS] Invalid account command');
+      if (requestedChannel === channel && (args[2] as { subscriptionSessionId?: string })?.subscriptionSessionId === 'sdk-on-mac')
+        return claude
+          ? { providerId, fiveHour: { utilization: 30 } }
+          : { providerId, primary: { usedPercent: 30, windowMinutes: 300, resetsAt: null } };
+      return null;
+    });
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        openExternal: mocks.openExternal,
+        subscriptionAccounts: { onChanged: () => () => {} },
+        deviceLink: { invoke, onPresenceChanged: () => () => {}, onStatusChanged: () => () => {} },
+      },
+    });
+    const { container } = render(
+      <SessionSubscriptionAccountProvider providerId={providerId} deviceId="mac-mini" sessionId="task-1" nativeSessionId="sdk-on-mac">
+        <TodaySpendChip vendorKey={claude ? 'cc' : 'codex'} providerId={providerId} modelId={claude ? 'claude-opus-5-5' : 'gpt-5.5'} sessionId="task-1"
+          usageAccount={{ kind: 'device', deviceId: 'mac-mini' }} />
+      </SessionSubscriptionAccountProvider>,
+    );
+    await act(async () => {});
+    expect(container.textContent).toContain('5h 剩余 70%');
+    expect(container.textContent).not.toContain('10%');
+    expect(invoke).toHaveBeenCalledWith('mac-mini', channel,
+      [claude ? providerId : 'codex', claude ? false : providerId, { subscriptionSessionId: 'sdk-on-mac' }]);
+    // The default account's name is not shown for an account it could not name.
+    fireEvent.mouseEnter(screen.getAllByRole('button')[0]);
+    act(() => vi.advanceTimersByTime(300));
+    expect(screen.getByTestId('quota-hover-card').textContent).not.toContain('a@example.test');
   });
 });

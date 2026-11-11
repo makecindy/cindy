@@ -20059,6 +20059,7 @@
   },
   "subscriptionAccounts": {
     "unassigned": "Cuenta sin asignar",
+    "boundUnavailable": "Cuenta no disponible",
     "providerManagedAuth": "El proveedor actual de Codex no permite consultar la cuenta de ChatGPT. Al añadir el proveedor, elige «$t(subscriptionAccounts.signIn.anotherAccount)» para usar una carpeta independiente.",
     "signIn": {
       "checking": "Comprobando la cuenta local…",

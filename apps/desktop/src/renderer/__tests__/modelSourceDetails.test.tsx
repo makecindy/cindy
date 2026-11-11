@@ -74,6 +74,7 @@ import {
   ModelSourceDetails,
   ModelSourceUsageProvider,
 } from '@/components/new-chat/ModelSourceDetails';
+import { SessionSubscriptionAccountProvider } from '@/components/new-chat/SessionSubscriptionAccount';
 
 const quotaText = (text: string) => (_: string, node: Element | null) =>
   node?.textContent === text &&
@@ -637,4 +638,71 @@ it('shows Kimi remaining quota on its own model source without borrowing Codex u
   expect(view.container.textContent).not.toContain('Pro');
   expect(fetchUsage).toHaveBeenCalledTimes(1);
   expect(reads.codex.mock.calls.some(([enabled]) => enabled)).toBe(false);
+});
+
+// 2026-11-11 user report (unit/jsdom): in an existing task pinned to the pool's second account,
+// the model row named the CLI default account and showed its quota; a group member answered with
+// its next pool pick. Draft-pool tests above only cover new tasks, never a task's own binding.
+// Minimal input: the default account at 93% weekly used and the task's account at 20%.
+describe('model source for an existing task on a subscription account pool', () => {
+  const bound = {
+    providerId: 'anthropic',
+    state: 'bound',
+    account: {
+      isDefault: false, number: 2, identity: 'b@example.test', plan: 'max', paused: false, status: 'ready',
+      usage: { claude: { sevenDay: { utilization: 20, resetsAt: now / 1000 + 86400 } } },
+    },
+  };
+  function mount(deviceId: string | null, reply: () => Promise<unknown>) {
+    const sessionAccount = vi.fn(reply);
+    const unconfigured = { providerId: 'anthropic', configured: false, accounts: [] };
+    const command = vi.fn(async () => unconfigured);
+    const invoke = vi.fn(async (_device: string, channel: string, args: { action?: string }[]) =>
+      channel === 'maker:subscription-accounts' && args[0]?.action === 'session'
+        ? reply()
+        : unconfigured,
+    );
+    Object.assign(window, { electronAPI: {
+      subscriptionAccounts: { sessionAccount, command, onChanged: () => () => {} },
+      deviceLink: { invoke, onPresenceChanged: () => () => {}, onStatusChanged: () => () => {} },
+    } });
+    const view = render(
+      <SessionSubscriptionAccountProvider providerId="anthropic" deviceId={deviceId} sessionId={`task-${deviceId}`} nativeSessionId="sdk-1">
+        <ModelSourceUsageProvider providers={[provider('anthropic', 'claude')]} scope={{ deviceId }}>
+          <ModelSourceDetails providerId="anthropic" label="Claude" accountIdentity="a@example.test" modelId="claude-sonnet" />
+        </ModelSourceUsageProvider>
+      </SessionSubscriptionAccountProvider>,
+    );
+    return { view, sessionAccount, invoke };
+  }
+  beforeEach(() => {
+    reads.claudeSnapshot = { subscriptionType: 'pro', sevenDay: { utilization: 93 } };
+    reads.remoteClaude.mockReturnValue({ subscriptionType: 'pro', sevenDay: { utilization: 93 } });
+  });
+
+  it.each([null, 'group-member'])('names the pinned account and reads only its quota (device %s)', async (deviceId) => {
+    const { view, sessionAccount, invoke } = mount(deviceId, async () => bound);
+    // Until the executing computer answers, nothing of the default account is shown.
+    expect(view.container.textContent).not.toMatch(/a@example|7%/);
+    await act(async () => {});
+    expect(view.container.textContent).toContain('b@example.test · Max');
+    expect(view.container.textContent).toContain('80%');
+    expect(view.container.textContent).not.toMatch(/a@example|Pro|7%/);
+    expect(reads.claude).not.toHaveBeenCalledWith(true, 'anthropic');
+    expect(reads.remoteClaude).not.toHaveBeenCalledWith('group-member', 'anthropic');
+    const query = { action: 'session', providerId: 'anthropic', sessionId: `task-${deviceId}`, nativeSessionId: 'sdk-1' };
+    if (deviceId) expect(invoke).toHaveBeenCalledWith(deviceId, 'maker:subscription-accounts', [query]);
+    else expect(sessionAccount).toHaveBeenCalledWith(query);
+  });
+
+  // Protocol fallback: no pool / the default account answer `legacy`; older hosts reject the action.
+  it.each([
+    ['no pool', async () => ({ providerId: 'anthropic', state: 'legacy' })],
+    ['an older host', async () => { throw new Error('INVALID_PARAMS'); }],
+  ] as const)('keeps the original account reader for %s', async (_case, reply) => {
+    const { view } = mount(null, reply);
+    await act(async () => {});
+    expect(view.container.textContent).toContain('a@example.test · Pro');
+    expect(view.container.textContent).toContain('7%');
+  });
 });
