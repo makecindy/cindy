@@ -48,7 +48,7 @@ export type SidebarVisibilityRequest = 'open' | 'close';
  * Omitting `sessionId` means "current session" — used by direct UI buttons
  * (e.g. the toggle in ContentHeader doesn't know about cross-session state).
  *
- * `animate`: false tells the subscriber not to prime the RightSidebar 250ms
+ * `animate`: false tells the subscriber not to prime the RightSidebar 200ms
  * transition for this request. Omitted keeps the existing behavior and is
  * equivalent to true.
  */
