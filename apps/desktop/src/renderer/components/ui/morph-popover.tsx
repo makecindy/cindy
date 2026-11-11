@@ -724,6 +724,7 @@ export function MorphPopover({
     <TransientLayerRoot layer={layer}>
       <span
         ref={wrapRef}
+        data-transient-morph-trigger=""
         className={cn('relative inline-flex', wrapperClassName)}
         onPointerDownCapture={() => {
           pointerInteractionRef.current = true;

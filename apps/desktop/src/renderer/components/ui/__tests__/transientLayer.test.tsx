@@ -2,14 +2,14 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useRef, useState, type ReactNode } from 'react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { Popover, PopoverContent, PopoverTrigger } from '../popover';
+import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '../popover';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '../dropdown-menu';
-import { Tip } from '../tooltip';
+import { Tip, Tooltip } from '../tooltip';
 import { SelectParts } from '../select-parts';
 import { MorphPopover } from '../morph-popover';
 
@@ -226,6 +226,59 @@ describe('page transient layers', () => {
     expect(screen.queryByRole('tooltip', { name: 'Readers hint' })).toBeNull();
   });
 
+  // r4535034311 / DESIGN §14.6: a Popover can own an interactive toolbar.
+  // Its anchor's other controls retain labels; only the actual trigger is suppressed.
+  // The two asChild orders and public Tooltip API have different ref/prop forwarding.
+  it.each(['tip-outside', 'tip-inside', 'generic'] as const)(
+    'keeps sibling control hints when only the transient trigger is open (%s)',
+    async (order) => {
+      const triggerRef = { current: null as HTMLButtonElement | null };
+      const button = <button ref={triggerRef}>Transcript</button>;
+      const trigger = <PopoverTrigger asChild>{button}</PopoverTrigger>;
+      render(
+        <Popover>
+          <PopoverAnchor asChild>
+            <section>
+              {order === 'generic' ? (
+                <Tooltip.Provider>
+                  <Tooltip.Root open>
+                    <Tooltip.Trigger asChild>{trigger}</Tooltip.Trigger>
+                    <Tooltip.Content>Transcript hint</Tooltip.Content>
+                  </Tooltip.Root>
+                </Tooltip.Provider>
+              ) : order === 'tip-outside' ? (
+                <Tip text="Transcript hint" forceOpen>
+                  {trigger}
+                </Tip>
+              ) : (
+                <PopoverTrigger asChild>
+                  <Tip text="Transcript hint" forceOpen>
+                    {button}
+                  </Tip>
+                </PopoverTrigger>
+              )}
+              <Tip text="Mute hint" forceOpen>
+                <button aria-pressed={false}>Mute</button>
+              </Tip>
+              <Tip text="Disclosure hint" forceOpen>
+                <button aria-expanded>Disclosure</button>
+              </Tip>
+            </section>
+          </PopoverAnchor>
+          <PopoverContent onOpenAutoFocus={(event) => event.preventDefault()}>
+            Transcript content
+          </PopoverContent>
+        </Popover>,
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Transcript' }));
+      await screen.findByRole('dialog');
+      expect(screen.getByRole('tooltip', { name: 'Mute hint' })).toBeTruthy();
+      expect(screen.getByRole('tooltip', { name: 'Disclosure hint' })).toBeTruthy();
+      expect(screen.queryByRole('tooltip', { name: 'Transcript hint' })).toBeNull();
+      expect(triggerRef.current).toBe(screen.getByRole('button', { name: 'Transcript' }));
+    },
+  );
+
   it('includes Select panels in the same branch and keeps focus on the new option', async () => {
     render(
       <>
@@ -262,7 +315,11 @@ describe('page transient layers', () => {
           open={open}
           onOpenChange={setOpen}
           panelAriaLabel="Morph panel"
-          trigger={<button onClick={() => setOpen((value) => !value)}>Morph</button>}
+          trigger={
+            <Tip text="Morph hint" forceOpen>
+              <button onClick={() => setOpen((value) => !value)}>Morph</button>
+            </Tip>
+          }
         >
           <button>Morph action</button>
         </MorphPopover>
@@ -276,6 +333,7 @@ describe('page transient layers', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: 'Morph' }));
     await screen.findByRole('group', { name: 'Morph panel' });
+    expect(screen.queryByRole('tooltip', { name: 'Morph hint' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Readers' }));
     await screen.findByRole('dialog');
     await waitFor(() =>
