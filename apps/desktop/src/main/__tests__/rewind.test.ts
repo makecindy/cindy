@@ -215,6 +215,7 @@ beforeEach(() => {
   setLastAssistantTranscriptUuidMock.mockClear();
   previewRewindFilesMock.mockReset();
   commitRewindFilesMock.mockReset();
+  syncBackgroundCommandWorkMock.mockClear();
   commitRewindFilesMock.mockResolvedValue(undefined);
   executeCodexFileRewindPlanWithThreadRollbackMock.mockReset();
   executeCodexFileRewindPlanWithThreadRollbackMock.mockImplementation(
