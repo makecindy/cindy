@@ -1247,12 +1247,9 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         import: (context, filePath) => withAccountDataAccess(context.sessionId, async assertCurrent => {
           const sessionId = context.sessionId;
           if (!sessionId) throw new Error('Task caller unavailable');
-          const surface = await resolveHelperSurface(tryGetDbClient()!, sessionId);
-          const botGuard = surface === 'bot' || surface === 'bot-main' ? await captureBotSettingsAccess(sessionId) : undefined;
           const assertAction = captureTaskActionSyncGuard();
           const assertCaller = async () => {
             await assertCurrent();
-            if (botGuard) await botGuard();
             await assertTaskActionCurrent();
             if (!deps.isCurrentLocalSessionInstance?.(sessionId, context.sessionInstanceId)) throw new Error('Task instance changed');
           };

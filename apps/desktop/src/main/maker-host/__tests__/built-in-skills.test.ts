@@ -124,9 +124,9 @@ describe('built-in Skills', () => {
 
   // Unit: older releases shipped three Skills. A missing new resource must not
   // make those authenticated, already-active Skills disappear during upgrade.
-  it.each(['success', 'missing-source'] as const)('upgrades the pre-theme bundle without losing existing Skills (%s)', async (mode) => {
+  it.each([83, 97].flatMap(bundleVersion => ['success', 'missing-source'].map(mode => ({ bundleVersion, mode }))))('upgrades the pre-theme bundle $bundleVersion without losing existing Skills ($mode)', async ({ bundleVersion, mode }) => {
     const input = fixture();
-    const previous = await prepareBuiltInSkills({ ...input, bundleVersion: 83 });
+    const previous = await prepareBuiltInSkills({ ...input, bundleVersion });
     const theme = previous.descriptors.find((item) => item.name === 'cindy-theme-creator')!;
     const manifestPath = path.join(input.appDataDir, 'Cindy', 'shared-system-skills', '.cindy-system-skills.json');
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
