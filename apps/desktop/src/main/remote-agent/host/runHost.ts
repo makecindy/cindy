@@ -523,6 +523,8 @@ interface Run {
   localWs?: Set<string>;
   /** Product turn awaiting done/terminal error; shared by local and relayed execution. */
   activeTurn?: boolean;
+  /** Stop fences queued foreground output until its terminal or a new send. */
+  abortRequested?: boolean;
   /** 本机 Agent 上一次报来的「正在运行一轮」。 */
   turnRunning?: boolean;
   /** 同一次发送的限额 RPC 失败与终态事件共用一次交付，下一次发送时作废。 */
@@ -1813,8 +1815,11 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     try {
       for await (const event of handle.events()) {
         if (run.closing) break;
-        if (startsRemoteProductTurn(event)) run.activeTurn = true;
-        if (event.turnScope !== 'background' && (event.type === 'done' || isTerminalAgentErrorEvent(event))) run.activeTurn = false;
+        if (!run.abortRequested && startsRemoteProductTurn(event)) run.activeTurn = true;
+        if (event.turnScope !== 'background' && (event.type === 'done' || isTerminalAgentErrorEvent(event))) {
+          run.activeTurn = false;
+          run.abortRequested = false;
+        }
         meterRunUsage(run, handle.model, event);
         const failure = relayRunFailureOf(event);
         if (failure && isAccountUsageLimitError(failure)) {
@@ -2104,8 +2109,12 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
    * 之前因故换下、现在已恢复的电脑又能接手。标记只在本机读，去掉后再交给 Agent 或转给组内电脑。
    */
   function takeGroupNewRound(run: Run, callId: string, method: RemoteAgentMethod, args: unknown[]): unknown[] {
-    if (method === 'abort') run.activeTurn = false;
+    if (method === 'abort') {
+      run.abortRequested = true;
+      run.activeTurn = false;
+    }
     if (method === 'send') {
+      run.abortRequested = false;
       run.activeTurn = true;
       run.quotaFailure = undefined;
       run.lastSendCallId = callId;
@@ -2273,8 +2282,11 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           };
           const failure = relayRunFailureOf(event);
           const typed = event as AgentEvent;
-          if (startsRemoteProductTurn(typed)) run.activeTurn = true;
-          if (typed.turnScope !== 'background' && (typed.type === 'done' || failure)) run.activeTurn = false;
+          if (!run.abortRequested && startsRemoteProductTurn(typed)) run.activeTurn = true;
+          if (typed.turnScope !== 'background' && (typed.type === 'done' || failure)) {
+            run.activeTurn = false;
+            run.abortRequested = false;
+          }
           if (failure) {
             turnFailed = true;
             if (!held || isAccountUsageLimitError(failure)) {

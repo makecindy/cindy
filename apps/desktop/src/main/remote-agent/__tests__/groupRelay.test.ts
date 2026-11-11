@@ -2156,6 +2156,39 @@ describe('provider group "switch to another computer" for shared users', () => {
     } finally { await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose(); }
   });
 
+  it.each((['local', 'member'] as const).flatMap(placement =>
+    (['text-tail', 'tool-tail', 'new-send', 'automatic-turn'] as const).map(mode => ({ placement, mode }))))(
+    'preserves cancellation while draining $placement $mode', async ({ placement, mode }) => {
+      const env = setup({ plans: [placement === 'local' ? { kind: 'local' } : { kind: 'member', ...MEMBER_MINI },
+        { kind: 'member', ...MEMBER_STUDIO }] });
+      const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+      try {
+        await guest.client.call('send', [{ content: 'first', attachments: [] }, {}]);
+        const record = placement === 'local' ? env.ownerStarted[0] : env.memberStarted.mini[0];
+        await guest.client.call('abort', []);
+        const tail = mode === 'tool-tail'
+          ? { type: 'tool_use', source: 'claude-code', data: { id: 'late-tool', name: 'late-tool', input: {} } }
+          : { type: 'text', source: 'claude-code', data: { text: 'late cancellation tail' } };
+        record.emit(tail as AgentEvent);
+        await waitFor(() => guest.stream.some(item => item.t === 'event'
+          && (item.event.data as { text?: string; id?: string })?.[mode === 'tool-tail' ? 'id' : 'text']
+            === (mode === 'tool-tail' ? 'late-tool' : 'late cancellation tail')));
+        if (mode === 'new-send') await guest.client.call('send', [{ content: 'second', attachments: [] }, {}]);
+        if (mode === 'automatic-turn') {
+          record.emit({ type: 'done', source: 'claude-code', data: { status: 'cancelled' } } as AgentEvent);
+          record.emit({ type: 'status', source: 'claude-code', data: { isRunning: true, providerInitiatedTurn: true } } as AgentEvent);
+          await waitFor(() => guest.stream.some(item => item.t === 'event'
+            && (item.event.data as { providerInitiatedTurn?: boolean })?.providerInitiatedTurn));
+        }
+        record.end();
+        await waitFor(() => guest.isClosed());
+        const unfinished = mode === 'new-send' || mode === 'automatic-turn';
+        expect(env.relay.noteRunFailure).toHaveBeenCalledTimes(unfinished ? 1 : 0);
+        expect(switchTokenIn(guest.stream) !== undefined).toBe(unfinished);
+        expect(record.sends).toHaveLength(mode === 'new-send' ? 2 : 1);
+      } finally { await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose(); }
+    });
+
   it.each(['done', 'abort', 'new-send', 'provider-start'])('uses product terminals rather than late busy snapshots after %s', async mode => {
     const env = setup({ plans: [{ kind: 'member', ...MEMBER_MINI }, { kind: 'member', ...MEMBER_STUDIO }] });
     const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
