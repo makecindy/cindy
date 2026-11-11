@@ -46,6 +46,8 @@ interface WallpaperSettingsContextValue extends WallpaperSettings {
   downloadProgress: number;
   retryDownload: () => void;
   visibility: number;
+  /** Last nonzero saved blur; survives settings-section remounts (default 10). */
+  lastBlur: number;
   setWallpaper: (id: WallpaperId) => void;
   setVisibility: (value: number) => void;
   previewVisibility: (value: number | null) => void;
@@ -95,6 +97,8 @@ export function WallpaperSettingsProvider({
   const [blurPreview, setBlurPreview] = useState<number | null>(null);
   const [visibilityPreview, setVisibilityPreview] = useState<number | null>(null);
   const [failedUrl, setFailedUrl] = useState('');
+  const lastBlurRef = useRef(10);
+  if (settings.wallpaperBlur) lastBlurRef.current = settings.wallpaperBlur;
   const onPlaybackFailure = useCallback(
     () => setFailedUrl(settings.customWallpaperUrl ?? ''),
     [settings.customWallpaperUrl],
@@ -277,6 +281,7 @@ export function WallpaperSettingsProvider({
       ...settings,
       wallpaperBlur: blurPreview ?? settings.wallpaperBlur,
       visibility,
+      lastBlur: lastBlurRef.current,
       playbackFailed: !!failedUrl && failedUrl === settings.customWallpaperUrl,
       downloadPending,
       downloadFailed,
@@ -300,6 +305,7 @@ export function WallpaperSettingsProvider({
       blurPreview,
       setWallpaper,
       settings,
+      settings.wallpaperBlur,
       failedUrl,
       visibility,
       downloadPending,

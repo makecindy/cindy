@@ -36,6 +36,7 @@ export function WallpaperSection() {
     wallpaperOverlay,
     wallpaperVisibility,
     wallpaperBlur,
+    lastBlur,
     visibility,
     wallpaperMotion,
     customWallpaperUrl,
@@ -83,10 +84,8 @@ export function WallpaperSection() {
   }, [visibility, previewBlur]);
   // Windows has a single system Acrylic strength, so desktop blur is on/off there.
   // Artwork blur stays graded; both share wallpaperBlur, so re-enabling restores
-  // the last nonzero strength instead of jumping to a fixed value.
+  // the last nonzero strength (kept in the provider, which outlives this section).
   const desktopBlurSwitch = wallpaperId === 'none' && window.electronAPI?.platform === 'win32';
-  const lastBlur = useRef(10);
-  if (wallpaperBlur) lastBlur.current = wallpaperBlur;
   const customVideo = isCustomWallpaperVideo(customWallpaperUrl);
   const downloading = isCdnWallpaper(wallpaperId) && downloadPending;
   const retryable = isCdnWallpaper(wallpaperId) && downloadFailed && !downloadPending;
@@ -452,7 +451,7 @@ export function WallpaperSection() {
               <Switch data-setting-id={appearanceSettings.wallpaperCustomChoose.id}
                 checked={visibility > 0 && Boolean(wallpaperBlur)}
                 disabled={visibility === 0}
-                onCheckedChange={(checked) => setBlur(checked ? lastBlur.current : 0)}
+                onCheckedChange={(checked) => setBlur(checked ? lastBlur : 0)}
                 aria-label={t('settings.appearance.wallpaper.desktopBlurLabel')}
               />
             }

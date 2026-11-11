@@ -292,7 +292,7 @@ describe('wallpaper blur gesture persistence', () => {
   it('uses an on/off switch for desktop blur on Windows and restores the last strength', async () => {
     (window.electronAPI as { platform: string }).platform = 'win32';
     saved = { ...saved, wallpaperId: 'none', desktopVisibility: 0.4, wallpaperBlur: 7 };
-    render(view());
+    const rendered = render(view());
     expect(screen.queryByRole('slider', { name: 'settings.appearance.wallpaper.desktopBlurLabel' })).toBeNull();
     const toggle = screen.getByRole('switch', { name: 'settings.appearance.wallpaper.desktopBlurLabel' });
     expect(toggle.getAttribute('aria-checked')).toBe('true');
@@ -300,6 +300,13 @@ describe('wallpaper blur gesture persistence', () => {
     await waitFor(() => expect(setPatch).toHaveBeenLastCalledWith({ wallpaperBlur: 0 }));
     expect(toggle.getAttribute('aria-checked')).toBe('false');
     fireEvent.click(toggle);
+    await waitFor(() => expect(setPatch).toHaveBeenLastCalledWith({ wallpaperBlur: 7 }));
+    // Leaving the Appearance tab unmounts the section; the strength must survive it.
+    fireEvent.click(toggle);
+    await waitFor(() => expect(setPatch).toHaveBeenLastCalledWith({ wallpaperBlur: 0 }));
+    rendered.rerender(view(false));
+    rendered.rerender(view());
+    fireEvent.click(screen.getByRole('switch', { name: 'settings.appearance.wallpaper.desktopBlurLabel' }));
     await waitFor(() => expect(setPatch).toHaveBeenLastCalledWith({ wallpaperBlur: 7 }));
     act(() => changed({ ...saved, wallpaperId: 'cindy-window' }));
     expect(thumb().getAttribute('aria-valuenow')).toBe('7');
