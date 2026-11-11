@@ -122,6 +122,14 @@ NODE_OPTIONS=--max-old-space-size=12288 node docs/performance/plugin-platform-se
 378 项已通过。MCP dispatcher / provider 两文件 66 / 66 通过。后续门禁结果另随提交记录更新。
 新增短路与确认生命周期三文件 16 / 16；Node Host 的 tools、server、plugins、input-queue
 四文件 82 / 82。Desktop / Host 类型检查、i18n 与术语检查、文档 11 / 11 及 Skill 105 检查通过。
+本地其余 CI 对应检查已跑：test-hygiene、settings-search、design-colors/inventory、endpoints、
+brand、Desktop/Mobile/maker-core guards、Device Link 编译及互通 10 / 10、迁移、scheduler guard
+和 Mobile scope 均通过。Mobile typecheck 在本机有既有的 7 处 Agent-Net `timer.unref` TS2339，
+相关源文件相对基线无 diff。runner 自测为 732 通过、2 跳过、1 失败：
+`whoami attributes a shared personal shell to its business checkout` 的 fixture 使用固定 app 路径，
+原 `scripts/desktop-whoami.mjs:194` 仅识别工作树的 node_modules/electron，返回空列表。
+生产脚本及测试与 `2c0e66c8ac`、核对时的 `origin/main` 均相同；该项只在 macOS 运行，
+CI verify-checks 使用 Ubuntu。未修改这些基线问题，也未将本地门禁描述为全绿。
 以下是此前基线的验证记录，不代表已在新基线全部重跑：
 
 - Desktop 七个服务测试文件：307 / 307，5.31 秒；包含文件、网络、存储、PTY、gateway、catalog、花名册路由。
