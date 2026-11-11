@@ -185,10 +185,10 @@ describe('PlanActionCard 快捷键不跟着菜单一起触发', () => {
 });
 
 describe('AskUserQuestionPrompt 数字键只在无人认领时作答', () => {
-  function renderAsk(onAnswer = vi.fn()) {
+  function renderAsk(onAnswer = vi.fn(), multiSelect = false) {
     render(createElement('div', null, createElement(Elsewhere), createElement(AskUserQuestionPrompt, {
       sessionId: 's1',
-      pending: {requestId: 'q1', questions: [{question: 'Which?', options: [{label: 'A'}, {label: 'B'}]}]},
+      pending: {requestId: 'q1', questions: [{question: 'Which?', multiSelect, options: [{label: 'A'}, {label: 'B'}]}]},
       onAnswer,
       viewerState: 'expanded',
       onViewerStateChange: () => {},
@@ -209,6 +209,16 @@ describe('AskUserQuestionPrompt 数字键只在无人认领时作答', () => {
     const onAnswer = renderAsk();
     keyOn(document.body, '2');
     expect(onAnswer).toHaveBeenCalledWith('q1', {'Which?': 'B'});
+  });
+
+  it('多选项是原生复选框：焦点停在选项上时，数字键仍切换选项、Esc 仍跳过', () => {
+    const onAnswer = renderAsk(vi.fn(), true);
+    const [first, second] = screen.getAllByRole('checkbox') as HTMLInputElement[];
+    first.focus();
+    keyOn(first, '2');
+    expect(second.checked).toBe(true);
+    keyOn(first, 'Escape');
+    expect(onAnswer).toHaveBeenCalled();
   });
 });
 
