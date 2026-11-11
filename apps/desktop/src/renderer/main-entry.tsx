@@ -140,8 +140,11 @@ if (!rootElement) {
 const root = createRoot(rootElement);
 
 void (async () => {
-  await migrateStoredThemeSelection();
-  presentTheme(getInitialThemeVariant().theme);
+  const migration = migrateStoredThemeSelection();
+  if (typeof migration !== 'boolean') {
+    await migration;
+    presentTheme(getInitialThemeVariant().theme);
+  }
   const disposeAppearancePresenter = installAppearancePresenter(applyFontSettings);
   import.meta.hot?.dispose(disposeAppearancePresenter);
   if (isComputerPermissionBackdrop) {

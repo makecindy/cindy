@@ -22,13 +22,14 @@ const colorVariables: Record<PluginAppearanceColor, string[]> = {
 
 // Consume the generated values, not OS-reduced computed durations or already
 // scaled document values. Restoring motion/density must never compound scales.
-const baseTokens = Object.entries(SCALABLE_APPEARANCE_TOKENS);
 function css(settings: AppearanceSettings, dark: boolean): string {
   const declarations: string[] = [], rules: string[] = [];
   const spacing: string[] = [], motion: string[] = [];
-  for (const [key, { value, unit }] of baseTokens) {
-    if (key.startsWith('--space-') && settings.density !== 1) spacing.push(`${key}:${value * settings.density}${unit}`);
-    if (key.startsWith('--motion-') && settings.motion !== 1) motion.push(`${key}:${value * settings.motion}${unit}`);
+  if (settings.density !== 1 || settings.motion !== 1) {
+    for (const [key, { value, unit }] of Object.entries(SCALABLE_APPEARANCE_TOKENS)) {
+      if (key.startsWith('--space-') && settings.density !== 1) spacing.push(`${key}:${value * settings.density}${unit}`);
+      if (key.startsWith('--motion-') && settings.motion !== 1) motion.push(`${key}:${value * settings.motion}${unit}`);
+    }
   }
   if (spacing.length) rules.push(`:root{${spacing.join(';')}}`);
   if (motion.length) rules.push(`@media (prefers-reduced-motion:no-preference){:root{${motion.join(';')}}}`);
@@ -176,6 +177,7 @@ export function installAppearancePresenter(applyFonts: (settings: AppearanceSett
     if (key !== lastFonts) { lastFonts = key; applyFonts(settings); }
   };
   const dark = () => document.documentElement.classList.contains('dark');
+  let appliedDark = dark();
   const clearStyle = () => { observer?.disconnect(); observer = undefined; style?.remove(); style = null; };
   const apply = (raw: AppearanceSettings): Promise<'applied' | 'saved' | 'failed'> => {
     const settings = normalizeAppearanceSettings(raw);
@@ -187,9 +189,16 @@ export function installAppearancePresenter(applyFonts: (settings: AppearanceSett
     const key = JSON.stringify(settings);
     if (applying?.key === key) return applying.promise;
     const currentGeneration = ++generation; latest = settings;
+    appliedDark = dark();
     if (!style) { style = document.createElement('style'); style.dataset.cindyAppearance = 'true'; document.head.append(style); }
     if (!observer) {
-      observer = new MutationObserver(() => { if (style && latest) style.textContent = css(latest, dark()); });
+      observer = new MutationObserver(() => {
+        const nextDark = dark();
+        if (style && latest && nextDark !== appliedDark) {
+          appliedDark = nextDark;
+          style.textContent = css(latest, nextDark);
+        }
+      });
       observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
     }
     const promise = applyAppearance(settings, { bridge, style, faces, pending, dark, applyFonts: next => { lastFonts = fontKey(next); applyFonts(next); },

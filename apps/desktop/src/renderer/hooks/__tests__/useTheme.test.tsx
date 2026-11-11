@@ -82,6 +82,32 @@ describe('useTheme 跨窗口主题同步(D2-3)', () => {
     applyVibrancyMock.mockClear();
   });
 
+  // Performance: completed migration must be a synchronous startup branch;
+  // font-only publications must not rewrite the real palette or rerender users.
+  it('returns synchronously after migration and applies a changed palette only once', async () => {
+    hostSnapshot = normalizeAppearanceSettings({ themeSelection: { mode: 'light', familyId: 'default' } });
+    expect(migrateStoredThemeSelection()).toBe(true);
+    expect(migrateThemeMock).not.toHaveBeenCalled();
+    vi.mocked(themeService.applyTheme).mockRestore();
+    const apply = vi.spyOn(themeService, 'applyTheme');
+    let renders = 0;
+    const hook = renderHook(() => { renders++; return useTheme(); }, { wrapper });
+    apply.mockClear();
+    const initialRenders = renders;
+    await act(async () => {
+      hostSnapshot = normalizeAppearanceSettings({ ...hostSnapshot, uiSize: 18 });
+      for (const receive of hostListeners) receive(hostSnapshot);
+    });
+    expect(apply).not.toHaveBeenCalled();
+    expect(renders).toBe(initialRenders);
+    await act(async () => {
+      hostSnapshot = normalizeAppearanceSettings({ ...hostSnapshot, themeSelection: { mode: 'dark', familyId: 'default' } });
+      for (const receive of hostListeners) receive(hostSnapshot);
+    });
+    expect(apply).toHaveBeenCalledTimes(1);
+    hook.unmount();
+  });
+
   // Upgrade entry, real hook/readers: preserve old choices on failure and never
   // read legacy values again after the Host confirms the one-time migration.
   it('migrates the stored selection once and keeps later choices in the Host only', async () => {

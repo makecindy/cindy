@@ -66,7 +66,7 @@ function readLegacySelectionOnce(): ThemeSelection {
 }
 
 /** Called before React's first render. Failure retains old bytes and this session's choice. */
-export async function migrateStoredThemeSelection(): Promise<boolean> {
+export function migrateStoredThemeSelection(): boolean | Promise<boolean> {
   if (hostSelection()) return true;
   const bridge = window.electronAPI?.appearanceSettings;
   if (!bridge?.migrateTheme) return false;
@@ -290,6 +290,9 @@ export function ThemeProvider({
   const setFamily = useCallback(
     (next: string) => {
       if (!tryGetFamily(next)) return;
+      // Explicitly reselecting a family retries its presentation. Unrelated
+      // appearance publications must not take this forced refresh path.
+      if (next === getStoredFamilyId()) applyThemeClass(getStoredTheme(), true);
       requestSelection({ familyId: next });
     },
     [requestSelection],
@@ -330,7 +333,7 @@ export function ThemeProvider({
       if (!next) return;
       setThemeState(next.mode);
       setFamilyIdState(tryGetFamily(next.familyId) ? next.familyId : DEFAULT_FAMILY_ID);
-      applyThemeClass(next.mode, true);
+      applyThemeClass(next.mode);
     });
   }, []);
 

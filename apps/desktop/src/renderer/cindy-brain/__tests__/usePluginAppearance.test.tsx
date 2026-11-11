@@ -182,6 +182,30 @@ describe('plugin appearance renderer', () => {
     }
   });
 
+  // Performance: theme class notifications may include unrelated classes. Only
+  // a dark/light change may rewrite the extended CSS, once per change. Unit.
+  it('does not rewrite extended CSS for unrelated or repeated class changes', async () => {
+    const settings = normalizeAppearanceSettings({ density: 0.9 });
+    window.electronAPI = { appearanceSettings: { getSync: () => settings,
+      onChanged: () => () => {} } } as unknown as typeof window.electronAPI;
+    document.documentElement.classList.remove('dark');
+    const release = installAppearancePresenter(vi.fn());
+    try {
+      const style = document.querySelector<HTMLStyleElement>('[data-cindy-appearance]')!;
+      const write = vi.spyOn(style, 'textContent', 'set');
+      await act(async () => document.documentElement.classList.add('performance-probe'));
+      expect(write).not.toHaveBeenCalled();
+      await act(async () => document.documentElement.classList.add('dark'));
+      expect(write).toHaveBeenCalledTimes(1);
+      write.mockClear();
+      await act(async () => document.documentElement.classList.add('performance-probe-2'));
+      expect(write).not.toHaveBeenCalled();
+    } finally {
+      release();
+      document.documentElement.classList.remove('dark', 'performance-probe', 'performance-probe-2');
+    }
+  });
+
   // Complete-theme contract: startup and React share one document presenter;
   // density/motion derive from foundation tokens and restore without compounding.
   // Unit, real installer + settings events, observing CSSOM and subscription lifecycle.
