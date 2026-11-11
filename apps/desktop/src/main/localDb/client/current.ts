@@ -8,10 +8,29 @@ export type CurrentDbClientSnapshot = {
 
 let clientEpoch = 0;
 let current: CurrentDbClientSnapshot | null = null;
+const readyWaiters = new Set<() => void>();
 
 export function setCurrentDbClient(client: DbClient, userId: string): void {
   clientEpoch += 1;
   current = { client, userId, clientEpoch };
+  for (const wake of [...readyWaiters]) wake();
+}
+
+/**
+ * 等当前 DbClient 出现,最多 timeoutMs;返回等到时是否已就绪。只用于启动期的有界等待
+ * (例如远端首拉早于 renderer 打开 owner 数据库),不替代调用方自己的未就绪处理。
+ */
+export function waitForDbClient(timeoutMs: number): Promise<boolean> {
+  if (current) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const wake = (): void => {
+      clearTimeout(timer);
+      readyWaiters.delete(wake);
+      resolve(current !== null);
+    };
+    const timer = setTimeout(wake, timeoutMs);
+    readyWaiters.add(wake);
+  });
 }
 
 export function clearCurrentDbClient(client?: DbClient): void {
