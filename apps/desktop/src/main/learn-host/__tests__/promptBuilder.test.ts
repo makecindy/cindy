@@ -109,6 +109,9 @@ describe('buildLearnPrompt', () => {
     expect(buildLearnPrompt({ ...base, appLocale: 'zh-TW' })).toContain(
       'Reply in Traditional Chinese (繁體中文)',
     );
+    expect(buildLearnPrompt({ ...base, appLocale: 'tr' })).toContain(
+      'Reply in Turkish (Türkçe)',
+    );
     // locale 未知/缺省 → 回退 English
     expect(buildLearnPrompt(base)).toContain('Reply in English');
   });
