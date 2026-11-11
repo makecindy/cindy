@@ -2698,6 +2698,41 @@ describe('nodeRuntimeBroker · 宿主代启子进程(childSpawn,2026-07-23)', ()
     } finally { broker.destroyAll(); }
   });
 
+  // Unit: independent Host calls are active work even without an Agent RPC.
+  // Existing immediate replies missed native consent exceeding the 30s idle timeout.
+  it('keeps concurrent Host calls alive and resumes idle collection after success and failure', async () => {
+    vi.useFakeTimers();
+    const ghost = childSpawnGhost();
+    ghost.manifest.node!.idleTimeoutSeconds = 30;
+    ghost.approval = { state: 'approved', revision: 'r1' };
+    let finish!: () => void, reject!: (error: Error) => void;
+    const first = new Promise<void>(resolve => { finish = resolve; });
+    const second = new Promise<void>((_resolve, fail) => { reject = fail; });
+    const result = { content: [{ type: 'text', text: 'saved' }] };
+    const hostToolRequest = vi.fn().mockImplementationOnce(async () => { await first; return result; })
+      .mockImplementationOnce(async () => { await second; });
+    const { broker, worker } = await bootWorker(ghost, undefined, true, hostToolRequest);
+    try {
+      for (const reqId of ['first', 'second'])
+        worker.emitControl({ type: 'host-tool-request', reqId, server: 'cindy_helper', tool: 'list_sessions', args: {} });
+      expect(hostToolRequest).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(31_000);
+      expect(worker.killed).toBe(false);
+      finish();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(worker.lastOf('node-host-result')).toMatchObject({ reqId: 'first', result });
+      await vi.advanceTimersByTimeAsync(31_000);
+      expect(worker.killed).toBe(false);
+      reject(new Error('consent unavailable'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(worker.lastOf('node-host-result')).toMatchObject({ reqId: 'second', result: { isError: true } });
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(worker.killed).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(worker.killed).toBe(true);
+    } finally { broker.destroyAll(); }
+  });
+
   it('未声明 childSpawn:代生请求收到结构化拒绝,不 fork', async () => {
     const { worker, spawned } = await bootWorker(childSpawnGhost(false));
     worker.emitControl({ type: 'spawn-child', reqId: 'r1', entry: 'node/maker.cjs' });

@@ -352,6 +352,8 @@ interface WorkerEntry {
   stdoutBuffer: string;
   nextId: number;
   pending: Map<string, PendingRpc>;
+  /** Autonomous Host calls can wait for native consent without an Agent RPC. */
+  hostToolRequests: number;
   /** 本 worker 名下代启的子进程(childId → 记账;级联生死)。 */
   children: Map<string, ChildProcEntry>;
   idleTimer: NodeJS.Timeout | null;
@@ -937,11 +939,16 @@ export class GhostNodeRuntimeBroker {
         JSON.stringify(ghost.manifest) === entry.hostToolIdentity.manifest;
     };
     const denied = { isError: true, content: [{ type: 'text', text: '{"ok":false,"errorCode":"PERMISSION_DENIED"}' }] };
+    this.clearIdleTimer(entry);
+    entry.hostToolRequests += 1;
     try {
       const result = current() && this.deps.hostToolRequest ? await this.deps.hostToolRequest(id, message, current) : denied;
       this.replyToWorker(entry, { type: 'node-host-result', reqId: message.reqId, ok: true, result: current() ? result : denied });
     } catch {
       this.replyToWorker(entry, { type: 'node-host-result', reqId: message.reqId, ok: true, result: denied });
+    } finally {
+      entry.hostToolRequests -= 1;
+      this.scheduleIdleStop(entry);
     }
   }
 
@@ -1700,6 +1707,7 @@ export class GhostNodeRuntimeBroker {
       stdoutBuffer: '',
       nextId: 1,
       pending: new Map(),
+      hostToolRequests: 0,
       children: new Map(),
       idleTimer: null,
       hardKillTimer: null,
@@ -2402,7 +2410,7 @@ export class GhostNodeRuntimeBroker {
   private scheduleIdleStop(entry: WorkerEntry): void {
     const key = GhostNodeRuntimeBroker.keyOf(GhostNodeRuntimeBroker.instanceId(entry.ghost), entry.entryRel);
     if (this.workers.get(key) !== entry) return;
-    if (entry.ghost.manifest.node?.lifecycle === 'resident' || entry.pending.size > 0) return;
+    if (entry.ghost.manifest.node?.lifecycle === 'resident' || entry.pending.size > 0 || entry.hostToolRequests > 0) return;
     // 有代启子进程在世时不空闲回收——收 worker 会级联杀掉正在干活的代理。
     if (entry.children.size > 0) return;
     this.clearIdleTimer(entry);
