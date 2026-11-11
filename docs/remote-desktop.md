@@ -30,24 +30,58 @@ This is separate from the default-on lock-on-exit and privacy-screen preferences
 The host counts elapsed time since actual remote input or manual clipboard actions.
 Heartbeats, video frames, automatic clipboard sync and release-key cleanup do not
 reset it. Viewing a static desktop or video without input still counts as idle.
-When the deadline expires, the host revokes input, requests native locking and
-ends the remote desktop. It rejects automatic recovery until a new explicit start.
+When the deadline expires, the host revokes input, protects the local desktop and
+ends the remote desktop. On macOS 14+, Windows 10 build 19041+, and supported Hyprland hosts, protection
+uses the persistent privacy cover described below; unsupported hosts and failed cover setup use native locking. It rejects automatic recovery until a new explicit start.
 Lock failures are logged; the viewer reports disconnection without claiming that
 an unconfirmed native lock succeeded. Single-window input handoffs are excluded.
 
-Desktop controller lock/suspend retires its viewer immediately and requests a host
-lock. With idle protection enabled, Mobile backgrounding without PiP also ends the
-connection and requests a lock; temporary inactive states (such as biometric prompts)
+Desktop controller lock/suspend retires its viewer immediately and requests host
+exit protection. With idle protection enabled, Mobile backgrounding without PiP also ends the
+connection and requests exit protection; temporary inactive states (such as biometric prompts)
 do not. PiP keeps the same host idle deadline. Neither path automatically reopens the
 remote desktop when the controller returns. The lock request is retained for any
 in-flight start reply. Background PiP failure or preparation timeout follows the
 same protected exit. Automatic Mobile recovery
 does not use a saved password; deliberate reconnects may still auto-unlock.
 If the exit request cannot arrive, the host's existing 12-second heartbeat expiry
-locks the protected lease. A transient
+protects the desktop and ends the lease. A transient
 media reconnect preserves the live host lease and its idle deadline until resume;
 failed recovery reaches heartbeat expiry instead of renewing the idle budget.
 Only this desktop lease ends: other Device Link tasks and channels remain intact.
+
+## Privacy cover after remote exit (2026-11-11)
+
+On macOS 14+ and Windows 10 build 19041+, a protected remote exit puts up the
+local away privacy cover. On macOS this is the same cover as **Keep working while
+away**, and works even if that setting is off. Windows uses the same lifecycle
+with native Windows input hooks and confirmed session locking. The cover keeps the display
+awake so Agents can continue working. It survives remote lease cleanup and has no
+preview timeout; an existing preview is adopted as persistent protection. Only
+local deliberate input (click, key press or meaningful scroll) triggers the system
+lock, while pointer drift is swallowed. Reconnecting does not remove the cover.
+
+Explicit local exit from the in-session privacy screen and quitting Cindy still
+lock immediately. Existing fail-safe locks (mask/helper failure and newly attached
+displays) remain. Failed cover startup or an unsupported platform falls back to the
+existing native lock where available. No path unlocks an already locked computer. The wire fields
+`lockOnExit` and `stop.lockScreen` stay compatible: old hosts still lock immediately.
+
+Linux uses the existing compositor privacy backend (Hyprland 0.56.2 with matching
+ABI). A protected exit adopts the existing mask/token without a stop/start gap,
+turns it into a black persistent cover, and keeps the display awake. Remote toggles
+and lease cleanup cannot remove it. Physical input requests the native session
+locker; capture and Agent injection continue while covered. The compositor stops
+masking and consuming input only when the system session lock owns the desktop.
+On Main heartbeat loss it requests locking and retains the cover until that handoff,
+rather than releasing it into an unlocked desktop. It runs the existing Omarchy
+locker, or logind's lock request on other supported Hyprland setups.
+
+This does not add a privacy backend to GNOME, KDE or X11: those environments keep
+their existing native-lock fallback. No generic Wayland portal can be assumed to
+provide the compositor's physical-input/capture separation. Native Windows and
+Hyprland lock/unlock and crash behavior still need verification on those systems;
+macOS unit tests and cross-compilation do not substitute for it.
 
 ## Keep working while away (macOS, 2026-11-06)
 

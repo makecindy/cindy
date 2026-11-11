@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { release as osRelease } from 'node:os';
 import { app, BrowserWindow, ipcMain, powerMonitor, powerSaveBlocker, screen } from 'electron';
 import { createLogger } from '../logger';
 import { t } from '../i18n.desktop';
@@ -9,6 +10,7 @@ import { requireBoolean, throwIpcError } from '../utils/ipcValidate';
 import { AwayGuardController, consoleSessionLocked } from './awayGuard';
 import {
   lockDesktopScreen,
+  readDesktopLockState,
   readDesktopInputPermission,
   requestDesktopInputPermission,
 } from './inputHost';
@@ -53,6 +55,12 @@ export function supportsAwayGuard(): boolean {
   );
 }
 
+/** Persistent exit cover is also available on supported Windows desktops. */
+export function supportsRemoteExitPrivacy(): boolean {
+  return supportsAwayGuard() ||
+    (process.platform === 'win32' && Number(osRelease().split('.')[2]) >= 19041);
+}
+
 let controller: AwayGuardController | null = null;
 
 /** True while the away cover is up (physical input cannot reach any app). */
@@ -61,8 +69,14 @@ export function isAwayCoverUp(): boolean {
   return controller?.inputShielded === true;
 }
 
+/** Reuse the persistent local cover; remote lease cleanup must not remove it. */
+export async function coverRemoteDesktopExit(): Promise<void> {
+  if (!controller) throw new Error('DESKTOP_PRIVACY_UNAVAILABLE');
+  await controller.coverRemoteExit();
+}
+
 export function startAwayGuard(deps: AwayGuardServiceDeps): void {
-  if (controller || !supportsAwayGuard()) return;
+  if (controller || !supportsRemoteExitPrivacy()) return;
   let monitor: AwayGuardInputMonitor | null = null;
   let helperLocked = false;
   let displayAwake: number | null = null;
@@ -83,12 +97,18 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
   powerMonitor.on('unlock-screen', restoreFront);
   // Started on a locked screen there is no lock event yet; read the console session so
   // the guard does not hold the display on behind the lock screen.
-  void exec('/usr/sbin/ioreg', ['-n', 'Root', '-d1'], { timeout: 5000, maxBuffer: 1024 * 1024 })
-    .then(({ stdout }) => {
-      const locked = consoleSessionLocked(stdout, process.getuid?.());
-      if (locked !== null) deps.seedScreenLocked(locked);
-    })
-    .catch(() => {});
+  if (process.platform === 'darwin') {
+    void exec('/usr/sbin/ioreg', ['-n', 'Root', '-d1'], { timeout: 5000, maxBuffer: 1024 * 1024 })
+      .then(({ stdout }) => {
+        const locked = consoleSessionLocked(stdout, process.getuid?.());
+        if (locked !== null) deps.seedScreenLocked(locked);
+      })
+      .catch(() => {});
+  } else {
+    void readDesktopLockState().then((state) => {
+      if (state !== 'unavailable') deps.seedScreenLocked(state === 'locked');
+    });
+  }
 
   const refreshDisplaySleep = () => {
     if (Date.now() - displaySleepReadAt < DISPLAY_SLEEP_REFRESH_MS) return;
@@ -130,7 +150,11 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
   const holdUntilLocked = () => {
     heldUntilLocked = true;
     void masks
-      .replacePage(awayScreenHtml(t('awayGuard.lockFailed.status'), t('awayGuard.lockFailed.hint'), false))
+      .replacePage(awayScreenHtml(
+        t(process.platform === 'darwin' ? 'awayGuard.lockFailed.status' : 'remoteDesktop.lockOnExitFailed'),
+        process.platform === 'darwin' ? t('awayGuard.lockFailed.hint') : '',
+        false,
+      ))
       .catch(() => {});
   };
   const releaseHeld = () => {
@@ -167,13 +191,16 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
       return watched;
     },
     {
-      html: () => awayScreenHtml(t('awayGuard.status'), t('awayGuard.hint')),
+      html: () => awayScreenHtml(
+        t('awayGuard.status'),
+        process.platform === 'darwin' ? t('awayGuard.hint') : '',
+      ),
       nonActivating: true,
     },
   );
 
   controller = new AwayGuardController({
-    enabled: deps.enabled,
+    enabled: () => supportsAwayGuard() && deps.enabled(),
     screenLocked: deps.screenLocked,
     msSinceOwnerInput: deps.msSinceOwnerInput,
     awayAfterMs: () => {

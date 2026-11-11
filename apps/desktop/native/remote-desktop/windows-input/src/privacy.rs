@@ -1,6 +1,6 @@
 //! Ephemeral physical-input gate, on the user's desktop, never the service's.
 //! No event contents leave this process. Closing stdin or losing its heartbeat
-//! exits the message loop and removes both hooks.
+//! removes both hooks in remote mode; away mode first locks the user session.
 use std::{
     cell::RefCell,
     collections::HashSet,
@@ -8,11 +8,12 @@ use std::{
     time::{Duration, Instant},
 };
 use windows_sys::Win32::{
-    Foundation::*, System::Threading::GetCurrentThreadId, UI::WindowsAndMessaging::*,
+    Foundation::*, System::Threading::GetCurrentThreadId, System::Shutdown::LockWorkStation, UI::WindowsAndMessaging::*,
 };
 
 #[derive(Default)]
 struct Gate {
+    away: bool,
     phase: u8, // 0 armed, 1 draining input helper, 2 local dialog
     swallowed: HashSet<u32>,
 }
@@ -25,7 +26,12 @@ impl Gate {
         scroll: bool,
     ) -> (bool, bool) {
         if !physical {
-            return (self.phase == 2, false);
+            return (self.phase == 2 || (self.away && self.phase != 0), false);
+        }
+        if self.away {
+            let notify = self.phase == 0 && (scroll || (down && press != Some(0x14)));
+            if notify { self.phase = 1; }
+            return (true, notify);
         }
         if scroll {
             let notify = self.phase == 0;
@@ -60,13 +66,21 @@ impl Gate {
         (false, false)
     }
 }
+const COMMAND: u32 = WM_APP + 1;
+fn status(word: &str) {
+    // Main may have died: a broken stdout must not prevent the fail-safe lock.
+    let _ = writeln!(io::stdout(), "{word}");
+    let _ = io::stdout().flush();
+}
 thread_local! { static GATE: RefCell<Gate> = RefCell::new(Gate::default()); }
 fn consume(physical: bool, press: Option<u32>, down: bool, scroll: bool) -> bool {
     let (consume, notify) =
         GATE.with(|gate| gate.borrow_mut().consume(physical, press, down, scroll));
     if notify {
-        println!("local-input");
-        io::stdout().flush().ok();
+        if GATE.with(|gate| gate.borrow().away) {
+            status("reason input");
+            unsafe { PostThreadMessageW(GetCurrentThreadId(), COMMAND, 3, 0); }
+        } else { status("local-input"); }
     }
     consume
 }
@@ -110,7 +124,12 @@ unsafe extern "system" fn mouse(code: i32, w: WPARAM, l: LPARAM) -> LRESULT {
     }
     CallNextHookEx(std::ptr::null_mut(), code, w, l)
 }
-pub fn run() {
+pub fn run(away: bool) {
+    if away && (!crate::desktop::user_desktop_active() || crate::desktop::locked() != Some(false)) {
+        // Main falls back to a real lock instead of claiming a hidden cover works.
+        std::process::exit(2);
+    }
+    GATE.with(|gate| gate.borrow_mut().away = away);
     unsafe {
         let mut message: MSG = std::mem::zeroed();
         // Create the queue before the stdin reader posts commands to it.
@@ -122,7 +141,6 @@ pub fn run() {
         if keyboard_hook.is_null() || mouse_hook.is_null() {
             std::process::exit(2);
         }
-        const COMMAND: u32 = WM_APP + 1;
         std::thread::spawn(move || {
             let mut stdin = io::stdin().lock();
             loop {
@@ -132,8 +150,10 @@ pub fn run() {
                     Ok(_) => {
                         let command = match bytes.as_slice() {
                             b"ping\n" => 0,
-                            b"confirm\n" => 1,
-                            b"resume\n" => 2,
+                            b"confirm\n" if !away => 1,
+                            b"resume\n" if !away => 2,
+                            b"lock\n" if away => 3,
+                            b"release\n" if away => 4,
                             _ => break,
                         };
                         if PostThreadMessageW(thread, COMMAND, command, 0) == 0 {
@@ -142,36 +162,66 @@ pub fn run() {
                     }
                 }
             }
-            PostThreadMessageW(thread, WM_QUIT, 0, 0);
+            PostThreadMessageW(thread, if away { COMMAND } else { WM_QUIT }, 3, 0);
         });
-        if SetTimer(std::ptr::null_mut(), 1, 1000, None) == 0 {
+        if SetTimer(std::ptr::null_mut(), 1, if away { 100 } else { 1000 }, None) == 0 {
             std::process::exit(2);
         }
         let mut last_seen = Instant::now();
         let mut previous_window = std::ptr::null_mut();
-        println!("ready");
-        io::stdout().flush().ok();
+        status(if away { "away-ready" } else { "ready" });
+        let mut locking: Option<Instant> = None;
         while GetMessageW(&mut message, std::ptr::null_mut(), 0, 0) > 0 {
             if message.message == COMMAND {
                 last_seen = Instant::now();
                 match message.wParam {
+                    3 if away => {
+                        if locking.is_none() {
+                            GATE.with(|gate| gate.borrow_mut().phase = 1);
+                            LockWorkStation();
+                            locking = Some(Instant::now());
+                        }
+                    }
+                    4 if away => { status("released"); break; }
                     1 => {
                         previous_window = GetForegroundWindow();
                         GATE.with(|gate| gate.borrow_mut().phase = 2);
-                        println!("confirmed");
+                        status("confirmed");
                     }
                     2 => {
                         if !previous_window.is_null() {
                             SetForegroundWindow(previous_window);
                         }
                         GATE.with(|gate| gate.borrow_mut().phase = 0);
-                        println!("ready");
+                        status("ready");
                     }
                     _ => (),
                 }
                 io::stdout().flush().ok();
-            } else if message.message == WM_TIMER && last_seen.elapsed() > Duration::from_secs(5) {
-                break;
+            } else if message.message == WM_TIMER {
+                if away && crate::desktop::locked() == Some(true) {
+                    status("locked");
+                    break;
+                }
+                if locking.is_some_and(|at| at.elapsed() > Duration::from_secs(3)) {
+                    status("lock-failed");
+                    break;
+                }
+                if away && !crate::desktop::user_desktop_active() && locking.is_none() {
+                    status("reason desktop");
+                    GATE.with(|gate| gate.borrow_mut().phase = 1);
+                    LockWorkStation();
+                    locking = Some(Instant::now());
+                }
+                if last_seen.elapsed() > Duration::from_secs(5) {
+                    if !away { break; }
+                    if locking.is_none() {
+                        status("reason heartbeat");
+                        GATE.with(|gate| gate.borrow_mut().phase = 1);
+                        LockWorkStation();
+                        locking = Some(Instant::now());
+                    }
+                }
             }
             TranslateMessage(&message);
             DispatchMessageW(&message);
@@ -216,5 +266,23 @@ mod wheel_tests {
         gate.phase = 0;
         assert_eq!(gate.consume(true, None, false, true), (true, true));
         assert!(gate.swallowed.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod away_tests {
+    use super::Gate;
+    // Persistent covers consume physical input, tolerate drift/releases and only
+    // report the first deliberate press. Agent input passes until locking begins.
+    #[test]
+    fn away_cover_separates_physical_presence_from_injection() {
+        let mut gate = Gate { away: true, ..Gate::default() };
+        assert_eq!(gate.consume(false, Some(13), true, false), (false, false));
+        assert_eq!(gate.consume(true, None, false, false), (true, false));
+        assert_eq!(gate.consume(true, Some(13), false, false), (true, false));
+        assert_eq!(gate.consume(true, Some(0x14), true, false), (true, false));
+        assert_eq!(gate.consume(true, Some(0x10000), true, false), (true, true));
+        assert_eq!(gate.consume(true, Some(0x10000), true, false), (true, false));
+        assert_eq!(gate.consume(false, Some(13), true, false), (true, false));
     }
 }

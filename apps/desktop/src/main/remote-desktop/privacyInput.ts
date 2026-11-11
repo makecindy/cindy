@@ -158,7 +158,9 @@ export async function watchAwayGuardInput(
     while ((end = buffer.indexOf('\n')) >= 0) {
       const line = buffer.slice(0, end).trim();
       buffer = buffer.slice(end + 1);
-      if (line === 'ready') {
+      // Old Windows helpers treat unknown switches as ordinary input mode and
+      // also print ready; require a mode-specific acknowledgement before masking.
+      if (line === (process.platform === 'win32' ? 'away-ready' : 'ready')) {
         ready = true;
         settleReady?.();
       } else if (/^reason [a-z-]{1,16}$/.test(line)) {

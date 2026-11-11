@@ -71,6 +71,8 @@ export class AwayGuardController {
   private previewUntil = 0;
   private displayAddedWhileShowing = false;
   private ticking = false;
+  private remoteExit = false;
+  private showing: Promise<boolean> | null = null;
 
   constructor(private readonly deps: AwayGuardDeps) {
     this.ownerInputAt = deps.now();
@@ -102,21 +104,52 @@ export class AwayGuardController {
    */
   async preview(): Promise<void> {
     if (this.mask !== 'none' || this.deps.screenLocked()) return;
-    this.beginShowing();
-    try {
-      await this.deps.showMasks();
-    } catch (error) {
-      if ((this.mask as MaskState) === 'showing') this.mask = 'none';
-      throw error;
-    }
-    if (!(await this.finishShowing())) return;
+    if (!(await this.show())) return;
+    // A remote exit can adopt a preview while its masks are still loading.
+    if (this.remoteExit) return;
     this.previewUntil = this.deps.now() + AWAY_GUARD_PREVIEW_MS;
     this.deps.keepDisplayAwake(true);
     this.deps.log('preview shown');
   }
 
+  /** Protect a remote exit even when automatic away protection is disabled. */
+  async coverRemoteExit(): Promise<void> {
+    if (this.deps.screenLocked()) return;
+    if (this.mask === 'ending') throw new Error('DESKTOP_LOCK_PENDING');
+    this.remoteExit = true;
+    this.previewUntil = 0;
+    try {
+      if (this.mask !== 'shown') await this.show();
+      if (!this.inputShielded && !this.deps.screenLocked())
+        throw new Error('DESKTOP_PRIVACY_UNAVAILABLE');
+      if (this.inputShielded) this.deps.keepDisplayAwake(true);
+    } catch (error) {
+      this.remoteExit = false;
+      throw error;
+    }
+  }
+
+  /** Share a mask startup with previews, the idle timer and remote exit. */
+  private show(): Promise<boolean> {
+    if (this.showing) return this.showing;
+    this.beginShowing();
+    this.showing = Promise.resolve().then(async () => {
+      try {
+        await this.deps.showMasks();
+        return await this.finishShowing();
+      } catch (error) {
+        if (this.mask === 'showing') this.mask = 'none';
+        throw error;
+      } finally {
+        this.showing = null;
+      }
+    });
+    return this.showing;
+  }
+
   /** The masks or the helper went away on their own (input lock, window loss). */
   masksEnded(): void {
+    this.remoteExit = false;
     this.previewUntil = 0;
     if (this.mask === 'none') return;
     this.mask = 'none';
@@ -156,8 +189,10 @@ export class AwayGuardController {
       // The owner unlocking starts a fresh absence period.
       this.ownerInputAt = now;
       this.previewUntil = 0;
+      this.remoteExit = false;
       return this.standDown(false, 'locked');
     }
+    if (this.remoteExit && this.mask === 'shown') return deps.keepDisplayAwake(true);
     if (this.previewUntil) {
       if (this.mask === 'shown' && now < this.previewUntil) return deps.keepDisplayAwake(true);
       this.previewUntil = 0;
@@ -180,10 +215,8 @@ export class AwayGuardController {
     }
     deps.keepDisplayAwake(true);
     if (now - this.ownerInputAt < deps.awayAfterMs()) return;
-    this.beginShowing();
     try {
-      await deps.showMasks();
-      if (await this.finishShowing()) deps.log('masks shown');
+      if (await this.show()) deps.log('masks shown');
     } catch (error) {
       if ((this.mask as MaskState) === 'showing') this.mask = 'none';
       this.retryAt = now + AWAY_GUARD_RETRY_MS;
@@ -207,6 +240,7 @@ export class AwayGuardController {
 
   private async end(lock: boolean, reason: string): Promise<void> {
     this.mask = 'ending';
+    this.remoteExit = false;
     this.previewUntil = 0;
     try {
       if (lock) await this.deps.lockAndHideMasks();

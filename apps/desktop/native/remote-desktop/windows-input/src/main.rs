@@ -174,12 +174,28 @@ fn counter_session() {
     }
 }
 fn main() {
+    match std::env::args().nth(1).as_deref() {
+        Some("--lock-screen") => {
+            if !desktop::lock() { std::process::exit(2); }
+            println!("locked");
+            return;
+        }
+        Some("--lock-state") => {
+            println!("{}", match desktop::locked() {
+                Some(true) => "locked", Some(false) => "unlocked", None => "unavailable",
+            });
+            return;
+        }
+        Some("--away-guard") => { privacy::run(true); return; }
+        _ => (),
+    }
+
     if std::env::args().nth(1).as_deref() == Some("--clipboard-counter") {
         counter_session();
         return;
     }
     if std::env::args().nth(1).as_deref() == Some("--privacy-input") {
-        privacy::run();
+        privacy::run(false);
         return;
     }
     if matches!(std::env::args().nth(1).as_deref(), Some("--clipboard-selection" | "--clipboard-content-selection")) {

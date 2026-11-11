@@ -651,7 +651,7 @@ import {
 } from './remote-desktop/linuxClipboardNative';
 import { initHeartbeatService } from './heartbeatService';
 import { markStartupMilestone } from './startupTimeline';
-import { registerRemoteDesktopIpc } from './remote-desktop';
+import { isLinuxAwayCoverUp, registerRemoteDesktopIpc } from './remote-desktop';
 import { isAwayCoverUp, registerAwayGuardIpc, startAwayGuard } from './remote-desktop/awayGuardService';
 import {
   isDesktopScreenLocked,
@@ -5025,7 +5025,7 @@ const registerIpcHandlers = () => {
       seedScreenLocked: seedDesktopScreenLocked,
       msSinceOwnerInput: () => msSinceForeignDesktopInput(),
     });
-    setPhysicalInputShielded(isAwayCoverUp);
+    setPhysicalInputShielded(() => isAwayCoverUp() || isLinuxAwayCoverUp());
   }
   // 灵动岛余量:与菜单栏同一份余量概览(顺序、显示与隐私设置都跟菜单栏),岛开着时才读取。
   const agentIsland = getAgentIslandService();

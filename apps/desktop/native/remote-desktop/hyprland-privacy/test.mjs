@@ -135,6 +135,16 @@ int main() {
   assert(gate.consume(false, 30, true, true));
   gate.stop();
   assert(gate.held.empty() && !gate.consume(true, 30, true, true));
+  gate.phase=PrivacyGate::Active;
+  gate.away=true;
+  assert(!gate.consume(false, 30, true, true)); // Agent can keep working
+  assert(gate.consume(true, 30, false, false)); // releases never unlock or trigger
+  assert(gate.phase==PrivacyGate::Active);
+  assert(gate.consume(true, 30, true, true)); // local action requests locking
+  assert(gate.phase==PrivacyGate::Pending);
+  assert(gate.consume(false, 30, true, true)); // no injection while locking
+  gate.stop();
+  assert(!gate.away && !gate.consume(true, 30, true, true));
 }
 `,
     );
@@ -152,6 +162,71 @@ int main() {
           path.join(directory, 'test'),
         ],
       ],
+      [path.join(directory, 'test'), []],
+    ]) {
+      const result = spawnSync(command, args, { encoding: 'utf8', timeout: 60000 });
+      assert.equal(result.status, 0, result.stderr || String(result.error));
+    }
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+// The production watchdog must never drop a persistent cover on Main's death.
+// Compile its actual body with fake OS/clock dependencies; no real session is locked.
+test('away watchdog locks on heartbeat loss and uncovers only after compositor lock ownership', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-away-watchdog-'));
+  const root = path.dirname(fileURLToPath(import.meta.url));
+  try {
+    const main = fs.readFileSync(path.join(root, 'main.cpp'), 'utf8');
+    const from = main.indexOf('static int tick(void *)');
+    const to = main.indexOf('APICALL EXPORT std::string PLUGIN_API_VERSION', from);
+    assert.ok(from >= 0 && to > from);
+    const source = path.join(directory, 'test.cpp');
+    fs.writeFileSync(source, `
+#include "gate.hpp"
+#include <cassert>
+#include <chrono>
+PrivacyGate gate;
+bool awayLocked=false;
+int lockChild=-1, locks=0, stops=0;
+int watchdog=0;
+#include <sys/wait.h>
+int fakeWaitpid(int, void*, int) { return 1; }
+#define waitpid fakeWaitpid
+struct Manager { bool locked=false; bool isSessionLocked() { return locked; } } manager;
+auto* g_pSessionLockManager=&manager;
+auto heartbeat=std::chrono::steady_clock::now();
+bool active() { return gate.phase!=PrivacyGate::Off; }
+void requestLock() { ++locks; }
+void stop() { ++stops; gate.stop(); }
+void damage() {}
+void wl_event_source_timer_update(int, int) {}
+${main.slice(from, to)}
+int main() {
+  gate.phase=PrivacyGate::Active;
+  gate.away=true;
+  tick(nullptr);
+  assert(locks==0 && stops==0 && active());
+  heartbeat-=std::chrono::seconds(7);
+  tick(nullptr);
+  assert(locks==1 && stops==0 && gate.phase==PrivacyGate::Pending);
+  tick(nullptr);
+  assert(locks==1 && stops==0); // no automatic command storm when the locker fails
+  assert(gate.consume(true, 30, true, true));
+  manager.locked=true;
+  tick(nullptr);
+  assert(awayLocked && !active() && stops==0);
+  assert(!gate.consume(true, 30, true, true)); // authentication receives input
+  manager.locked=false;
+  awayLocked=false;
+  gate.phase=PrivacyGate::Active;
+  tick(nullptr);
+  assert(stops==1 && !active()); // ordinary remote privacy keeps its old cleanup
+}
+`);
+    for (const [command, args] of [
+      ['c++', ['-std=c++20', '-fsanitize=address,undefined', '-I', root, source, '-o', path.join(directory, 'test')]],
       [path.join(directory, 'test'), []],
     ]) {
       const result = spawnSync(command, args, { encoding: 'utf8', timeout: 60000 });

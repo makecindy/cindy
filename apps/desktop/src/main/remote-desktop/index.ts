@@ -44,6 +44,7 @@ import { RemoteDesktopController, type DesktopControllerDeps } from './controlle
 import { getInputHandoffService } from '../input-handoff/service';
 import { ClipboardCounter } from './clipboardCounter';
 import { onQuit } from '../lifecycle';
+import { createLogger } from '../logger';
 import {
   createViewerDisplay,
   viewerDisplaySupported,
@@ -75,6 +76,7 @@ import {
 import { readLinuxCursorSupport } from './linuxCapture';
 import { LinuxDesktopMute, supportsLinuxMute } from './linuxMute';
 import { PrivacyScreen } from './privacyScreen';
+import { coverRemoteDesktopExit, supportsRemoteExitPrivacy } from './awayGuardService';
 import { ControlledOverlay } from './controlledOverlay';
 import { LinuxPrivacyScreen, supportsLinuxPrivacy, prepareLinuxPrivacy } from './linuxPrivacy';
 import { LinuxWindowActions, supportsOmarchyMenu } from './linuxWindowActions';
@@ -101,6 +103,8 @@ import {
   MAC_ACCESSIBILITY_SETTINGS_URL,
   MAC_SCREEN_RECORDING_SETTINGS_URL,
 } from '../computer-permission-guide/request';
+
+const log = createLogger('remote-desktop');
 
 const permissions = new RemoteDesktopPermissionsService({
   required: process.platform === 'darwin',
@@ -198,10 +202,23 @@ const privacyScreen = new PrivacyScreen(
   },
   pauseInputForPrivacy,
 );
+let linuxAwayAwake: number | null = null;
 const linuxPrivacy = new LinuxPrivacyScreen(
   () => remoteDesktop.stopPrivacyByUser(),
   pauseInputForPrivacy,
+  undefined,
+  (awake) => {
+    if (awake && linuxAwayAwake === null)
+      linuxAwayAwake = powerSaveBlocker.start('prevent-display-sleep');
+    else if (!awake && linuxAwayAwake !== null) {
+      powerSaveBlocker.stop(linuxAwayAwake);
+      linuxAwayAwake = null;
+    }
+  },
 );
+export function isLinuxAwayCoverUp(): boolean {
+  return linuxPrivacy.inputShielded;
+}
 const supportsPrivacyScreen =
   (process.platform === 'darwin' &&
     typeof process.getSystemVersion === 'function' &&
@@ -839,7 +856,7 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
         process.platform === 'darwin' ||
         (process.platform === 'win32' && windowsAvailable) ||
         Boolean(enabled && nativeWayland() && (await readLinuxCursorSupport())),
-      lockOnExit: process.platform === 'darwin' || supportsLinuxLock(),
+      lockOnExit: process.platform === 'darwin' || process.platform === 'win32' || supportsLinuxLock(),
       clipboardContent:
         process.platform === 'darwin' ||
         process.platform === 'win32' ||
@@ -988,7 +1005,7 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
   },
   stopPrivacyScreen: () => {
     privacyScreen.stop();
-    linuxPrivacy.stop();
+    linuxPrivacy.stopSession();
     privacyRequested = false;
     // Called from inside lease teardown; read controller state afterwards.
     queueMicrotask(syncControlledOverlay);
@@ -1072,11 +1089,26 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
   releaseInput: () => input.release(),
   pauseVideo,
   resumeVideo,
-  ...(process.platform === 'darwin' || supportsLinuxLock()
+  ...(process.platform === 'darwin' || process.platform === 'win32' || supportsLinuxLock()
     ? {
         lockScreen: async (isCurrent: () => boolean, signal: AbortSignal) => {
           await input.release();
           await lockDesktopScreen(isCurrent, signal);
+        },
+      }
+    : {}),
+  ...(supportsRemoteExitPrivacy() || nativeWayland()
+    ? {
+        protectOnExit: async (isCurrent: () => boolean, signal: AbortSignal) => {
+          await input.release();
+          if (!isCurrent() || signal.aborted) throw new Error('DESKTOP_LEASE_EXPIRED');
+          try {
+            if (process.platform === 'linux') await linuxPrivacy.coverOnExit(isCurrent);
+            else await coverRemoteDesktopExit();
+          } catch (error) {
+            log.warn('Exit privacy cover unavailable; falling back to screen lock', error);
+            await lockDesktopScreen(isCurrent, signal);
+          }
         },
       }
     : {}),
@@ -1116,6 +1148,7 @@ export function registerRemoteDesktopIpc(
     permissions.dismiss();
     remoteDesktop.stop(undefined, undefined, 'shutdown');
   });
+  onQuit('linux-privacy-lock', () => linuxPrivacy.lockOnExit(), 'async');
   onQuit('remote-desktop-restore', () => remoteDesktop.stopAndRestore(), 'async');
   const linuxLayoutChanged = () => {
     if (remoteDesktop.changingDisplay || !remoteDesktop.displayId || liveSession) return;

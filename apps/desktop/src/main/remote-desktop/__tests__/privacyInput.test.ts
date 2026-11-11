@@ -4,7 +4,11 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { watchAwayGuardInput, watchPrivacyInput } from '../privacyInput';
 
 vi.mock('../inputHost', () => ({ resolveDesktopInputBinary: vi.fn() }));
-afterEach(() => vi.useRealTimers());
+const platform = process.platform;
+afterEach(() => {
+  vi.useRealTimers();
+  Object.defineProperty(process, 'platform', { value: platform });
+});
 function fixture() {
   const child = Object.assign(new EventEmitter(), {
     stdout: new EventEmitter(),
@@ -109,7 +113,7 @@ it.each([
   const ended = vi.fn();
   const starting = watchAwayGuardInput(ended, undefined, f.runtime);
   await Promise.resolve();
-  f.line('ready\n');
+  f.line(process.platform === 'win32' ? 'away-ready\n' : 'ready\n');
   const monitor = await starting;
   const finishing = command === 'lock' ? monitor.lock() : monitor.stop().then(() => false);
   expect(f.child.stdin.write).toHaveBeenLastCalledWith(`${command}\n`);
@@ -123,4 +127,31 @@ it.each([
   f.child.emit('close');
   expect(f.child.kill).not.toHaveBeenCalled();
   expect(ended).toHaveBeenCalledOnce();
+});
+
+// New Windows mode must not accept the ordinary ready emitted by old helpers.
+// Unit: production startup parser + fake stdio/timers, no native process.
+// Standalone vitest duration: 1.28 s on 2026-11-11.
+it.each(['ready', 'away-ready'])('Windows away startup requires its own acknowledgement: %s', async (word) => {
+  vi.useFakeTimers();
+  Object.defineProperty(process, 'platform', { value: 'win32' });
+  const f = fixture();
+  Object.assign(f.child.stdin, { writable: true });
+  f.child.kill.mockImplementation(() => { f.child.emit('close'); });
+  const starting = watchAwayGuardInput(vi.fn(), undefined, f.runtime);
+  const rejected = word === 'ready'
+    ? expect(starting).rejects.toThrow('DESKTOP_PRIVACY_UNAVAILABLE') : undefined;
+  await Promise.resolve();
+  f.line(`${word}\n`);
+  if (rejected) {
+    await vi.advanceTimersByTimeAsync(5000);
+    await rejected;
+    expect(f.child.kill).toHaveBeenCalledOnce();
+  } else {
+    const monitor = await starting;
+    const stopping = monitor.stop();
+    f.child.emit('close');
+    await stopping;
+    expect(f.child.kill).not.toHaveBeenCalled();
+  }
 });

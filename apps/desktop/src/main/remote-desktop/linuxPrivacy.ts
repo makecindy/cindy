@@ -115,11 +115,15 @@ const runtime: Runtime = {
  * creates a second viewer, changes system config or handles passwords. */
 export class LinuxPrivacyScreen {
   private generation = 0;
+  private persistent = false;
   private token: string | null = null;
   private timer?: ReturnType<typeof setTimeout>;
   private resume?: () => Promise<void>;
   private pausing?: Promise<() => Promise<void>>;
   private cleanup: Promise<unknown> = Promise.resolve();
+  get inputShielded(): boolean {
+    return this.persistent && this.token !== null;
+  }
   get active(): boolean {
     return this.token !== null;
   }
@@ -127,8 +131,34 @@ export class LinuxPrivacyScreen {
     private readonly stopped: () => void | Promise<void>,
     private readonly suspendInput: () => Promise<() => Promise<void>>,
     private readonly native: Runtime = runtime,
+    private readonly keepAwake: (awake: boolean) => void = () => {},
   ) {}
+  /** Adopt the same compositor masks without uncovering between owners. */
+  async coverOnExit(current: () => boolean): Promise<void> {
+    if (this.persistent) return;
+    await this.set(true, current);
+    const token = this.token;
+    if (!token || !current()) throw new Error('DESKTOP_LEASE_EXPIRED');
+    const state = await this.native.call({ op: 'away', token });
+    if (token !== this.token || !['active', 'locking', 'locked'].includes(state))
+      throw new Error('DESKTOP_PRIVACY_UNAVAILABLE');
+    this.generation++; // retire in-flight polls bound to the remote lease
+    this.persistent = true;
+    this.keepAwake(true);
+    // The old poll was tied to the remote lease. The same token now survives it.
+    clearTimeout(this.timer);
+    this.schedule(this.generation, () => true);
+  }
+  stopSession(): void {
+    if (!this.persistent) this.stop();
+  }
+  async lockOnExit(): Promise<void> {
+    if (this.persistent && this.token)
+      await this.native.call({ op: 'lock', token: this.token });
+  }
   async set(enabled: boolean, current: () => boolean): Promise<void> {
+    // Remote toggles cannot remove a cover that now protects local absence.
+    if (this.persistent) return;
     if (!enabled) {
       const resuming = this.pausing ?? Promise.resolve(this.resume);
       this.stop();
@@ -176,13 +206,13 @@ export class LinuxPrivacyScreen {
   private schedule(generation: number, current: () => boolean): void {
     this.timer = setTimeout(() => {
       void this.poll(generation, current);
-    }, 250);
+    }, this.persistent ? 1000 : 250);
     this.timer.unref();
   }
   private async poll(generation: number, current: () => boolean): Promise<void> {
     const token = this.token;
     const valid = () =>
-      !!token && this.token === token && generation === this.generation && current();
+      !!token && this.token === token && generation === this.generation && (this.persistent || current());
     if (!valid()) {
       if (generation === this.generation) this.stop();
       return;
@@ -190,6 +220,14 @@ export class LinuxPrivacyScreen {
     try {
       const state = await this.native.call({ op: 'ping', token });
       if (!valid()) return;
+      if (this.persistent && state === 'locked') {
+        this.stop();
+        return;
+      }
+      if (this.persistent && state === 'locking') {
+        this.schedule(generation, () => true);
+        return;
+      }
       if (state === 'pending') {
         const pausing = this.suspendInput();
         this.pausing = pausing;
@@ -210,21 +248,24 @@ export class LinuxPrivacyScreen {
         return;
       } else if (state !== 'active' && state !== 'confirming')
         throw new Error('DESKTOP_PRIVACY_UNAVAILABLE');
-      if (valid()) this.schedule(generation, current);
+      if (valid()) this.schedule(generation, this.persistent ? () => true : current);
     } catch {
       if (valid()) await this.finish(generation);
     }
   }
   private async finish(generation: number): Promise<void> {
     try {
-      await this.stopped();
+      if (this.persistent) await this.lockOnExit();
+      else await this.stopped();
     } catch {
-      /* Native watchdog also releases the mask. */
+      /* The native away watchdog locks before releasing a persistent mask. */
     } finally {
       if (generation === this.generation) this.stop();
     }
   }
   stop(): void {
+    this.persistent = false;
+    this.keepAwake(false);
     this.generation++;
     clearTimeout(this.timer);
     this.resume = undefined;

@@ -148,7 +148,7 @@ export async function readDesktopLockState(): Promise<'locked' | 'unlocked' | 'u
   if (process.platform === 'linux') {
     return readLinuxUnlockState();
   }
-  if (process.platform !== 'darwin') return 'unavailable';
+  if (process.platform !== 'darwin' && process.platform !== 'win32') return 'unavailable';
   try {
     const { stdout } = await exec(await resolveBinary(), ['--lock-state'], {
       timeout: 5000,
@@ -196,7 +196,8 @@ export async function lockDesktopScreen(
   signal: AbortSignal,
 ): Promise<void> {
   if (process.platform === 'linux') return lockLinuxDesktop(isCurrent, signal);
-  if (process.platform !== 'darwin') throw new Error('DESKTOP_LOCK_UNAVAILABLE');
+  if (process.platform !== 'darwin' && process.platform !== 'win32')
+    throw new Error('DESKTOP_LOCK_UNAVAILABLE');
   const binary = await resolveBinary();
   if (signal.aborted || !isCurrent()) throw new Error('DESKTOP_LEASE_EXPIRED');
   try {

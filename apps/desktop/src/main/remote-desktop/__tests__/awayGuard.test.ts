@@ -205,6 +205,67 @@ describe('AwayGuardController', () => {
     expect(state.awake).toBe(false);
   });
 
+  // 2026-11-11: remote exits must cover even with the automatic setting off.
+  // Existing idle/preview tests did not cover a persistent remote-exit cover (unit).
+  // Standalone vitest duration: 1.60 s on 2026-11-11.
+  it('keeps remote exit covered with automatic protection off until the system locks', async () => {
+    const { state, guard, away } = setup();
+    state.enabled = false;
+    await guard.coverRemoteExit();
+    await away(AWAY_GUARD_PREVIEW_MS + AWAY_MS);
+    expect(state.events).toEqual(['show']);
+    expect(state.awake).toBe(true);
+    expect(guard.inputShielded).toBe(true);
+    state.locked = true;
+    await guard.tick();
+    expect(state.events).toEqual(['show', 'hide']);
+    expect(state.awake).toBe(false);
+    state.locked = false;
+    await away(AWAY_MS);
+    expect(state.events).toEqual(['show', 'hide']);
+  });
+
+  it.each([false, true])('adopts a preview without its expiry, pending=%s', async (pending) => {
+    let finish!: () => void;
+    const show = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    let shows = 0;
+    const { state, guard, away } = setup({
+      showMasks: async () => {
+        shows++;
+        await show;
+      },
+    });
+    state.enabled = false;
+    const preview = guard.preview();
+    if (!pending) {
+      finish();
+      await preview;
+    }
+    const covering = guard.coverRemoteExit();
+    finish();
+    await Promise.all([preview, covering]);
+    await away(AWAY_GUARD_PREVIEW_MS + 1);
+    expect(shows).toBe(1);
+    expect(guard.inputShielded).toBe(true);
+    expect(state.events).toEqual([]);
+    expect(state.awake).toBe(true);
+  });
+
+  it('reports a failed remote cover for the caller to lock and permits a later retry', async () => {
+    const { state, guard } = setup();
+    state.enabled = false;
+    state.showFails = true;
+    await expect(guard.coverRemoteExit()).rejects.toThrow('DESKTOP_PRIVACY_UNAVAILABLE');
+    expect(guard.inputShielded).toBe(false);
+    await guard.tick();
+    expect(state.awake).toBe(false);
+    state.showFails = false;
+    await guard.coverRemoteExit();
+    expect(guard.inputShielded).toBe(true);
+  });
+
   it('reads this user\'s lock state from the console session list', () => {
     const user = (uid: number, extra: string) =>
       `{"kCGSSessionOnConsoleKey"=Yes,"kCGSSessionUserIDKey"=${uid}${extra}}`;

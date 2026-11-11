@@ -41,6 +41,7 @@ export type DesktopStopReason =
   | 'capture-stop'
   | 'user-stop'
   | 'remote-stop'
+  | 'privacy-exit'
   | 'takeover'
   | 'resume-replaced'
   | 'shutdown'
@@ -192,6 +193,8 @@ export interface DesktopControllerDeps {
    * capture confirms a live stream follows it (e.g. not browser capture).
    */
   resumeVideo?(display: RemoteDesktopDisplay): Promise<boolean>;
+  /** Cover an unattended desktop; the host falls back to a lock if unavailable. */
+  protectOnExit?(isCurrent: () => boolean, signal: AbortSignal): Promise<void>;
   lockScreen?(isCurrent: () => boolean, signal: AbortSignal): Promise<void>;
   offer(
     lease: RemoteDesktopLease,
@@ -490,7 +493,13 @@ export class RemoteDesktopController {
         /* Diagnostics must never prevent revocation or cleanup. */
       }
     }
-    if (active && lockScreen && this.deps.lockScreen) {
+    // Local privacy exit and process shutdown need the actual OS lock. All other
+    // protected ends may leave a persistent cover so background work can continue.
+    const protect =
+      reason === 'privacy-exit' || reason === 'shutdown'
+        ? this.deps.lockScreen
+        : this.deps.protectOnExit ?? this.deps.lockScreen;
+    if (active && lockScreen && protect) {
       // A protected connection that ends on loss of contact must not recover
       // unattended and automatically unlock the computer again.
       if (active.idleTimeoutMinutes) this.userStopped.set(active.peer, active.lease);
@@ -504,7 +513,7 @@ export class RemoteDesktopController {
       // another stop must not cancel an accepted lock; revocation still can.
       const pending = Promise.resolve()
         .then(() =>
-          this.deps.lockScreen!(
+          protect(
             () =>
               this.active === active &&
               !cancellation.signal.aborted &&
@@ -819,7 +828,7 @@ export class RemoteDesktopController {
     }
     // Enter the existing lock/stop path before marking the lease stopped:
     // subsequent phone input and recovery must be rejected while locking.
-    const ending = this.request(active.peer, { op: 'stop', lease: active.lease, lockScreen: true });
+    const ending = this.stop(active.peer, true, 'privacy-exit');
     this.userStopped.set(active.peer, active.lease);
     try {
       await ending;

@@ -4,6 +4,9 @@
 #include <dlfcn.h>
 #include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/managers/input/InputManager.hpp>
+#include <hyprland/src/managers/SessionLockManager.hpp>
+#include <spawn.h>
+#include <sys/wait.h>
 #include <hyprland/src/plugins/PluginAPI.hpp>
 #include <hyprland/src/pointer/PointerManager.hpp>
 #include <hyprland/src/pointer/cursor/CursorManager.hpp>
@@ -28,6 +31,22 @@ static std::string stringValue(json_object *value) {
 static HANDLE owner;
 static PrivacyGate gate;
 static bool retired = false;
+static bool awayLocked = false;
+static pid_t lockChild = -1;
+static std::chrono::steady_clock::time_point lockAttempt;
+extern char **environ;
+// Fixed executable/arguments only; never execute a command received over hyprctl.
+static void requestLock() {
+  if (lockChild > 0 && waitpid(lockChild, nullptr, WNOHANG) == 0) return;
+  lockChild = -1;
+  const auto now = std::chrono::steady_clock::now();
+  if (now - lockAttempt < std::chrono::seconds(2)) return;
+  lockAttempt = now;
+  const bool omarchy = access("/usr/bin/omarchy-shell", X_OK) == 0;
+  const char *program = omarchy ? "/usr/bin/omarchy-shell" : "/usr/bin/loginctl";
+  const char *args[] = {program, omarchy ? "lock" : "lock-session", omarchy ? "lock" : nullptr, nullptr};
+  posix_spawn(&lockChild, program, nullptr, nullptr, const_cast<char **>(args), environ);
+}
 static bool loading = true;
 static std::string token;
 static std::chrono::steady_clock::time_point heartbeat;
@@ -213,6 +232,7 @@ static void damage() {
   }
 }
 static void stop() {
+  awayLocked = false;
   gate.stop();
   token.clear();
   covered.clear();
@@ -222,6 +242,8 @@ static void stop() {
 static bool consume(bool physical, unsigned key, bool down, bool trigger) {
   auto old = gate.phase;
   bool result = gate.consume(physical, key, down, trigger);
+  if (gate.away && physical && trigger && gate.phase == PrivacyGate::Pending)
+    requestLock();
   if (old != gate.phase)
     damage();
   return result;
@@ -401,7 +423,13 @@ static bool copy(CHyprOpenGLImpl *self, const CBox &box) {
   CBox full{0, 0, monitor->m_transformedSize.x, monitor->m_transformedSize.y};
   g_pHyprRenderer->m_renderData.damage = CRegion(full);
   g_pHyprRenderer->pushMonitorTransformEnabled(true);
-  self->renderRect(full, surface(), {});
+  self->renderRect(full, gate.away ? CHyprColor(0xFF000000) : surface(), {});
+  if (gate.away) {
+    g_pHyprRenderer->popMonitorTransformEnabled();
+    g_pHyprRenderer->m_renderData = saved;
+    covered.insert(monitor->m_id);
+    return copied;
+  }
   self->blend(true);
   if (texts.empty()) {
     for (auto &label : labels) {
@@ -490,6 +518,8 @@ static CFunctionHook *hook(const std::string &name, void *replacement) {
   return h;
 }
 static std::string state() {
+  if (awayLocked) return "locked";
+  if (gate.away && gate.phase == PrivacyGate::Pending) return "locking";
   if (gate.phase == PrivacyGate::Active)
     for (const auto &monitor : State::monitorState()->allMonitors())
       if (monitor->enabled() && physicalOutput(monitor) &&
@@ -500,9 +530,22 @@ static std::string state() {
   return names[gate.phase];
 }
 static int tick(void *) {
-  if (active() &&
-      std::chrono::steady_clock::now() - heartbeat > std::chrono::seconds(6))
-    stop();
+  if (gate.away && g_pSessionLockManager->isSessionLocked()) {
+    // The compositor now owns the lock: let it draw and receive authentication
+    // input. Retain the token/status until Main acknowledges the transition.
+    gate.stop();
+    awayLocked = true;
+    damage();
+  } else if (active() &&
+      std::chrono::steady_clock::now() - heartbeat > std::chrono::seconds(6)) {
+    if (gate.away) {
+      if (gate.phase != PrivacyGate::Pending) {
+        gate.phase = PrivacyGate::Pending;
+        requestLock(); // Main died: never drop an unprotected curtain.
+      }
+    } else stop();
+  }
+  if (lockChild > 0 && waitpid(lockChild, nullptr, WNOHANG) != 0) lockChild = -1;
   wl_event_source_timer_update(watchdog, 500);
   return 0;
 }
@@ -657,6 +700,8 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
              dark = json_object_get_boolean(theme);
              wordmarkTexture.reset();
              token = key;
+             awayLocked = false;
+             gate.away = false;
              labels = next;
              texts.clear();
              covered.clear();
@@ -666,13 +711,21 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
            if (key != token)
              throw std::runtime_error("owner");
            heartbeat = std::chrono::steady_clock::now();
-           if (op == "stop")
+           if (op == "stop") {
+             if (gate.away && !g_pSessionLockManager->isSessionLocked())
+               throw std::runtime_error("lock required");
              stop();
-           else if (op == "confirm" && gate.phase == PrivacyGate::Pending) {
+           } else if (op == "away" && gate.phase == PrivacyGate::Active) {
+             gate.away = true;
+             damage();
+           } else if (op == "lock" && gate.away) {
+             gate.phase = PrivacyGate::Pending;
+             requestLock();
+           } else if (op == "confirm" && !gate.away && gate.phase == PrivacyGate::Pending) {
              gate.phase = PrivacyGate::Confirming;
              selectedDisconnect = false;
              damage();
-           } else if (op == "resume" && gate.phase == PrivacyGate::Resume) {
+           } else if (op == "resume" && !gate.away && gate.phase == PrivacyGate::Resume) {
              gate.phase = PrivacyGate::Active;
              damage();
            } else if (op != "start" && op != "ping")
@@ -686,6 +739,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
           "Cindy", "1"};
 }
 APICALL EXPORT void PLUGIN_EXIT() {
+  if (gate.away) requestLock();
   stop();
   listeners.clear();
   texts.clear();

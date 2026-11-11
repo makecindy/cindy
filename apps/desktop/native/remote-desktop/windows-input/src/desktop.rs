@@ -140,3 +140,53 @@ mod tests {
         );
     }
 }
+
+/// Query only this process's user session. A secure input desktop can be UAC,
+/// so its name alone is not proof that Windows locked the workstation.
+pub fn locked() -> Option<bool> {
+    use windows_sys::Win32::System::RemoteDesktop::*;
+    unsafe {
+        let mut data = std::ptr::null_mut();
+        let mut size = 0;
+        if WTSQuerySessionInformationW(std::ptr::null_mut(), u32::MAX, WTSSessionInfoEx,
+                                      &mut data, &mut size) == 0 { return None; }
+        let result = if size as usize >= std::mem::size_of::<WTSINFOEXW>() {
+            let info = &*(data as *const WTSINFOEXW);
+            if info.Level == 1 {
+                match info.Data.WTSInfoExLevel1.SessionFlags as u32 {
+                    WTS_SESSIONSTATE_LOCK => Some(true),
+                    WTS_SESSIONSTATE_UNLOCK => Some(false),
+                    _ => None,
+                }
+            } else { None }
+        } else { None };
+        WTSFreeMemory(data.cast());
+        result
+    }
+}
+
+pub fn lock() -> bool {
+    use windows_sys::Win32::System::Shutdown::LockWorkStation;
+    if locked() == Some(true) { return true; }
+    if unsafe { LockWorkStation() } == 0 { return false; }
+    // LockWorkStation only accepts the request; wait for session confirmation.
+    for _ in 0..30 {
+        if locked() == Some(true) { return true; }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    false
+}
+
+/// Covers and hooks belong to Default, never to UAC or another secure desktop.
+pub fn user_desktop_active() -> bool {
+    unsafe {
+        let desktop = OpenInputDesktop(0, 0, DESKTOP_READOBJECTS);
+        if desktop.is_null() { return false; }
+        let mut name = [0u16; 256];
+        let mut needed = 0;
+        let ok = GetUserObjectInformationW(desktop, UOI_NAME, name.as_mut_ptr().cast(), 512, &mut needed);
+        CloseDesktop(desktop);
+        let length = name.iter().position(|c| *c == 0).unwrap_or(name.len());
+        ok != 0 && String::from_utf16_lossy(&name[..length]) == "Default"
+    }
+}

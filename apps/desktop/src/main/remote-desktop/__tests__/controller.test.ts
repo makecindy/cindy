@@ -861,15 +861,54 @@ describe('remote desktop authority and lifecycle', () => {
       expect(h.controller.state).toBeNull();
     },
   );
-  it.each(['expiry', 'disconnect', 'stop'])(
-    'locks locally after %s and keeps locking through further network loss',
+  // User request 2026-11-11: protected exits cover instead of immediately locking.
+  // Existing tests exercise only hosts without a persistent cover. These unit cases
+  // drive the real stop/request/tick entries and distinguish local from remote exit.
+  // Standalone vitest duration: 1.83 s on 2026-11-11.
+  it.each(['remote', 'disconnect', 'expiry', 'idle', 'local-privacy', 'shutdown', 'plain'])(
+    'selects persistent privacy versus actual lock for %s',
     async (reason) => {
+      const h = harness();
+      h.deps.lockScreen = vi.fn(async () => {});
+      h.deps.protectOnExit = vi.fn(async (current) => {
+        expect(current()).toBe(true);
+      });
+      const { lease } = (await h.controller.request('phone', {
+        op: 'start',
+        displayId: '1',
+        lockOnExit: true,
+        ...(reason === 'idle' ? { idleTimeoutMinutes: 1 } : {}),
+      })) as RemoteDesktopLease;
+      if (reason === 'remote' || reason === 'plain')
+        await h.controller.request('phone', { op: 'stop', lease, lockScreen: reason === 'remote' });
+      if (reason === 'disconnect') h.controller.signalingLost('phone');
+      if (reason === 'expiry' || reason === 'idle') {
+        h.advance(reason === 'idle' ? 60_000 : 13_000);
+        h.controller.tick();
+      }
+      if (reason === 'local-privacy') await h.controller.stopPrivacyByUser();
+      if (reason === 'shutdown') await h.controller.stopAndRestore();
+      await h.controller.stop('phone');
+      const locks = reason === 'local-privacy' || reason === 'shutdown';
+      expect(h.deps.lockScreen).toHaveBeenCalledTimes(locks ? 1 : 0);
+      expect(h.deps.protectOnExit).toHaveBeenCalledTimes(!locks && reason !== 'plain' ? 1 : 0);
+      expect(h.controller.state).toBeNull();
+    },
+  );
+  it.each([
+    ['expiry', 'lockScreen'],
+    ['disconnect', 'lockScreen'],
+    ['stop', 'lockScreen'],
+    ['disconnect', 'protectOnExit'],
+  ] as const)(
+    'awaits %s / %s through network loss before removing session privacy masks',
+    async (reason, protection) => {
       const h = harness();
       let finish!: () => void;
       let current!: () => boolean;
       let signal!: AbortSignal;
       h.deps.stopPrivacyScreen = vi.fn();
-      h.deps.lockScreen = vi.fn((check, cancellation) => {
+      h.deps[protection] = vi.fn((check, cancellation) => {
         current = check;
         signal = cancellation;
         return new Promise<void>((resolve) => {
@@ -884,7 +923,7 @@ describe('remote desktop authority and lifecycle', () => {
       })) as RemoteDesktopLease;
       h.controller.signalingLost('other');
       expect(h.controller.state).toEqual({ peer: 'phone', controlling: true });
-      expect(h.deps.lockScreen).not.toHaveBeenCalled();
+      expect(h.deps[protection]).not.toHaveBeenCalled();
       if (reason === 'expiry') {
         h.advance(13000);
         h.controller.tick();
@@ -900,7 +939,7 @@ describe('remote desktop authority and lifecycle', () => {
       h.controller.signalingLost('phone');
       expect(signal.aborted).toBe(false);
       expect(current()).toBe(true);
-      expect(h.deps.lockScreen).toHaveBeenCalledOnce();
+      expect(h.deps[protection]).toHaveBeenCalledOnce();
       expect(() =>
         h.controller.input(lease, 1, [{ kind: 'key', code: 'KeyA', down: true }]),
       ).toThrow('DESKTOP_VIEW_ONLY');

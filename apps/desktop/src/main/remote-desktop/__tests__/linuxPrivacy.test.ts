@@ -18,10 +18,12 @@ function fixture() {
     if (request.op === 'stop') return 'off';
     return state;
   });
-  const owner = new LinuxPrivacyScreen(stop, pause, { prepare, call, labels: () => [] });
+  const awake = vi.fn();
+  const owner = new LinuxPrivacyScreen(stop, pause, { prepare, call, labels: () => [] }, awake);
   owners.push(owner);
   return {
     owner,
+    awake,
     call,
     prepare,
     pause,
@@ -184,4 +186,51 @@ it('a late input resume cannot clear the replacement owner resume callback', asy
   h.state('resume');
   await vi.advanceTimersByTimeAsync(250);
   expect(nextResume).toHaveBeenCalledOnce();
+});
+
+// Remote exit must adopt the compositor cover without a stop/start gap (2026-11-11).
+// Existing lease tests did not cover persistence or native lock acknowledgement.
+// Unit: fake compositor statuses and timers; no physical input or OS changes.
+// Standalone vitest duration: 1.31 s on 2026-11-11.
+it('retains the cover after lease cleanup and remote toggles until native lock confirmation', async () => {
+  vi.useFakeTimers();
+  const h = fixture();
+  let current = true;
+  await h.owner.set(true, () => current);
+  const token = h.call.mock.calls[0][0].token;
+  await h.owner.coverOnExit(() => current);
+  current = false;
+  h.owner.stopSession();
+  await h.owner.set(false, () => true);
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(h.owner.active).toBe(true);
+  expect(h.call.mock.calls.filter(([r]) => r.op === 'start')).toHaveLength(1);
+  expect(h.call.mock.calls.some(([r]) => r.op === 'stop')).toBe(false);
+  expect(h.call).toHaveBeenCalledWith({ op: 'away', token });
+  expect(h.awake).toHaveBeenLastCalledWith(true);
+  h.state('locking');
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(h.owner.active).toBe(true);
+  expect(h.pause).not.toHaveBeenCalled();
+  h.state('locked');
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(h.owner.active).toBe(false);
+  expect(h.awake).toHaveBeenLastCalledWith(false);
+  expect(h.stop).not.toHaveBeenCalled();
+});
+
+it('requests native locking on shutdown and reports unsupported adoption for fallback', async () => {
+  vi.useFakeTimers();
+  const h = fixture();
+  await h.owner.coverOnExit(() => true);
+  await h.owner.lockOnExit();
+  expect(h.call).toHaveBeenLastCalledWith(expect.objectContaining({ op: 'lock' }));
+  expect(h.owner.active).toBe(true);
+  const old = fixture();
+  await old.owner.set(true, () => true);
+  old.state('unavailable');
+  await expect(old.owner.coverOnExit(() => true)).rejects.toThrow('DESKTOP_PRIVACY_UNAVAILABLE');
+  old.owner.stopSession();
+  expect(old.owner.active).toBe(false);
+  expect(old.awake).not.toHaveBeenCalledWith(true);
 });
