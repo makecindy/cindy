@@ -860,6 +860,7 @@
       "assignLocalAria": "{{name}}에서 다른 컴퓨터의 새 작업 수신 허용",
       "moreAria": "{{name}} 추가 작업",
       "remove": "그룹에서 제외",
+      "removeLocalBlocked": "그룹을 만든 컴퓨터는 그룹에서 제외할 수 없습니다",
       "status": {
         "checking": "확인 중…",
         "idle": "대기 중",
