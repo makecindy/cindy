@@ -19868,12 +19868,6 @@
       "from": "Transferido de “{{name}}”",
       "closeChecklist": "Fechar lista"
     },
-    "suggestion": {
-      "title": "Usar o assistente de migração para transferir de “{{name}}”?",
-      "description": "Pode configurar este computador com os plugins, competências, definições e ligações do outro. Tudo o que aqui precisar de um novo início de sessão ou permissão fica listado. Também o pode abrir mais tarde em Definições → Geral → Assistente de migração.",
-      "confirm": "Abrir o assistente de migração",
-      "later": "Agora não"
-    },
     "walkthrough": {
       "progress": "Lista de configuração {{current}} / {{total}}",
       "open": "Abrir",
@@ -19895,6 +19889,103 @@
         "allow": "Permitir",
         "deny": "Recusar"
       }
+    }
+  },
+  "firstRunGuide": {
+    "title": {
+      "new": "Bem-vindo ao Cindy",
+      "returning": "Bem-vindo de volta"
+    },
+    "stepsLabel": "Passos do guia",
+    "close": "Fechar o guia",
+    "next": "Seguinte",
+    "skip": "Ignorar",
+    "preparing": "A preparar…",
+    "steps": {
+      "legacy": "Dados anteriores",
+      "intro": "Conheça o Cindy",
+      "migration": "Migrar",
+      "models": "Ligar um modelo",
+      "import": "Trazer o que já tem",
+      "finish": "Concluído"
+    },
+    "legacy": {
+      "title": "Os seus dados da versão anterior já estão aqui",
+      "body": "As sessões anteriores, os ficheiros multimédia e os inícios de sessão do navegador do Agent foram transferidos para esta versão e estão prontos a usar.",
+      "note": "As chaves e credenciais de terceiros que autorizou não são transferidas com os dados. Autorize-as ou introduza-as novamente nas Definições."
+    },
+    "intro": {
+      "lead": "O Cindy é o assistente de IA que o ajuda a tornar realidade o que tem em mente.",
+      "work": {
+        "title": "Entregue-lhe o trabalho",
+        "body": "Trabalha diretamente nas suas pastas e aplicações, em vez de apenas responder a perguntas."
+      },
+      "connect": {
+        "title": "Use os modelos e as ferramentas que já tem",
+        "body": "Ligue a sua própria subscrição ou chave de API e adicione plugins e Skills quando precisar."
+      },
+      "continue": {
+        "title": "Continue em qualquer lugar",
+        "body": "A partir do telemóvel, inicie, consulte e continue as sessões do seu computador."
+      },
+      "start": "Começar",
+      "next": "A seguir"
+    },
+    "migration": {
+      "title": "Traga o Cindy do seu outro computador",
+      "body": "Outro computador da sua conta já está configurado. O Assistente de migração copia os plugins, Skills, definições e ligações dele para este computador; as chaves só são copiadas depois de escolher Permitir nesse computador.",
+      "manualBody": "Se já usou o Cindy noutro computador, o Assistente de migração pode copiar os plugins, Skills, definições e ligações dele para este computador.",
+      "done": "Migrado de «{{name}}»",
+      "from": "Computador antigo",
+      "to": "Este computador"
+    },
+    "models": {
+      "title": "Dê um modelo ao Cindy",
+      "body": "Pode usar as duas opções em conjunto.",
+      "cindy": {
+        "badge": "Serviço oficial",
+        "body": "O serviço de modelos disponibilizado pelo Cindy. Já vem com a sua conta, sem nada para ativar. As contas novas recebem um saldo gratuito para experimentar; depois de pagar, quase todos os modelos ficam disponíveis, e sem pagar a gama de modelos é mais reduzida.",
+        "active": "Incluído na sua conta e pronto a usar",
+        "freeBalance": "Montante gratuito oferecido: experimente à vontade"
+      },
+      "own": {
+        "title": "Use o seu próprio plano",
+        "badge": "Mais económico",
+        "body": "Já tem uma subscrição do Claude ou do ChatGPT, ou uma chave de API? Recomendamos vivamente que a ligue e a use em conjunto com o Cindy AI para ter a melhor experiência.",
+        "more": "Outros fornecedores e chaves de API",
+        "connected": "Ligado"
+      }
+    },
+    "import": {
+      "title": "Traga o que já está neste computador",
+      "body": "Isto é o que o Cindy encontrou noutras ferramentas de IA deste computador. O Cindy apenas lê os originais e nunca os altera.",
+      "empty": "Não foi encontrado nada para importar neste computador.",
+      "tasksHeading": "Sessões",
+      "tasksHint": "Selecione ferramentas para trazer as sessões delas para o Cindy e continuar a trabalhar.",
+      "pick": "Escolher uma a uma",
+      "started": "A importação começou em segundo plano. Acompanhe o progresso em Definições → Importação de sessões.",
+      "startFailed": "A importação não começou. Importe novamente em Definições → Importação de sessões.",
+      "teammatesHeading": "Colegas",
+      "teammatesHint": "Importe um Agent de outra ferramenta como colega, com a memória, as Skills e as automatizações dele.",
+      "importTeammate": "Importar como colega"
+    },
+    "finish": {
+      "title": "Está tudo pronto",
+      "legacy": "Os dados da versão anterior foram transferidos para esta versão",
+      "modelReady": "Há um modelo ligado",
+      "modelMissing": "Ainda não há nenhum modelo ligado. Pode ligar um quando iniciar uma sessão.",
+      "importStarted": "As sessões de outras ferramentas estão a ser importadas em segundo plano",
+      "native": "As suas Skills e os seus servidores MCP do Claude Code e do Codex funcionam aqui diretamente; não há nada para importar.",
+      "start": "Iniciar a sua primeira sessão"
+    },
+    "resume": {
+      "label": "Guia em curso · {{step}}",
+      "back": "Voltar ao guia"
+    },
+    "settings": {
+      "title": "Guia de introdução",
+      "description": "Veja novamente como conhecer o Cindy, migrar de outro computador, ligar um modelo e trazer o que já tem.",
+      "open": "Abrir o guia"
     }
   },
   "forwardedRequest": {

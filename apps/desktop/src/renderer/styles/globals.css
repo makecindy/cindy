@@ -1019,6 +1019,54 @@ body.resizing-pane [data-ghost-webview] {
   }
 }
 
+/* 开始引导的入场(DESIGN.md §14.4):每一步的内容按 --rise-index 依次淡入并上移,相邻错峰 30ms。
+   欢迎页(.first-run-cover)是一段约 1.3 秒的编排:各块相隔 45ms 利落到场,随后每张卡片里的
+   小场景按 --at 指定的时刻各播放一次(对勾弹出、横条从左画出、圆环让位给对勾)。仅 transform /
+   opacity,只在内容出现时播放一次、不循环,减弱动态效果下直落终态。 */
+.first-run-rise {
+  animation: first-run-rise var(--rise-duration, var(--motion-base)) var(--motion-ease-out)
+    calc(var(--rise-start, 0ms) + var(--rise-index, 0) * var(--rise-step, 30ms)) both;
+}
+@keyframes first-run-rise {
+  from {
+    opacity: 0;
+    transform: translateY(var(--rise-distance, 6px));
+  }
+}
+.first-run-cover {
+  --rise-step: 45ms;
+  --rise-distance: 8px;
+}
+.first-run-pop {
+  animation: first-run-pop var(--motion-base) var(--motion-ease-out) var(--at, 0ms) both;
+}
+@keyframes first-run-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+}
+.first-run-draw {
+  transform-origin: left center;
+  animation: first-run-draw var(--motion-base) var(--motion-ease-out) var(--at, 0ms) both;
+}
+@keyframes first-run-draw {
+  from {
+    opacity: 0;
+    transform: scaleX(0);
+  }
+}
+/* 终态是不可见:动效关闭时只留下取代它的对勾。 */
+.first-run-leave {
+  opacity: 0;
+  animation: first-run-leave var(--motion-fast) var(--motion-ease-in) var(--at, 0ms) both;
+}
+@keyframes first-run-leave {
+  from {
+    opacity: 1;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   [data-voice-mic-active='true'] [data-voice-mic-bar],
   .status-bar-shimmer,
@@ -1032,7 +1080,11 @@ body.resizing-pane [data-ghost-webview] {
   .stream-word,
   [data-stream-marker]::marker,
   .card-col-fade,
-  .bot-market-rise {
+  .bot-market-rise,
+  .first-run-rise,
+  .first-run-pop,
+  .first-run-draw,
+  .first-run-leave {
     animation: none !important;
     will-change: auto;
   }

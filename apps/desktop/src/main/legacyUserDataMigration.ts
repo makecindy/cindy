@@ -471,6 +471,14 @@ let pendingConfirmResolver: (() => void) | null = null;
 /** 并发防重入:beforeEnsureReady 可能被重复触发,共享同一个 in-flight promise。 */
 let inFlight: Promise<LegacyUserDataMigrationResult> | null = null;
 
+/**
+ * What this process last told the window about earlier-version data; null when nothing
+ * was found. The get-started guide reads it to list that data as already brought over.
+ */
+export function getLegacyMigrationPhase(): LegacyMigrationPhase | null {
+  return currentPhase;
+}
+
 function broadcastPhase(phase: LegacyMigrationPhase): void {
   currentPhase = phase;
   for (const win of BrowserWindow.getAllWindows()) {

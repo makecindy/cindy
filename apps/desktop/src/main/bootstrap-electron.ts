@@ -492,6 +492,7 @@ import { getActiveCatalog } from './maker-host/active-catalog';
 import { resolveSessionContextWindow } from '../shared/sessionContextWindow';
 import { resumeDeletedPiSubagentCleanup } from './localDb/ipc/sessions';
 import {
+  getLegacyMigrationPhase,
   registerLegacyMigrationIpc,
   runLegacyUserDataMigrationForUser,
 } from './legacyUserDataMigration';
@@ -7696,6 +7697,7 @@ const registerIpcHandlers = () => {
       app.getPath('appData'),
     ),
     getMainWindow: () => mainWindowRef,
+    getLegacyMigrated: () => getLegacyMigrationPhase() === 'done',
   });
   disposeSkillhubAutoSyncAuthListener = authManager.onAuthStateChange((state) => {
     if (!state.isAuthenticated) return;

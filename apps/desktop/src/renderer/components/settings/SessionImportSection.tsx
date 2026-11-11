@@ -99,7 +99,7 @@ function isoOf(ms: number): string | undefined {
   return ms > 0 ? new Date(ms).toISOString() : undefined;
 }
 
-function useFormatSize(): (bytes: number) => string {
+export function useFormatSize(): (bytes: number) => string {
   const { i18n } = useTranslation();
   return useCallback(
     (bytes: number) => {
@@ -112,7 +112,7 @@ function useFormatSize(): (bytes: number) => string {
 }
 
 /** 大致时间：按约 12 MB/s 的读写速度加每条任务的固定开销估算，至少 1 分钟。 */
-function estimateMinutes(count: number, bytes: number): number {
+export function estimateMinutes(count: number, bytes: number): number {
   return Math.max(1, Math.ceil((bytes / (12 * MB) + count * 0.6) / 60));
 }
 

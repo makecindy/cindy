@@ -1244,6 +1244,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     apply: (request) => ipcRenderer.invoke(SETUP_MIGRATION_IPC.APPLY, request),
     state: () => ipcRenderer.invoke(SETUP_MIGRATION_IPC.STATE),
     dismiss: (request) => ipcRenderer.invoke(SETUP_MIGRATION_IPC.DISMISS, request),
+    firstRunGuide: () => ipcRenderer.invoke(SETUP_MIGRATION_IPC.FIRST_RUN_GUIDE),
     onProgress: (listener) => {
       const receive = (_event: Electron.IpcRendererEvent, progress: SetupMigrationProgress) =>
         listener(progress);

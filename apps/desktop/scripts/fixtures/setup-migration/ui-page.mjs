@@ -155,7 +155,7 @@ export default {
   cases: {
     'settings-entry': {
       about: 'Opening Settings stays quiet; the explicit migration action opens an unselected source list',
-      data: { surface: 'settings', sources, plan, applyResponse, tools, state: { lastRun: null, suggestion: null } },
+      data: { surface: 'settings', sources, plan, applyResponse, tools, state: { lastRun: null } },
     },
     'same-name': {
       about: 'Same-name development devices are distinguishable without a default selection',
@@ -171,7 +171,7 @@ export default {
       data: {
         surface: 'walkthrough',
         walkthroughIds: checklistAfter.filter((item) => !item.done).map((item) => item.id),
-        state: { lastRun: { sourceName: 'MacBook Pro', finishedAt: 0, checklist: checklistAfter }, suggestion: null },
+        state: { lastRun: { sourceName: 'MacBook Pro', finishedAt: 0, checklist: checklistAfter } },
       },
       viewport: { width: 900, height: 400 },
     },
@@ -180,7 +180,7 @@ export default {
       about: 'Settings → General entry with the remaining checklist',
       data: {
         surface: 'settings',
-        state: { lastRun: { sourceName: 'MacBook Pro', finishedAt: 0, checklist: checklistAfter.map((item, index) => (index === 1 ? { ...item, done: true } : item)) }, suggestion: null },
+        state: { lastRun: { sourceName: 'MacBook Pro', finishedAt: 0, checklist: checklistAfter.map((item, index) => (index === 1 ? { ...item, done: true } : item)) } },
       },
       viewport: { width: 900, height: 760 },
     },
