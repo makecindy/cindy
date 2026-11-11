@@ -193,7 +193,8 @@
     "fromLead": "Lead'den mesaj",
     "fromWorkerNamed": "“{{role}}” adlı Worker'dan mesaj",
     "fromWorker": "Worker'dan mesaj",
-    "emptyMessageBody": "(Boş mesaj)"
+    "emptyMessageBody": "(Boş mesaj)",
+    "fromWorkerBatch": "Sistem raporu: {{count}} Worker sonucu"
   },
   "contextSheet": {
     "backAccessibility": "Bağlam paneline geri dön",

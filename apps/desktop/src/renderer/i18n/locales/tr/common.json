@@ -14207,7 +14207,8 @@
         "generic": "Yeni görev başlatılamadı. Tekrar deneyin."
       },
       "groupSentNamed": "“{{name}}” grubundan gönderildi",
-      "groupSent": "Bir gruptan gönderildi"
+      "groupSent": "Bir gruptan gönderildi",
+      "orcaFromWorkerBatch": "Sistem raporu: {{count}} Worker sonucu"
     },
     "threadContext": {
       "cindyFrom": "Cindy · {{platform}} üzerinden",
@@ -20006,7 +20007,11 @@
     "quotaUpdating": "Kota güncelleniyor",
     "quotaResetSoon": "Yakında sıfırlanacak",
     "quotaAverageHint": "Haftalık kota · Her hesap eşit ağırlıklı",
-    "quotaResetHint": "Mevcut kullanım hızında sıfırlama anında kullanılmamış kota kalabilir: son 24 saatte sarı, son 6 saatte kırmızı."
+    "quotaResetHint": "Mevcut kullanım hızında sıfırlama anında kullanılmamış kota kalabilir: son 24 saatte sarı, son 6 saatte kırmızı.",
+    "quotaRecoverIn": "{{duration}} sonra kullanılabilir",
+    "quotaExhausted": "Kullanım sınırına ulaşıldı",
+    "quotaFiveHourRemaining": "5 saatlik kalan: %{{percent}}",
+    "quotaFiveHourExhausted": "5 saatlik kullanım sınırına ulaşıldı"
   },
   "crashDiagnosis": {
     "description": "Ne olduğunu teşhis etmek ister misiniz? Göndermeden önce incelemeniz için çıkış ayrıntılarını ve sansürlenmiş günlükleri içeren bir görev taslağı hazırlayacağız. Beklenmeyen bir çıkış, zorla kapatma veya güç kaybından da kaynaklanabilir.",
