@@ -1147,6 +1147,9 @@ CI 的三类测试位置问题同时修正：模型对账/手机说明 guard 指
 - **真实使用**：`--mock` 界面夹具（隔离沙箱 `host-usage`，免登录本地数据）里用
   `apps/desktop/scripts/host-client-usage-tour.mjs` 走一遍 25 个夹具任务、20 个设置页、
   10 个主页面并新建任务发送一次，主进程按 `CINDY_IPC_USAGE_FILE` 计数（仅源码运行）。
+  这是旧版脚本的历史采样；当前巡检只导航读取，不填入或发送消息。`--mock` 与隔离
+  profile 都不能阻止已配置模型的真实调用，因此发送步骤已删除；两份证据未重录，
+  不代表当前只导航版本的采样，也不证明模型执行已隔离。
   报告存为 [`evidence/channel-usage-mock-tour.json`](evidence/channel-usage-mock-tour.json)，
   清单脚本默认读它排序。这一轮共调用 253 个通道（1862 次）。
 - **计数格式**：计数报告从 v2 起按 `(kind, channel)` 分别记 invoke 与 event。上面两份证据

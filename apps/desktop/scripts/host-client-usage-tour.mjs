@@ -8,6 +8,8 @@
  *   node apps/desktop/scripts/host-client-usage-tour.mjs --cdp=http://127.0.0.1:9333 --profile=<sandbox userData>
  *   node scripts/host-channel-coverage.mjs --usage /tmp/ipc-usage.json
  *
+ * Navigation only: never fills or submits the composer. --mock does not block
+ * real model calls when the sandbox has configured providers or an account.
  * Refuses any instance that the dev registry does not list as an isolated sandbox.
  */
 import assert from 'node:assert/strict';
@@ -69,17 +71,6 @@ try {
   for (const tab of SETTINGS_TABS) { await visit(`#/settings?tab=${tab}`); visited.push(`settings ${tab}`); }
   for (const route of PAGES) { await visit(`#${route}`); visited.push(route); }
 
-  // Basic flow: type into a new task and send once. Mock mode has no model, so
-  // the turn may fail; the channels it reaches are what matters here.
-  await visit('#/cc-agent/new');
-  const composer = page.locator('[contenteditable="true"], textarea').first();
-  if (await composer.count()) {
-    await composer.click();
-    await composer.fill('host client usage tour');
-    await page.keyboard.press('Enter');
-    await page.waitForTimeout(settle * 3);
-    visited.push('send');
-  }
   if (sessions[0]) { await visit(`#/cc-agent/${sessions[0]}`); visited.push('back to first task'); }
   console.log(`[host-client-usage-tour] visited ${visited.length} views (${sessions.length} fixture tasks)`);
 } finally {
