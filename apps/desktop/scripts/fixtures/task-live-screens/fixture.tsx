@@ -20,6 +20,7 @@ const installed = {
 const screens = [
   {
     plugin: '_root__cindy-simulator',
+    pluginIdentity: '_root__cindy-simulator',
     pluginName: 'Device Simulator',
     id: 'a',
     name: 'iPhone Air',
@@ -29,6 +30,7 @@ const screens = [
   },
   {
     plugin: '_root__second',
+    pluginIdentity: '_root__second',
     pluginName: 'Other device plugin',
     id: 'b',
     name: 'iPad',
@@ -38,6 +40,7 @@ const screens = [
   },
   {
     plugin: 'cindy-simulator',
+    pluginIdentity: '_root__cindy-simulator',
     pluginName: 'Device Simulator',
     id: 'a',
     name: 'iPhone Air',

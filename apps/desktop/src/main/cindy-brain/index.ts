@@ -2337,9 +2337,10 @@ export const pluginDeviceSync = new PluginDeviceSync({
 /** A live screen plugin's own view of its screens on the account's other computers. */
 export const pluginLiveScreenViews = new PluginLiveScreenViews({
   available: () => getAppCapabilities().canUseDeviceLink && !isAppSessionBoundaryPending(),
-  allowed: (instance) => {
+  identity: (instance) => {
     const ghost = findGhostForInstanceId(instance);
-    return !!ghost && ghost.enabled && ghost.manifest.liveScreen === true && Boolean(ghost.manifest.node);
+    return ghost && ghost.enabled && ghost.manifest.liveScreen === true && ghost.manifest.node
+      ? pluginStoragePart(installedGhostLogicalIdentity(ghost)) : null;
   },
 });
 

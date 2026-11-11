@@ -39,6 +39,7 @@ vi.mock('@/lib/toast', () => ({ toast: { info: notices } }));
 const invoke = vi.fn();
 const listed = (id: string, name: string, taskIds: string[], state = 'running') => ({
   plugin: '_root__cindy-simulator',
+  pluginIdentity: '_root__cindy-simulator',
   pluginName: 'Device Simulator',
   id,
   name,
@@ -240,6 +241,7 @@ it('keeps every plugin entry and setup need while merging duplicate install keys
   const b = {
     ...listed('b', 'Other phone', ['task-1']),
     plugin: '_root__second',
+    pluginIdentity: '_root__second',
     pluginName: 'Second',
   };
   const entries = taskLiveScreenEntries(
@@ -249,9 +251,39 @@ it('keeps every plugin entry and setup need while merging duplicate install keys
   expect(entries).toHaveLength(2);
   expect(entries[0].screens).toHaveLength(1);
   expect(entries[0].need).toBeNull();
-  expect(entries[1]).toMatchObject({ plugin: '_root__second', need: 'install' });
+  expect(entries[1]).toMatchObject({
+    plugin: '_root__second',
+    pluginIdentity: '_root__second',
+    need: 'install',
+  });
   expect(taskLiveScreenEntries([a, b] as never, []).map((entry) => entry.need)).toEqual([
     'install',
     'install',
   ]);
+});
+
+it('matches stamped logical source instead of the physical install name', () => {
+  const stamped = { ...plugin(), namespace: 'acme', instanceKey: 'cindy-simulator' };
+  const remote = [
+    {
+      ...listed('same', 'Org phone', ['task-1']),
+      plugin: 'cindy-simulator',
+      pluginIdentity: '_ns__acme__cindy-simulator',
+    },
+    {
+      ...listed('other', 'Root phone', ['task-1']),
+      plugin: '_root__cindy-simulator',
+      pluginIdentity: 'cindy-simulator',
+    },
+  ];
+  const entries = taskLiveScreenEntries(remote as never, [stamped] as never);
+  expect(entries).toHaveLength(2);
+  expect(entries[0]).toMatchObject({ need: null, ghost: stamped });
+  expect(entries[1]).toMatchObject({ need: 'install', ghost: null });
+  expect(
+    taskLiveScreenEntries(
+      [{ ...remote[0], pluginIdentity: undefined }] as never,
+      [stamped] as never,
+    ),
+  ).toEqual([]);
 });

@@ -8,6 +8,11 @@ import http from 'node:http';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { WebContents } from 'electron';
 import { LIVE_SCREEN_RELAY } from '../../../shared/liveScreenView.js';
+import {
+  parsePluginStoragePart,
+  pluginStoragePart,
+  installedGhostLogicalIdentity,
+} from '../../../shared/pluginIdentity.js';
 import { PluginLiveScreenViews } from '../pluginViews.js';
 
 function fakeHost() {
@@ -22,6 +27,7 @@ function fakeHost() {
 }
 const listed = (plugin: string, id: string, taskIds: string[]) => ({
   plugin,
+  pluginIdentity: pluginStoragePart(parsePluginStoragePart(plugin)!),
   pluginName: 'Device Simulator',
   id,
   name: `Device ${id}`,
@@ -39,7 +45,8 @@ function setup(allowed = ['sim']) {
   const allow = new Set(allowed);
   const views = new PluginLiveScreenViews({
     available: () => true,
-    allowed: (instance) => allow.has(instance),
+    identity: (instance) =>
+      allow.has(instance) ? pluginStoragePart(parsePluginStoragePart(instance)!) : null,
   });
   views.connect({ selfDeviceId: () => 'self', invoke });
   const relay = fakeHost();
@@ -133,7 +140,7 @@ it('lists and opens only the asking plugin’s own screens on another computer',
       payload: {
         relayId: expect.stringMatching(/^lr-/),
         deviceId: 'remote',
-        screen: { plugin: '_root__sim', id: 'a' },
+        screen: { plugin: '_root__sim', id: 'a', pluginIdentity: 'sim' },
       },
     },
   ]);
@@ -281,3 +288,77 @@ it('revokes an open before its loopback listener is ready', async () => {
   expect(fixture.invoke).not.toHaveBeenCalled();
   expect(fixture.relay.sent).toEqual([]);
 });
+
+// The same physical key can belong to a root or stamped organization install.
+// Source matching must use host-attested identity at both ends, not the key.
+it.each([null, 'acme', 'local'])(
+  'authorizes actual %s identity across legacy and new physical keys',
+  async (namespace) => {
+    const installed = {
+      manifest: { id: 'helper' },
+      namespace,
+      instanceKey: 'helper',
+      dir: '/plugins/helper',
+    };
+    const identity = pluginStoragePart(installedGhostLogicalIdentity(installed));
+    const { host, sent } = fakeHost();
+    let actualIdentity = identity;
+    const views = new PluginLiveScreenViews({
+      available: () => true,
+      identity: () => actualIdentity,
+    });
+    views.setHost(host);
+    views.connect({
+      selfDeviceId: () => 'self',
+      invoke: async (_device, request) =>
+        request.op === 'capabilities'
+          ? { version: 1, enabled: true, liveScreens: true }
+          : {
+              screens: [
+                { ...listed('helper', 'same-old', []), pluginIdentity: identity },
+                { ...listed('_ns__acme__helper', 'same-new', []), pluginIdentity: identity },
+                {
+                  ...listed('helper', 'other-source', []),
+                  pluginIdentity: namespace === null ? '_ns__acme__helper' : 'helper',
+                },
+                { ...listed('helper', 'unknown-source', []), pluginIdentity: undefined },
+              ],
+            },
+    });
+    try {
+      expect(await views.handle('helper', { op: 'screens', deviceId: 'remote' })).toMatchObject({
+        ok: true,
+        screens: [{ id: 'same-old' }, { id: 'same-new' }],
+      });
+      expect(
+        await views.handle('helper', { op: 'open', deviceId: 'remote', id: 'other-source' }),
+      ).toMatchObject({ ok: false });
+      expect(
+        await views.handle('helper', { op: 'open', deviceId: 'remote', id: 'unknown-source' }),
+      ).toMatchObject({ ok: false });
+      const opened = (await views.handle('helper', {
+        op: 'open',
+        deviceId: 'remote',
+        id: 'same-old',
+      })) as { ok: boolean; url: string };
+      expect(opened).toMatchObject({ ok: true });
+      expect(
+        await views.handle('helper', { op: 'open', deviceId: 'remote', id: 'same-new' }),
+      ).toMatchObject({ ok: true });
+      expect(
+        sent.filter((m) => m.channel === LIVE_SCREEN_RELAY.START).map((m) => m.payload.screen),
+      ).toEqual([
+        { plugin: 'helper', id: 'same-old', pluginIdentity: identity },
+        { plugin: '_ns__acme__helper', id: 'same-new', pluginIdentity: identity },
+      ]);
+      actualIdentity = namespace === null ? '_ns__acme__helper' : 'helper';
+      expect((await post(opened.url, { events: [{ kind: 'release' }] })).status).toBe(404);
+      const relayId = sent.find((m) => m.channel === LIVE_SCREEN_RELAY.START)!.payload
+        .relayId as string;
+      views.state(host, relayId, { status: 'live' });
+      expect((await post(opened.url, { events: [{ kind: 'release' }] })).status).toBe(404);
+    } finally {
+      views.endAll();
+    }
+  },
+);

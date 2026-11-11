@@ -1066,6 +1066,7 @@ it('shows a device screen as that device: touches, its own buttons and its turns
   const requests: RemoteDesktopRequest[] = [];
   const screen = {
     plugin: 'cindy-simulator',
+    pluginIdentity: '_ns__acme__cindy-simulator',
     id: 'sim',
     name: 'iPhone',
     platform: 'ios',
@@ -1082,7 +1083,7 @@ it('shows a device screen as that device: touches, its own buttons and its turns
         target: {
           deviceId: 'host',
           name: 'Computer',
-          screen: { plugin: screen.plugin, id: 'sim' },
+          screen: { plugin: screen.plugin, id: 'sim', pluginIdentity: '_ns__acme__cindy-simulator' },
         },
       }),
       request: async (_generation, request) => {
@@ -1118,7 +1119,7 @@ it('shows a device screen as that device: touches, its own buttons and its turns
   });
   expect(requests.find((request) => request.op === 'start')).toMatchObject({
     displayId: 'live-screen',
-    screen: { plugin: 'cindy-simulator', id: 'sim' },
+    screen: { plugin: 'cindy-simulator', id: 'sim', pluginIdentity: '_ns__acme__cindy-simulator' },
     control: true,
   });
   expect(runtime.receive).toHaveBeenCalledWith({

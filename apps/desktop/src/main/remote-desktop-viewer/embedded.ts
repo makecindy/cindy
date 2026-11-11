@@ -133,6 +133,7 @@ export class EmbeddedLiveScreens {
       screen: {
         plugin: screen.plugin,
         id: screen.id,
+        ...(screen.pluginIdentity === undefined ? {} : {pluginIdentity:screen.pluginIdentity}),
         ...(screen.name ? { name: screen.name } : {}),
       },
     });

@@ -509,7 +509,7 @@ it.each(['lock-screen', 'suspend'])('ends the remote desktop on local %s without
 it.each(['lock-screen', 'suspend', 'reset'])(
   'revokes pending plugin opens on %s before a late list arrives',
   async (signal) => {
-    const views = new PluginLiveScreenViews({ available: () => true, allowed: () => true });
+    const views = new PluginLiveScreenViews({ available: () => true, identity: () => 'sim' });
     manager = new RemoteDesktopViewerWindows(() => true);
     manager.register(views);
     let finish!: (value: unknown) => void;
@@ -538,6 +538,7 @@ it.each(['lock-screen', 'suspend', 'reset'])(
       screens: [
         {
           plugin: 'sim',
+        pluginIdentity: 'sim',
           pluginName: 'Simulator',
           id: 'phone',
           name: 'Phone',

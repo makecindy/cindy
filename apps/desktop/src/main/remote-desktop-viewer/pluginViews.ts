@@ -17,7 +17,6 @@ import {
   type LiveScreenRelayState,
   type LiveScreenViewMessage,
 } from '../../shared/liveScreenView.js';
-import { parsePluginStoragePart } from '../../shared/pluginIdentity.js';
 
 /** Same message types as a plugin's own live screen stream. */
 const MESSAGE = { description: 0x01, key: 0x02, delta: 0x03, json: 0x10 } as const;
@@ -40,6 +39,7 @@ type View = {
   id: string;
   token: string;
   instance: string;
+  identity: string;
   /** The plugin's install key on that computer, as that computer lists it. */
   remotePlugin: string | null;
   deviceId: string;
@@ -55,16 +55,6 @@ type View = {
 export interface PluginLiveScreenLink {
   selfDeviceId(): string | null | undefined;
   invoke(deviceId: string, request: { op: 'capabilities' | 'screens' }): Promise<unknown>;
-}
-
-/**
- * The same plugin on two computers: same id from the same source. Its install
- * key may differ between them (an older install keeps its old place on disk).
- */
-function samePlugin(a: string, b: string): boolean {
-  const left = parsePluginStoragePart(a);
-  const right = parsePluginStoragePart(b);
-  return !!left && !!right && left.ghostId === right.ghostId && left.namespace === right.namespace;
 }
 
 const fail = (errorCode: string) => ({ ok: false as const, errorCode });
@@ -129,7 +119,7 @@ export class PluginLiveScreenViews {
     private readonly deps: {
       available(): boolean;
       /** Whether this enabled plugin instance may view its screens elsewhere. */
-      allowed(instance: string): boolean;
+      identity(instance: string): string | null;
     },
   ) {}
   /** The way to the account's other computers, set once device link is up. */
@@ -156,7 +146,8 @@ export class PluginLiveScreenViews {
   }
 
   async handle(instance: string, payload: unknown): Promise<unknown> {
-    if (!this.deps.allowed(instance)) return fail('PERMISSION_DENIED');
+    const identity = this.deps.identity(instance);
+    if (!identity) return fail('PERMISSION_DENIED');
     if (!record(payload)) return fail('INVALID_ARGUMENT');
     if (payload.op === 'close') {
       const view = typeof payload.view === 'string' ? this.views.get(payload.view) : undefined;
@@ -177,9 +168,11 @@ export class PluginLiveScreenViews {
         const screens = await this.screens(link, deviceId);
         return {
           ok: true,
-          screens: screens
-            .filter((screen) => samePlugin(screen.plugin, instance))
-            .map(({ id, name, platform, taskIds }) => ({ id, name, platform, taskIds })),
+          screens: !this.matchesIdentity(instance, identity)
+            ? []
+            : screens
+                .filter((screen) => screen.pluginIdentity === identity)
+                .map(({ id, name, platform, taskIds }) => ({ id, name, platform, taskIds })),
         };
       } catch (error) {
         return fail(error instanceof Error && error.message ? error.message : 'DEVICE_UNAVAILABLE');
@@ -207,6 +200,7 @@ export class PluginLiveScreenViews {
         id: `lv-${randomUUID()}`,
         token: randomBytes(32).toString('hex'),
         instance,
+        identity,
         remotePlugin: null,
         deviceId,
         screenId,
@@ -223,14 +217,14 @@ export class PluginLiveScreenViews {
       this.views.get(view.id) === view &&
       this.host === view.host &&
       !view.host.isDestroyed() &&
-      this.deps.allowed(instance) &&
+      this.matchesIdentity(instance, view.identity) &&
       this.deps.available();
     if (view.remotePlugin === null) {
       try {
         await this.listen();
         if (!current()) return fail('HOST_NOT_READY');
         const remotePlugin = (await this.screens(link, deviceId)).find(
-          (screen) => screen.id === screenId && samePlugin(screen.plugin, instance),
+          (screen) => screen.id === screenId && screen.pluginIdentity === identity,
         )?.plugin;
         if (!current()) return fail('HOST_NOT_READY');
         if (!remotePlugin) {
@@ -243,7 +237,7 @@ export class PluginLiveScreenViews {
           view.host.send(LIVE_SCREEN_RELAY.START, {
             relayId: view.relayId,
             deviceId,
-            screen: { plugin: remotePlugin, id: screenId },
+            screen: { plugin: remotePlugin, id: screenId, pluginIdentity: identity },
           } satisfies LiveScreenRelayStart);
           this.idleSoon(view);
         }
@@ -284,10 +278,18 @@ export class PluginLiveScreenViews {
     this.lists.clear();
   }
 
+  private matchesIdentity(instance: string, identity: string): boolean {
+    return this.deps.identity(instance) === identity;
+  }
+
   private byRelay(sender: WebContents, relayId: unknown): View | undefined {
     if (typeof relayId !== 'string') return undefined;
     for (const view of this.views.values())
-      if (view.relayId === relayId && view.host === sender) return view;
+      if (view.relayId === relayId && view.host === sender) {
+        if (this.matchesIdentity(view.instance, view.identity)) return view;
+        this.end(view, 'PERMISSION_DENIED', true);
+        return undefined;
+      }
     return undefined;
   }
   /** The relaying window reports what the connection is doing. */
@@ -431,7 +433,8 @@ export class PluginLiveScreenViews {
     const view = match
       ? [...this.views.values()].find((item) => item.token === match[1])
       : undefined;
-    if (!match || !view) return reply(404, fail('VIEW_CLOSED'));
+    if (!match || !view || !this.matchesIdentity(view.instance, view.identity))
+      return reply(404, fail('VIEW_CLOSED'));
     if (request.method === 'OPTIONS') {
       response.writeHead(204, {
         'Access-Control-Allow-Methods': 'GET, POST',

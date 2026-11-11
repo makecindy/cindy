@@ -1082,7 +1082,7 @@ describe('device screen view', () => {
       writeClipboard: () => {},
       credentials: credentials as never,
     });
-    const screen = { plugin: 'cindy-simulator', id: 'sim' };
+    const screen = { plugin: 'cindy-simulator', id: 'sim', pluginIdentity: 'cindy-simulator' };
     connection.bind({ deviceId: 'computer-a', name: 'Computer', screen });
     connection.setActive(true);
     const { generation } = connection.snapshot();
@@ -1091,6 +1091,8 @@ describe('device screen view', () => {
     for (const start of [
       { op: 'start', displayId: '1' },
       { op: 'start', displayId: 'live-screen', screen: { ...screen, id: 'other' } },
+      { op: 'start', displayId: 'live-screen', screen: { ...screen, pluginIdentity: undefined } },
+      { op: 'start', displayId: 'live-screen', screen: { ...screen, pluginIdentity: '_ns__acme__cindy-simulator' } },
     ])
       expect(await connection.request(generation, start)).toEqual({
         ok: false,

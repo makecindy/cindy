@@ -205,6 +205,7 @@ export class RemoteViewerConnection {
       if (
         request.op === 'start' &&
         (request.screen?.plugin !== this.target?.screen?.plugin ||
+          request.screen?.pluginIdentity !== this.target?.screen?.pluginIdentity ||
           request.screen?.id !== this.target?.screen?.id)
       )
         throw new Error('DESKTOP_UNAVAILABLE');

@@ -80,6 +80,7 @@ export interface RemoteViewerTarget {
 }
 export interface RemoteViewerScreen {
   plugin: string;
+  pluginIdentity?: string;
   id: string;
   name?: string;
 }
@@ -92,6 +93,7 @@ export function sameViewerScope(
     a?.deviceId === b.deviceId &&
     a.handoff === b.handoff &&
     a.screen?.plugin === b.screen?.plugin &&
+    a.screen?.pluginIdentity === b.screen?.pluginIdentity &&
     a.screen?.id === b.screen?.id
   );
 }

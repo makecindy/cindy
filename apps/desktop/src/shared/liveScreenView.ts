@@ -37,7 +37,7 @@ export interface LiveScreenRelayState {
 export interface LiveScreenRelayStart {
   relayId: string;
   deviceId: string;
-  screen: { plugin: string; id: string };
+  screen: { plugin: string; id: string; pluginIdentity?: string };
 }
 
 export interface LiveScreenRelayBridge {

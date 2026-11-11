@@ -34,6 +34,7 @@ export type TaskLiveScreenNeed = 'install' | 'enable' | 'update';
 export interface TaskLiveScreenEntry {
   plugin: string;
   pluginName: string;
+  pluginIdentity?: string;
   screens: RemoteLiveScreen[];
   ghost: InstalledGhost | null;
   need: TaskLiveScreenNeed | null;
@@ -52,11 +53,12 @@ export function taskLiveScreenEntries(
 ): TaskLiveScreenEntry[] {
   const entries: TaskLiveScreenEntry[] = [];
   for (const screen of screens) {
+    if (!screen.pluginIdentity) continue;
     let entry = entries.find((item) => item.plugin === screen.plugin);
     if (!entry) {
       // The same plugin here: same id from the same source. Its install key
       // may differ between two computers (an older install keeps its place).
-      const identity = parsePluginStoragePart(screen.plugin);
+      const identity = parsePluginStoragePart(screen.pluginIdentity ?? '');
       const ghost =
         (identity &&
           installed.find((item) => {
@@ -66,6 +68,7 @@ export function taskLiveScreenEntries(
         null;
       entry = {
         plugin: screen.plugin,
+        pluginIdentity: screen.pluginIdentity,
         pluginName: screen.pluginName,
         screens: [],
         ghost,
@@ -83,7 +86,7 @@ export function taskLiveScreenEntries(
   }
   const groups = new Map<string, TaskLiveScreenEntry>();
   for (const entry of entries) {
-    const identity = parsePluginStoragePart(entry.plugin);
+    const identity = parsePluginStoragePart(entry.pluginIdentity ?? '');
     const key = identity ? JSON.stringify([identity.namespace, identity.ghostId]) : entry.plugin;
     const previous = groups.get(key);
     if (!previous || (previous.need && !entry.need)) groups.set(key, entry);
@@ -98,7 +101,7 @@ export function taskLiveScreenEntries(
 
 /** Where the user makes the plugin usable: its own page here, else its market listing. */
 async function setupRoute(entry: TaskLiveScreenEntry): Promise<string> {
-  const pluginId = parsePluginStoragePart(entry.plugin)?.ghostId ?? entry.plugin;
+  const pluginId = parsePluginStoragePart(entry.pluginIdentity ?? '')?.ghostId ?? entry.plugin;
   try {
     return (await pluginSetupRoute(entry.ghost ?? undefined, pluginId)) ?? '/plugins';
   } catch {

@@ -471,6 +471,7 @@ export class DesktopViewerController {
           ? {
               screen: {
                 plugin: this.scope.target.screen.plugin,
+                ...(this.scope.target.screen.pluginIdentity === undefined ? {} : {pluginIdentity:this.scope.target.screen.pluginIdentity}),
                 id: this.scope.target.screen.id,
               },
             }
