@@ -10,6 +10,7 @@ export default {
     'full-panel-warning': { about: 'Full production ModelSelector popup with pooled accounts and yellow reset time' },
     default: { about: 'Paused first account; unique eligible second account' },
     bound: { about: 'Existing task remains bound to the paused first account' },
+    'session-bound': { about: 'Executing host resolves the native session to the second account, overriding the picker preview' },
     ambiguous: { about: 'Two accounts; average once in provider heading and separate details' },
     'reset-soon': { about: 'One account retains 80% with 12 hours until weekly reset; time is yellow' },
     'reset-urgent': { about: 'One account retains 80% with 5 hours until weekly reset; time is red' },

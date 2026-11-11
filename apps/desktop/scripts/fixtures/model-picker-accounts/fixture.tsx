@@ -9,6 +9,7 @@ import {
 } from '../../../src/renderer/components/new-chat/ModelSourceDetails';
 import { ModelPoolQuotaSummary } from '../../../src/renderer/components/new-chat/ModelPoolQuota';
 import { UnifiedModelRail } from '../../../src/renderer/components/new-chat/UnifiedModelRail';
+import { SessionSubscriptionAccountProvider } from '../../../src/renderer/components/new-chat/SessionSubscriptionAccount';
 
 const providers = [
   {
@@ -46,16 +47,26 @@ void mountPage({
     },
     subscriptionAccounts: {
       onChanged: subscription('subscriptionAccounts'),
+      sessionAccount: async () => ({
+        providerId: 'anthropic',
+        state: 'bound',
+        account: {
+          isDefault: false, number: 2, identity: 'second@example.test',
+          paused: false, status: 'ready', plan: 'pro',
+          usage: { claude: { sevenDay: { utilization: 20, resetsAt: Date.now() / 1000 + 2 * 86400 } } },
+        },
+      }),
       command: async () => ({
         providerId: 'anthropic',
         configured: true,
         strategy: 'round-robin',
         ...(ctx.case === 'bound' ? { boundAccountId: 'default' } : {}),
+        ...(ctx.case === 'session-bound' ? { boundAccountId: null } : {}),
         accounts: [
           {
             id: 'default',
             identity: 'first@example.test',
-            paused: !['ambiguous', 'reset-soon', 'reset-urgent', 'unknown', 'full-panel', 'full-panel-warning'].includes(ctx.case),
+            paused: !['ambiguous', 'session-bound', 'reset-soon', 'reset-urgent', 'unknown', 'full-panel', 'full-panel-warning'].includes(ctx.case),
             status: 'ready',
             running: 0,
             limit: 4,
@@ -91,9 +102,13 @@ void mountPage({
         </div>
       </main>
     );
-    const scope = { deviceId: null, ...(ctx.case === 'bound' ? { taskId: 'existing-task' } : {}) };
+    const scope = { deviceId: null, ...(['bound', 'session-bound'].includes(ctx.case) ? { taskId: 'existing-task' } : {}) };
     return (
       <div className="p-4">
+        <SessionSubscriptionAccountProvider
+          providerId={ctx.case === 'session-bound' ? 'anthropic' : null}
+          deviceId={null} sessionId="existing-task" nativeSessionId="native-task"
+        >
         <ModelSourceUsageProvider providers={providers} scope={scope}>
           <div className="flex rounded-[var(--radius-lg)] border border-[var(--model-dropdown-border)] bg-[var(--model-dropdown-bg)] p-2">
             <UnifiedModelRail
@@ -118,6 +133,7 @@ void mountPage({
             </div>
           </div>
         </ModelSourceUsageProvider>
+        </SessionSubscriptionAccountProvider>
       </div>
     );
   },
