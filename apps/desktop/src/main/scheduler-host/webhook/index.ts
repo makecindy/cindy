@@ -10,6 +10,7 @@ import path from 'node:path';
 import { safeStorage } from 'electron';
 import {
   ScheduleWebhookQueue,
+  sameGithubAppScope,
   scheduleWebhookEventMatches,
   isValidWebhookSecret,
   resolveScheduleWebhookFormat,
@@ -425,7 +426,7 @@ export class ScheduleWebhookHost {
       const appSource = schedule.webhookTrigger?.source?.preset === 'github-app'
         || replacement?.webhookTrigger?.source?.preset === 'github-app';
       if (replacement?.id === schedule.id && !(appSource
-        && (replacement.status !== 'active' || JSON.stringify(replacement.webhookTrigger) !== JSON.stringify(schedule.webhookTrigger)))) continue;
+        && (replacement.status !== 'active' || !sameGithubAppScope(replacement.webhookTrigger ?? {}, schedule.webhookTrigger ?? {})))) continue;
       this.secrets.delete(endpointId);
       fs.rmSync(this.secretFile(endpointId), { force: true });
       await this.queue.forget(schedule.id);

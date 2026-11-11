@@ -427,6 +427,19 @@ export type ScheduleWebhookSource =
   | { preset: ScheduleWebhookPresetId; signed?: boolean }
   | { preset: 'custom'; format: WebhookFormat };
 
+/** Presentation order is not part of a managed subscription's queue identity. */
+export function sameGithubAppScope(
+  a: { source?: ScheduleWebhookSource; events?: readonly string[] },
+  b: { source?: ScheduleWebhookSource; events?: readonly string[] },
+): boolean {
+  if (a.source?.preset !== 'github-app' || b.source?.preset !== 'github-app') return false;
+  const canonical = (repositories: readonly string[], events: readonly string[] = []) => JSON.stringify([
+    [...new Set(repositories.map(repo => repo.trim().toLowerCase()))].sort(),
+    [...new Set(events.map(event => event.trim()).filter(Boolean))].sort(),
+  ]);
+  return canonical(a.source.repositories, a.events) === canonical(b.source.repositories, b.events);
+}
+
 /**
  * 校验调用方提交的发送方；不合法时抛错，错误信息可直接给用户或 Agent。
  * 未知的预设名不接受：服务器按格式执行，客户端认不出的预设无法转成格式。

@@ -28,7 +28,7 @@ import type { ChildRunInput, FireContext, ScheduleRunner } from '../interfaces/s
 import type { Clock } from '../interfaces/clock.js';
 import type { Logger } from '../interfaces/logger.js';
 import { nextCronOrMonthlyFire } from './monthlyClamp.js';
-import { GITHUB_APP_EVENTS, normalizeScheduleWebhookSource } from '../webhook-formats.js';
+import { GITHUB_APP_EVENTS, normalizeScheduleWebhookSource, sameGithubAppScope } from '../webhook-formats.js';
 
 /**
  * Interval-mode 下次触发时间。`baseMs` 是上次完成（或 createdAt）。
@@ -93,7 +93,7 @@ function normalizeWebhookTrigger(
     throw new Error('unsupported GitHub App event filter');
   }
   const managedScopeChanged = existing && (source?.preset === 'github-app' || existing.source?.preset === 'github-app')
-    && (JSON.stringify(source) !== JSON.stringify(existing.source) || JSON.stringify(events) !== JSON.stringify(existing.events ?? []));
+    && !sameGithubAppScope({ source, events }, existing);
   return {
     // App routes have no public URL/secret. Rotate their local queue identity when
     // scope changes so an already prepared run cannot execute under a new scope.
