@@ -723,7 +723,7 @@ phone/network latency benchmark or a guarantee of 30/60 fps. Desktop types,
 related unit tests and native memory/bounds checks pass. Phone-side smoothness
 and packaged Linux startup still require validation.
 
-Other Linux Wayland environments (including XWayland applications) expose
+Other Linux Wayland environments expose
 one portal-selected surface. Electron's PipeWire source is not a physical monitor
 enumeration and may have an empty `display_id`; see the
 [Electron Linux caveat](https://www.electronjs.org/docs/latest/api/desktop-capturer#linux)
@@ -731,6 +731,17 @@ and [source contract](https://www.electronjs.org/docs/latest/api/structures/desk
 The host advertises one view-only display slot. Its initial 1280×720 geometry is a
 viewport placeholder; video/JPEG dimensions describe the selected surface. The
 existing viewer fallback supplies its localized display name.
+
+That path needs Electron itself on Wayland. Electron picks Ozone Wayland only when
+`XDG_SESSION_TYPE=wayland`, and `--ozone-platform` overrides that choice. Started
+from a shell without that variable inside a Wayland compositor, Cindy runs on XWayland.
+Capture then reads XWayland's root window, which holds no desktop pixels: viewers
+see a black screen with only the pointer and no portal request is made (#9712).
+On the first video offer of each run, the host logs one `remote-desktop:display-backend`
+warning listing the Wayland signals it saw (`XDG_SESSION_TYPE=wayland`,
+`WAYLAND_DISPLAY` set, a `wayland-N` socket in the runtime directory). That exact
+scope is in the log-upload allowlist. The UI does not show this state, and the
+supported compositors are unchanged.
 
 A lease creates one isolated capture window and starts one system picker. Local
 consent may take up to two minutes, independently of each bounded video RPC.
