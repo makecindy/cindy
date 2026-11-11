@@ -16,6 +16,8 @@ export interface SubscriptionPoolConfig {
   disconnected?: boolean;
   /** Upgrade-only: preserve an already authorized private Cindy Codex home. */
   legacyCodexDefault?: boolean;
+  /** Upgrade aliases: old connection ID -> pool account ID. Retained after removal to prevent re-import. */
+  legacyCodexAccounts?: Record<string, string>;
   strategy: ProviderGroupStrategy;
   accounts: SubscriptionAccountConfig[];
 }
