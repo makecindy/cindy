@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { expect, it, vi } from 'vitest';
+import { normalizeAppearanceSettings } from '../../../shared/appearanceSettings.js';
 const h = vi.hoisted(() => ({
   wallpaper: { url: '', pluginSource: undefined as { instanceId: string; key: string } | undefined },
   settings: { wallpaperId: 'custom' } as Record<string, unknown>,
@@ -9,8 +10,9 @@ const h = vi.hoisted(() => ({
 vi.mock('../../custom-wallpaper-settings.js', () => ({ customWallpaperStore: { read: () => h.wallpaper } }));
 vi.mock('../../appearance-settings-store.js', () => ({
   readAppearanceSettings: () => ({ ...h.settings, customWallpaperUrl: h.wallpaper.url }),
-  updateAppearanceSettingsAtomic: async (updater: (current: unknown) => object) => {
-    h.settings = { ...h.settings, ...updater(h.settings) }; return { ...h.settings, customWallpaperUrl: h.wallpaper.url };
+  updateAppearanceSettingsAtomic: async (updater: (current: unknown, overrides: unknown) => object) => {
+    h.settings = { ...normalizeAppearanceSettings({ ...h.settings, ...updater(normalizeAppearanceSettings(h.settings), h.settings) }) };
+    return { ...h.settings, customWallpaperUrl: h.wallpaper.url };
   },
 }));
 vi.mock('../../appearance-settings-ipc.js', () => ({ publishAppearanceFromOwner: h.publish }));
