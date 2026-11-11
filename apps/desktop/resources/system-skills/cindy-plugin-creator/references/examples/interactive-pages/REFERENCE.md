@@ -56,7 +56,7 @@ cindy.send({ type: 'tool-progress', callId: msg.callId,
 
 progress 保持递增；total 可省略。cindy.pick、上传、下载等文件操作已报告自身进度，
 不必重复发。页面关闭时清理自己的计时器、订阅和事件；不依赖文档替换清除所有
-JavaScript 状态。临时输入要由页面自行保存，卡片重开默认显示最初工具结果。
+JavaScript 状态。卡片重开默认显示最初工具结果；少量草稿和浏览位置可用[宿主页面状态](../../plugin-interactive-pages.md#91-宿主保存单张卡片的页面状态)保存，未支持时或业务数据仍通过插件自己的工具和存储。
 
 整页替换并重新连接后，旧请求会被取消，旧回复不会交给新页面。已被 Cindy 接收的
 sendMessage 消息仍会继续发送；不要因旧页面未收到回执而重复发送。尚未接收的消息
