@@ -10,6 +10,7 @@ import type {
   SessionSendResult,
 } from '@cindy/maker-core';
 import { describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 
 import {
   authorizeSendToLeadCaller,
@@ -22,10 +23,11 @@ import {
   type OrcaWorkerReportQueueStatus,
   type OrcaWorkerReportReceipt,
 } from '../orca-bridge-mcp';
+import { ORCA_WORKER_REPORT_STATES, ORCA_WORKER_SETTLING_REPORT_STATES } from '../orca-bridge-mcp';
 import { renderOrcaWorkerSystemPrompt } from '../orca-bridge-prompt';
 
 const WORKER_BRIDGE_TOOLS = [
-  'send_to_lead', 'read_lead_history', 'read_lead', 'lead_status',
+  'report_progress', 'send_to_lead', 'read_lead_history', 'read_lead', 'lead_status',
   'get_lead_queue_status', 'update_queued_report', 'cancel_queued_report', 'merge_queued_reports',
 ];
 
@@ -720,38 +722,34 @@ describe('orca_worker_bridge MCP helpers', () => {
     expect(text).toContain('blocked');
   });
 
-  it('records progress without dispatching it to the Lead or rehydrating it', async () => {
+  // 遥测与结论从工具层分家：progress 走独立工具，结构上不派发、不 rehydrate、不结算、不带问题。
+  it('records progress via report_progress without touching the Lead', async () => {
     const lead = makeSession('lead-1');
     const recordWorkerReport = vi.fn(async () => {});
     const h = makeWorkerBridgeLeadHarness(lead, undefined, undefined, { recordWorkerReport });
-    // rehydrate 通道是 resolveLead→ensureCapturedSession；progress 不得触碰它，
-    // 否则空闲/失活的 Lead 会为一条进度被拉起，或卡在远端 preflight 上。
-    const json = parseToolJson(await h.server._registeredTools.send_to_lead.handler({
+    const json = parseToolJson(await h.server._registeredTools.report_progress.handler({
       worker_id: 'worker-1',
-      message: '做到一半',
-      report: { state: 'progress', summary: '已完成一半' },
+      summary: '已完成一半',
     }));
 
     expect(json).toMatchObject({ ok: true, recorded: 'progress' });
     expect(lead.sent).toEqual([]);
     expect(recordWorkerReport).toHaveBeenCalledWith('worker-session-1', expect.objectContaining({ state: 'progress' }));
-    // progress 不结算欠回报：仍然照旧走后续 Auto-bridge。
     expect(h.finishReport).not.toHaveBeenCalled();
   });
 
-  // progress 是内部遥测：带 question 即拒，防止内部问题经 latest_report 漏进用户通知。
-  it('rejects a progress report that carries a question', async () => {
-    const lead = makeSession('lead-1');
-    const h = makeWorkerBridgeLeadHarness(lead);
-    const json = expectToolError(await h.server._registeredTools.send_to_lead.handler({
-      worker_id: 'worker-1',
-      message: '做到一半',
-      report: { state: 'progress', question: '顺便问一下选哪个？' },
-    }));
-
-    expect(json).toMatchObject({ error: expect.stringContaining('must not carry a question') });
-    expect(lead.sent).toEqual([]);
-    expect(h.captureLocalWorkerReport).not.toHaveBeenCalled();
+  // 旧提示词/旧模型仍可能把 progress 塞进 send_to_lead：枚举已收窄到五个终段状态，
+  // schema 层拒收 progress（存储侧仍认六态，供 latest_report 面板读旧数据）。
+  it('narrows send_to_lead to the settling states so progress cannot ride it', () => {
+    // 契约：send_to_lead 的枚举 = 五个终段状态；progress 只存在于存储/消费侧六态集合。
+    expect([...ORCA_WORKER_SETTLING_REPORT_STATES]).not.toContain('progress');
+    expect([...ORCA_WORKER_SETTLING_REPORT_STATES]).toEqual(
+      ORCA_WORKER_REPORT_STATES.filter((state) => state !== 'progress'),
+    );
+    // 与生产 schema 同源断言：send_to_lead 的 state 枚举正是 SETTLING 集合。
+    const settlingSchema = z.enum(ORCA_WORKER_SETTLING_REPORT_STATES as unknown as [string, ...string[]]);
+    expect(() => settlingSchema.parse('progress')).toThrow();
+    expect(settlingSchema.parse('waiting')).toBe('waiting');
   });
 
   it('rejects a blocked report without a question before dispatch', async () => {

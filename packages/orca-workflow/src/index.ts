@@ -4,6 +4,8 @@ export {
   formatOrcaCommunicationMessage,
   formatWorkerReportForLead,
   ORCA_WORKER_REPORT_STATES,
+  ORCA_WORKER_SETTLING_REPORT_STATES,
+  REPORT_PROGRESS_TOOL_DESCRIPTION,
   type OrcaBridgeMcpDeps,
   type OrcaToolResult,
   type OrcaLeadHistoryCursor,
@@ -22,6 +24,7 @@ export {
   type OrcaWorkerReportReceipt,
   type OrcaWorkerReportQueueStatus,
   type OrcaWorkerReportState,
+  type OrcaWorkerSettlingReportState,
   type OrcaWorkerStatus,
   type OrcaWorkerVendorOptions,
 } from './orca-bridge-mcp.js';

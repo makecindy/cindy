@@ -245,6 +245,19 @@ export const ORCA_WORKER_REPORT_STATES = [
 export type OrcaWorkerReportState = (typeof ORCA_WORKER_REPORT_STATES)[number];
 
 /**
+ * send_to_lead 只接受五个终段状态。progress 是遥测不是结论：走独立的
+ * report_progress 工具，从结构上与派发/Lead/队列/结算互不相干。
+ */
+export const ORCA_WORKER_SETTLING_REPORT_STATES = [
+  'waiting',
+  'ready',
+  'blocked',
+  'failed',
+  'dropped',
+] as const;
+export type OrcaWorkerSettlingReportState = (typeof ORCA_WORKER_SETTLING_REPORT_STATES)[number];
+
+/**
  * 结构化回报的 Lead 可见文本。报告是 Lead 要读的内容,不是宿主私货回执:
  * 证据与问题必须跟 message 一起进入 Lead 的消息和历史记录。
  */
@@ -383,12 +396,20 @@ const ORCA_SEND_OWNER = 'orca-workflow';
 /** Tools that change what the Lead reads; nested agents report to the Worker instead. */
 const ROOT_ONLY_WORKER_TOOLS: ReadonlySet<string> = new Set([
   'send_to_lead',
+  'report_progress',
   'update_queued_report',
   'cancel_queued_report',
   'merge_queued_reports',
 ]);
 const SAFE_ERROR_NAME_RE = /^[A-Za-z][A-Za-z0-9]{0,63}$/;
 const SAFE_SEND_ERROR_CODES = new Set(['SESSION_RUNNING']);
+
+export const REPORT_PROGRESS_TOOL_DESCRIPTION = [
+  'Pass the worker_id.',
+  'Internal telemetry only: records progress for the panel without contacting, waking, or queueing anything for the Lead.',
+  'Never carries a question; if a person must answer, that is send_to_lead with state=blocked.',
+  'The assignment keeps running; this tool settles nothing.',
+].join(' ');
 
 export const SEND_TO_LEAD_TOOL_DESCRIPTION = [
   'Pass the worker_id from the latest Lead message.',
@@ -990,6 +1011,43 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
       }
 
       register(
+        'report_progress',
+        REPORT_PROGRESS_TOOL_DESCRIPTION,
+        {
+          worker_id: z.string().min(1).describe('Required. Your assigned worker_id.'),
+          summary: z.string().min(1).describe('One or two sentences: what is done so far.'),
+        },
+        async ({ worker_id, summary }) => {
+          const authorization = authorizeSendToLeadCaller(resolveRuntimeMcpContext(ctx));
+          if (!authorization.ok) return text(authorization.error, true);
+          // 结构上不碰 Lead：不 resolveLead、不派发、不结算、不带问题——遥测与结论两条通道
+          // 从工具层分开，send_to_lead 侧的任何进度语义都无从谈起。
+          const workerResolved = await resolveWorkerLink(deps, ctx, worker_id);
+          if (!workerResolved.ok) return text(workerResolved.error, true);
+          if (!deps.recordWorkerReport) {
+            return text({ error: 'progress recording unavailable on this host', worker_id }, true);
+          }
+          try {
+            await deps.recordWorkerReport(workerResolved.link.workerSessionId, {
+              state: 'progress',
+              summary,
+            });
+          } catch (err) {
+            log.warn('record worker progress failed', {
+              err: err instanceof Error ? err.message : String(err),
+              workerId: workerResolved.link.workerId,
+            });
+            return text({ error: 'failed to record progress', worker_id }, true);
+          }
+          return text({
+            ok: true,
+            recorded: 'progress',
+            worker_id: workerResolved.link.workerId,
+          });
+        },
+      );
+
+      register(
         'send_to_lead',
         SEND_TO_LEAD_TOOL_DESCRIPTION,
         {
@@ -1011,7 +1069,7 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
               risk: z.string().min(1).optional(),
             })
             .optional()
-            .describe('Structured status. progress = internal update; waiting = turn ended cleanly; ready = finished and verified; blocked / failed = need a person; dropped = nothing to act on.'),
+            .describe('The turn\'s conclusion. waiting = turn ended cleanly; ready = finished and verified; blocked = a person must answer (report.question required); failed = cannot continue; dropped = nothing to act on. Internal progress goes to the report_progress tool instead.'),
         },
         async ({ message, worker_id, delivery, report }) => {
           if (report?.state === 'blocked' && !report.question?.trim()) {
@@ -1019,36 +1077,6 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
               error: 'a blocked report must carry one concrete question in report.question',
               worker_id,
             }, true);
-          }
-          // progress 是内部遥测：带问题说明它不是进度，拒在派发前，防止内部问题漏进用户通知。
-          if (report?.state === 'progress' && report.question?.trim()) {
-            return text({
-              error: 'a progress report is internal telemetry and must not carry a question; send state=blocked with report.question instead',
-              worker_id,
-            }, true);
-          }
-          const authorization = authorizeSendToLeadCaller(resolveRuntimeMcpContext(ctx));
-          if (!authorization.ok) return text(authorization.error, true);
-          // progress 只走 Worker link：不 rehydrate Lead（resolveLead 可能拉起/重连 Lead 会话，
-          // 甚至在远端 preflight 上失败），而这条路径根本不用 Lead 会话也不派发消息。
-          if (report?.state === 'progress') {
-            const workerResolved = await resolveWorkerLink(deps, ctx, worker_id);
-            if (!workerResolved.ok) return text(workerResolved.error, true);
-            const { link } = workerResolved;
-            try {
-              await deps.recordWorkerReport?.(link.workerSessionId, report);
-            } catch (err) {
-              log.warn('record worker progress failed', {
-                err: err instanceof Error ? err.message : String(err),
-                workerId: link.workerId,
-              });
-            }
-            return text({
-              ok: true,
-              recorded: 'progress',
-              worker_id: link.workerId,
-              lead_session_id: link.leadSessionId,
-            });
           }
           const resolved = await resolveLead(worker_id);
           if (!resolved.ok) return text(resolved.error, true);
