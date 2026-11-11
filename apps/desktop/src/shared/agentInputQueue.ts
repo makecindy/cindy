@@ -530,6 +530,8 @@ export interface AgentInputProjection {
   queueEditLocks: string[];
   queueAbortPending: boolean;
   error: string | null;
+  /** Exact persisted error row owned by this banner; older hosts may omit it. */
+  errorPersistId?: string | null;
   /** Stable error reason for live clients; older controlled hosts may omit it. */
   errorReason?: string | null;
   /** Bounded details for tool-loop errors; never carries the raw provider message. */
@@ -1239,4 +1241,26 @@ export function buildMakerUserMessage(
   return blocks.length === 1 && first?.type === 'text'
     ? { type: 'user', content: first.text as string }
     : { type: 'user', content: blocks };
+}
+
+/**
+ * 把宿主说明追加到发给模型的正文末尾（附件与引用 block 的顺序不变）。
+ * 说明只存在于这一次派发的 wire 消息里：不写回队列项，因此不进排队正文、落库正文，
+ * 派发失败重新入队后也不会带着过期的说明。
+ */
+export function appendNoteToMakerUserMessage(
+  message: AgentInputMakerMessage,
+  note: string | null | undefined,
+): AgentInputMakerMessage {
+  if (!note) return message;
+  const suffix = `\n\n---\n${note}`;
+  if (typeof message === 'string') return `${message}${suffix}`;
+  if (typeof message.content === 'string') {
+    return { ...message, content: `${message.content}${suffix}` };
+  }
+  const [first, ...rest] = message.content;
+  if (first?.type === 'text' && typeof first.text === 'string') {
+    return { ...message, content: [{ ...first, text: `${first.text}${suffix}` }, ...rest] };
+  }
+  return { ...message, content: [{ type: 'text', text: note }, ...message.content] };
 }

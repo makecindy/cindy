@@ -514,12 +514,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // The renderer's durable-tab consumers use the canonical localDb namespace.
   // Keep the legacy top-level alias above for compatibility with older builds.
   localDb: {
-    bots: {
-      autonomy: {
-        glance: (botId: string): Promise<import('../shared/botAutonomy').BotGlance> =>
-          ipcRenderer.invoke('local-db:bots:autonomy:glance', botId),
-      },
-    },
     // Minimal read-only chat hydration bridge used by BackgroundTasks and the
     // shared makerChatStore. Do not expose the primary window's full DB API.
     sessions: {
@@ -681,14 +675,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
       onXaiSubscriptionChanged: (cb: (payload: unknown) => void, providerId?: string) =>
         onProviderUsage('usage:xai-subscription-changed', 'xai', cb, providerId),
     },
-    onBotAutonomyChanged: (cb: (payload: { botIds?: string[] }) => void): (() => void) =>
-      onPayload('maker:bot-autonomy:changed', cb),
-    allowBotWorkbenchPermission: (
-      botId: string,
-      sessionId: string,
-      requestId: string,
-    ): Promise<{ accepted: boolean }> =>
-      ipcRenderer.invoke('maker:rsb-window:allow-bot-workbench-permission', { botId, sessionId, requestId }),
     // Live event subset consumed by makerChatStore in the detached renderer.
     onEvent: (cb: (payload: unknown) => void): (() => void) => onPayload('maker:event', cb),
     onStatusChanged: (cb: (payload: unknown) => void): (() => void) =>

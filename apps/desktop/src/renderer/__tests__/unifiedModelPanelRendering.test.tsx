@@ -16,7 +16,7 @@
 
 import { act, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import React from 'react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import type { FastMode } from '@cindy/maker-shared';
 import { MemoryRouter } from 'react-router-dom';
 import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
@@ -24,6 +24,7 @@ import { CreateWorkerPopover } from '@/features/cc-agent/CreateWorkerPopover';
 import { useTransientModelPickerPreferences } from '@/components/new-chat/modelPickerPreferences';
 import { PluginModelPickerDialog } from '@/cindy-brain/PluginModelPickerHost';
 import type { AgentCapabilities } from '@/hooks/useAgentCapabilities';
+import type { ProviderView } from '@cindy/model-providers';
 
 /** 统一面板发起的深度写入带上「面板已串行」标记(见 ModelSelector 的 onEffortChangeLive)。 */
 const FROM_PANEL = { serializedByPanel: true };
@@ -38,6 +39,7 @@ vi.mock('react-i18next', async (importOriginal) => ({
         'settings.providers.openai.title': 'OpenAI',
         'settings.providers.xd.title': 'Cindy AI',
         'newChat.modelSelector.modelListAria': '模型列表',
+        'newChat.modelSelector.meta.context': `上下文 ${options?.value}`,
         'newChat.modelSelector.search.noResults': '无匹配模型',
         'newChat.modelSelector.search.placeholderAll': '搜索模型…',
         'newChat.modelSelector.unified.favoritesGroup': '收藏',
@@ -732,6 +734,91 @@ describe('统一模型选择器面板', () => {
       fireEvent.click(row);
     });
     expect(onFollow).toHaveBeenCalledTimes(1);
+  });
+});
+
+// #9501 review P2: the real selector/flyout read the controller's same-key window.
+// Existing rendering tests had no context-limit IPC response. Unit: remote 1M +
+// local 123K, including native Codex readback, source reset and controlled catalogs.
+describe('模型浮层上下文按目录来源隔离', () => {
+  const localProviders = providersRef.providers;
+  const getModelContextLimit = vi.fn();
+  beforeEach(() => {
+    getModelContextLimit.mockReset().mockResolvedValue({
+      limit: 123_000, isCustomized: true,
+      codexContext: { contextWindow: 256_000, usableContextWindow: 243_200,
+        autoCompactTokenLimit: 230_400, modelMaxContextWindow: null,
+        source: 'config', fallbackModel: false },
+    });
+    vi.stubGlobal('electronAPI', {
+      ...window.electronAPI,
+      maker: { ...window.electronAPI?.maker, getModelContextLimit },
+    });
+    remoteProvidersRef.providers = (localProviders as ProviderView[]).map((provider) => ({
+      ...provider, remoteInvocationEnabled: true,
+      models: Object.fromEntries(Object.entries(provider.models).map(([agent, models]) => [
+        agent, models?.map((model) => ({ ...model,
+          contextWindowOverride: provider.id === 'anthropic' ? 1_000_000
+            : agent === 'codex' ? 600_000 : 800_000,
+        })),
+      ])),
+    }));
+  });
+  afterEach(() => {
+    remoteProvidersRef.providers = [];
+    vi.unstubAllGlobals();
+  });
+
+  it.each([
+    { name: '同账号远程 Agent', props: { remoteAgent: {
+      devices: [{ deviceId: 'other', name: 'Other' }], selectedDeviceId: 'other',
+    } } },
+    { name: '分享供应商', props: { remoteAgent: {
+      devices: [{ deviceId: 'share:context', name: 'Shared' }], selectedDeviceId: 'share:context',
+    } } },
+    { name: '被控电脑', props: { deviceId: 'other' } },
+  ])('$name 的窗口与引擎切换只使用来源目录', async ({ props }) => {
+    // 同账号的另一台电脑：本机也有同名供应商时左栏只列一处，这里是用户把它们改成「运行于」那台。
+    if (props.remoteAgent?.selectedDeviceId === 'other') {
+      providersRef.providers = (localProviders as ProviderView[]).map((provider) => ({ ...provider, runLocation: 'other' }));
+      onTestFinished(() => { providersRef.providers = localProviders; });
+    }
+    renderPanel(props);
+    const claude = await openRowFlyout('Opus 5');
+    expect(within(claude).getByText(/上下文 1M/)).toBeTruthy();
+    if (props.remoteAgent) {
+      await act(async () => fireEvent.click(document.querySelector(
+        `[data-rail-item="remote:${props.remoteAgent.selectedDeviceId}:openai"]`,
+      )!));
+    }
+    const codex = await openRowFlyout('GPT-5.6');
+    expect(within(codex).getByText(/上下文 600K/)).toBeTruthy();
+    await act(async () => fireEvent.click(codex.querySelector('[data-engine-capsule="cc"]') as HTMLElement));
+    expect(within(codex).getByText(/上下文 800K/)).toBeTruthy();
+    expect(getModelContextLimit).not.toHaveBeenCalled();
+  });
+
+  it('来源恢复默认或旧目录缺少覆写时仍不读取本机同名设置', async () => {
+    remoteProvidersRef.providers = (localProviders as ProviderView[]).map((provider) => ({
+      ...provider, remoteInvocationEnabled: true,
+    }));
+    renderPanel({ remoteAgent: {
+      devices: [{ deviceId: 'other', name: 'Other' }], selectedDeviceId: 'other',
+    } });
+    expect(within(await openRowFlyout('Opus 5')).getByText(/上下文 200K/)).toBeTruthy();
+    expect(getModelContextLimit).not.toHaveBeenCalled();
+  });
+
+  it('本机仍读取精确模型设置及 Codex 原生窗口', async () => {
+    renderPanel();
+    expect(within(await openRowFlyout('Opus 5')).getByText(/上下文 123K/)).toBeTruthy();
+    expect(getModelContextLimit).toHaveBeenCalledWith({
+      providerId: 'anthropic', agent: 'claude-code', modelId: 'claude-opus-5',
+    });
+    expect(within(await openRowFlyout('GPT-5.6')).getByText(/上下文 256K/)).toBeTruthy();
+    expect(getModelContextLimit).toHaveBeenCalledWith({
+      providerId: 'openai', agent: 'codex', modelId: 'gpt-5.6',
+    });
   });
 });
 
@@ -4409,7 +4496,6 @@ vi.mock('@/features/bots/botStore', () => ({ getEffectiveBotModelSettings: () =>
 }) }));
 vi.mock('@/features/bots/botPronounContext', () => ({ useBotTranslation: () => ({ t: (key: string) => key }) }));
 import { BotModelChainEditor } from '@/features/bots/BotModelChainEditor';
-import { BotTaskModelEditor } from '@/features/bots/BotTaskModelEditor';
 
 describe('teammate settings selected location catalog', () => {
   const originalProviders = providersRef.providers;
@@ -4435,14 +4521,12 @@ describe('teammate settings selected location catalog', () => {
     workerCapabilities.byAgent = {};
   });
 
-  it.each(['primary', 'backup', 'task'] as const)('shows shared-only Gemini and Terra in the %s picker', async (position) => {
+  it.each(['primary', 'backup'] as const)('shows shared-only Gemini and Terra in the %s picker', async (position) => {
     for (const model of models) {
       const route = { harness: 'codex' as const, providerId: 'xd', model: model.id,
         effort: 'high', fastMode: false, agentDeviceId: share };
       const local = { ...route, agentDeviceId: null, model: 'gpt-5.5' };
-      const view = render(position === 'task'
-        ? <BotTaskModelEditor value={route} onChange={vi.fn()} />
-        : <BotModelChainEditor value={position === 'backup' ? [local, route] : [route]} onChange={vi.fn()} />);
+      const view = render(<BotModelChainEditor value={position === 'backup' ? [local, route] : [route]} onChange={vi.fn()} />);
       const picker = view.container.querySelectorAll('button[aria-haspopup="listbox"]')[position === 'backup' ? 1 : 0]!;
       expect(picker.textContent).toContain(model.name);
       expect(picker.textContent).not.toContain('settings.auxiliaryModels.unavailable');

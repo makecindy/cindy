@@ -43,7 +43,6 @@
  * 没法按天) 启动期砍头保尾 (keepRecentSync)。
  */
 
-import { app } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import util from 'node:util';
@@ -77,6 +76,7 @@ function parseLevel(s: string | undefined, fallback: LogLevel): LogLevel {
 let currentLevel: LogLevel = 'info';
 let isDevMode = false;
 let initialized = false;
+let appVersion = 'unknown';
 
 // ── 落盘 slot + 按天 rotate ───────────────────────────────────────────────────
 // 所有最终日志统一按天: main 与 agent 各一个 DailySlot, 跨天开新文件 + 只保留最近
@@ -353,6 +353,14 @@ export interface InitOptions {
   isDev?: boolean;
   level?: LogLevel;
   logDir?: string;
+  /**
+   * Caller-supplied runtime facts. Keeping them out of an `electron` import is
+   * what lets the same logger (and the modules that depend on it) load in the
+   * Node `cindy-host` process. Desktop passes its Electron values at startup.
+   */
+  isPackaged?: boolean;
+  userDataDir?: string;
+  version?: string;
 }
 
 function readLevelFromConfigFile(userDataDir: string): LogLevel | undefined {
@@ -369,17 +377,26 @@ function readLevelFromConfigFile(userDataDir: string): LogLevel | undefined {
   return undefined;
 }
 
+/** Packaged logging has no safe default: callers must name the real profile. */
+function requireUserDataDir(userDataDir: string | undefined): string {
+  if (!userDataDir) {
+    throw new Error('initLogger: userDataDir is required when packaged (pass logDir instead)');
+  }
+  return userDataDir;
+}
+
 export function initLogger(opts?: InitOptions): void {
   if (initialized) return;
   initialized = true;
+  appVersion = opts?.version ?? 'unknown';
 
-  isDevMode = opts?.isDev ?? !app.isPackaged;
+  isDevMode = opts?.isDev ?? !(opts?.isPackaged ?? true);
   // dev: 仓库内 apps/desktop/logs/ —— vite 把 main 编译到 apps/desktop/.vite/build/,
   // 所以 __dirname 上跳两级正好是 apps/desktop/。
   // packaged: <userData>/logs/ (asar 内不可写,且用户不该去仓库找日志)。
   const logDir = opts?.logDir ?? (isDevMode
     ? path.resolve(__dirname, '../../logs')
-    : path.join(app.getPath('userData'), 'logs'));
+    : path.join(requireUserDataDir(opts?.userDataDir), 'logs'));
 
   // Level resolution: env > config file > opts.level > built-in default.
   // log-config.json: dev 放 apps/desktop/logs/, packaged 放 <userData>/。
@@ -455,7 +472,7 @@ export function initLogger(opts?: InitOptions): void {
   });
 
   emit('info', 'logger', [
-    `=== App started === v${app.getVersion()} level=${currentLevel} isDev=${isDevMode}`,
+    `=== App started === v${appVersion} level=${currentLevel} isDev=${isDevMode}`,
   ]);
 }
 

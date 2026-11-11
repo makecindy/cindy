@@ -1,3 +1,6 @@
+import answerPicture from '../../../src/renderer/assets/cindy-share-character.jpg';
+import answerVideo from '../../../src/renderer/assets/wallpapers/cindy-window.mp4?url';
+import answerAudio from '../../../native/agent-island/sounds/startup-chime.mp3?url';
 import { makerChatStore } from '../../../src/renderer/lib/makerChatStore';
 import { useEffect, useRef } from 'react';
 import { Route, Routes, useSearchParams } from 'react-router-dom';
@@ -19,6 +22,8 @@ if (!crypto.randomUUID) {
 }
 
 interface GroupData {
+  /** #9398: message-only push, then an explicitly released full plan read. */
+  planRead?: 'talk' | 'work' | 'missing';
   processRecord?: boolean;
   processEmpty?: boolean;
   processUnavailable?: boolean;
@@ -86,7 +91,7 @@ function bodyMessages() {
     { seq: 3, op: 'create', id: 'list', kind: 'markdown', props: { text: '- 正文可以阅读\n- **重点**保持格式' } },
     { seq: 4, op: 'create', id: 'image', kind: 'image', props: { src: 'cindy-media://blobs/fixture-image.png', alt: '图片说明保留', caption: '图片标题保留' } },
     { seq: 5, op: 'create', id: 'unnamed-image', kind: 'image', props: { src: '/private/tmp/fixture-image.png' } },
-    ...['image', 'video', 'audio'].map((kind, index) => ({ seq: index + 6, op: 'create', id: `public-${kind}`, kind, props: { src: `https://example.test/public-${kind}` } })),
+    ...Object.entries({ image: answerPicture, video: answerVideo, audio: answerAudio }).map(([kind, asset], index) => ({ seq: index + 6, op: 'create', id: `public-${kind}`, kind, props: { src: new URL(asset, location.href).href, alt: `public-${kind}`, style: { maxHeight: 120 } } })),
   ].map(item => JSON.stringify(item)).join('\n') + '\n```';
   return [
     message({ id: 'body-user', sequence: 1, content: '请整理发布前检查', createdAt: T0 }),
@@ -374,7 +379,20 @@ void mountPage({
   route: '/bots/groups/fixture-group',
   host: (ctx) => {
     const data = ctx.data as unknown as GroupData;
-    const group = groupFrom(data);
+    let group = { ...groupFrom(data), ...(data.planRead ? { serverBacked: true, historyRevision: 'fixture-live', organizerBotId: 'b' } : {}) };
+    let planReadHeld = false;
+    const planReads: Array<() => void> = [];
+    if (data.planRead) {
+      window.addEventListener('fixture-plan-hold', () => { planReadHeld = true; }, { once: true });
+      window.addEventListener('fixture-plan-ready', () => {
+        const ready = groupFrom({ ...data, arrangement: 'running', workMentioned: data.planRead === 'work' });
+        group = { ...ready, historyRevision: 'fixture-live', organizerBotId: 'b',
+          plans: data.planRead === 'missing' ? [] : ready.plans.map(plan => ({ ...plan, organizerBotId: 'b', organizerName: 'Nova' })),
+          ...(data.planRead === 'missing' ? { openPlan: null } : {}) };
+        planReadHeld = false;
+        for (const finish of planReads.splice(0)) finish();
+      }, { once: true });
+    }
     if (data.processRecord) {
       Object.assign(group, { serverBacked: true, members: group.members.map(member => ({ ...member, isOwned: !data.processOtherOwner, homeDeviceId: 'fixture-mac' })),
         messages: [message({ id: 'process-answer', sequence: 1, authorKind: 'bot', authorBotId: 'a', authorName: 'Aster',
@@ -411,7 +429,10 @@ void mountPage({
         onCompanionCloudChanged: subscription('companionCloudChanged'),
         polishWorkingStatus: async () => null,
         listBotGroups: async () => ({ ok: true, groups: (ctx.data as unknown as GroupData).settings ? [group] : [] }),
-        getBotGroup: async () => ({ ok: true, group }),
+        getBotGroup: async () => {
+          if (planReadHeld) return new Promise(resolve => { planReads.push(() => resolve({ ok: true, group })); });
+          return { ok: true, group };
+        },
         onBotGroupChanged: subscription('botGroupChanged'),
         sendBotGroupMessage: data.sendStatus ? (input: { text: string; clientId: string }) => new Promise((resolve) => {
           window.addEventListener('fixture-send-receipt', (event) => {

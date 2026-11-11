@@ -81,19 +81,33 @@ describe('send_to_session tool', () => {
     }));
     expect(result).toMatchObject({ ok: true, project_path: '/projects/product', working_dir: '/temporary/checkout' });
   });
+  // Unit: when the caller omits project_path the host decides membership, so the receipt
+  // must say where the task landed and how to choose otherwise. Before this note a
+  // projectless result was only a bare null and callers kept starting tasks outside projects.
+  it.each([
+    { name: 'placed by execution directory', args: {}, host: { projectDir: '/projects/product', projectFromWorkingDir: true as const }, note: 'contains working_dir' },
+    { name: 'left without a project', args: {}, host: { projectDir: null }, note: 'not in any project' },
+    { name: 'inherited from the source', args: {}, host: { projectDir: '/projects/product' }, note: null },
+    { name: 'explicitly projectless', args: { project_path: null }, host: { projectDir: null }, note: null },
+  ])('explains host-decided membership in the creation receipt: $name', async ({ args, host, note }) => {
+    const { registry } = setup({ result: {
+      ok: true, targetSessionId: 'child', agentKind: 'codex', wakeKind: 'created',
+      targetTitle: 'Work', targetLastUserSendAt: null, workingDir: '/projects/product/app', ...host,
+    } });
+    const result = parse(await registry.call('send_to_session', {
+      message: 'Start work', working_dir: '/projects/product/app', ...args,
+    }));
+    expect(result).toMatchObject({ ok: true, project_path: host.projectDir });
+    if (note === null) expect(result).not.toHaveProperty('project_note');
+    else expect(result.project_note).toContain(note);
+  });
+
   it('注册到 handoff 类目, 不混入 control(改名场景选错隔离的核心)', () => {
     const { registry } = setup();
     const handoff = registry.list('handoff').map((t) => t.name);
     const control = registry.list('control').map((t) => t.name);
     expect(handoff).toContain('send_to_session');
     expect(control).not.toContain('send_to_session');
-  });
-
-  it.each(['coordination', 'user-visible'])('passes message purpose with the bound caller identity: %s', async purpose => {
-    const { registry, sendToSession } = setup();
-    const result = await registry.call('send_to_session', { target_session_id: 'parent', message: 'Update', message_purpose: purpose });
-    expect(result.isError).toBeUndefined();
-    expect(sendToSession).toHaveBeenCalledWith(expect.objectContaining({ targetSessionId: 'parent', messagePurpose: purpose, dispatcherSessionId: expect.any(String) }));
   });
 
   it('缺 message → INVALID_ARGS, host 不被调', async () => {
@@ -586,10 +600,9 @@ describe('send_to_session → 另一台电脑上的任务', () => {
     }
   });
 
-  it('宿主不支持、内部协调用途、无来源任务时明确拒绝, 不发出', async () => {
+  it('宿主不支持、无来源任务时明确拒绝, 不发出', async () => {
     const cases = [
       [remoteSetup({ remote: false }), {}, 'REMOTE_UNSUPPORTED'],
-      [remoteSetup(), { message_purpose: 'coordination' }, 'INVALID_ARGS'],
       [remoteSetup({ sessionId: undefined }), {}, 'LEAD_NOT_SUPPORTED'],
     ] as const;
     for (const [s, extra, errorCode] of cases) {

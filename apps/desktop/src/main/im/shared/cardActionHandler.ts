@@ -1562,6 +1562,15 @@ export function createCardActionHandler(
             `card action sender=...${event.senderId.slice(-8)} button=${event.buttonId} payload=${JSON.stringify(event.payload).slice(0, 200)}`,
           );
 
+          // 公共对话(服务器频道)不接入本机桌面任务 / 项目: 即使旧卡仍在，接管 / 项目按钮也不执行。
+          if (
+            (event.buttonId.startsWith('control:') || event.buttonId.startsWith('project:')) &&
+            adapter.blocksLocalTaskAccess?.(event.senderId)
+          ) {
+            log.warn(`ignored local-task card action in public conversation button=${event.buttonId}`);
+            return;
+          }
+
           // model:pick is NOT an InteractionRequest reply — it's a direct command
           // triggered by the /model slash command's picker card. Handle it
           // separately: update DB + live session, patch card to "已切换".

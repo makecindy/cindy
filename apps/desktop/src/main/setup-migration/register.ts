@@ -47,13 +47,13 @@ import {
   storeGhostUserSecretsForSetup,
 } from '../cindy-brain/index.js';
 import { remoteBackgroundInvoke } from '../device-link/index.js';
-import { setSetupSnapshotRemoteHandler, setSetupTransferRemoteHandler } from '../device-link/dispatch.js';
+import { setSetupSnapshotRemoteHandler, setSetupTransferRemoteHandler } from '../device-link/dispatch.desktop.js';
 import { defaultDeps as deviceDirectoryDeps, handleListDevices } from '../device-link/ipc.js';
-import { readDeviceLinkSettings } from '../device-link/settings-store.js';
+import { readDeviceLinkSettings } from '../device-link/settings-store.desktop.js';
 import { ownerScopedImSecrets } from '../im/ownerScopedStorage.js';
 import { createLogger } from '../logger.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
-import { listCustomMcpNamesForSetup, listCustomMcpServers } from '../maker-host/custom-mcp-store.js';
+import { listCustomMcpNamesForSetup, listCustomMcpServers } from '../maker-host/custom-mcp-store.desktop.js';
 import { hydrateCustomProviderHeaders } from '../maker-host/custom-provider-header-secrets.js';
 import { listCustomProviders } from '../maker-host/custom-provider-store.js';
 import { createCustomMcpServerForSetup } from '../maker-ipc/mcpHandlers.js';
@@ -378,8 +378,12 @@ export function registerSetupMigration(options: RegisterSetupMigrationOptions): 
     targetGhosts: () => listGhosts().map(ghostFact),
     catalog: async (plugins: SetupSnapshotPlugin[]) => {
       const out = new Map<string, TargetCatalogFact>();
-      const snapshot = await market().snapshot({ discoveryOnly: true });
-      const visible = new Set(snapshot.items.map((item) => item.pluginId));
+      const ids = [...new Set(plugins.map(plugin => plugin.ghostId))];
+      const visible = new Set<string>();
+      for (let offset = 0; offset < ids.length; offset += 100) {
+        const snapshot = await market().lookup(ids.slice(offset, offset + 100));
+        for (const item of snapshot.items) visible.add(item.pluginId);
+      }
       const wanted = plugins.filter(
         (plugin) => plugin.pluginId && visible.has(plugin.pluginId) && !findGhost(plugin.ghostId, plugin.namespace),
       );
@@ -568,7 +572,20 @@ export function registerSetupMigration(options: RegisterSetupMigrationOptions): 
       readRendererPrefs: () => rendererHost.read(),
       readPlugins: async () => {
         const snapshot = await market().snapshot({ discoveryOnly: true });
+        // Without the official catalog only custom-market items come back; the local
+        // install records still know which plugins came from the official market.
+        const catalogUnavailable = snapshot.unavailableReason !== null;
+        const installedServerRecords = catalogUnavailable
+          ? await market().installedServerMarketRecords().catch((error: unknown) => {
+            log.warn('setup plugin install records unavailable', {
+              error: error instanceof Error ? error.message : String(error),
+            });
+            return [];
+          })
+          : [];
         return {
+          catalogUnavailable,
+          installedServerRecords,
           ghosts: listGhosts().map((ghost) => ({
             ...ghostFact(ghost),
             name: ghost.manifest.name,

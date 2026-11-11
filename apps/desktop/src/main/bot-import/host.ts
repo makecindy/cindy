@@ -1,14 +1,14 @@
 import { normalizeBotToolCapabilities } from '../../shared/botCapabilitySelection.js';
 import { companionImportReasonKey } from '@cindy/maker-shared/companion-import';
 import { createMessage } from '../localDb/ipc/messages.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { app } from 'electron';
 import sharp from 'sharp';
 import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFile.js';
-import { parseRoutineInput, type RoutineInput } from '@cindy/maker-scheduler';
+import type { RoutineInput } from '@cindy/maker-scheduler';
 import { normalizeBotName } from '../../shared/botCreation.js';
 import { listBotRemoteResourceSources } from '../localDb/ipc/bots.js';
 import { validateBotAvatarBuffer, decodeBotAvatarImage } from '../localDb/ipc/botAvatarSelection.js';
@@ -17,12 +17,12 @@ import { COMPANION_IMPORT_CHUNK_LENGTH, COMPANION_IMPORT_READ_MAX_LENGTH, COMPAN
 import type { CompanionImportPreview, CompanionImportResult, CompanionImportSelection, CompanionImportSubmission, CompanionImportSource } from '@cindy/maker-shared/companion-import';
 import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending, ownerScopedUserDataPath } from '../appSessionState.js';
 import { createBotCanonicalSession, createBotProfile, getBotMemoryService, getBotRemoteResourceSource, reconcileBotProfileFolder, prepareImportedBotInvitation } from '../localDb/ipc/bots.js';
-import { readBotProfileFolder, writeBotProfileFolder, BOT_PROFILE_TEXT_MAX_BYTES } from '../maker-ipc/botProfileFolder.js';
+import { ensureBotWorkspaceDir, readBotProfileFolder, writeBotProfileFolder, BOT_PROFILE_TEXT_MAX_BYTES } from '../maker-ipc/botProfileFolder.js';
 import { splitImportedMemoryText } from '../maker-ipc/botMemoryService.js';
 import { memoryFileContent } from './memoryFiles.js';
-import { importBotSkillFiles, normalizeBotSkillSlug, validateBotSkillFiles } from '../maker-ipc/botSkillStore.js';
+import { importBotSkillDirectory, importBotSkillFiles, normalizeBotSkillSlug, validateBotSkillFiles } from '../maker-ipc/botSkillStore.js';
 import { withBotProfileLocks } from '../maker-ipc/botProfileLock.js';
-import { getRoutineEngine, routineTools, updateBotRoutineLifecycle } from '../routines/service.js';
+import { findRoutineAutomations, prepareTeammateRoutineProject, setRoutineAutomationsRunning, writeRoutineAutomations } from '../maker-ipc/botRoutineAutomations.js';
 import { previewImportRedactions, retainedImportRedactions, resolveImportReferences, selectedImportEnvironment, selectedImportRedactions } from './environmentSelection.js';
 import { createEnvironmentRedactor } from './process.js';
 import { importedContentRedactions } from './connectionCatalog.js';
@@ -36,7 +36,7 @@ import { changeSourceAutomationState } from './takeover.js';
 import { verifyImportedAutomation } from './verification.js';
 import { importMemoryMedia } from './memoryMedia.js';
 import { projectImportedSkill } from './skillResources.js';
-import { assertImportedAutomationReady } from './automationRuntime.js';
+import { captureSkillArchive, materializeSkillArchive } from './skillArchive.js';
 import { BOT_PACKAGE_IDS, applyNativeLocale, readNativeBotPackage } from './nativePackage.js';
 import type { BotMarketEntry, BotPackageIdentity } from '../../shared/botMarket.js';
 
@@ -365,17 +365,35 @@ async function cleanRejectedCreation(root: string, receipt: ImportReceipt, asser
 /** Called inside the lifecycle profile lock, after the active transfer pass has joined. */
 export async function prepareCompanionImportDeletion(botId: string): Promise<void> {
   const scope = owner();
-  await updateBotRoutineLifecycle(botId, 'pause');
+  await pauseImportedAutomations(scope.root, botId, scope.assert);
   scope.assert();
   await cancelCompanionImportsForDeletion(botId);
   scope.assert();
   await companionEnvironmentStore.stageRemoval(scope.root, botId, scope.assert);
   scope.assert();
-  // Keep definitions and history until the profile deletion commits. The
-  // post-commit lifecycle hook purges them; a failed DB write stays retryable.
+  // Keep the paused automations and history until the profile deletion commits;
+  // a failed DB write stays retryable.
 }
 
-/** Called with target routines paused, inside the lifecycle profile lock. */
+/**
+ * The project automations this teammate's imports created stop before their source tasks are given
+ * back, so the two never run side by side.
+ */
+async function pauseImportedAutomations(root: string, botId: string, assertOwner: () => void): Promise<void> {
+  let files: string[];
+  try { files = await fs.readdir(path.join(root, 'companion-imports')); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error; }
+  const routineIds = new Set<string>();
+  for (const name of files.filter(name => /^[A-Za-z0-9_-]{16,100}\.json$/.test(name))) {
+    const receipt = await readReceipt(root, name.slice(0, -5)); assertOwner();
+    if (receipt?.result.botId === botId) for (const record of Object.values(receipt.routines)) routineIds.add(record.id);
+  }
+  if (!routineIds.size) return;
+  const workingDir = await ensureBotWorkspaceDir(root, botId, app.getPath('userData')); assertOwner();
+  for (const id of routineIds) { await setRoutineAutomationsRunning(workingDir, id, false); assertOwner(); }
+}
+
+/** Called with the import's target automations paused, inside the lifecycle profile lock. */
 export async function cancelCompanionImportsForDeletion(botId: string): Promise<void> {
   const scope = owner();
   let files: string[];
@@ -389,7 +407,7 @@ export async function cancelCompanionImportsForDeletion(botId: string): Promise<
     receipt.result.checks = [...receipt.result.checks.filter(check => check.entryId !== 'import'),
       { entryId: 'import', status: 'needs-attention', message: 'IMPORT_CANCELLED' }];
     await saveReceipt(scope.root, receipt); scope.assert();
-    // The lifecycle has paused target routines under the same profile
+    // Deletion has paused the target automations under the same profile
     // lock. Restore only source tasks this import actually paused, before the
     // profile/vault can be deleted; a failed handback remains visibly retryable.
     const environment = await companionEnvironmentStore.read(scope.root, botId, scope.assert);
@@ -549,34 +567,6 @@ export async function getCompanionImportSetupStatus(botId: string, root: string,
   return { status: result?.status, total, nextOffset: offset + items.length < total ? offset + items.length : undefined, items };
 }
 
-/** Explicit enable/run reuses the saved import retry, without a second settings UI. */
-export async function ensureImportedAutomationReady(root: string, botId: string, routineId: string, assertOwner: () => void,
-  request?: { input?: RoutineInput; expectedRevision?: number }): Promise<number | void> {
-  assertOwner();
-  const scope = owner();
-  if (scope.root !== root) throw new CompanionImportError('OWNER_CHANGED');
-  const environment = await companionEnvironmentStore.read(root, botId, assertOwner);
-  const binding = environment?.automations?.[routineId];
-  if (!binding) return;
-  if (binding.issues?.length) throw new CompanionImportError(binding.issues[0]!);
-  if (binding.handover === 'ready') return;
-  const pending = environment?.pendingImport;
-  if (!pending?.selection.takeover) throw new CompanionImportError('AUTOMATION_HANDOVER_REQUIRED');
-  const current = (await routineTools.list(botId)).find(routine => routine.id === routineId); assertOwner();
-  const expectedInput = current && JSON.stringify(parseRoutineInput({ ...current, enabled: false }));
-  if (!current || request?.expectedRevision !== undefined && request.expectedRevision !== current.revision
-    || request?.input && JSON.stringify(parseRoutineInput({ ...request.input, enabled: false })) !== expectedInput)
-    throw new CompanionImportError('TARGET_AUTOMATION_CHANGED');
-  await startCompanionImport(pending.selection, `routine:${routineId}`, false, true);
-  await jobs.get(`${scope.scope}:${pending.selection.requestId}`);
-  assertOwner(); scope.assert();
-  await assertImportedAutomationReady(root, botId, routineId, assertOwner);
-  const latest = (await routineTools.list(botId)).find(routine => routine.id === routineId); assertOwner();
-  if (!latest || JSON.stringify(parseRoutineInput({ ...latest, enabled: false })) !== expectedInput)
-    throw new CompanionImportError('TARGET_AUTOMATION_CHANGED');
-  return latest.revision;
-}
-
 /** Main-owned work survives closing the import dialog. Repeated request IDs join the same work. */
 export async function startCompanionImport(selection: CompanionImportSelection, controller: string, reconcileOnly = false, resumeSetup = false): Promise<CompanionImportResult> {
   const scope = owner();
@@ -635,6 +625,7 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
   // Completed entries may be skipped after a crash before environmentSaved.
   // Partial entries contribute only documents completed during this attempt.
   const previouslyCopied = new Set(prior?.copied);
+  const completedSkillIds = new Set(selected.filter(item => item.view.category === 'skills' && previouslyCopied.has(item.view.id)).map(item => item.view.id));
   const completedDocumentIds = new Set(selected.filter(item => previouslyCopied.has(item.view.id))
     .flatMap(item => documentEntries(item).map(([id]) => id)));
   const readLegacyDeferSetup = async (botId: string) => {
@@ -684,6 +675,10 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
   };
   const transferDeps: TransferDeps = {
     assertOwner: scope.assert,
+    async captureSkill(botId, item) {
+      const { ref, redactions } = await captureSkillArchive(botId, item, companionEnvironmentStore, contentSecrets, scope.assert);
+      item.skillArchive = ref; item.archiveRedactions = redactions; item.files = undefined;
+    },
     async validateItems(items) {
       // Repaired manifests can reveal credentials that were unavailable at preview time.
       const previousMaskCount = knownValues.size;
@@ -696,7 +691,7 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
       // Capturing lazily selected resources may grow even a rejected selection.
       const cached = previews.get(selection.previewId);
       if (cached?.value === snapshot) await retainPreview(selection.previewId, cached, scope.assert, true);
-      for (const item of items.filter(item => item.view.category === 'skills' && !item.captureIssue)) {
+      for (const item of items.filter(item => item.view.category === 'skills' && !item.captureIssue && !item.skillArchive)) {
         try {
           const slug = skillSlug(item);
           validateBotSkillFiles(slug, projectImportedSkill(item.files ?? [], slug, contentSecrets).files);
@@ -732,10 +727,16 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
     async importItem(botId, item) {
       let pendingFailure: Error | undefined;
       let persistedItem = item;
+      let needsPrivate = false;
       if (item.view.category === 'skills') {
         const slug = skillSlug(item);
+        if (item.skillArchive) {
+          await importBotSkillDirectory(scope.root, botId, slug,
+            directory => materializeSkillArchive(item.skillArchive!, directory, companionEnvironmentStore, contentSecrets, scope.assert, true, slug, value => { needsPrivate = value; }), scope.assert, item.view.enabled !== false);
+        } else {
         const projected = projectImportedSkill(item.files ?? [], slug, contentSecrets);
         await importBotSkillFiles(scope.root, botId, slug, projected.files, scope.assert, item.view.enabled !== false);
+        }
       } else if (snapshot.nativePackage && item.role === 'identity') {
         // Native identity belongs to SOUL, never reference/user memory.
         completedDocumentIds.add(item.view.id);
@@ -799,7 +800,9 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
         await applyProfile(botId, selected.map(candidate => candidate.view.id === item.view.id ? item : candidate), previous,
           { ...previous, ...Object.fromEntries(documentEntries(persistedItem)) });
       }
-      if (prior?.environmentSaved) await companionEnvironmentStore.update(scope.root, botId, scope.assert, environment => {
+      // Private references are committed after publication and before the copied
+      // receipt. Ordinary Skills need no per-item environment write.
+      if (prior?.environmentSaved || needsPrivate) await companionEnvironmentStore.update(scope.root, botId, scope.assert, environment => {
         // A formerly unreadable manifest may only now supply its own settings.
         if (item.env) environment.env = { ...environment.env, ...item.env };
         if (isMemoryItem(item)) {
@@ -820,12 +823,14 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
         for (const [id, text] of documentEntries(persistedItem)) { environment.documents ??= {}; environment.documents[id] = text; }
         if (item.view.category === 'skills') {
           const slug = skillSlug(item);
+          if (item.skillArchive && needsPrivate) { environment.skillArchives ??= {}; environment.skillArchives[slug] = item.skillArchive; }
           const originals = projectImportedSkill(item.files ?? [], slug, contentSecrets).originals;
           if (originals) { environment.skillFiles ??= {}; environment.skillFiles[slug] = originals; }
         }
         environment.contentRedactions = { ...environment.contentRedactions, ...publicationRedactions([item]) };
       });
       if (pendingFailure) throw pendingFailure;
+      if (item.view.category === 'skills') completedSkillIds.add(item.view.id);
     },
     async saveCheckpoint(botId, items) {
       const previous = await companionEnvironmentStore.read(scope.root, botId, scope.assert);
@@ -845,7 +850,7 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
       const chosen = new Set(items.map(item => item.view.id));
       const env = selectedImportEnvironment(items);
       const resolveReferences = (value: unknown) => resolveImportReferences(value, env);
-      const skillFiles = Object.fromEntries(items.filter(item => item.view.category === 'skills').flatMap(item => {
+      const skillFiles = Object.fromEntries(items.filter(item => item.view.category === 'skills' && completedSkillIds.has(item.view.id)).flatMap(item => {
         const slug = skillSlug(item);
         const originals = projectImportedSkill(item.files ?? [], slug, contentSecrets).originals;
         return originals ? [[slug, originals]] : [];
@@ -866,6 +871,8 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
         fileExecutables: Object.fromEntries(items.flatMap(item => item.asset && !isMemoryItem(item) ? [[item.asset.name, item.asset.executable === true]] : [])),
         memoryFiles: Object.fromEntries(items.flatMap(memoryFileEntries)),
         skillFiles,
+        skillArchives: Object.fromEntries(items.filter(item => item.skillArchive && completedSkillIds.has(item.view.id))
+          .flatMap(item => { const slug = skillSlug(item); const ref = previous?.skillArchives?.[slug]; return ref ? [[slug, ref]] : []; })),
         documents,
         contentRedactions: publicationRedactions(items),
         sourceAutomations: snapshot.source.kind === 'cindy' ? [] : items.flatMap(item => item.automation ? [{ entryId: item.view.id, kind: snapshot.source.kind as 'hermes' | 'openclaw', original: item.automation.original }] : []),
@@ -883,10 +890,10 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
       const result = await createBotCanonicalSession({ botId, expectedCanonicalSessionId: null, expectedProfileVersion: source.currentVersion });
       scope.assert(); return result.canonicalSessionId;
     },
-    async createRoutine(botId, input, creationId, item) {
+    async createAutomation(botId, input, creationId, item) {
       if (!item.automation) throw new CompanionImportError('SOURCE_AUTOMATION_INVALID');
-      // createOnce uses creationId as its persisted routine ID. Publish the guard
-      // first so there is no editor-visible window without a handover binding.
+      // Publish the handover binding first: deletion restores the source from it, and the
+      // takeover checks it before resuming the automations.
       if (snapshot.source.kind !== 'cindy') await companionEnvironmentStore.update(scope.root, botId, scope.assert, environment => {
         environment.automations ??= {};
         environment.automations[creationId] ??= { kind: snapshot.source.kind as 'hermes' | 'openclaw',
@@ -894,8 +901,15 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
           original: item.automation!.original, sourceId: item.automation!.sourceId, sourceRoot: snapshot.source.root, sourceWorkspace: snapshot.source.workspace, deliveries: item.automation!.deliveries,
           issues: [...(item.view.issues ?? []), ...(item.view.dependsOn?.some(id => !selected.some(item => item.view.id === id)) ? ['AUTOMATION_DEPENDENCY_NOT_SELECTED'] : [])] };
       });
-      const routine = await routineTools.createOnce(botId, publicRoutine(input), creationId); scope.assert();
-      return routine.id;
+      // The job becomes paused automations of the teammate's project, named after creationId.
+      const { workingDir, route } = await prepareTeammateRoutineProject(botId, scope.root, scope.assert); scope.assert();
+      // A replayed batch keeps what is already there, including the owner's edits.
+      if ((await findRoutineAutomations(workingDir, creationId)).length) { scope.assert(); return creationId; }
+      const now = Date.now();
+      await writeRoutineAutomations(workingDir, { ...publicRoutine(input), enabled: false, id: creationId, botId, revision: 1, createdAt: now, updatedAt: now },
+        { route, paused: true });
+      scope.assert();
+      return creationId;
     },
     verifyAutomation: (botId, item) => verifyImportedAutomation(scope.root, botId, item, scope.assert, selected, snapshot.source.root),
     async connectImBot(botId, item) {
@@ -923,26 +937,30 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
     },
     pauseSource: (item, source, resumeInterruptedPause) => changeSourceAutomationState(source.source, item, false, readers(), scope.assert, resumeInterruptedPause, selectedImportEnvironment(selected)),
     resumeSource: (item, source) => changeSourceAutomationState(source.source, item, true, readers(), scope.assert, false, selectedImportEnvironment(selected)),
-    async enableRoutine(botId, routineId, item) {
-      const routine = (await routineTools.list(botId)).find(item => item.id === routineId); scope.assert();
-      if (!routine) throw new CompanionImportError('AUTOMATION_NOT_FOUND');
+    async enableAutomation(botId, routineId, item) {
       const binding = (await companionEnvironmentStore.read(scope.root, botId, scope.assert))?.automations?.[routineId];
       // The private activation committed even if its outer receipt was lost.
       // Preserve edits made after that success instead of restoring the source.
       if (binding?.handover === 'ready') return;
-      if (!item.automation?.input || JSON.stringify(parseRoutineInput({ ...routine, enabled: false })) !== JSON.stringify(parseRoutineInput({ ...publicRoutine(item.automation.input), enabled: false }))) {
-        throw new CompanionImportError(routine.enabled ? 'TARGET_HANDOVER_UNCERTAIN' : 'TARGET_AUTOMATION_CHANGED');
+      const { workingDir } = await prepareTeammateRoutineProject(botId, scope.root, scope.assert); scope.assert();
+      const found = await findRoutineAutomations(workingDir, routineId); scope.assert();
+      const running = found.some(schedule => schedule.status === 'active');
+      const input = item.automation?.input;
+      const passed = !running && !!input?.triggers.some(trigger => trigger.kind === 'once' && trigger.at <= Date.now());
+      if (passed) throw new CompanionImportError('AUTOMATION_TIME_PASSED');
+      if (!found.length) throw new CompanionImportError('AUTOMATION_NOT_FOUND');
+      const expected = input && publicRoutine(input);
+      // Changed in the project meanwhile: not this import's to start.
+      if (!expected || found.some(schedule => schedule.name !== expected.name || schedule.prompt !== expected.prompt)) {
+        throw new CompanionImportError(running ? 'TARGET_HANDOVER_UNCERTAIN' : 'TARGET_AUTOMATION_CHANGED');
       }
-      const expected = parseRoutineInput({ ...routine, enabled: true });
-      if (!routine.enabled && expected.triggers.some(trigger => trigger.kind === 'once' && trigger.at <= Date.now())) throw new CompanionImportError('AUTOMATION_TIME_PASSED');
       // This private transaction is reached only after a confirmed source pause.
-      // Ordinary saves remain guarded; execution waits for the durable ready bit.
-      try { const engine = await getRoutineEngine(); scope.assert(); await engine.put(botId, expected, routineId, routine.revision); }
+      try { await setRoutineAutomationsRunning(workingDir, routineId, true); scope.assert(); }
       catch (error) {
-        // A committed enable with a lost acknowledgement must not resume the source as well.
-        const saved = await routineTools.list(botId).then(rows => rows.find(item => item.id === routineId), () => { throw new CompanionImportError('TARGET_HANDOVER_UNCERTAIN'); }); scope.assert();
-        if (saved?.enabled && JSON.stringify(parseRoutineInput(saved)) !== JSON.stringify(expected)) throw new CompanionImportError('TARGET_HANDOVER_UNCERTAIN');
-        if (!saved || JSON.stringify(parseRoutineInput(saved)) !== JSON.stringify(expected)) throw error;
+        // A committed resume with a lost acknowledgement must not resume the source as well.
+        const after = await findRoutineAutomations(workingDir, routineId).catch(() => { throw new CompanionImportError('TARGET_HANDOVER_UNCERTAIN'); }); scope.assert();
+        if (after.some(schedule => schedule.status === 'active')) throw new CompanionImportError('TARGET_HANDOVER_UNCERTAIN');
+        throw error;
       }
       try {
         await companionEnvironmentStore.update(scope.root, botId, scope.assert, env => {
@@ -951,8 +969,8 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
           binding.handover = 'ready';
         });
       } catch {
-        // The target was enabled. Keep the source paused if this acknowledgement
-        // cannot be persisted; recovery retries it before any work is dispatched.
+        // The target is running. Keep the source paused if this acknowledgement
+        // cannot be persisted; recovery reconciles it from the saved receipt.
         throw new CompanionImportError('TARGET_HANDOVER_UNCERTAIN');
       }
     },

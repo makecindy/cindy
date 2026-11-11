@@ -603,6 +603,11 @@ export function buildUnifiedListSections(args: {
    * 这些行只出现在 ★ / 全部视图,按本机供应商筛选的视图不列。
    */
   resolveForeignFavorite?: (item: ModelFavoriteItem) => ForeignFavoriteRow | null;
+  /**
+   * 只从模型分组里收起的供应商(同一供应商「运行于」另一台电脑时只列那台的一项)。收藏与最近仍按完整目录解析，
+   * 不因收起而消失。
+   */
+  listHiddenProviderIds?: ReadonlySet<string>;
 }): UnifiedListSection[] {
   const { entries, favorites, effectiveEngineOf } = args;
   const q = args.query.trim().toLowerCase();
@@ -735,6 +740,7 @@ export function buildUnifiedListSections(args: {
   const visible = entries.filter(
     (entry) =>
       matches(entry, q) &&
+      !args.listHiddenProviderIds?.has(entry.providerId) &&
       (groupProviderId === null || entry.providerId === groupProviderId) &&
       (rail.kind !== 'engine' || entry.candidates.includes(rail.agent)),
   );

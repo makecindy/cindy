@@ -9,10 +9,10 @@ const tempRoot = vi.hoisted(() => ({ value: '' }));
 vi.mock('electron', () => ({
   app: { getPath: () => tempRoot.value },
 }));
-vi.mock('../../imageCacheStore.js', () => ({
+vi.mock('../../imageCacheStore.desktop.js', () => ({
   resolveSafe: vi.fn(),
 }));
-vi.mock('../../cindy-media/blobStore.js', () => ({
+vi.mock('../../cindy-media/blobStore.desktop.js', () => ({
   resolveSafe: vi.fn(),
   supportedMime: vi.fn(),
   mimeForExt: vi.fn(),
@@ -40,8 +40,8 @@ import {
   tempAttachmentRootPath,
   writeTempFile,
 } from '../normalizeAttachments.js';
-import * as imageCacheStore from '../../imageCacheStore.js';
-import * as cindyMediaBlobStore from '../../cindy-media/blobStore.js';
+import * as imageCacheStore from '../../imageCacheStore.desktop.js';
+import * as cindyMediaBlobStore from '../../cindy-media/blobStore.desktop.js';
 import { ingestMedia } from '../../cindy-media/ingest.js';
 import { downloadToFile, removeRemote } from '../../device-link/mediaTransfer.js';
 import { buildAttachmentOssRef } from '../../../shared/attachmentOssRef.js';

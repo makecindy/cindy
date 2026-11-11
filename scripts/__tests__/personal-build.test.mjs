@@ -3,9 +3,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import {mobileBuildNumber, mobileConfig, mobileFollowup, mobileNext, mobileReceipt} from '../personal-build/mobile.mjs';
 import { localPluginsIdentity } from '../personal-build/automatic.mjs';
 import { exportBuild, parseManifest, syncPlugins } from '../personal-build/managed.mjs';
-import { auditPlugins, configFrom, copyPlugin, discover, packageHash, prepare, prepareLocalPlugins, run, verifyReport } from '../personal-build.mjs';
+import { auditPlugins, configFrom, copyPlugin, discover, packageHash, prepare, prepareLocalPlugins, run, verifyReport, verifyFreshSelection, verifyUpgradeSnapshot } from '../personal-build.mjs';
 
 // Script integration tier, explicit in test:runner like the existing worktree runner tests.
 // Production entry: prepare/discover/copyPlugin/auditPlugins. Previous personal scripts hardcoded
@@ -16,6 +19,210 @@ import { auditPlugins, configFrom, copyPlugin, discover, packageHash, prepare, p
 const tmp = t => { const p = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-personal-test-')); t.after(() => fs.rmSync(p, { recursive: true, force: true })); return p; };
 const put = (file, value) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, typeof value === 'string' ? value : JSON.stringify(value)); };
 const repoId = { full_name: 'example/app' };
+
+test('personal iOS artifact check requires matching signed and provisioned APNs environments', () => {
+  const script = fileURLToPath(new URL('../personal-build/mobile-ios.py', import.meta.url));
+  const result = execFileSync(process.platform === 'win32' ? 'python' : 'python3', ['-c', `
+import json, runpy, sys
+verify = runpy.run_path(sys.argv[1])['verify_push_environment']
+results = []
+for value, expected in [('development', 'sandbox'), ('production', 'prod')]:
+    proof = verify({'aps-environment': value}, {'aps-environment': value})
+    assert proof['registrationEnvironment'] == expected
+    results.append(proof)
+for signed, provisioned in [(None, None), ('invalid', 'invalid'), ('development', 'production'), ('production', None)]:
+    try:
+        verify({'aps-environment': signed}, {'aps-environment': provisioned})
+    except RuntimeError:
+        continue
+    raise AssertionError('accepted invalid push signing')
+print(json.dumps(results))
+`, script], {encoding:'utf8'});
+  assert.deepEqual(JSON.parse(result).map(p => p.registrationEnvironment), ['sandbox', 'prod']);
+});
+
+// Delivery integration contract: earlier one-off scripts could reuse old signing profiles,
+// install into the other app/device, or reinstall after an interrupted tool call. Existing
+// composition tests do not cover device receipts. Minimal inputs are plugin metadata/errors;
+// this runner tier exercises production transitions without contacting a phone or Apple.
+const mobileIdentity = {
+  enabled:true, platform:'ios', bundleId:'com.example.personal', appGroupId:'group.com.example.personal',
+  teamId:'ABCDEFGHIJ', signingCertificateSha256:'A'.repeat(64), region:'global',
+  stateDir:'/personal/mobile', deviceId:'00000000-0000-0000-0000-000000000001',
+  hardwareUdid:'00000000-0000000000000001', launchAfterInstall:false, verifyInstallationMetadataOnly:true,
+};
+const delivery = phase => ({phase, identity:mobileIdentity, build:'2026110902', app:'/personal/Cindy.app'});
+const appInfo = build => ({ok:true, result:{ok:true, udid:mobileIdentity.deviceId,
+  bundleId:mobileIdentity.bundleId, installed:true,
+  app:{bundleIdentifier:mobileIdentity.bundleId, bundleVersion:build}, matchesLocal:null}});
+
+// Distribution regressions exercise mobileConfig and the production Python verifier/exporter.
+// Minimum failures: incomplete extension profiles, development/debug signing and a traversal IPA.
+// Script integration tier; existing registration tests do not cover native export.
+// Standalone file measured 4.37s on macOS; fixtures never read developer credentials.
+test('distribution is explicit without changing historical delivery identities', () => {
+  const validate = value => mobileConfig(value, '/personal', 'global');
+  assert.equal(Object.hasOwn(validate(mobileIdentity), 'distribution'), false);
+  assert.equal(validate({...mobileIdentity, distribution:'ad-hoc'}).distribution, 'ad-hoc');
+  assert.throws(() => validate({...mobileIdentity, distribution:'production'}), /distribution/);
+  assert.throws(() => validate({...mobileIdentity, distribution:null}), /distribution/);
+  const profiles = Object.fromEntries(['', '.CindyNotificationService', '.CindyHomeWidgets', '.expo-sharing-extension']
+    .map((suffix, i) => [mobileIdentity.bundleId + suffix, `Fixture profile ${i}`]));
+  assert.deepEqual(validate({...mobileIdentity, distribution:'ad-hoc', exportProvisioningProfiles:profiles}).exportProvisioningProfiles, profiles);
+  for (const invalid of [null, [], {}, {...profiles, unexpected:'profile'}, {...profiles, [mobileIdentity.bundleId]:''},
+    {...profiles, [mobileIdentity.bundleId]:'bad\nprofile'}]) {
+    assert.throws(() => validate({...mobileIdentity, distribution:'ad-hoc', exportProvisioningProfiles:invalid}), /exportProvisioningProfiles/);
+  }
+  assert.throws(() => validate({...mobileIdentity, exportProvisioningProfiles:profiles}), /exportProvisioningProfiles/);
+});
+
+test('Ad Hoc export and verification reject development, enterprise and unsafe archives', () => {
+  const script = fileURLToPath(new URL('../personal-build/mobile-ios.py', import.meta.url));
+  execFileSync(process.platform === 'win32' ? 'python' : 'python3', ['-c', `
+import pathlib, runpy, sys, tempfile, zipfile, stat
+m = runpy.run_path(sys.argv[1])
+identity = {'distribution': 'ad-hoc', 'teamId': 'ABCDEFGHIJ'}
+assert m['export_options'](identity) == {'method':'release-testing', 'destination':'export',
+    'teamID':'ABCDEFGHIJ', 'signingStyle':'automatic', 'manageAppVersionAndBuildNumber':False}
+profiles = {'com.example.personal' + suffix: 'Fixture ' + str(i) for i, suffix in enumerate(
+    ['', '.CindyNotificationService', '.CindyHomeWidgets', '.expo-sharing-extension'])}
+manual = {**identity, 'bundleId':'com.example.personal', 'exportProvisioningProfiles':profiles}
+options = m['export_options'](manual)
+assert options['signingStyle'] == 'manual' and options['signingCertificate'] == 'Apple Distribution'
+assert options['provisioningProfiles'] == profiles and options['manageAppVersionAndBuildNumber'] is False
+for invalid in [None, {}, {**profiles, 'unexpected':'profile'}, {**profiles, 'com.example.personal':''}]:
+    try: m['export_options']({**manual, 'exportProvisioningProfiles':invalid})
+    except RuntimeError: pass
+    else: raise AssertionError('accepted incomplete export profiles')
+
+ent = {'aps-environment':'production', 'get-task-allow':False}
+profile = {'Entitlements':dict(ent), 'ProvisionedDevices':['fixture']}
+m['verify_distribution'](identity, ent, profile, main=True)
+m['verify_distribution'](identity, {'get-task-allow':False}, profile)
+for signed, provisioned in [
+    ({**ent, 'aps-environment':'development'}, {'Entitlements':{**ent, 'aps-environment':'development'}}),
+    ({**ent, 'get-task-allow':True}, profile),
+    (ent, {**profile, 'ProvisionsAllDevices':True}),
+    (ent, {'Entitlements':{**ent, 'get-task-allow':True}}),
+]:
+    try: m['verify_distribution'](identity, signed, provisioned, main=True)
+    except RuntimeError: pass
+    else: raise AssertionError('accepted invalid distribution signing')
+for unsafe in ['../escape', '/absolute', 'Payload/link']:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        with zipfile.ZipFile(root / 'app.ipa', 'w') as z:
+            item = zipfile.ZipInfo(unsafe)
+            if unsafe.endswith('link'): item.external_attr = (stat.S_IFLNK | 0o777) << 16
+            z.writestr(item, 'fixture')
+        try: m['extract_export'](root)
+        except RuntimeError: pass
+        else: raise AssertionError('accepted unsafe IPA')
+        assert not (root / 'unpacked').exists()
+with tempfile.TemporaryDirectory() as tmp:
+    root = pathlib.Path(tmp)
+    with zipfile.ZipFile(root / 'app.ipa', 'w') as z:
+        item = zipfile.ZipInfo('Payload/Fixture.app/Fixture')
+        item.external_attr = (stat.S_IFREG | 0o755) << 16
+        z.writestr(item, 'executable fixture')
+    m['extract_export'](root)
+    assert (root / 'unpacked/Payload/Fixture.app/Fixture').read_text() == 'executable fixture'
+    if sys.platform != 'win32':
+        assert (root / 'unpacked/Payload/Fixture.app/Fixture').stat().st_mode & 0o111
+`, script]);
+});
+
+test('mobile certificate pin accepts SHA-256 and rejects legacy, mixed or malformed configuration', () => {
+  const validate = value => mobileConfig(value, '/personal', 'global');
+  assert.equal(validate({...mobileIdentity, signingCertificateSha256:'a'.repeat(64)}).signingCertificateSha256, 'A'.repeat(64));
+  for (const value of [undefined, null, 123, 'A'.repeat(40), 'G'.repeat(64)]) {
+    assert.throws(() => validate({...mobileIdentity, signingCertificateSha256:value}), /signingCertificateSha256/);
+  }
+  assert.throws(() => validate({...mobileIdentity, signingCertificateSha1:'A'.repeat(40)}), /Legacy/);
+  const {signingCertificateSha256, ...old} = mobileIdentity;
+  assert.throws(() => validate({...old, signingCertificateSha1:'A'.repeat(40)}), /migrate/);
+});
+
+test('artifact certificate pin rejects replacement certificates, unauthorized profiles and old requests', () => {
+  const script = fileURLToPath(new URL('../personal-build/mobile-ios.py', import.meta.url));
+  execFileSync(process.platform === 'win32' ? 'python' : 'python3', ['-c', `
+import hashlib, runpy, sys
+m = runpy.run_path(sys.argv[1])
+cert = b'public certificate fixture'
+identity = {'signingCertificateSha256': hashlib.sha256(cert).hexdigest()}
+m['verify_certificate'](cert, [cert], identity)
+for candidate, allowed, pin in [
+    (b'different certificate', [b'different certificate'], identity),
+    (cert, [], identity),
+    (cert, [cert], {'signingCertificateSha1': 'A' * 40}),
+    (cert, [cert], dict(identity, signingCertificateSha1='A' * 40)),
+    (cert, [cert], {'signingCertificateSha256': 'G' * 64}),
+]:
+    try:
+        m['verify_certificate'](candidate, allowed, pin)
+    except RuntimeError:
+        continue
+    raise AssertionError('accepted invalid certificate identity')
+`, script]);
+});
+
+test('personal mobile delivery selects one physical device, never downgrades or launches', () => {
+  let d = delivery('awaiting-device');
+  assert.equal(mobileNext(d).tool, 'devices');
+  d = mobileReceipt(d, 'devices', {devices:[{udid:mobileIdentity.deviceId, kind:'physical', platform:'ios', isAvailable:false}]});
+  assert.equal(d.phase, 'awaiting-device');
+  d = mobileReceipt(d, 'devices', {devices:[{udid:mobileIdentity.deviceId, kind:'physical', platform:'ios', isAvailable:true}]});
+  assert.equal(mobileNext(d).args.action, 'info');
+  assert.throws(() => mobileReceipt(d, 'info', {...appInfo('2026110901').result, udid:'other'}), /another device/);
+  const ready = mobileReceipt(d, 'info', appInfo('2026110901'));
+  assert.deepEqual(mobileNext(ready).args, {action:'install', udid:mobileIdentity.deviceId, appPath:'/personal/Cindy.app', wait:60});
+  assert.equal(mobileNext(mobileReceipt(d, 'info', appInfo('2026110903'))), null);
+  const verified = mobileReceipt(d, 'info', appInfo('2026110902'));
+  assert.equal(verified.phase, 'installed-metadata-verified');
+  assert.equal(verified.fullByteMatchVerified, false);
+  assert.equal(mobileNext(verified), null);
+});
+
+test('uncertain installation reconciles metadata instead of blindly retrying', () => {
+  const d = delivery('installing');
+  assert.equal(mobileNext(d).args.action, 'info');
+  assert.throws(() => mobileReceipt(d, 'install', {ok:false, error:{message:'connection lost'}}), /connection lost/);
+  const unresolved = mobileReceipt(d, 'info', appInfo('2026110901'));
+  assert.equal(unresolved.phase, 'installation-unconfirmed');
+  assert.equal(mobileNext(unresolved), null);
+  const done = mobileReceipt(d, 'install', {udid:mobileIdentity.deviceId, bundleId:mobileIdentity.bundleId,
+    installed:true, state:'done', execution:'executed'});
+  assert.equal(done.phase, 'installing'); // Tool success still requires installed metadata.
+  assert.equal(mobileReceipt(done, 'info', appInfo('2026110902')).phase, 'installed-metadata-verified');
+});
+
+test('mobile configuration freezes an external identity and rejects launching or region changes', t => {
+  const root = tmp(t), source = path.join(root, 'source'), identityFile = path.join(root, 'device.json');
+  fs.mkdirSync(source);
+  const configFile = path.join(root, 'config.json');
+  put(configFile, {version:1, name:'personal', region:'global', app:{checkout:source, repository:'example/app'}, mobileConfig:'device.json'});
+  put(identityFile, {...mobileIdentity, stateDir:'mobile-state'});
+  const frozen = configFrom(configFile);
+  put(identityFile, {...mobileIdentity, bundleId:'com.example.other'});
+  assert.equal(frozen.mobileConfig, undefined);
+  assert.equal(frozen.mobile.bundleId, mobileIdentity.bundleId);
+  assert.equal(mobileConfig(frozen.mobile, root, 'global').stateDir, path.join(fs.realpathSync(root), 'mobile-state'));
+  assert.throws(() => mobileConfig({...mobileIdentity, launchAfterInstall:true}, root, 'global'), /never launches/);
+  assert.throws(() => mobileConfig(mobileIdentity, root, 'cn'), /regions must agree/);
+  assert.equal(mobileBuildNumber(2026110902, new Date('2026-11-09T01:00:00Z')), '2026110903');
+  assert.equal(mobileBuildNumber(2026110903, new Date('2026-11-08T01:00:00Z')), '2026110904');
+});
+
+test('optional mobile build failure preserves the desktop check and reports a separate pending problem', async t => {
+  const file = path.join(tmp(t), 'report.json');
+  put(file, {state:'checked', configuration:{mobile:{enabled:true}}});
+  const result = await mobileFollowup(file, async () => {throw Error('Expired signing profile');});
+  assert.equal(result.phase, 'build-failed');
+  assert.match(result.error, /Expired/);
+  assert.equal(JSON.parse(fs.readFileSync(file)).state, 'checked');
+  put(file, {configuration:{}});
+  assert.deepEqual(await mobileFollowup(file, () => {throw Error('must not build');}), {phase:'disabled'});
+});
 function pr(number, head, base = 'main', repository = repoId) {
   return { number, user: { login: 'somebody' }, draft: true, head: { ref: head, sha: 'a'.repeat(40), repo: repository }, base: { ref: base, repo: repoId }, html_url: `https://github.com/example/app/pull/${number}` };
 }
@@ -135,7 +342,7 @@ test('a conflicting PR leaves an explicit failed report, not a partial successfu
   put(path.join(out, 'app/file'), 'resolved\n');
   run('git', ['add', 'file'], path.join(out, 'app'));
   run('git', ['commit', '-m', 'resolve fixture conflict'], path.join(out, 'app'));
-  const continued = prepare(f.config, out, f.exec, { resume: true });
+  const continued = prepare(f.config, out, (cmd,args,cwd) => { assert.notEqual(cmd,'gh','continuation must not rediscover the selection'); return f.exec(cmd,args,cwd); }, { resume: true });
   assert.equal(continued.state, 'prepared');
   assert.equal(continued.app.prs.length, 2);
   assert.equal(fs.readFileSync(path.join(out, 'app/file'), 'utf8'), 'resolved\n');
@@ -150,7 +357,12 @@ test('application and local plugin compositions share a report without replacing
   f.config.plugins = f.config.app;
   f.config.localPlugins = { sample: source };
   const out = path.join(f.root, 'with plugins');
-  const result = prepare(f.config, out, f.exec), file = path.join(out, 'report.json');
+  let composing = false;
+  const result = prepare(f.config, out, (cmd,args,cwd) => {
+    if (cmd === 'gh') assert.equal(composing,false,'both repositories must be captured before composition');
+    if (cmd === 'git' && args.includes('worktree') && args.includes('add')) composing = true;
+    return f.exec(cmd,args,cwd);
+  }), file = path.join(out, 'report.json');
   assert.equal(result.pluginRepository.prs.length, 2);
   assert.equal(result.plugins.length, 0);
   assert.equal(result.localPlugins[0].namespace, 'local');
@@ -205,4 +417,40 @@ test('local plugin release identity ignores where and when a bundle was prepared
   assert.equal(localPluginsIdentity(a), localPluginsIdentity(b));
   put(path.join(b, 'sample/main.js'), 'changed bytes');
   assert.notEqual(localPluginsIdentity(a), localPluginsIdentity(b));
+});
+
+// Regression: an old checked build used to bypass current draft/new PRs during upgrades.
+// Integration-script tier, injected GitHub replies; exercise the real selection gate without network.
+test('upgrade freshness rejects changed main, draft heads, new/closed PRs and plugin selections', () => {
+ const repo={repository:'example/app',checkout:'.'}, config={author:'somebody',app:repo,plugins:{...repo,repository:'example/plugins'}};
+ let base='b'.repeat(40), app=[pr(1,'draft')], plugins=[];
+ const exec=(_cmd,args)=> args[1].includes('/commits/') ? base :
+   JSON.stringify(args[1].includes('/pulls?') ? (args[1].includes('example/plugins')?plugins:app) : {default_branch:'main'});
+ const snapshot=r=>{const d=discover(r,'somebody',exec);return {repository:r.repository,base:d.base,baseSha:d.baseSha,prs:d.selected,excluded:d.excluded};};
+ const report={author:'somebody',app:snapshot(config.app),pluginRepository:snapshot(config.plugins)};
+ assert.equal(verifyFreshSelection(config,report,exec).author,'somebody');
+ app=[pr(1,'draft'),pr(2,'new')];assert.throws(()=>verifyFreshSelection(config,report,exec),/app: main or PR/);
+ app=[];assert.throws(()=>verifyFreshSelection(config,report,exec),/app: main or PR/);
+ app=[pr(1,'draft')];app[0].head.sha='c'.repeat(40);assert.throws(()=>verifyFreshSelection(config,report,exec),/app: main or PR/);
+ app=[pr(1,'draft')];base='d'.repeat(40);assert.throws(()=>verifyFreshSelection(config,report,exec),/app: main or PR/);
+ base='b'.repeat(40);plugins=[pr(3,'plugin-draft')];assert.throws(()=>verifyFreshSelection(config,report,exec),/plugins: main or PR/);
+ assert.throws(()=>verifyFreshSelection(config,report,()=>{throw Error('offline')}),/offline/);
+});
+
+// Upgrade-start policy: snapshot validation must stay offline while detecting omitted/changed PRs.
+// Existing freshness tests cover live comparison, not a long-running build's fixed selection.
+test('each preparation captures a new selection; activation checks the fixed snapshot offline', t => {
+ const f=fixture(t), report=prepare(f.config,path.join(f.root,'first-build'),f.exec);
+ assert.equal(verifyUpgradeSnapshot(f.config,report).author,'somebody');
+ const changedExec=(cmd,args,cwd)=>cmd==='gh' && args[1].includes('/pulls?') ? '[]' : f.exec(cmd,args,cwd);
+ const next=prepare(f.config,path.join(f.root,'next-build'),changedExec);
+ assert.equal(next.app.prs.length,0);
+ assert.equal(report.app.prs.length,2);
+ assert.equal(verifyUpgradeSnapshot(f.config,report).author,'somebody');
+ const omitted=structuredClone(report);omitted.app.prs.pop();
+ assert.throws(()=>verifyUpgradeSnapshot(f.config,omitted),/differs from upgrade snapshot/);
+ const changed=structuredClone(report);changed.app.prs[0].sha='f'.repeat(40);
+ assert.throws(()=>verifyUpgradeSnapshot(f.config,changed),/differs from upgrade snapshot/);
+ const old=structuredClone(report);delete old.upgradeSnapshot;
+ assert.throws(()=>verifyUpgradeSnapshot(f.config,old),/Missing upgrade snapshot/);
 });

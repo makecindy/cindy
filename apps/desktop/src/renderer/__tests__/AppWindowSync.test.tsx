@@ -8,9 +8,11 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const state = vi.hoisted(() => ({
   owner: { dataOwnerId: 'account-a' as string | null, generation: 1 },
   ready: true, secondary: false, sidebar: false,
+  dbStatus: 'ready',
   events: [] as string[],
 }));
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ canEnterApp: state.ready, dataOwnerId: state.owner.dataOwnerId }) }));
+vi.mock('@/contexts/AppShellCoverContext', () => ({ useAppShellCover: () => ({ localDbGateStatus: state.dbStatus }) }));
 vi.mock('@/contexts/dataOwnerGeneration', () => ({ getDataOwnerGeneration: () => state.owner }));
 vi.mock('@/lib/secondaryWindow', () => ({ isSecondaryWindow: () => state.secondary }));
 vi.mock('@/lib/sidebarWindow', () => ({ isSidebarWindow: () => state.sidebar }));
@@ -32,8 +34,26 @@ import { AppWindowSync } from '../components/layout/AppWindowSync';
 beforeEach(() => {
   state.owner = { dataOwnerId: 'account-a', generation: 1 };
   state.ready = true; state.secondary = false; state.sidebar = false; state.events = [];
+  state.dbStatus = 'ready';
 });
 afterEach(cleanup);
+
+// 2026-11-10 startup regression, unit/jsdom: auth precedes the slow DB gate.
+// Existing tests only delayed auth, so badge's two session queries ran too early.
+it('waits for the owner database before mounting list consumers and resumes once ready', () => {
+  state.dbStatus = 'pending';
+  const view = render(<AppWindowSync />);
+  expect(state.events).toEqual([]);
+  expect(view.queryByTestId('system-attention')).toBeNull();
+  state.dbStatus = 'ready';
+  view.rerender(<AppWindowSync />);
+  expect(view.queryByTestId('system-attention')).not.toBeNull();
+  expect(state.events.filter(event => event.endsWith(':start'))).toHaveLength(4);
+  state.dbStatus = 'pending';
+  view.rerender(<AppWindowSync />);
+  expect(view.queryByTestId('system-attention')).toBeNull();
+  expect(state.events.filter(event => event.endsWith(':stop'))).toHaveLength(4);
+});
 
 it('starts list/read/outbox mirrors in each full window but publishes system attention only in main', () => {
   const main = render(<AppWindowSync />);

@@ -13,6 +13,102 @@ export const RESPONSE_TOOL_CALL_TYPES = new Set(['function_call', 'custom_tool_c
 
 export const RESPONSE_TOOL_OUTPUT_TYPES = new Set(['function_call_output', 'custom_tool_call_output']);
 
+export type DeepSeekToolHistoryResult =
+  | { kind: 'unchanged' }
+  | { kind: 'invalid' }
+  | { kind: 'normalized'; body: Record<string, unknown> };
+
+/**
+ * Complete an interleaved tool batch before developer messages for the verified
+ * DeepSeek V4.1 Responses route. The host owns route selection and error delivery.
+ * No item, field, reasoning content or media is altered; conversation boundaries
+ * and incomplete or ambiguous batches are never crossed or guessed.
+ */
+export function normalizeDeepSeekV41ToolHistory(
+  body: Record<string, unknown>,
+): DeepSeekToolHistoryResult {
+  if (!Array.isArray(body.input)) return { kind: 'unchanged' };
+  const input: unknown[] = body.input;
+  const outputTypes = new Map<string, string>([
+    ['function_call', 'function_call_output'],
+    ['custom_tool_call', 'custom_tool_call_output'],
+  ]);
+  const counts = new Map<unknown, { calls: number; outputs: number }>();
+  for (const item of input) {
+    if (!isPlainObject(item) || typeof item.type !== 'string') continue;
+    const isCall = outputTypes.has(item.type);
+    const isOutput = RESPONSE_TOOL_OUTPUT_TYPES.has(item.type);
+    if (!isCall && !isOutput) continue;
+    const count = counts.get(item.call_id) ?? { calls: 0, outputs: 0 };
+    if (isCall) count.calls += 1;
+    else count.outputs += 1;
+    counts.set(item.call_id, count);
+  }
+
+  const normalized: unknown[] = [];
+  let changed = false;
+  for (let index = 0; index < input.length;) {
+    const first = input[index];
+    if (!isPlainObject(first) || typeof first.type !== 'string' || !outputTypes.has(first.type)) {
+      normalized.push(first);
+      index += 1;
+      continue;
+    }
+    const start = index;
+    const calls = new Map<unknown, Record<string, unknown>>();
+    while (index < input.length) {
+      const item = input[index];
+      if (!isPlainObject(item) || typeof item.type !== 'string' || !outputTypes.has(item.type)) break;
+      calls.set(item.call_id, item);
+      index += 1;
+    }
+    const endCalls = index;
+    const pending = new Set(calls.keys());
+    const outputs: Record<string, unknown>[] = [];
+    const developers: Record<string, unknown>[] = [];
+    let cursor = endCalls;
+    while (cursor < input.length && pending.size > 0) {
+      const item = input[cursor];
+      if (!isPlainObject(item)) break;
+      if (item.role === 'developer' && (item.type === 'message' || item.type === undefined)) {
+        developers.push(item);
+      } else {
+        const call = calls.get(item.call_id);
+        if (
+          !call || !pending.has(item.call_id) || typeof call.type !== 'string' ||
+          outputTypes.get(call.type) !== item.type
+        ) break;
+        outputs.push(item);
+        pending.delete(item.call_id);
+      }
+      cursor += 1;
+    }
+    if (developers.length === 0) {
+      normalized.push(...input.slice(start, endCalls));
+      continue;
+    }
+    if (pending.size > 0) return { kind: 'invalid' };
+    for (const callId of calls.keys()) {
+      const count = counts.get(callId);
+      if (typeof callId !== 'string' || callId.length === 0 || count?.calls !== 1 || count.outputs !== 1) {
+        return { kind: 'invalid' };
+      }
+    }
+    for (const output of outputs) {
+      const call = calls.get(output.call_id)!;
+      if (
+        !Object.hasOwn(output, 'output') ||
+        (Object.hasOwn(output, 'name') && output.name !== call.name) ||
+        (Object.hasOwn(output, 'namespace') && output.namespace !== call.namespace)
+      ) return { kind: 'invalid' };
+    }
+    normalized.push(...input.slice(start, endCalls), ...outputs, ...developers);
+    index = cursor;
+    changed = true;
+  }
+  return changed ? { kind: 'normalized', body: { ...body, input: normalized } } : { kind: 'unchanged' };
+}
+
 export function responseToolCallId(item: unknown, output: boolean): string | null {
   if (!isPlainObject(item)) return null;
   const supportedTypes = output ? RESPONSE_TOOL_OUTPUT_TYPES : RESPONSE_TOOL_CALL_TYPES;

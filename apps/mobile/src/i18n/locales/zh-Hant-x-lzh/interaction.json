@@ -29,6 +29,13 @@
       "description": "完全存取將關工作區沙箱，並略過常規審批。{{appName}} 可改工作區外之卷、行聯網命令而不復相詢；內建高險之舉仍須確認。慎之。",
       "confirm": "啟完全存取",
       "cancel": "守今之權柄"
+    },
+    "description": {
+      "default": "操作須批者，由君裁可。",
+      "acceptEdits": "編輯文件徑許，餘事按需請君裁可。",
+      "auto": "操作由 AI 模型裁可，審之或須多候；必要時仍請君確認。",
+      "bypass": "常規操作徑許，可訪工作區外文件、聯網執行命令。",
+      "plan": "惟析事定策，不改檔。"
     }
   },
   "planMode": {
@@ -36,6 +43,10 @@
     "exit": "出謀劃式"
   },
   "panel": {
+    "questionUnanswered": "未答",
+    "questionWithdrawn": "無須再答",
+    "withdrawnDraft": "此問無須再答。\n{{reason}}\n草稿尚存，可另作補充傳送。",
+    "sendSupplement": "傳送補充",
     "readOnlyKind": "待確",
     "readOnlyTitle": "機上方待確認",
     "pendingRequests": "待理之請",
@@ -450,5 +461,39 @@
       "ghost_id": "法器",
       "tool": "工具"
     }
+  },
+  "issueConfirm": {
+    "title": "確呈反饋至 {{appName}}",
+    "typeBug": "Bug",
+    "typeFeature": "功能之議",
+    "titleLabel": "題",
+    "bodyLabel": "正文(Markdown)",
+    "privacyHint": "Issue 之題與正文將公開示人，且或被搜尋、快取。系統僅能遮蔽部分常見之敏感資訊，未能辨一切語意之隱私。",
+    "relatedLogsHint": "此呈含上方所示之相關客戶端日誌；日誌於公開前已經來源與欄位篩選、去敏及長度之限。",
+    "privacyConfirm": "吾已察上方公開之內容，無不宜公開之個人、言談或業務資訊",
+    "submissionMethodLabel": "發布之法",
+    "identityGithubUser": "以 GitHub 名籍 @{{login}} 徑發",
+    "identityGithubUserHint": "君將為此 Issue 之 GitHub 作者，可於 GitHub 修之或闔之",
+    "identityPlatform": "由 Cindy 平臺代發(GitHub App {{login}})",
+    "identityPlatformHint": "君非此 Issue 之 GitHub 作者，呈後不能自修或自闔",
+    "publicNameLabel": "公署其名",
+    "publicNameHint": "此署名將公開示於 Issue 正文",
+    "anonymous": "匿名",
+    "useAnonymous": "用匿名署名",
+    "envLine": "所呈客戶端之環境（呈時自附）：客戶端 {{appVersion}} · {{platform}} {{arch}}（{{osVersion}}）· 界面語言 {{uiLanguage}}",
+    "runtimeLine": "Harness {{harness}} · Model ID {{modelId}}（今之差事）",
+    "regionLine": "版本區域：{{region}}",
+    "regionCodeCn": "CN",
+    "regionCodeDev": "Dev",
+    "submit": "呈反饋",
+    "cancel": "罷",
+    "previewLabel": "GitHub · 公開回饋",
+    "edit": "修改",
+    "doneEditing": "改畢",
+    "publicSubmit": "公開呈送",
+    "publicationNotice": "呈送後，正文與署名皆公開於 GitHub。",
+    "attribution": "署名：{{name}}",
+    "environment": "附執行環境",
+    "identitySettings": "署名與帳號"
   }
 }

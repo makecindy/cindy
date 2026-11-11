@@ -36,6 +36,8 @@ const h = vi.hoisted(() => ({
   catalogIo: null as Parameters<typeof import('@cindy/model-providers').loadCatalog>[1] | null,
 }));
 
+vi.mock('../../userDataPath.js', () => ({ getUserDataDir: () => os.tmpdir(), userDataPath: (...parts: string[]) => path.join(os.tmpdir(), ...parts) }));
+
 vi.mock('electron', () => ({
   app: { getPath: () => os.tmpdir() },
   BrowserWindow: { getAllWindows: () => [] },
@@ -131,8 +133,8 @@ vi.mock('../claude-native-auth.js', () => ({
   hasClaudeNativeLoginUnbound: () => false,
 }));
 vi.mock('../claude-native-connection.js', () => ({ readClaudeNativeLogin: async () => null }));
-vi.mock('../claude-native-cli.js', () => ({ readClaudeCliLoginStatus: async () => ({ loggedIn: false }) }));
-vi.mock('../grok-oauth-login.js', () => ({
+vi.mock('../claude-native-cli.desktop.js', () => ({ readClaudeCliLoginStatus: async () => ({ loggedIn: false }) }));
+vi.mock('../grok-oauth-login.desktop.js', () => ({
   getGrokAccessToken: h.getGrokAccessToken,
   peekGrokAccessToken: () => null,
   hasGrokOAuthLogin: () => false,
@@ -140,7 +142,7 @@ vi.mock('../grok-oauth-login.js', () => ({
   recoverGrokAuthAfterRejection: h.recoverGrokAuthAfterRejection,
   resetGrokOAuthMemoryCache: () => undefined,
 }));
-vi.mock('../generic-oauth.js', () => ({
+vi.mock('../generic-oauth.desktop.js', () => ({
   configureGenericOAuth: () => undefined,
   hasGenericOAuthLogin: () => false,
   readCachedGenericOAuthAccessToken: () => null,
@@ -157,7 +159,7 @@ vi.mock('../../secrets/providerSecretStore.js', () => ({
   setProviderSecretsClearedListener: () => undefined,
   addProviderSecretsClearedListener: (listener: () => void) => h.secretsClearedListeners.add(listener),
 }));
-vi.mock('../outbound-fetch.js', () => ({
+vi.mock('../outbound-fetch.desktop.js', () => ({
   outboundFetch: vi.fn(async () => { throw new Error('offline'); }),
 }));
 vi.mock('../provider-route.js', () => ({
@@ -1361,3 +1363,12 @@ describe('provider catalog realm reload', () => {
     expect(request.abort).toHaveBeenCalledTimes(1);
   });
 });
+
+// Preserve the existing test owner/path contract after storage ports were extracted.
+vi.mock('../../ownerContext.js', () => ({
+  activeDataOwnerId: () => h.owner,
+  ownerGeneration: () => 0,
+  isOwnerBoundaryPending: () => false,
+  hasCommittedOwner: () => Boolean(h.owner),
+  ownerScopedPath: (...parts: string[]) => path.join(os.tmpdir(), 'provider-catalog-realm-reload', h.owner, ...parts),
+}));

@@ -19,7 +19,7 @@ vi.mock('../model-discovery/xai.js', () => ({
   discardXaiModelsDiskCache: vi.fn(async () => {}),
 }));
 
-vi.mock('../grok-oauth-login.js', () => ({
+vi.mock('../grok-oauth-login.desktop.js', () => ({
   hasGrokOAuthLogin: () => true,
 }));
 
@@ -146,13 +146,13 @@ it('materializes a separate native ChatGPT provider for each independent account
 });
 
 it.each(['google/gemini-3.8-flash', 'google/gemini-99-pro-preview'])(
-  'does not pass a misleading Gateway Responses hint to Pi for %s',
+  'uses the Global Gateway Responses route for %s in local and remote Pi',
   (id) => {
     setActiveCatalog(BUNDLED_CATALOG);
     setXdGatewayModels([{ id, agents: ['pi'], perAgent: { pi: { wireProtocol: 'openai-responses' } } }]);
-    expect(resolvePiCindyGatewayModelApi('xd', id)).toBe('google-generative-ai');
-    expect(resolvePiCindyGatewayModelSpec('xd', id)).toMatchObject({ api: 'google-generative-ai' });
-    expect(resolvePiCindyGatewayModelSpec('xd', id, { remote: true })).toMatchObject({ api: 'google-generative-ai' });
+    expect(resolvePiCindyGatewayModelApi('xd', id)).toBe('openai-responses');
+    expect(resolvePiCindyGatewayModelSpec('xd', id)).toEqual({ api: 'openai-responses' });
+    expect(resolvePiCindyGatewayModelSpec('xd', id, { remote: true })).toEqual({ api: 'openai-responses' });
   },
 );
 
@@ -176,6 +176,29 @@ const piBundledModel = (
   contextWindow: 272_000,
   maxTokens: 128_000,
   ...over,
+});
+
+it('keeps Google API-key connections native when Global Gateway Gemini uses Responses', () => {
+  const modelId = 'gemini-3.7-flash';
+  setActiveCatalog(BUNDLED_CATALOG);
+  setXdGatewayModels([{
+    id: `google/${modelId}`, agents: ['pi'],
+    perAgent: { pi: { wireProtocol: 'openai-responses' } },
+  }]);
+  const { providers } = buildPiNativeProvidersFromConfigs([{
+    id: 'google-direct', name: 'Google direct', auth: { method: 'apiKey' },
+    runtimes: { pi: piRuntime({
+      baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+      wireProtocol: 'google-generative-ai',
+      models: [{ id: modelId, name: 'Gemini' }],
+    }) },
+  }], () => 'test-google-key');
+  expect(providers[0]).toMatchObject({
+    api: 'google-generative-ai',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+  });
+  expect(providers[0].models[0].id).toBe(modelId);
+  expect(resolvePiCindyGatewayModelApi('xd', `google/${modelId}`)).toBe('openai-responses');
 });
 
 it.each(['absent', 'compatible', 'other-api'] as const)(
@@ -3002,14 +3025,36 @@ describe('buildPiNativeProvidersFromConfigs', () => {
         xhigh: null,
         max: 'max',
       },
-      // Exact manufacturer adapters apply to compatible relays; unknown
-      // models retain the Chat Completions system-role fallback.
+      // Serializer parameters travel with the generation, but a vendor thinking
+      // dialect does not: this runtime points at loopback, not api.deepseek.com.
+      // Pi then uses reasoning_effort instead of DeepSeek's top-level `thinking`
+      // object (#9808). Unknown models keep the Chat Completions system-role fallback.
       compat: id === 'deepseek-v4-pro' ? {
         supportsDeveloperRole: false, supportsStore: false,
         maxTokensField: 'max_tokens', requiresReasoningContentOnAssistantMessages: true,
-        thinkingFormat: 'deepseek', supportsStrictMode: true, supportsMidConvoSystemMessages: true,
+        supportsStrictMode: true, supportsMidConvoSystemMessages: true,
       } : { supportsDeveloperRole: false },
     });
+  });
+
+  it('keeps the DeepSeek thinking dialect on the official host and drops it elsewhere (#9808)', () => {
+    const model = {
+      id: 'DeepSeek-V4.1-Flash', name: 'DeepSeek V4.1 Flash', reasoning: true,
+      reasoningEfforts: ['low', 'high', 'max'] as Array<'low' | 'high' | 'max'>,
+    };
+    const build = (baseUrl: string) => buildPiNativeProvidersFromConfigs([
+      {
+        id: 'deepseek-route', name: 'DeepSeek route', auth: { method: 'apiKey' },
+        runtimes: { pi: piRuntime({ baseUrl, wireProtocol: 'openai-chat', models: [model] }) },
+      },
+    ], () => 'secret');
+    expect(build('https://api.deepseek.com').providers[0]?.models[0]?.compat)
+      .toMatchObject({ thinkingFormat: 'deepseek', maxTokensField: 'max_tokens' });
+    expect(build('https://api.deepseek.com/v1').providers[0]?.models[0]?.compat)
+      .toMatchObject({ thinkingFormat: 'deepseek' });
+    const custom = build('https://developer.amd.example/v1').providers[0]?.models[0]?.compat;
+    expect(custom).toMatchObject({ maxTokensField: 'max_tokens', supportsDeveloperRole: false });
+    expect(custom).not.toHaveProperty('thinkingFormat');
   });
 });
 
@@ -3353,4 +3398,26 @@ it('does not borrow a provider adapter for a future generation on an unrelated r
       models: [{ id: 'claude-opus-9' }] } } }], () => 'fixture-key');
   expect(result.providers[0]?.models[0].id).toBe('claude-opus-9');
   expect(result.providers[0]?.adapterProvider).toBeUndefined();
+  // #9630: this is the real custom-provider launch descriptor, not a Gateway link.
+  expect(result.providers[0]?.models[0].compat).not.toHaveProperty('supportsMidConvoEffort');
+  expect(result.providers[0]?.models[0].compat).toMatchObject({ forceAdaptiveThinking: true });
+});
+
+// #9630 review, unit: the saved preset survives URL edits, while an official
+// /v1 input is normalized by the native host before the SDK sends a request.
+it.each([
+  { id: 'claude-opus-5', baseUrl: 'https://relay.example', catalogPresetId: 'anthropic-api', enabled: false },
+  { id: 'claude-opus-5-5', baseUrl: 'https://relay.example', catalogPresetId: 'anthropic-api', enabled: false },
+  { id: 'claude-opus-5', baseUrl: 'https://api.anthropic.com/v1', enabled: true },
+  { id: 'claude-opus-5-5', baseUrl: 'https://api.anthropic.com/v1', enabled: true },
+])('uses the effective Anthropic endpoint for $id at $baseUrl', ({ id, baseUrl, catalogPresetId, enabled }) => {
+  const result = buildPiNativeProvidersFromConfigs([{ id: 'anthropic-boundary', name: 'Anthropic boundary',
+    auth: { method: 'apiKey' }, runtimes: { pi: { baseUrl, catalogPresetId,
+      wireProtocol: 'anthropic-messages', models: [{ id, api: 'anthropic-messages' }] } } }], () => 'fixture-key');
+  const model = result.providers[0]?.models[0];
+  expect(model?.compat).toMatchObject({ forceAdaptiveThinking: true });
+  if (enabled) {
+    expect(model?.baseUrl).toBe('https://api.anthropic.com');
+    expect(model?.compat).toMatchObject({ supportsMidConvoEffort: true });
+  } else expect(model?.compat).not.toHaveProperty('supportsMidConvoEffort');
 });
