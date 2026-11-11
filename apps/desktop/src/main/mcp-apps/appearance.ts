@@ -30,12 +30,16 @@ export function reconcilePluginAppearanceSources(resolve: typeof resolveSource, 
 async function reconcileAppearance(released?: string): Promise<void> {
   if (service) await service.reconcile(released);
   else if (files && sourcesAvailable()) {
-    // Only selected wallpaper metadata can require a service on cold startup.
+    // Only explicitly selected resource metadata can require a service on cold startup.
     // Registry refreshes never read or decode appearance media for an unused capability.
-    const { customWallpaperStore } = await import('../custom-wallpaper-settings.js');
+    const [{ customWallpaperStore }, { readAppearanceSettings }] = await Promise.all([
+      import('../custom-wallpaper-settings.js'), import('../appearance-settings-store.js'),
+    ]);
     if (!sourcesAvailable()) return;
-    const source = customWallpaperStore.read().pluginSource;
-    if (source && (!released || source.instanceId === released))
+    const settings = readAppearanceSettings();
+    const sources = [customWallpaperStore.read().pluginSource, settings.uiFontResource?.source,
+      settings.codeFontResource?.source, settings.bodyFontResource?.source];
+    if (sources.some(source => source && (!released || source.instanceId === released)))
       await (await getPluginAppearanceService()).reconcile(released);
   }
 }

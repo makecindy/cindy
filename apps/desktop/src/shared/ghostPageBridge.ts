@@ -1,5 +1,5 @@
 import type { PluginModelPickerOptions, PluginModelPickerResult } from './pluginModelPicker';
-import type { PluginUiControlState, PluginUiInterest, PluginUiTarget } from './pluginUi';
+import { PLUGIN_UI_STATE_BATCH_LIMIT, type PluginUiControlState, type PluginUiInterest, type PluginUiTarget } from './pluginUi';
 type HostMessageListener = (payload: unknown) => void;
 /** Transport only. The execution-side dispatcher checks every request. */
 export function createGhostPageBridge(ports: { ping: () => Promise<{ ok: true; id: string; nativeUiConsumers?: PluginUiInterest[] }>; send: (payload: unknown) => Promise<any> }) {
@@ -46,8 +46,11 @@ export function createGhostPageBridge(ports: { ping: () => Promise<{ ok: true; i
     if (!active.length) return;
     uiSending = true;
     try {
-      const result = await ports.send({ type: 'ui-state-update', updates });
-      active.forEach((update, index) => update.resolve({ ok: true, observed: result?.observed?.[index] === true }));
+      for (let offset = 0; offset < updates.length; offset += PLUGIN_UI_STATE_BATCH_LIMIT) {
+        const batch = updates.slice(offset, offset + PLUGIN_UI_STATE_BATCH_LIMIT);
+        const result = await ports.send({ type: 'ui-state-update', updates: batch });
+        batch.forEach((_, index) => active[offset + index].resolve({ ok: true, observed: result?.observed?.[index] === true }));
+      }
     } catch (error) { active.forEach(update => update.reject(error)); }
     finally { uiSending = false; if (uiUpdates.size) scheduleUiUpdates(); }
   }

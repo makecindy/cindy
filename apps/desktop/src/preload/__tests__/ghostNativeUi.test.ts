@@ -48,6 +48,36 @@ it('coalesces a burst before constructing and sending the latest demanded state'
   expect(build).toHaveBeenCalledTimes(1);
 });
 
+// PR #9496 / discussion_r4536355436: per-window demand is bounded, but the
+// plugin receives the union. Existing burst tests only cover one target.
+// 513 targets must fit Main's 512-item packets without losing reply alignment.
+it('splits cross-window demand into bounded packets and maps each reply to its target', async () => {
+  const consumers = Array.from({ length: 513 }, (_, index) => ({ ...interest, sessionId: `task-${index}` }));
+  demand(consumers);
+  boundary.invoke.mockImplementation(async (_channel, payload) => {
+    if (payload.updates.length > 512) throw new Error('MCP_APP_INVALID_REQUEST');
+    return { ok: true, observed: payload.updates.map((update: { state: PluginUiControlState }) => Number(update.state.value) % 2 === 0) };
+  });
+  const results = await Promise.all(consumers.map((target, index) =>
+    boundary.sdk!.ui.updateContribution('progress', () => ({ value: String(index) }), target)));
+  expect(boundary.invoke.mock.calls.map(([, payload]) => payload.updates.length)).toEqual([512, 1]);
+  expect(results.map(result => result.observed)).toEqual(consumers.map((_, index) => index % 2 === 0));
+});
+
+it('settles every packet after a send failure and accepts the next update', async () => {
+  const consumers = Array.from({ length: 513 }, (_, index) => ({ ...interest, sessionId: `task-${index}` }));
+  demand(consumers);
+  boundary.invoke.mockResolvedValueOnce({ ok: true, observed: Array(512).fill(true) })
+    .mockRejectedValueOnce(new Error('PIPE_CLOSED'));
+  const results = await Promise.allSettled(consumers.map(target =>
+    boundary.sdk!.ui.updateContribution('progress', () => ({ title: 'Updated' }), target)));
+  expect(results.slice(0, 512).every(result => result.status === 'fulfilled' && result.value.observed)).toBe(true);
+  expect(results[512]).toMatchObject({ status: 'rejected', reason: new Error('PIPE_CLOSED') });
+  await expect(boundary.sdk!.ui.updateContribution('progress', () => ({ title: 'Next' }), consumers[0]))
+    .resolves.toEqual({ ok: true, observed: true });
+  expect(boundary.invoke).toHaveBeenCalledTimes(3);
+});
+
 it('keeps only the latest pending state while a send is in flight', async () => {
   demand([interest]);
   let finish!: (result: unknown) => void;

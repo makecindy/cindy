@@ -3,7 +3,7 @@ import { activeOwnerScopeKey } from '../appSessionState.js';
 import { sendToGhostLogic } from '../cindy-brain/runtime/electronSandboxAdapter.js';
 import { readPluginHostUi } from '../mcp-integrations/plugin-app-registry.js';
 import { NativePluginUiState } from './nativeState.js';
-import type { PluginUiInterest, PluginUiTarget, PluginUiControlState } from '../../shared/pluginUi.js';
+import { PLUGIN_UI_STATE_BATCH_LIMIT, type PluginUiInterest, type PluginUiTarget, type PluginUiControlState } from '../../shared/pluginUi.js';
 
 /** Existing pipe downlink does not start a sleeping plugin. Ping restores current demand. */
 export const nativePluginUi = new NativePluginUiState({
@@ -34,7 +34,7 @@ export function parsePluginUiInterests(raw: unknown): PluginUiInterest[] {
 }
 
 export function publishPluginUiControl(instance: string, raw: unknown) {
-  if (!raw || typeof raw !== 'object' || !('updates' in raw) || !Array.isArray(raw.updates) || raw.updates.length > 512)
+  if (!raw || typeof raw !== 'object' || !('updates' in raw) || !Array.isArray(raw.updates) || raw.updates.length > PLUGIN_UI_STATE_BATCH_LIMIT)
     throw new Error('MCP_APP_INVALID_REQUEST');
   const updates = raw.updates.map(value => {
     if (!value || typeof value !== 'object' || typeof value.id !== 'string' || value.target !== undefined &&
