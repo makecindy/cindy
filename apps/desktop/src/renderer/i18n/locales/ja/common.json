@@ -11649,6 +11649,7 @@
     "cloud": {
       "homeLabel": "メインのパソコン",
       "thisComputer": "このパソコン",
+      "recoveryNotReady": "このパソコンではまだ利用できません",
       "homeOffline": "メインのパソコン「{{device}}」がオフラインです",
       "homeControlOff": "メインのパソコン「{{device}}」はリモート操作を許可していません",
       "continueHere": "このパソコンで続ける",

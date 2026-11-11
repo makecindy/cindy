@@ -11694,6 +11694,7 @@
     "cloud": {
       "homeLabel": "Hauptcomputer",
       "thisComputer": "Dieser Computer",
+      "recoveryNotReady": "Auf diesem Computer noch nicht bereit",
       "homeOffline": "Hauptcomputer „{{device}}“ ist offline",
       "homeControlOff": "Hauptcomputer „{{device}}“ erlaubt keine Fernsteuerung",
       "continueHere": "Auf diesem Computer fortfahren",

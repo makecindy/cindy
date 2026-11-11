@@ -1074,6 +1074,26 @@ describe('cloud companions in the roster', () => {
     expect(mocks.navigate).toHaveBeenCalledWith('/bots/remote/laptop/mia');
   });
 
+  // Unit regression: a synthetic self-home row is not a remote offline device.
+  it('shows local recovery without offline status or device name while preserving remote status', async () => {
+    mocks.profiles = [bot({ id: 'mia', name: 'Mia' })];
+    mocks.remoteBots = [{ id: 'ada', deviceId: 'other', deviceName: 'Remote Mac', name: 'Ada', avatar: '', avatarColor: 'violet',
+      description: '', preview: '', activityAt: 0, sessionId: null, online: false, connectionKnown: true }];
+    mocks.cloud = { enabled: true, selfDeviceId: 'desk', humanActorId: 'human', demotedBotIds: ['mia'], actors: [
+      { id: 'a-mia', externalId: 'mia', name: 'Mia', avatar: null, homeDeviceId: 'desk',
+        homeDevice: { deviceId: 'desk', name: 'My Mac', online: false, isSelf: true } },
+    ] };
+    await renderSidebar();
+    const local = screen.getByText('Mia').closest('button')!;
+    expect(local.textContent).toContain('bots.cloud.recoveryNotReady');
+    expect(local.textContent).not.toContain('My Mac');
+    expect(local.textContent).not.toContain('bots.remote.offline');
+    expect(local.querySelector('[data-teammate-status]')).toBeNull();
+    const remote = screen.getByText('Ada').closest('button')!;
+    expect(remote.textContent).toContain('bots.remote.offline');
+    expect(remote.textContent).toContain('Remote Mac');
+  });
+
   it('does not offer a demoted local Cindy as the local option', async () => {
     mocks.profiles = [bot({ id: 'cindy-default', name: 'Cindy', lastMessagePreview: 'Local preview' })];
     mocks.remoteBots = [{ id: 'cindy-default', deviceId: 'laptop', deviceName: 'Laptop', name: 'Cindy', avatar: '🤖',

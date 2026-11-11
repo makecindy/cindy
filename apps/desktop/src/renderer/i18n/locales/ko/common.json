@@ -11649,6 +11649,7 @@
     "cloud": {
       "homeLabel": "주 컴퓨터",
       "thisComputer": "이 컴퓨터",
+      "recoveryNotReady": "이 컴퓨터에서 아직 준비되지 않았어요",
       "homeOffline": "주 컴퓨터 '{{device}}' 오프라인",
       "homeControlOff": "주 컴퓨터 '{{device}}'에서 원격 제어를 허용하지 않았습니다",
       "continueHere": "이 컴퓨터에서 계속하기",

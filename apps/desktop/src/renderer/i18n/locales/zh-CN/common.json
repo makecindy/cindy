@@ -11649,6 +11649,7 @@
     "cloud": {
       "homeLabel": "主力电脑",
       "thisComputer": "这台电脑",
+      "recoveryNotReady": "在这台电脑上尚未就绪",
       "homeOffline": "主力电脑「{{device}}」离线",
       "homeControlOff": "主力电脑「{{device}}」没有开放远程控制",
       "continueHere": "在这台电脑继续",
