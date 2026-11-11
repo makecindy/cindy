@@ -176,13 +176,14 @@ export function useHookWorkspacePrefs(
 
   const neutral = isNeutralPrefsProvider(provider);
   const neutralView = neutral && hook !== null ? hook[provider as NeutralPrefsProvider] : null;
-  const neutralBindingId =
-    neutralView?.binding?.state === 'confirmed' ? neutralView.binding.bindingId : null;
+  const neutralConfirmedBinding = neutralView?.bindings?.[0] ??
+    (neutralView?.binding?.state === 'confirmed' ? neutralView.binding : null);
+  const neutralBindingId = neutralConfirmedBinding?.bindingId ?? null;
   const enabled = neutral ? neutralView?.enabled === true : hook?.enabled === true;
   const connected = neutral
     ? enabled && Boolean(neutralView?.available) && neutralView?.status === 'connected'
     : enabled && hook?.status === 'connected';
-  const providerBindingConfirmed = !neutral || neutralView?.binding?.state === 'confirmed';
+  const providerBindingConfirmed = !neutral || neutralConfirmedBinding !== null;
   // 本机正本不依赖 WS：已绑定即可拉本地快照。未绑定仍不发起（避免空身份）。
   const readyIdentity = providerBindingConfirmed
     ? neutral

@@ -74,6 +74,11 @@
     "cancel": "Dejar como está"
   },
   "unified": {
+    "accountUnassigned": "Cuenta sin asignar",
+    "accountCount_one": "Cuenta {{count}}",
+    "accountCount_other": "cuentas {{count}}",
+    "accountFallback": "Cuenta {{index}}",
+    "accountCount_many": "cuentas {{count}}",
     "favoriteConfiguration": "Guardar esta configuración en Favoritos",
     "savedConfiguration": "En Favoritos · Toca para quitar",
     "currentConfiguration": "Configuración actual",
@@ -114,6 +119,12 @@
       "minute": "m",
       "second": "s"
     },
-    "groupBadge_many": "Grupo de proveedores · {{count}} computadoras"
+    "groupBadge_many": "Grupo de proveedores · {{count}} computadoras",
+    "quotaAverage": "Media restante {{percent}} %",
+    "quotaUpdating": "Cuota pendiente de actualizar",
+    "quotaResetSoon": "Se restablece pronto",
+    "quotaResetIn": "Se reinicia en {{duration}}",
+    "quotaAverageHint": "Cuota semanal · Mismo peso por cuenta",
+    "quotaResetHint": "Al ritmo actual, puede quedar cuota al restablecerse: amarillo si faltan hasta 24 horas y rojo si faltan hasta 6 horas."
   }
 }

@@ -1573,8 +1573,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getControlPoints: (id: string): Promise<GhostControlPointInfo[]> =>
       ipcRenderer.invoke('ghosts:control-points:get', id),
     /** 任务「前置检查」可选的插件(仅本机窗口,不进 device-link)。 */
-    listControlPointCandidates: (point: 'will-schedule-run' | 'will-routine-run' | 'will-start-task'): Promise<GhostControlPointCandidate[]> =>
+    listControlPointCandidates: (point: import('../shared/ghost').GhostControlPointId): Promise<GhostControlPointCandidate[]> =>
       ipcRenderer.invoke('ghosts:control-points:candidates', point),
+    runtimePlugins: (sessionId: string, settings?: import('../shared/pluginRuntime').RuntimePluginSettings): Promise<import('../shared/pluginRuntime').RuntimePluginSettings> =>
+      ipcRenderer.invoke('maker:runtime-plugins', sessionId, settings),
     /** 新任务「让插件选」：第一条消息发出前问一次插件用哪个模型(仅本机窗口)。 */
     /** 新任务模型选择器里的插件模型(仅本机窗口,不进 device-link)。 */
     listPickerModels: (): Promise<GhostPickerModel[]> => ipcRenderer.invoke('ghosts:models:list'),
@@ -5150,6 +5152,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onChanged: fanOutSubscriptionAccountsChanged,
     command: (command: import('../shared/subscriptionAccounts').SubscriptionAccountCommand): Promise<import('../shared/subscriptionAccounts').SubscriptionPoolView> =>
       ipcRenderer.invoke('maker:subscription-accounts', command),
+    // 已建立任务实际在用的账号(只读，用量显示用)。
+    sessionAccount: (query: import('../shared/subscriptionAccounts').SubscriptionSessionAccountQuery): Promise<unknown> =>
+      ipcRenderer.invoke('maker:subscription-accounts', query),
   },
   providerGroup: {
     command: (command: ProviderGroupCommand): Promise<unknown> =>
@@ -5698,19 +5703,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:hook-control:revoke-team', { teamId }),
     cancelPendingBind: (): Promise<{ hook: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:cancel-pending-bind'),
-    providerBindStart: (provider: 'telegram' | 'x' | 'feishu'): Promise<{ hook: unknown }> =>
-      ipcRenderer.invoke('maker:hook-control:provider-bind-start', { provider }),
+    providerBindStart: (provider: 'telegram' | 'x' | 'feishu', scopeId?: string): Promise<{ hook: unknown }> =>
+      ipcRenderer.invoke('maker:hook-control:provider-bind-start', { provider, ...(scopeId ? { scopeId } : {}) }),
     providerBindCancel: (provider: 'telegram' | 'x' | 'feishu'): Promise<{ hook: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:provider-bind-cancel', { provider }),
-    providerBindSelect: (provider: 'telegram' | 'x' | 'feishu'): Promise<{ hook: unknown }> =>
-      ipcRenderer.invoke('maker:hook-control:provider-bind-select', { provider }),
-    providerBindRevoke: (provider: 'telegram' | 'x' | 'feishu'): Promise<{ hook: unknown }> =>
-      ipcRenderer.invoke('maker:hook-control:provider-bind-revoke', { provider }),
+    providerBindSelect: (provider: 'telegram' | 'x' | 'feishu', bindingId?: string): Promise<{ hook: unknown }> =>
+      ipcRenderer.invoke('maker:hook-control:provider-bind-select', { provider, ...(bindingId === undefined ? {} : { bindingId }) }),
+    providerBindRevoke: (provider: 'telegram' | 'x' | 'feishu', bindingId?: string): Promise<{ hook: unknown }> =>
+      ipcRenderer.invoke('maker:hook-control:provider-bind-revoke', { provider, ...(bindingId === undefined ? {} : { bindingId }) }),
     openProviderAction: (
       provider: 'telegram' | 'x' | 'feishu',
       action: 'connect' | 'provider' | 'add-to-group',
+      scopeId?: string,
     ): Promise<{ ok: true }> =>
-      ipcRenderer.invoke('maker:hook-control:provider-open-action', { provider, action }),
+      ipcRenderer.invoke('maker:hook-control:provider-open-action', { provider, action, ...(scopeId ? { scopeId } : {}) }),
     // 目录偏好本机读写(正本在本地; 连上后镜像到 hook server 供 /model 卡使用;
     // teamId 为 multi-team 下的归属 team, 单绑定缺省)
     getWorkspacePrefs: (): Promise<{ prefs: unknown }> =>
@@ -7099,6 +7105,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:provider:oauth:cancel', providerId, options),
     importProviderFile: (): Promise<string | string[] | null> =>
       ipcRenderer.invoke('maker:provider:import:file'),
+    scanLocalProviderImports: (): Promise<import('../shared/localProviderImport').LocalProviderImportScan> =>
+      ipcRenderer.invoke('maker:provider:import:local-scan'),
+    editLocalProviderImport: (id: string, input: import('../shared/localProviderImport').LocalProviderImportEdit): Promise<import('../shared/localProviderImport').LocalProviderImportItem> =>
+      ipcRenderer.invoke('maker:provider:import:local-edit', id, input),
     previewProviderImport: (
       importId: string,
       targetProviderId?: string,

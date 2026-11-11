@@ -1,4 +1,12 @@
 {
+  "runtimePlugins": {
+    "save": "Save",
+    "promptUnsupported": "This Pi execution location does not support system prompt fragments.",
+    "title": "Task plugins",
+    "description": "Select plugins for this task. Changes apply from your next message.",
+    "unsupported": "Per-request processing is supported only for local Pi. This task’s engine does not support it.",
+    "failed": "Could not load or save these settings. Reopen this panel to try again."
+  },
   "sharedTaskRecovery": {
     "title": "Cannot resume on the original computer",
     "description": "Choose another computer or provider to continue with a context handoff. Your messages stay, but switching does not transfer the original computer’s full running state.",
@@ -2291,6 +2299,7 @@
         "desktopVisibilityHint": "Reveal the desktop and windows behind Cindy. Text and controls stay clear.",
         "desktopBlurLabel": "Desktop Blur",
         "desktopBlurHint": "Blur the desktop behind the window. 0 turns it off; higher values increase blur. Systems without adjustable blur use their default effect.",
+        "desktopBlurSwitchHint": "Blur the desktop behind the window with the Windows system effect. Requires Windows 11 version 22H2 or later.",
         "blurLabel": "Wallpaper Blur",
         "blurHint": "Blur only the wallpaper. Set to 0 to turn off. Blurring animated wallpaper increases GPU usage.",
         "motionLabel": "Display",
@@ -3628,6 +3637,36 @@
           "invalid": "Preview unavailable; check the configuration or select the file again",
           "skipped": "Skipped; select the file again to import this entry",
           "authorizationPending": "Connection added; complete authorization in provider settings"
+        },
+        "local": {
+          "title": "Import from local apps",
+          "note": "Read saved API configurations on this computer without changing source apps. Claude Code: user settings.json only, including CLAUDE_CONFIG_DIR. Shell variables, project and managed settings are not read.",
+          "review": "Review and import ({{count}})",
+          "scanning": "Reading saved configurations…",
+          "empty": "No saved API configurations found.",
+          "failed": "Could not finish reading. Please retry.",
+          "edit": "Edit",
+          "editFailed": "Check the URL, protocol and key, then retry.",
+          "editNote": "Leave the key blank to keep the saved credential. A changed URL or protocol requires a new key.",
+          "name": "Display name",
+          "baseUrl": "Base URL",
+          "protocol": "API protocol",
+          "chooseProtocol": "Choose a protocol",
+          "apiKey": "API key",
+          "keepKey": "Leave blank to keep the saved key",
+          "missingUrl": "URL required",
+          "status": {
+            "missing": "No configuration found",
+            "readFailed": "Could not read; check permissions or retry",
+            "invalid": "Unrecognized format; check or edit the configuration",
+            "limit": "Limit reached; this source was not fully read",
+            "unsupported": "This configuration cannot be imported automatically. Commands and apiKeyHelper are not run; add the API configuration manually.",
+            "needsInput": "Configuration needs completion",
+            "changed": "Source changed; scan again",
+            "duplicate": "An identical connection already exists"
+          },
+          "rescan": "Scan again",
+          "sourceDisabled": "Turned off in the source app"
         }
       },
       "order": {
@@ -3789,6 +3828,10 @@
           "openaiImagesHint": "Uses this connection’s address and API key for /images/generations and /images/edits. Enabling it selects this as the provider’s only Images connection. Add missing model IDs manually, then declare their image capability in model details.",
           "xaiVideos": "Use xAI-compatible Videos API",
           "xaiVideosHint": "Uses this connection’s address and API key to submit and poll video tasks. Enabling it selects this as the provider’s only video connection. Add missing model IDs, then declare video capability in model details.",
+          "minimaxVideos": "Use MiniMax-compatible Videos API",
+          "minimaxVideosHint": "Uses this connection’s address and API key to submit and poll MiniMax video tasks, such as MiniMax-H3. A provider can use only one video API. Add missing model IDs, then declare video capability in model details.",
+          "openaiVideos": "Use OpenAI-compatible Videos API (/v1/videos)",
+          "openaiVideosHint": "Uses this connection’s address and API key to submit and poll tasks with POST /v1/videos, the format most relays such as tu-zi use; models such as MiniMax-H3 work through it. A provider can use only one video API. Add missing model IDs, then declare video capability in model details.",
           "runtimeSupportsImageGeneration": "Supports image generation and editing",
           "runtimeSupportsImageGenerationHelpLabel": "About image generation and editing support",
           "runtimeSupportsImageGenerationConditionTitle": "When to enable",
@@ -6617,8 +6660,27 @@
             "copied": "Link code copied",
             "hint": "Or send this code to the Cindy bot in a direct message in Feishu / Lark"
           },
+          "linkedAccounts": "Linked Accounts: {{count}}",
+          "connectionTenant": "Company: {{tenant}}",
           "setWorkingDevice": "Set as working computer",
-          "workingDeviceSet": "Working computer set"
+          "workingDeviceSet": "Working computer set",
+          "appType": {
+            "self_built": "Organization app",
+            "store": "Store app"
+          },
+          "linkedBotsSummary": "Linked bots: {{bots}} · accounts: {{accounts}}",
+          "chooseBot": "Choose a bot to link. You can use multiple bots at the same time.",
+          "connectBot": "Link This Bot",
+          "linkAnotherAccount": "Link Another Feishu Account",
+          "botFallback": "Cindy bot",
+          "bridgeTitle": "Feishu / Lark Bots",
+          "bridgeDescription": "Bots only pass your Feishu / Lark messages to Cindy. Each linked account’s messages go to its working computer, and sessions stay separate for each bot and account.",
+          "settingsTitle": "Working Directories and Models",
+          "settingsDescription": "These belong to your Cindy account on this computer, not to a bot or a Feishu / Lark account, so every Feishu / Lark bot uses the same ones. The directory list is also shared with other channels.",
+          "workingDeviceLabel": "Working computer: {{name}}",
+          "workingDeviceThisComputer": "This computer",
+          "workingDeviceUnknown": "Working computer not yet synced",
+          "workingDeviceUnnamed": "Unnamed computer"
         }
       },
       "summary": {
@@ -8039,8 +8101,18 @@
         "subscribeScheduleRunDetail": "Automations where you choose it under Pre-run check ask it first. It sees the automation's name and instructions and can skip or stop that run, but can't approve anything for you.",
         "subscribeRoutineRun": "Can check chosen teammate routines before they run",
         "subscribeRoutineRunDetail": "Routines where you choose it under Pre-run check ask it first. It sees the routine's instructions and the events that triggered it, and can skip or stop that run, but can't approve anything for you.",
+        "systemPrompt": "Can add system instructions to selected tasks",
+        "systemPromptDetail": "The static fragments below are added after Cindy’s fixed instructions only in tasks where you select this plugin. Order and engine scope come from the package. Changes apply from the next message; errors follow the task setting.",
+        "subscribeComposeContext": "Can add reference material before replies in selected tasks",
+        "subscribeComposeContextDetail": "Only selected tasks share their current message with this plugin. Its results are ordinary reference material, not system instructions or approval. Errors follow the task setting.",
+        "subscribeSearchMemory": "Can provide memories for selected tasks",
+        "subscribeSearchMemoryDetail": "Adds inline results with this plugin’s name to the existing memory_search tool. Memory search must be enabled. Only the selected task’s query is shared; failures keep Cindy’s results.",
+        "subscribeStartTurn": "Can choose a model before each reply in selected tasks",
+        "subscribeStartTurnDetail": "Only tasks where you select this plugin share the current message with it. It can choose a connected model, effort and Fast. Errors follow that task’s setting; it cannot approve actions for you.",
+        "subscribeModelRequest": "Can process each model request in selected tasks",
+        "subscribeModelRequestDetail": "Only tasks where you select this plugin share their model requests with it. It can adjust models, parameters and request content. Currently supported only for local Pi; errors follow the task’s setting. Connection credentials are excluded.",
         "subscribeStartTask": "Can choose the model for new tasks",
-        "subscribeStartTaskDetail": "When a new task uses a model it provides, it reads the first message and picks one of your connected models. It decides once; the model doesn’t change during the task.",
+        "subscribeStartTaskDetail": "When a new task uses a model it provides, it reads the first message and picks one of your connected models. This entry point runs only before the first message.",
         "card": "Renders message cards",
         "cardExternalLink": "Cards may declare external links that open your browser after confirmation",
         "cardExternalLinkDetail": "Clicking a card link shows a confirmation dialog; the URL opens in your system browser only after you approve. Only http/https addresses are allowed.",
@@ -9318,6 +9390,9 @@
     }
   },
   "quotaCard": {
+    "codexRefreshFailed": "ChatGPT quota could not be updated. Retry the read; other usage information is kept.",
+    "retryQuota": "Retry Quota Read",
+    "retryingQuota": "Reading Quota…",
     "usageCritical": "High usage",
     "usageWarning": "Elevated usage",
     "usageTitle": "Usage details",
@@ -11751,7 +11826,7 @@
       "remove": "Remove",
       "removeAria": "Remove {{platform}}",
       "empty": "Add a bot you already have, or connect personal WeChat below, and {{name}} will reply there.",
-      "externalNote": "Anyone who messages this bot is talking to {{name}}. Your own messages run with {{name}}’s permissions; everyone else gets a separate hidden task with restricted permissions.",
+      "externalNote": "After binding, Telegram and Feishu/Lark accept private messages only from the owner. Groups follow each platform’s participation settings and {{name}}’s tool permissions. Separate tasks share files and memory.",
       "sharedMemoryNote": "{{name}} uses information from here and from other conversations together. To keep memories separate, use another teammate.",
       "groups": {
         "title": "Groups",
@@ -19875,6 +19950,7 @@
   },
   "subscriptionAccounts": {
     "unassigned": "Account not assigned",
+    "boundUnavailable": "Account unavailable",
     "providerManagedAuth": "The current Codex provider does not expose a ChatGPT account. When adding the provider, choose “$t(subscriptionAccounts.signIn.anotherAccount)” to use a separate folder.",
     "signIn": {
       "checking": "Checking local account…",
@@ -19902,7 +19978,12 @@
     "openDirectory": "Open account folder",
     "openDirectoryFailed": "Couldn’t open the account folder. It may have been moved or deleted.",
     "loginAgain": "Sign in again",
-    "login": "Sign in"
+    "login": "Sign in",
+    "quotaAverage": "Average remaining {{percent}}%",
+    "quotaUpdating": "Quota updating",
+    "quotaResetSoon": "Resets soon",
+    "quotaAverageHint": "Weekly quota · Equal weight per account",
+    "quotaResetHint": "At the current pace, quota may remain at reset: yellow within 24 hours, red within 6 hours."
   },
   "sessionNotify": {
     "finished": "This task finished its turn. Its final answer:",
