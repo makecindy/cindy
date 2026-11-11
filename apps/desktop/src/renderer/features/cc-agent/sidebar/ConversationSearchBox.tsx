@@ -1291,11 +1291,13 @@ function SearchResultRow({
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex min-w-0 items-center gap-2">
-              <span className="flex min-w-0 flex-1 items-center gap-1.5">
-                <span className="min-w-0 truncate text-13 font-medium text-[var(--text-primary)]">
+              <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-1">
+                <span className="min-w-0 flex-[1_0_6rem] truncate text-13 font-medium text-[var(--text-primary)]">
                   {highlightSegments(displayTitle, item.titleMatchIndices)}
                 </span>
-                <TaskTagDots tags={item.session.tags} />
+                <span className="max-w-full overflow-x-auto">
+                  <TaskTagDots tags={item.session.tags} />
+                </span>
               </span>
               <Tip text={sourceText} side="top" delay={150}>
                 <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-1.5 py-0.5 text-10 leading-none text-[var(--text-tertiary)]">

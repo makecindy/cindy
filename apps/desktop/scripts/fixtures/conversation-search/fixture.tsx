@@ -23,6 +23,6 @@ const results: ConversationSearchResultItem[] = [
 }));
 
 mountPage({
-  render: () => <SearchResultsBody trimmed="Search" status="done" results={results}
+  render: (ctx) => <SearchResultsBody trimmed="Search" status="done" results={ctx.case === 'many-tags' ? results.map(row => ({ ...row, session: { ...row.session, tags: Array.from({ length: 32 }, (_, index) => ({ ...tags[index % 2], id: `tag-${index}`, name: `Tag ${index}` })) } })) : results}
     onSelect={(item) => { document.body.dataset.selectedSession = item.session.id; }} />,
 });
