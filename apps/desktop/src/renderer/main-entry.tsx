@@ -145,7 +145,8 @@ void (async () => {
     await migration;
     presentTheme(getInitialThemeVariant().theme);
   }
-  const disposeAppearancePresenter = installAppearancePresenter(applyFontSettings);
+  const disposeAppearancePresenter = installAppearancePresenter(applyFontSettings,
+    isComputerPermissionView || isVoiceInputOverlay || isVoiceInputDictionaryToast);
   import.meta.hot?.dispose(disposeAppearancePresenter);
   if (isComputerPermissionBackdrop) {
     const { ComputerPermissionBackdrop } = await import(

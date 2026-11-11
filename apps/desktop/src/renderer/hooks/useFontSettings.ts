@@ -157,6 +157,12 @@ export function FontSettingsProvider({ children }: { children: ReactNode }) {
   const writeQueueRef = useRef<Promise<void>>(Promise.resolve());
   const nextRequestIdRef = useRef(0);
 
+  const { uiFamily, codeFamily, uiSize, codeSize } = settings;
+  useEffect(() => {
+    // Terminal changes never rewrite UI/code tokens; queued writes still reconcile.
+    applyFontSettings({ uiFamily, codeFamily, uiSize, codeSize });
+  }, [uiFamily, codeFamily, uiSize, codeSize]);
+
   useEffect(() => {
     const bridge = getBridge();
     if (!bridge?.onChanged) return;

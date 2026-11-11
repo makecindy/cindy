@@ -3,7 +3,8 @@
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { createElement, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { FontSettingsProvider, useFontSettings } from '@/hooks/useFontSettings';
+import { applyFontSettings, FontSettingsProvider, useFontSettings } from '@/hooks/useFontSettings';
+import { installAppearancePresenter } from '@/appearance/AppearancePresenter';
 import {
   DEFAULT_APPEARANCE_SETTINGS,
   type AppearanceSettings,
@@ -67,10 +68,14 @@ it('uses the existing single appearance subscription for default and plugin sett
   const stop = vi.fn();
   const bridge = window.electronAPI.appearanceSettings;
   vi.mocked(bridge.onChanged).mockReturnValue(stop);
+  // Main-entry's first-frame presenter must reuse the provider's fan-out.
+  const disposeStartup = installAppearancePresenter(applyFontSettings, false);
+  expect(bridge.onChanged).not.toHaveBeenCalled();
   const hook = renderHook(() => useFontSettings(), { wrapper });
   expect(bridge.onChanged).toHaveBeenCalledTimes(1);
   hook.unmount();
   expect(stop).toHaveBeenCalledTimes(1);
+  disposeStartup();
 });
 
 afterEach(() => {

@@ -21,6 +21,7 @@ import {
   GHOST_SKILL_MD_MAX_BYTES,
   declaredAutoApproveTools,
   ghostHostUiApprovalTokens,
+  declaredGhostControlPoints,
   ghostManifestToAuthorFormat,
   isValidGhostId,
   validateGhostManifestLocaleResource,
@@ -1296,7 +1297,7 @@ function approvedAutoToolsField(raw: unknown, manifest: GhostManifest): { approv
  */
 function approvedControlPointsField(raw: unknown, manifest: GhostManifest): { approvedControlPoints?: string[] } {
   if (!Array.isArray(raw)) return {};
-  const declared = new Set(manifest.subscribe?.hooks ?? []);
+  const declared = new Set([...(manifest.subscribe?.hooks ?? []), ...declaredGhostControlPoints(manifest)]);
   const points = [...new Set(raw.filter((item): item is string => typeof item === 'string' && declared.has(item as never)))];
   return points.length > 0 ? { approvedControlPoints: points.sort() } : {};
 }

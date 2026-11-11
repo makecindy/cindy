@@ -45,7 +45,7 @@ describe('utility window appearance bootstrap registration', () => {
     ]) {
       expectBefore(
         source,
-        'const disposeAppearancePresenter = installAppearancePresenter(applyFontSettings)',
+        'const disposeAppearancePresenter = installAppearancePresenter(applyFontSettings,',
         `if (${view})`,
       );
     }

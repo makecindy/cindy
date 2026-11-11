@@ -24,6 +24,18 @@ import { AgentNetClient, authorization, submitJoin, pollJoin, submitTenantJoin, 
 import { uploadEncryptedMedia, openEncryptedMedia } from '../media.js';
 import { createHash } from 'node:crypto';
 
+// Integration: HTTPS and UDP can sit behind different load balancers. /info must
+// name the UDP host only when configured, and a malformed host must stop startup.
+it('advertises a configured STUN host next to the bound UDP port', async () => {
+  const plain = await fixture();
+  const plainInfo = await (await fetch(plain.relay.url + API + '/info')).json() as Record<string, unknown>;
+  expect(plainInfo.udpPort).toBe(plain.relay.udpAddress?.port); expect(plainInfo).not.toHaveProperty('stunHost');
+  const split = await fixture({ stunHost: 'agent-net-stun.example.test' });
+  expect(await (await fetch(split.relay.url + API + '/info')).json())
+    .toMatchObject({ udpPort: split.relay.udpAddress?.port, stunHost: 'agent-net-stun.example.test' });
+  await expect(startAgentNetRelay({ dataDir: split.dataDir, udpPort: 0, stunHost: 'agent-net-stun.example.test:3479' })).rejects.toThrow('INVALID_STUN_HOST');
+});
+
 // Bug: opaque media storage alone did not protect App attachments or authenticated video seeks.
 // Minimal input crosses an AEAD block boundary; this uses the real production HTTP and disk path.
 it('streams authenticated attachments to both endpoints, supports seeks and rejects relay substitutions', async () => {

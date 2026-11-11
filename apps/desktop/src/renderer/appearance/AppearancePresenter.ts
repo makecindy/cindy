@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { getWallpaperVisibility, normalizeAppearanceSettings, type AppearanceSettings } from '@/../shared/appearanceSettings';
 import type { PluginAppearanceColor } from '@cindy/plugin-protocol/appearance';
 import { themeService } from '../themes/theme-service';
@@ -95,8 +95,6 @@ export async function applyAppearance(settings: AppearanceSettings, options: {
 }): Promise<'applied' | 'saved' | 'failed'> {
   const { faces, pending, bridge } = options;
   if (!options.current()) return 'saved';
-  options.applyFonts(settings);
-  options.style.textContent = css(settings, options.dark());
   for (const role of ['uiFont', 'codeFont', 'bodyFont', 'terminalFont'] as const) {
     const resource = settings[`${role}Resource` as 'uiFontResource'];
     const existing = faces.get(role);
@@ -140,6 +138,9 @@ export async function applyAppearance(settings: AppearanceSettings, options: {
     }
   }
   if (!options.current()) return 'saved';
+  options.applyFonts(settings);
+  const nextCss = css(settings, options.dark());
+  if (options.style.textContent !== nextCss) options.style.textContent = nextCss;
   return wallpaperApplicationStatus(settings, options.dark);
 }
 
@@ -170,7 +171,7 @@ function releasePresenter(): () => void {
 }
 
 /** One runtime per document, shared by startup, React views and fixed-capability receipts. */
-export function installAppearancePresenter(applyFonts: (settings: AppearanceSettings) => void): () => void {
+export function installAppearancePresenter(applyFonts: (settings: AppearanceSettings) => void, follow = true, initial?: AppearanceSettings): () => void {
   if (disposePresenter) { presenterUsers++; return releasePresenter(); }
   const bridge = window.electronAPI?.appearanceSettings;
   if (!bridge?.onChanged) return () => {};
@@ -191,9 +192,13 @@ export function installAppearancePresenter(applyFonts: (settings: AppearanceSett
   fontInWindow = loadedFonts;
   const fontKey = (settings: AppearanceSettings) => JSON.stringify([settings.uiFamily, settings.codeFamily, settings.uiSize, settings.codeSize]);
   let lastFonts = fontKey(normalizeAppearanceSettings({}));
+  let appliedUiFace: FontFace | undefined, appliedCodeFace: FontFace | undefined;
   const applyBaseFonts = (settings: AppearanceSettings) => {
     const key = fontKey(settings);
-    if (key !== lastFonts) { lastFonts = key; applyFonts(settings); }
+    const uiFace = faces.get('uiFont')?.face, codeFace = faces.get('codeFont')?.face;
+    if (key === lastFonts && uiFace === appliedUiFace && codeFace === appliedCodeFace) return;
+    lastFonts = key; appliedUiFace = uiFace; appliedCodeFace = codeFace;
+    applyFonts(settings);
   };
   const dark = () => document.documentElement.classList.contains('dark');
   let appliedDark = dark();
@@ -220,7 +225,7 @@ export function installAppearancePresenter(applyFonts: (settings: AppearanceSett
       });
       observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
     }
-    const promise = applyAppearance(settings, { bridge, style, faces, pending, dark, applyFonts: next => { lastFonts = fontKey(next); applyFonts(next); },
+    const promise = applyAppearance(settings, { bridge, style, faces, pending, dark, applyFonts: applyBaseFonts,
       current: () => live && currentGeneration === generation }).then(status => {
         if (!extended && live && generation === currentGeneration) clearStyle();
         return status;
@@ -229,9 +234,11 @@ export function installAppearancePresenter(applyFonts: (settings: AppearanceSett
     return promise;
   };
   applyInWindow = apply;
-  const initial = bridge.getSync(); // Cached preload snapshot, no IPC.
-  if (initial) void apply(initial);
-  const stop = bridge.onChanged(next => { void apply(next); });
+  const snapshot = initial ?? bridge.getSync(); // Cached preload snapshot, no IPC.
+  if (snapshot) void apply(snapshot);
+  // Main views reuse FontSettingsProvider's existing fan-out; utility windows
+  // have no provider and follow the same presenter directly.
+  const stop = follow ? bridge.onChanged(next => { void apply(next); }) : () => {};
   disposePresenter = () => {
     live = false; generation++; stop(); clearStyle();
     if (applyInWindow === apply) applyInWindow = undefined;
@@ -243,6 +250,8 @@ export function installAppearancePresenter(applyFonts: (settings: AppearanceSett
   return releasePresenter();
 }
 
-export function useAppearancePresenter(applyFonts: (settings: AppearanceSettings) => void): void {
-  useEffect(() => installAppearancePresenter(applyFonts), [applyFonts]);
+export function useAppearancePresenter(applyFonts: (settings: AppearanceSettings) => void, initial?: AppearanceSettings): (settings: AppearanceSettings) => void {
+  const initialRef = useRef(initial);
+  useEffect(() => installAppearancePresenter(applyFonts, false, initialRef.current), [applyFonts]);
+  return useCallback(settings => { void applyInWindow?.(settings); }, []);
 }

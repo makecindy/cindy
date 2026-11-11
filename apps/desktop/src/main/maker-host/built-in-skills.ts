@@ -26,9 +26,9 @@ const VERSIONS_DIRECTORY = '.versions';
 const ACTIVE_BUNDLE_LINK = '.active';
 const BUILT_IN_SKILL_MUTATION_WAIT_MS = 5_000;
 /** Increment whenever shipped built-in Skill bytes change between releases. */
-export const BUILT_IN_SKILLS_BUNDLE_VERSION = 99;
+export const BUILT_IN_SKILLS_BUNDLE_VERSION = 104;
 const PLUGIN_CREATOR_FIRST_BUNDLE_VERSION = 13;
-const THEME_CREATOR_FIRST_BUNDLE_VERSION = 99;
+const THEME_CREATOR_FIRST_BUNDLE_VERSION = 104;
 
 export interface BuiltInSkillDescriptor {
   name: string;
