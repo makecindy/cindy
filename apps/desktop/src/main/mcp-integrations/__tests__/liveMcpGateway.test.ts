@@ -11,14 +11,38 @@ const context = { agentKind: 'codex', workingDir: '/test', sessionId: 'task', se
 function fixture() {
   let current = true;
   let saved = false;
+  let signature = 'config-1';
   const called = vi.fn(async ({ text }: { text: string }) => ({ content: [{ type: 'text' as const, text }] }));
-  const resolve = vi.fn(() => saved ? { isCurrent: () => current, create: () => {
+  const resolve = vi.fn(() => saved ? { isCurrent: () => current, signature: () => signature, create: () => {
     const instance = new McpServer({ name: 'fixture', version: '1' });
     instance.registerTool('ping', { inputSchema: { text: z.string() } }, called);
     return { type: 'sdk', instance };
   } } : null);
   return { gateway: createLiveMcpGateway({ resolve }), resolve, called,
-    save: () => { saved = true; }, invalidate: () => { current = false; } };
+    save: () => { saved = true; }, invalidate: () => { current = false; },
+    editConfig: () => { signature = 'config-2'; } };
+}
+
+/** The remote server keeps per-session state, like `Mcp-Session-Id`-bound databases. */
+function statefulFixture() {
+  let signature = 'config-1';
+  let created = 0;
+  let resolveCalls = 0;
+  const resolve = vi.fn(() => {
+    resolveCalls += 1;
+    return { isCurrent: () => true, signature: () => signature, create: () => {
+      created += 1;
+      let sessionCounter = 0;
+      const instance = new McpServer({ name: 'stateful', version: '1' });
+      instance.registerTool('increment', { inputSchema: {} }, async () => {
+        sessionCounter += 1;
+        return { content: [{ type: 'text' as const, text: String(sessionCounter) }] };
+      });
+      return { type: 'sdk', instance };
+    } };
+  });
+  return { gateway: createLiveMcpGateway({ resolve }), resolve, created: () => created,
+    resolveCalls: () => resolveCalls, editConfig: () => { signature = 'config-2'; } };
 }
 const payload = (result: { content: Array<{ type: string; [key: string]: unknown }> }) => JSON.parse(result.content[0].text as string);
 
@@ -57,6 +81,24 @@ describe('stable live MCP entry', () => {
     expect(await f.gateway(context, { action: 'call', server: 'custom_example', tool: 'ping', arguments: { text: 2 } }))
       .toMatchObject({ isError: true });
     expect(f.called).not.toHaveBeenCalled();
+  });
+  it('keeps one upstream session across calls in the same task', async () => {
+    const f = statefulFixture();
+    const call = () => f.gateway(context, { action: 'call', server: 'custom_example', tool: 'increment', arguments: {} });
+    expect(await call()).toMatchObject({ content: [{ type: 'text', text: '1' }] });
+    // A second call must reach the same `Mcp-Session-Id` state, not a fresh session.
+    expect(await call()).toMatchObject({ content: [{ type: 'text', text: '2' }] });
+    expect(f.created()).toBe(1);
+    // Registry refreshes hand back a new provider object each call; that is not a new server.
+    expect(f.resolveCalls()).toBe(2);
+  });
+  it("starts a new upstream session when this server's configuration changes", async () => {
+    const f = statefulFixture();
+    const call = () => f.gateway(context, { action: 'call', server: 'custom_example', tool: 'increment', arguments: {} });
+    expect(await call()).toMatchObject({ content: [{ type: 'text', text: '1' }] });
+    f.editConfig();
+    expect(await call()).toMatchObject({ content: [{ type: 'text', text: '1' }] });
+    expect(f.created()).toBe(2);
   });
   it('does not start a cancelled call or return data after task invalidation', async () => {
     const f = fixture(); f.save();

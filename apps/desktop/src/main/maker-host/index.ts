@@ -1076,10 +1076,17 @@ export function getMaker(): Maker {
           (kind !== 'codex' && kind !== 'claude-code' && kind !== 'pi')) return null;
         const provider = _mcpProviders[kind]?.find(candidate => candidate.name === server);
         if (!(provider instanceof CustomMcpProvider)) return null;
+        const signature = provider.configSignature();
+        // The registry rebuilds every provider object on any custom-MCP save, so identity
+        // comparison would cancel in-flight calls when an unrelated server is added or
+        // edited. Compare this server's own configuration instead.
         const isCurrent = () => !isAppSessionBoundaryPending() && activeOwnerScopeKey() === owner &&
           _maker?.getSession(session.id) === session && session.getStatus() === 'active' &&
-          _mcpProviders[kind]?.find(candidate => candidate.name === server) === provider;
-        return { isCurrent, create: ctx => provider.toClaudeSdkConfig(ctx) };
+          (() => {
+            const live = _mcpProviders[kind]?.find(candidate => candidate.name === server);
+            return live instanceof CustomMcpProvider && live.configSignature() === signature;
+          })();
+        return { isCurrent, signature: () => signature, create: ctx => provider.toClaudeSdkConfig(ctx) };
       } }),
       runtimeCapabilities: async (context: import('@cindy/mcps').LiziMcpSessionContext, query: AgentCapabilityQuery) => {
         const session = context.sessionId ? _maker?.getSession(context.sessionId) : undefined;

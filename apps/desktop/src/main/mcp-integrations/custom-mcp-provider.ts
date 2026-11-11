@@ -100,6 +100,24 @@ export class CustomMcpProvider implements McpProvider {
     return { id: this.config.id, url: this.config.url, transport: this.config.transport, headers: this.buildHeaders() };
   }
 
+  /**
+   * Stable identity of this connection's configuration.
+   *
+   * The registry rebuilds every provider object on any custom-MCP save, so callers that
+   * need "did *this* server change?" must compare this signature instead of object
+   * identity — otherwise saving an unrelated server cancels in-flight calls. A token
+   * rotation is deliberately excluded: it is a credential change, not a new endpoint.
+   */
+  configSignature(): string {
+    return JSON.stringify([
+      this.config.id,
+      this.config.name,
+      this.config.transport,
+      this.config.url,
+      Object.entries(this.config.headers ?? {}).sort(([a], [b]) => a.localeCompare(b)),
+    ]);
+  }
+
   /** 合成 Claude 端使用的 headers(用户 headers + 可选 Bearer)。 */
   private buildHeaders(): Record<string, string> | undefined {
     const headers: Record<string, string> = { ...this.config.headers };

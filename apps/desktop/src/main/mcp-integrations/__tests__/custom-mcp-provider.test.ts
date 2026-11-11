@@ -169,4 +169,16 @@ describe('CustomMcpProvider', () => {
     const under = make({ headers: { x_a: '1' } }).getExtraEnv(ctx) as Record<string, string>;
     expect(Object.keys(dash)[0]).not.toBe(Object.keys(under)[0]);
   });
+
+  it('configSignature identifies the endpoint, not the provider object or its token', () => {
+    const version = (config: Partial<CustomMcpConfig>, token: string | null = null) =>
+      make(config, token).configSignature();
+    // The registry rebuilds provider objects on every save, so equal signatures must survive it.
+    expect(version({})).toBe(version({}));
+    expect(version({ headers: { a: '1', b: '2' } })).toBe(version({ headers: { b: '2', a: '1' } }));
+    expect(version({ url: 'https://other.example/mcp' })).not.toBe(version({}));
+    expect(version({ transport: 'sse' })).not.toBe(version({}));
+    // Rotating the token is a credential change, not a different server.
+    expect(version({}, 'token-a')).toBe(version({}, 'token-b'));
+  });
 });
