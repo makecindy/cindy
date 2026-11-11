@@ -1,5 +1,5 @@
 import { parseAgentMetaRecord, patchMessageAgentMetaWithResultRow, findVisibleToolUseMessageByAliasesRow,
-  writeMessageContentRow, rollbackAssistantMessageRow } from '../messageMutations.js';
+  writeMessageContentRow, rollbackAssistantMessageRow, readVisiblePiUserEntry } from '../messageMutations.js';
 import type { MessageAgentMetaPatchResult, VisibleToolUseMessageLink } from '../messageMutations.js';
 export type { MessageAgentMetaPatchResult, VisibleToolUseMessageLink } from '../messageMutations.js';
 import { writeMessageRow } from '../messageWrite.js';
@@ -80,6 +80,7 @@ import { scheduleBotRemoteResourceChangedForSession } from '../../maker-ipc/botR
 import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer';
 import { createHistoryViewReader, MAX_HISTORY_SCAN_ROWS, type HistoryPageShape } from './historyViewReader';
 import { setHistoryWorkPageReader } from '../../device-link/historyViewPush';
+import { createMessageClearRecovery } from '../messageClearRecovery.js';
 
 export { listMessagesForAgentHandoff } from '../agentHandoffHistory.js';
 
@@ -1303,80 +1304,18 @@ export function broadcastMessageDeleted(
   }
 }
 
-/**
- * Hide a user row that was persisted after the session crossed `/clear`.
- *
- * This is deliberately narrower than `commitMessageDeletion`: a clear-race
- * cleanup must not create a context-rebuild marker, reset the native session,
- * or touch any other turn.  The row stays as a rewind tombstone so the same
- * clientId remains idempotent across a weak-link retry.
- */
-export async function rewindPersistedUserMessageAfterClear(
-  sessionId: string,
-  clientId: string,
-  options?: { discard?: boolean },
-): Promise<void> {
-  const ownerScope = captureOwnerBroadcastScope();
-  if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
-  const dbClient = getDbClient();
-  const db = dbClient.drizzle;
-  const [row] = await db
-    .select({ id: messages.id, clientId: messages.clientId, content: messages.content })
-    .from(messages)
-    .where(
-      and(
-        eq(messages.sessionId, sessionId),
-        eq(messages.clientId, clientId),
-        eq(messages.role, 'user'),
-        isNull(messages.rewindAt),
-      ),
-    )
-    .limit(1);
-  if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
-  if (!row) return;
-
-  const rewoundAt = Date.now();
-  const updated = await dbClient.tx('message.rewindUserAfterClear', {
-    sessionId,
-    clientId,
-    rewoundAt,
-    ...(options?.discard ? { discard: true } : {}),
-  });
-  if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
-  if (updated.changes === 0) return;
-
-  const mediaCleanup = await Promise.allSettled(
-    [...new Set([row.id, row.clientId])].map((refId) =>
-      removeMediaRefs({ refKind: 'message', refId }),
-    ),
-  );
-  for (const [index, cleanup] of mediaCleanup.entries()) {
-    if (cleanup.status === 'fulfilled') continue;
-    log.warn('clear-race user media ref cleanup failed', {
-      sessionId,
-      clientId,
-      refId: [row.id, row.clientId][index],
-      error: cleanup.reason instanceof Error ? cleanup.reason.message : String(cleanup.reason),
-    });
-  }
-  const mediaHashes = collectCindyMediaHashes(row.content);
-  const mediaHashCleanup = await Promise.allSettled(
-    mediaHashes.map((hash) =>
-      removeSessionAttachmentRefIfUnreferencedByLiveMessage({ sessionId, hash }),
-    ),
-  );
-  for (const [index, cleanup] of mediaHashCleanup.entries()) {
-    if (cleanup.status === 'fulfilled') continue;
-    log.warn('clear-race session media ref reconcile failed', {
-      sessionId,
-      clientId,
-      hash: mediaHashes[index],
-      error: cleanup.reason instanceof Error ? cleanup.reason.message : String(cleanup.reason),
-    });
-  }
-  broadcastMessageDeleted({ sessionId, clientId, clientIds: [clientId] }, ownerScope);
-  void recomputePrRefsForSession(sessionId).catch(() => undefined);
-}
+/** Shared clear-race tombstone; Desktop retains its existing broadcast scope. */
+export const rewindPersistedUserMessageAfterClear = createMessageClearRecovery({
+  captureOwnerBroadcastScope: () => captureOwnerBroadcastScope(),
+  isOwnerBroadcastScopeCurrent: scope => isOwnerBroadcastScopeCurrent(scope),
+  getDbClient: () => getDbClient(),
+  removeMediaRefs: params => removeMediaRefs(params),
+  collectCindyMediaHashes: content => collectCindyMediaHashes(content),
+  removeSessionAttachmentRefIfUnreferencedByLiveMessage: params => removeSessionAttachmentRefIfUnreferencedByLiveMessage(params),
+  broadcastMessageDeleted: (payload, scope) => broadcastMessageDeleted(payload, scope),
+  recomputePrRefsForSession: id => recomputePrRefsForSession(id),
+  log,
+});
 
 export async function purgeRewoundSchedulerPrompts(
   limit = 100,
@@ -1908,18 +1847,7 @@ export function extractEstimatedSessionValueEntries(
 
 /** Stable native identity of a visible user input; do not match retries by text. */
 export async function readPiUserEntry(sessionId: string, clientId: string): Promise<string | undefined> {
-  const [row] = await getDbClient().drizzle
-    .select({ agentMeta: messages.agentMeta })
-    .from(messages)
-    .innerJoin(sessions, eq(messages.sessionId, sessions.id))
-    .where(and(
-      eq(messages.sessionId, sessionId), eq(messages.clientId, clientId),
-      eq(messages.role, 'user'), isNull(messages.rewindAt),
-      or(isNull(sessions.clearedAt), gt(messages.createdAt, sessions.clearedAt)),
-    ))
-    .limit(1);
-  const id = row && parseAgentMetaRecord(row.agentMeta)?.piEntryId;
-  return typeof id === 'string' && id.length > 0 && id.length <= 128 ? id : undefined;
+  return readVisiblePiUserEntry(getDbClient(), sessionId, clientId);
 }
 
 /** 与 patchMessageAgentMeta 相同，但返回补丁前后的元数据供幂等账本计算。 */
