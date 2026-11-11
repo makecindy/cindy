@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 
-import { BUNDLED_CATALOG, buildUserProvider, connectedProvidersForAgent, providerMediaField, remoteInvocationModels } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, buildUserProvider, connectedProvidersForAgent, providerMediaField, remoteInvocationModels, type ModelDisableOverrides } from '@cindy/model-providers';
 
 import { checkModelRoute } from '../model-route-guard.js';
 import { createProviderService, type ConnectionReadOptions } from '../provider-service.js';
@@ -352,7 +352,7 @@ describe('createProviderService', () => {
         ...provider, models: { codex: [model] },
       })) }),
       connection: { xd: () => false, anthropic: () => false, openai: () => true, xai: () => false },
-      getModelAccess: () => ({ disabledModels: disabled ? { 'openai:pool-model': true } : {} }),
+      getModelAccess: (): ModelDisableOverrides => ({ disabledModels: disabled ? { 'openai:pool-model': true } : {} }),
     });
     expect(checkModelRoute(await svc.listProviders({ catalog }), 'codex', model.id, 'openai'))
       .toEqual({ kind: 'reject', reason: 'explicit-source-disabled' });
