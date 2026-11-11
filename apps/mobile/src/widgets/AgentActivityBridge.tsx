@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AppState } from "react-native";
 import * as Linking from "expo-linking";
 import { useTranslation } from "react-i18next";
@@ -40,6 +40,9 @@ export function AgentActivityBridge() {
     hasActivity: boolean;
   } | null>(null);
   const registrationKey = `${scope}:${accountGeneration}`;
+  // A reconnect rebuilds the syncer; it must inherit a confirmed server takeover.
+  const registeredRef = useRef(registered);
+  registeredRef.current = registered;
   useEffect(() => {
     if (!native || !initialized) return;
     if (native.configureAccount) {
@@ -66,6 +69,9 @@ export function AgentActivityBridge() {
         error: t("devices.companions.avatarStatus.error"),
         stale: t("devices.liveActivity.waitingForUpdate"),
       },
+      initiallyRegistered:
+        registeredRef.current?.key === registrationKey &&
+        registeredRef.current.hasActivity,
       onRegistered: (hasActivity) =>
         setRegistered((previous) =>
           previous?.key === registrationKey &&

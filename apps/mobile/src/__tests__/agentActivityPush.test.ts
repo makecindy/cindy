@@ -282,3 +282,17 @@ it("defers background stale recovery until foreground and preserves ownership wi
     expect(fetchMock).toHaveBeenCalledTimes(2);
   } finally { sync.dispose(); }
 });
+
+// Unit: a reconnect rebuilds the syncer; a failed first attempt must not undo an
+// already confirmed server takeover (it would re-enable the partial local mirror).
+it("keeps a confirmed server takeover when a rebuilt syncer fails to register", async () => {
+  const opts = { ...options(), initiallyRegistered: true };
+  fixture.native.getPushRegistration.mockResolvedValue({ ...registration(), updateToken: "update" });
+  fetchMock.mockResolvedValue({ ok: false, status: 503 } as Response);
+  const sync = startActivityPushSync(opts);
+  try {
+    await sync.sync();
+    expect(fetchMock).toHaveBeenCalled();
+    expect(opts.onRegistered).not.toHaveBeenCalledWith(false);
+  } finally { sync.dispose(); }
+});

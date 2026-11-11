@@ -98,6 +98,9 @@ export function startActivityPushSync(options: {
   >;
   urlScheme: string;
   onRegistered(hasActivity: boolean): void;
+  /** The service already owns this account's activity (known from an earlier
+   * syncer before a reconnect); a failed later attempt must not hand it back. */
+  initiallyRegistered?: boolean;
 }) {
   const native = agentActivityNative;
   if (!native?.getPushRegistration || getActiveSelfHostedRelay()) {
@@ -111,6 +114,7 @@ export function startActivityPushSync(options: {
   const controller = new AbortController();
   let tail = Promise.resolve();
   let last: string | undefined;
+  let accepted = options.initiallyRegistered === true;
   let unsupported = false;
   let lastRefreshAt = -Infinity;
   let wasStale = false;
@@ -170,7 +174,7 @@ export function startActivityPushSync(options: {
         const token = await options.getAccessToken();
         assertCurrent();
         if (!token) {
-          if (last === undefined) options.onRegistered(false);
+          if (!accepted) options.onRegistered(false);
           return;
         }
         if (shouldRefresh) lastRefreshAt = Date.now();
@@ -182,6 +186,7 @@ export function startActivityPushSync(options: {
         );
         assertCurrent();
         last = key;
+        accepted = true;
         mobileDebugLog("info", "lifecycle", "activity-registration", {
           outcome: "accepted", refresh: shouldRefresh, hasUpdateToken: !!registration.updateToken,
         });
@@ -210,7 +215,7 @@ export function startActivityPushSync(options: {
           });
           // A failed refresh of an already registered activity must not transfer
           // ownership to the partial Home projection. Initial discovery still falls back.
-          if (last === undefined) options.onRegistered(false);
+          if (!accepted) options.onRegistered(false);
         } catch {
           /* disposed or previous account */
         }
