@@ -2477,7 +2477,7 @@ export function ProviderConnectionDialog({
             <Sparkles size={20} className="text-[var(--settings-section-title)]" />
             <Dialog.Title asChild><h2
               id="custom-provider-dialog-title"
-              className="text-18 font-semibold text-[var(--settings-section-title)]"
+              className="text-18 font-medium text-[var(--settings-section-title)]"
             >
               {editing
                 ? t('settings.providers.custom.dialog.editTitle')
@@ -3573,7 +3573,7 @@ export function ModelPickerOverlay({
           {/* Header */}
           <div className="flex items-center px-5 pb-1 pt-4">
             <div className="flex min-w-0 flex-col gap-0.5">
-              <Dialog.Title className="text-15 font-semibold text-[var(--settings-section-title)]">
+              <Dialog.Title className="text-15 font-medium text-[var(--settings-section-title)]">
                 {t('settings.providers.custom.fetch.pickerTitle', {
                   runtime: t(TAB_META[picker.agent].labelKey),
                 })}
