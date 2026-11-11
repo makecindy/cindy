@@ -582,6 +582,7 @@ export class GhostSubscriptionGateway {
     point: GhostControlPointId,
     data: GhostControlPointData,
     target: { pluginId: string; onFailure: GhostControlPointFailureAction },
+    timeoutMs?: number,
   ): Promise<GhostRuntimeControlPointResult> {
     const ownerScope = this.captureOwnerScope();
     if (!this.ownerScopeUsable(ownerScope)) return { action: 'allow' };
@@ -604,7 +605,8 @@ export class GhostSubscriptionGateway {
     const ghostId = installedGhostStoragePart(ghost);
     const e = this.entry(ghostId);
     const controlApproval = ghostInstallApprovalToken(ghost.approval);
-    const verdict = e.pointFused ? null : await this.askControlPoint(ghost, e, point, data, spec.timeoutMs, ownerScope);
+    const verdict = e.pointFused ? null : await this.askControlPoint(ghost, e, point, data,
+      Math.min(spec.timeoutMs, timeoutMs ?? spec.timeoutMs), ownerScope);
     if (!this.ownerScopeUsable(ownerScope)) return { action: 'allow' };
     if (verdict === null) return failed(ghostId, ghost.manifest.name, e.pointFused ? 'fused' : 'unanswered');
     if (runtimePoint) {

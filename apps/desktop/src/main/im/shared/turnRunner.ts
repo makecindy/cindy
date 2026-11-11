@@ -712,7 +712,7 @@ function routeOfRow(
 
 export interface ImTurnRunnerDeps {
   prepareRuntimeTurn?: (sessionId: string, message: unknown) => Promise<Partial<SendOptions>> | undefined;
-  composeRuntimeMessage?: (sessionId: string, message: UserMessage) => Promise<UserMessage> | undefined;
+  composeRuntimeMessage?: (sessionId: string, message: UserMessage, currentText: string) => Promise<UserMessage> | undefined;
   createRuntimeSession?: (options: CreateSessionOptions) => Promise<MakerSession>;
   /**
    * 锁住 session 并落实 deferred switch；IM 在刷新 live session + send 后 release。
@@ -1703,7 +1703,7 @@ export function createTurnRunner(
             goalInactiveNote,
           )
         : withPlanReconcile;
-      const runtimeMessage = deps.composeRuntimeMessage?.(rowId, outgoingMessage as UserMessage);
+      const runtimeMessage = deps.composeRuntimeMessage?.(rowId, outgoingMessage as UserMessage, item.text);
       if (runtimeMessage) outgoingMessage = await runtimeMessage;
 
       // 群护栏取缔: 按会话当前权限档决定是否真正挂强确认策略, 见

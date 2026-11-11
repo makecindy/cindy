@@ -2,7 +2,7 @@ import { MODEL_REQUEST_CONTROL, type ModelRequestControl, type SendOptions, type
 import type { GhostModelRoute, GhostRuntimePointData } from '../../shared/ghost.js';
 import { assertRuntimeRequestShape, type RuntimePluginSettings } from '../../shared/pluginRuntime.js';
 import { createRuntimePluginControl, RuntimePluginControlError } from '../cindy-brain/runtimeControl.js';
-import { extractPlainText, prependNoteToWireUserMessage, type HandoffWireMessage } from './agentHandoff.js';
+import { prependNoteToWireUserMessage, type HandoffWireMessage } from './agentHandoff.js';
 import { pluginMessageText } from '../../shared/pluginMessage.js';
 
 /** Ordinary reference material, shared by Desktop, personal IM and hook sends. */
@@ -21,14 +21,17 @@ export function createTaskRuntimePlugins(deps: {
   changed(sessionId: string, pluginId: string, phase: string): void;
 }) {
   return {
-    compose(sessionId: string, message: UserMessage, signal?: AbortSignal): Promise<UserMessage> | undefined {
+    compose(sessionId: string, message: UserMessage, currentText: string, signal?: AbortSignal): Promise<UserMessage> | undefined {
       if (!deps.readSettings(sessionId)?.['will-compose-context']?.length) return undefined;
-      const pending = deps.composeContext?.(sessionId, extractPlainText(message.content), signal);
+      const pending = deps.composeContext?.(sessionId, currentText, signal);
       return pending?.then(context => appendRuntimePluginContext(message as HandoffWireMessage, context) as UserMessage);
     },
     prepare(sessionId: string, message: unknown, signal?: AbortSignal): Promise<Partial<SendOptions>> | undefined {
       const settings = deps.readSettings(sessionId);
-      if (!settings?.['will-start-turn']?.length && !settings?.['will-model-request']?.length) return undefined;
+      if (!settings?.['will-start-turn']?.length && !settings?.['will-model-request']?.length
+        && !settings?.['will-compose-context']?.length && !settings?.['will-search-memory']?.length) return undefined;
+      deps.control.beginTurn(sessionId);
+      if (!settings['will-start-turn']?.length && !settings['will-model-request']?.length) return Promise.resolve({});
       return (async () => {
         const content = typeof message === 'string' ? message : (message as { content?: unknown } | null)?.content;
         const text = typeof content === 'string' ? content : Array.isArray(content)
@@ -52,7 +55,11 @@ export function createTaskRuntimePlugins(deps: {
           }
           return {};
         }
+        let requestBudget: ReturnType<typeof deps.control.requestBudget> | undefined;
         const control: ModelRequestControl = async input => {
+          if (input.phase === 'select' || !requestBudget) requestBudget = deps.control.requestBudget();
+          const sharedRequestBudget = requestBudget;
+          if (input.phase === 'payload') requestBudget = undefined;
           let changedRoute = false;
           const result = deps.control.run<GhostRuntimePointData>('will-model-request', sessionId, async () => ({ sessionId,
             route: { agentKind: 'pi', providerId: input.providerId, model: input.model },
@@ -72,7 +79,7 @@ export function createTaskRuntimePlugins(deps: {
               deps.changed(sessionId, verdict.ghostId, 'payload');
               return { ...data, request: verdict.request };
             }
-          }, signal, input.failure ? new Error('Model request exceeds the Pi transport frame budget') : undefined);
+          }, signal, input.failure ? new Error('Model request exceeds the Pi transport frame budget') : undefined, sharedRequestBudget);
           if (!result) throw new Error('Runtime selection changed');
           let data;
           try { data = await result; }

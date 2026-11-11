@@ -1861,7 +1861,7 @@ let textOnlyTurnActive = false;
 let modelRequestControlActive = false;
 function toolsDisabledForTurn(): boolean { return textOnlyTurnActive; }
 
-function installTextOnlyTurnPolicy(pi: any): void {
+function installTextOnlyTurnPolicy(pi: any, prepareRuntimeControl?: (ctx: any) => Promise<void> | undefined): void {
   const token = process.env.CINDY_PI_TURN_TOOL_POLICY;
   if (!token) return;
   const prefix = ${JSON.stringify(CINDY_PI_TEXT_ONLY_INPUT_PREFIX)} + token + '\n';
@@ -1869,18 +1869,22 @@ function installTextOnlyTurnPolicy(pi: any): void {
   pi.on('input', (event: any, ctx: any) => {
     if (event.source !== 'rpc' || typeof event.text !== 'string') return;
     let text = event.text;
+    const wasControlled = modelRequestControlActive;
     const controlled = text.startsWith(modelPrefix);
     if (controlled) text = text.slice(modelPrefix.length);
     if (ctx.isIdle() && !event.streamingBehavior) modelRequestControlActive = controlled;
     if (controlled) modelRequestControlActive = true;
+    const prepared = controlled || wasControlled ? prepareRuntimeControl?.(ctx) : undefined;
     if (!text.startsWith(prefix)) {
       // Aborted/failed turns may omit agent_settled. Only a fresh idle RPC input
       // resets their latch; steer, follow-ups and extension continuations retain it.
       if (ctx.isIdle() && !event.streamingBehavior) textOnlyTurnActive = false;
-      return controlled ? { action: 'transform', text, images: event.images } : undefined;
+      const result = controlled ? { action: 'transform', text, images: event.images } : undefined;
+      return prepared ? prepared.then(() => result) : result;
     }
     textOnlyTurnActive = true;
-    return { action: 'transform', text: text.slice(prefix.length), images: event.images };
+    const result = { action: 'transform', text: text.slice(prefix.length), images: event.images };
+    return prepared ? prepared.then(() => result) : result;
   });
   // agent_end is too early: native retries, compaction and follow-ups retain the policy.
   pi.on('agent_settled', (_event: any, ctx: any) => {
@@ -1896,7 +1900,7 @@ function installTextOnlyTurnPolicy(pi: any): void {
 
 // Native virtual routing preserves the user's selected physical model while each
 // assistant message records the model actually dispatched by this request.
-function installRuntimeModelControl(pi: any): () => any {
+function installRuntimeModelControl(pi: any) {
   const provider = 'cindy-runtime-router';
   const id = 'selected-task';
   let baseline: any;
@@ -1904,7 +1908,7 @@ function installRuntimeModelControl(pi: any): () => any {
   let dispatched: any;
   let requestFast: boolean | undefined;
   let registered = false;
-  pi.on('before_agent_start', async (_event: any, ctx: any) => {
+  const prepare = (ctx: any): Promise<void> | undefined => {
     if (ctx.model?.provider !== provider) {
       baseline = ctx.model;
     }
@@ -1913,8 +1917,10 @@ function installRuntimeModelControl(pi: any): () => any {
     requestFast = undefined;
     if (!modelRequestControlActive) {
       if (ctx.model?.provider === provider && baseline) {
-        if (!(await pi.setModel(baseline))) throw new Error('Cannot restore the selected model');
-        pi.setThinkingLevel(baselineThinking);
+        return pi.setModel(baseline).then((ok: boolean) => {
+          if (!ok) throw new Error('Cannot restore the selected model');
+          pi.setThinkingLevel(baselineThinking);
+        });
       }
       return;
     }
@@ -1938,9 +1944,12 @@ function installRuntimeModelControl(pi: any): () => any {
       registered = true;
     }
     const router = ctx.modelRegistry.find(provider, id);
-    if (!router || !(await pi.setModel(router))) throw new Error('Model request routing is unavailable');
-  });
-  return () => modelRequestControlActive ? { model: dispatched ?? baseline, fast: requestFast } : undefined;
+    if (!router) throw new Error('Model request routing is unavailable');
+    return pi.setModel(router).then((ok: boolean) => {
+      if (!ok) throw new Error('Model request routing is unavailable');
+    });
+  };
+  return { prepare, requestModel: () => modelRequestControlActive ? { model: dispatched ?? baseline, fast: requestFast } : undefined };
 }
 
 async function runtimeModelControl(ctx: any, input: any): Promise<any> {
@@ -4621,8 +4630,9 @@ export default async function cindyBridge(piApi: any) {
       if (allowed.length !== active.length) pi.setActiveTools(allowed);
     });
   }
-  installTextOnlyTurnPolicy(pi);
-  const runtimeRequestModel = installRuntimeModelControl(pi);
+  const runtimeModelRouting = installRuntimeModelControl(pi);
+  installTextOnlyTurnPolicy(pi, runtimeModelRouting.prepare);
+  const runtimeRequestModel = runtimeModelRouting.requestModel;
   const cacheRecovery = installCindyCacheRecovery(pi);
   const nativeProviderAdapters = await registerCindyNativeProviderAdapters(pi, cacheRecovery);
   const initialNativeSettings = typeof pi.getSettings === 'function' ? undefined

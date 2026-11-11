@@ -1751,6 +1751,26 @@ describe('control points', () => {
   };
   const approved = (id: string): InstalledGhost => ({ ...ghost(id, { hooks: [point] }), approvedControlPoints: [point] });
 
+  // Runtime latency contract, unit/fake timers: silence reaches the selected
+  // failure policy at each new point's own deadline, not the legacy 8s limit.
+  it.each([['will-start-turn', 1000], ['will-compose-context', 2000], ['will-search-memory', 1500], ['will-model-request', 1000]] as const)
+    ('bounds unanswered %s at %dms', async (runtimePoint, timeoutMs) => {
+      const provider = { ...ghost('runtime', { hooks: [runtimePoint] }), approvedControlPoints: [runtimePoint] };
+      const { gw, running, sent } = makeGateway({ listGhosts: () => [provider] });
+      running.add('runtime');
+      const input = { sessionId: 'task', route: { agentKind: 'pi' as const, model: 'm', providerId: 'p' },
+        phase: 'select' as const, text: 'text', query: 'query', limit: 10 };
+      let settled = false;
+      const pending = gw.screenControlPoint(runtimePoint, input, { pluginId: 'runtime', onFailure: 'allow' });
+      void pending.then(() => { settled = true; });
+      await vi.advanceTimersByTimeAsync(timeoutMs - 1);
+      expect(sent[0].payload).toMatchObject({ deadline: 1000 + timeoutMs });
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await pending).toEqual({ action: 'allow' });
+      expect(settled).toBe(true);
+    });
+
   it('asks only the chosen plugin and returns its skip', async () => {
     const { gw, sent, running } = makeGateway({ listGhosts: () => [approved('p1'), approved('p2')] });
     running.add('p1').add('p2');

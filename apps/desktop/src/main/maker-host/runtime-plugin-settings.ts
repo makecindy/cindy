@@ -1,5 +1,5 @@
 import { parseRuntimePluginSettings, type RuntimePluginSettings } from '../../shared/pluginRuntime.js';
-import { ownerScopedPath } from '../ownerContext.js';
+import { activeDataOwnerId, ownerScopedPath } from '../ownerContext.js';
 import { createOverrideSettingsFile } from './override-settings-file.js';
 import { desktopMakerLogger } from './logger-adapter.js';
 
@@ -29,6 +29,11 @@ const store = createOverrideSettingsFile<RuntimePluginPreferences>({
 /** Runtime reads use the ordinary settings cache; they never enumerate installed plugins. */
 export function readRuntimePluginSettings(sessionId: string): RuntimePluginSettings | undefined {
   return store.read().tasks[sessionId];
+}
+
+/** Load the bounded file during existing owner initialization, before sends. */
+export function warmRuntimePluginSettings(): void {
+  if (activeDataOwnerId()) store.read();
 }
 
 export async function writeRuntimePluginSettings(sessionId: string, value: RuntimePluginSettings): Promise<void> {

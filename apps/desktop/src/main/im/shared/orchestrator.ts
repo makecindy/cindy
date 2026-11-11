@@ -166,7 +166,7 @@ export function createImOrchestrator(
   });
   const turnRunner = createTurnRunner(adapter, repo, cards, {
     prepareRuntimeTurn: (sessionId, message) => prepareRuntimePluginsForDirectSend(sessionId, message),
-    composeRuntimeMessage: (sessionId, message) => composeRuntimePluginMessageForSend(sessionId, message),
+    composeRuntimeMessage: (sessionId, message, currentText) => composeRuntimePluginMessageForSend(sessionId, message, currentText),
     createRuntimeSession: options => createSessionWithRuntimePlugins(options),
     acquirePendingAgentSwitch: (sessionId, opts) =>
       opts?.channelOwned

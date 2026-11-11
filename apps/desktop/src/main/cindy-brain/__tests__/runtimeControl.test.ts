@@ -8,6 +8,11 @@ import { createRuntimeContextProviders } from '../runtimeContext.js';
 import { createStaticPromptProvider } from '../staticPrompt.js';
 import type { InstalledGhost } from '../../../shared/ghost.js';
 import { assembleSystemPromptSections } from '@cindy/maker-core';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import * as ownerContext from '../../ownerContext.js';
+import * as runtimePreferences from '../../maker-host/runtime-plugin-settings.js';
 
 // Test value: the production controller must never load data or call plugins for
 // unselected tasks, must preserve selected order, and must not apply stale answers.
@@ -54,9 +59,35 @@ describe('task runtime plugin control', () => {
   it('does no async work and never reads task input without a selection', () => {
     const f = fixture();
     const read = vi.fn(async () => input);
-    expect(f.control.run('will-start-turn', 'task', read, f.apply)).toBeUndefined();
+    for (const point of ['will-start-turn', 'will-model-request', 'will-compose-context', 'will-search-memory'] as const) {
+      expect(f.control.run(point, 'task', read, f.apply)).toBeUndefined();
+    }
     expect(read).not.toHaveBeenCalled();
     expect(f.screen).not.toHaveBeenCalled();
+  });
+
+  // Performance contract, unit: initialize the real bounded preference store
+  // before messages. The first unselected send must use memory, including when
+  // another task has persisted selections. Previous tests injected settings.
+  it('keeps the first unselected lookup off disk after owner initialization', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'runtime-plugin-prefs-'));
+    const file = path.join(dir, 'runtime-plugin-prefs.json');
+    fs.writeFileSync(file, JSON.stringify({ tasks: { selected: { 'will-start-turn': [{ pluginId: 'router', onFailure: 'block' }] } } }));
+    const ownerPath = vi.spyOn(ownerContext, 'ownerScopedPath').mockReturnValue(file);
+    const owner = vi.spyOn(ownerContext, 'activeDataOwnerId').mockReturnValue('fixture');
+    let read: { mockRestore(): void } | undefined;
+    let stat: { mockRestore(): void } | undefined;
+    let exists: { mockRestore(): void } | undefined;
+    try {
+      (runtimePreferences as typeof runtimePreferences & { warmRuntimePluginSettings?: () => void }).warmRuntimePluginSettings?.();
+      read = vi.spyOn(fs, 'readFileSync'); stat = vi.spyOn(fs, 'statSync'); exists = vi.spyOn(fs, 'existsSync');
+      expect(runtimePreferences.readRuntimePluginSettings('unselected')).toBeUndefined();
+      expect(runtimePreferences.readRuntimePluginSettings('selected')?.['will-start-turn']?.[0].pluginId).toBe('router');
+      expect(read).not.toHaveBeenCalled(); expect(stat).not.toHaveBeenCalled(); expect(exists).not.toHaveBeenCalled();
+    } finally {
+      read?.mockRestore(); stat?.mockRestore(); exists?.mockRestore(); owner.mockRestore(); ownerPath.mockRestore();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('composes only selected providers in task order', async () => {
@@ -71,6 +102,115 @@ describe('task runtime plugin control', () => {
     const output = await f.control.run('will-start-turn', 'task', async () => input, apply);
     expect(output?.route.model).toBe('m1-next-next');
     expect(f.screen.mock.calls.map(call => call[2].pluginId)).toEqual(['second', 'first']);
+  });
+
+  // New runtime latency contract, unit/fake clock: only transport wait consumes
+  // the 5s turn budget, and exhaustion must retain each selected failure policy.
+  it.each(['allow', 'skip', 'block'] as const)('bounds cumulative plugin wait and honors exhausted policy: %s', async onFailure => {
+    let clock = 0;
+    const settings = { 'will-start-turn': [{ pluginId: 'router', onFailure }] };
+    const screen = vi.fn(async (_point: string, _data: unknown, _target: RuntimePluginTarget, timeoutMs?: number) => { clock += timeoutMs ?? 0; return { action: 'allow' as const }; });
+    const control = createRuntimePluginControl({ readSettings: () => settings,
+      captureOwner: () => () => true, screen, now: () => clock });
+    control.beginTurn('task');
+    const read = async () => { clock += 10_000; return input; };
+    const apply = async () => { clock += 10_000; };
+    for (let i = 0; i < 5; i++) await control.run('will-start-turn', 'task', read, apply);
+    expect(screen.mock.calls.map(call => call[3])).toEqual([1000, 1000, 1000, 1000, 1000]);
+    const pending = control.run('will-start-turn', 'task', read, apply);
+    if (onFailure === 'allow') await expect(pending).resolves.toEqual(input);
+    else await expect(pending).rejects.toMatchObject({ action: onFailure, failure: true });
+    expect(screen).toHaveBeenCalledTimes(5);
+  });
+
+  it.each(['will-compose-context', 'will-search-memory'] as const)('collects %s concurrently but merges in the selected order', async point => {
+    let settings: RuntimePluginSettings = { [point]: [
+      { pluginId: 'first', onFailure: 'allow' }, { pluginId: 'second', onFailure: 'allow' },
+    ] };
+    const answers = new Map<string, (value: GhostRuntimeControlPointResult) => void>();
+    const screen = vi.fn((_point: string, _data: unknown, target: RuntimePluginTarget) => new Promise<GhostRuntimeControlPointResult>(resolve => answers.set(target.pluginId, resolve)));
+    const control = createRuntimePluginControl({ readSettings: () => settings, captureOwner: () => () => true, screen });
+    const providers = createRuntimeContextProviders(control);
+    const collect = () => point === 'will-compose-context' ? providers.compose('task', 'reference')
+      : providers.search({ sessionId: 'task', query: 'reference', limit: 10 });
+    const pending = collect();
+    await Promise.resolve(); await Promise.resolve();
+    expect(screen).toHaveBeenCalledTimes(2);
+    for (const id of ['second', 'first']) answers.get(id)!(point === 'will-compose-context'
+      ? { action: 'context', ghostId: id, ghostName: id, blocks: [{ id, text: id }] }
+      : { action: 'memories', ghostId: id, ghostName: id, entries: [{ id, title: id, content: id }] });
+    const output = await pending;
+    const ordered = typeof output === 'string' ? output : output!.hits.map(hit => hit.id).join(',');
+    expect(ordered.indexOf('first')).toBeLessThan(ordered.indexOf('second'));
+    settings = {};
+    expect(collect()).toBeUndefined();
+  });
+
+  // A new message must renew the shared budget even when only context is selected.
+  // Unit/fake clock: the prior request-routing fixture cannot cover this entry.
+  it('renews context-only message budgets without reading input or a model route', async () => {
+    let clock = 0;
+    const settings = { 'will-compose-context': [{ pluginId: 'context', onFailure: 'allow' as const }] };
+    const timeouts: number[] = [];
+    const control = createRuntimePluginControl({ readSettings: () => settings, captureOwner: () => () => true, now: () => clock,
+      screen: async (_point, _data, _target, timeoutMs) => {
+        timeouts.push(timeoutMs!); clock += Math.min(1800, timeoutMs!);
+        return { action: 'context', ghostId: 'context', ghostName: 'Context', blocks: [{ id: 'b', text: 'reference' }] };
+      } });
+    const readRoute = vi.fn(async () => input.route);
+    const readContent = vi.fn(() => 'message');
+    const service = createTaskRuntimePlugins({ control, readSettings: () => settings, readRoute,
+      routeAvailable: async () => true, applyRoute: vi.fn(), changed: vi.fn() });
+    const providers = createRuntimeContextProviders(control);
+    const message = { get content() { return readContent(); } };
+    await service.prepare('task', message);
+    for (let i = 0; i < 3; i++) expect(await providers.compose('task', 'reference')).toContain('reference');
+    expect(await providers.compose('task', 'reference')).toBe('');
+    await service.prepare('task', message);
+    expect(await providers.compose('task', 'reference')).toContain('reference');
+    expect(timeouts).toEqual([2000, 2000, 1400, 2000]);
+    expect(readRoute).not.toHaveBeenCalled();
+    expect(readContent).not.toHaveBeenCalled();
+  });
+
+  it('caps merged provider memories globally and marks truncated results', async () => {
+    const settings = { 'will-search-memory': ['first', 'second', 'third'].map(pluginId => ({ pluginId, onFailure: 'allow' as const })) };
+    const control = createRuntimePluginControl({ readSettings: () => settings, captureOwner: () => () => true,
+      screen: async (_point, _data, target) => ({ action: 'memories', ghostId: target.pluginId, ghostName: target.pluginId,
+        entries: [{ id: target.pluginId, title: target.pluginId, content: target.pluginId === 'third' ? 'tail' : 'x'.repeat(20_000) }] }) });
+    const result = await createRuntimeContextProviders(control).search({ sessionId: 'task', query: 'memory', limit: 50 });
+    expect(result).toMatchObject({ truncated: true });
+    expect(result!.hits.map(hit => hit.id)).toEqual(['first', 'second']);
+    expect(result!.hits.reduce((sum, hit) => sum + hit.content.length, 0)).toBe(32768);
+    expect(result!.hits[1].truncated).toBe(true);
+  });
+
+  it('shares one request budget across select and payload and resets it for the next request', async () => {
+    let clock = 0;
+    const settings = { 'will-model-request': [{ pluginId: 'request', onFailure: 'allow' as const }] };
+    const timeouts: number[] = [];
+    const control = createRuntimePluginControl({ readSettings: () => settings, captureOwner: () => () => true, now: () => clock,
+      screen: async (_point, _data, _target, timeoutMs) => { timeouts.push(timeoutMs!); clock += Math.min(600, timeoutMs!); return { action: 'allow' }; } });
+    const service = createTaskRuntimePlugins({ control, readSettings: () => settings, readRoute: async () => input.route,
+      routeAvailable: async () => true, applyRoute: vi.fn(), changed: vi.fn() });
+    const options = await service.prepare('task', 'message');
+    const callback = options![MODEL_REQUEST_CONTROL]!;
+    await callback({ phase: 'select', providerId: 'p', model: 'm1' });
+    await callback({ phase: 'payload', providerId: 'p', model: 'm1', request: { model: 'm1' } });
+    await callback({ phase: 'select', providerId: 'p', model: 'm1' });
+    expect(timeouts).toEqual([1000, 400, 1000]);
+  });
+
+  it('caps the aggregate memory count at fifty in selected order', async () => {
+    const settings = { 'will-search-memory': ['first', 'second'].map(pluginId => ({ pluginId, onFailure: 'allow' as const })) };
+    const control = createRuntimePluginControl({ readSettings: () => settings, captureOwner: () => () => true,
+      screen: async (_point, _data, target) => ({ action: 'memories', ghostId: target.pluginId, ghostName: target.pluginId,
+        entries: Array.from({ length: 31 }, (_, i) => ({ id: `${target.pluginId}-${i}`, title: 'title', content: 'x' })) }) });
+    const result = await createRuntimeContextProviders(control).search({ sessionId: 'task', query: 'memory', limit: 50 });
+    expect(result?.truncated).toBe(true);
+    expect(result?.hits).toHaveLength(50);
+    expect(result!.hits[30].id).toBe('first-30');
+    expect(result!.hits[49].id).toBe('second-18');
   });
 
   it.each(['allow', 'skip', 'block'] as const)('uses the task policy when a host effect fails: %s', async onFailure => {
@@ -146,9 +286,9 @@ describe('task runtime plugin control', () => {
       : { action: 'memories', ghostId: target.pluginId, ghostName: 'Memory', entries: [{ id: 'm', title: 'Title', content: 'memory' }] });
     const providers = createRuntimeContextProviders(f.control);
     expect(await providers.compose('task', 'read only')).toContain('"sourcePlugin":{"id":"context","name":"Context"}');
-    expect(await providers.search({ sessionId: 'task', query: 'word', limit: 10 })).toEqual([
+    expect(await providers.search({ sessionId: 'task', query: 'word', limit: 10 })).toEqual({ hits: [
       { id: 'm', title: 'Title', content: 'memory', sourcePlugin: { id: 'memory', name: 'Memory' } },
-    ]);
+    ] });
     expect(f.screen.mock.calls[1][1]).toEqual({ sessionId: 'task', query: 'word', limit: 10 });
     f.setSettings({});
     expect(providers.compose('task', 'private')).toBeUndefined();

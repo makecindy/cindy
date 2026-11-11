@@ -407,7 +407,7 @@ export interface SchedulerHookScriptService {
 export interface MemoryMcpDeps {
   /** Optional runtime providers. Undefined means no provider was selected for the caller. */
   searchProviders?: (query: string, opts: { type?: 'user' | 'feedback' | 'project' | 'reference'; limit?: number },
-    context: LiziMcpSessionContext | undefined) => Promise<MemoryProviderHit[]> | undefined;
+    context: LiziMcpSessionContext | undefined) => Promise<MemoryProviderHit[] | MemoryProviderSearchResult> | undefined;
   withAccountDataAccess?: import('./account-data-access.js').AccountDataAccess;
   /** Host captures the source turn before storage; invoked only for a successful write. */
   beginWrite?: (context: LiziMcpSessionContext | undefined) => ((receipt: { key: string; title: string; action: 'created' | 'updated' }) => void);
@@ -430,7 +430,10 @@ export interface MemoryProviderHit {
   content: string;
   type?: 'user' | 'feedback' | 'project' | 'reference';
   sourcePlugin: { id: string; name: string };
+  truncated?: boolean;
 }
+
+export interface MemoryProviderSearchResult { hits: MemoryProviderHit[]; truncated?: boolean }
 
 export interface LspMcpDeps {
   workdir: string;

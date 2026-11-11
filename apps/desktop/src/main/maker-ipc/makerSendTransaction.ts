@@ -275,7 +275,7 @@ export interface MakerSendTransactionLog {
 
 export interface MakerSendTransactionDeps {
   prepareRuntimePrompt?(sessionId: string): Promise<void> | undefined;
-  composeRuntimeContext?(sessionId: string, text: string, signal?: AbortSignal): Promise<string> | undefined;
+  composeRuntimeContext?(sessionId: string, readText: () => string, signal?: AbortSignal): Promise<string> | undefined;
   prepareRuntimeTurn?(sessionId: string, message: unknown, signal?: AbortSignal): Promise<{
     options?: Partial<SessionSendOptions>; failure?: DesktopMakerSendResult;
   }> | undefined;
@@ -1584,7 +1584,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       }
       if (allowsEnvironmentNotes) {
         try {
-          const pending = deps.composeRuntimeContext?.(sessionId, extractIpcUserMessageText(normalized), so.signal);
+          const pending = deps.composeRuntimeContext?.(sessionId, () => extractIpcUserMessageText(normalized), so.signal);
           const context = pending ? await pending : undefined;
           if (context) outgoing = appendRuntimePluginContext(outgoing as HandoffWireMessage, context);
         } catch (error) {

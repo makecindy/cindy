@@ -45,6 +45,9 @@ import { buildCindyMakeTaskNote } from '../../cindy-make/taskNote';
 import { getResolvedMainLocale } from '../../i18n.desktop';
 import { buildMobileClientPromptNote } from '../mobileClientPromptNote';
 import { buildUiLanguageErrorNote } from '../uiLanguageErrorNote';
+import { createRuntimePluginControl } from '../../cindy-brain/runtimeControl.js';
+import { createRuntimeContextProviders } from '../../cindy-brain/runtimeContext.js';
+import { createTaskRuntimePlugins } from '../runtimePlugins.js';
 import * as mcpApps from '../../mcp-apps/runtime.js';
 import { createWireNoteMemory } from '../wireNoteMemory';
 import {
@@ -68,6 +71,34 @@ function withUiLanguageUserMessage(content: string): { type: 'user'; content: st
 }
 
 describe('local application task takeover', () => {
+  // Performance contract, unit: an unselected Desktop send must neither await
+  // plugin work nor extract the context-provider input. Existing selection tests
+  // only cover the controller, not argument evaluation at the real send entry.
+  it('keeps unselected Desktop plugin preparation synchronous and context input lazy', async () => {
+    const { deps, session } = createDeps();
+    const screen = vi.fn();
+    const readRoute = vi.fn();
+    const control = createRuntimePluginControl({ readSettings: () => undefined,
+      captureOwner: vi.fn(), screen });
+    const providers = createRuntimeContextProviders(control);
+    const service = createTaskRuntimePlugins({ control, readSettings: () => undefined,
+      readRoute, routeAvailable: vi.fn(), applyRoute: vi.fn(), changed: vi.fn() });
+    const pending: unknown[] = [];
+    deps.prepareRuntimeTurn = (id, message) => {
+      const value = service.prepare(id, message); pending.push(value); return value?.then(options => ({ options }));
+    };
+    deps.composeRuntimeContext = (id, readText) => {
+      expect(typeof readText).toBe('function');
+      const value = providers.compose(id, readText); pending.push(value); return value;
+    };
+    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'Unchanged plugin-free input');
+    expect(pending).toEqual([undefined, undefined]);
+    expect(readRoute).not.toHaveBeenCalled();
+    expect(screen).not.toHaveBeenCalled();
+    expect(session.send).toHaveBeenCalledOnce();
+    expect(vi.mocked(session.send).mock.calls[0][1]?.[MODEL_REQUEST_CONTROL]).toBeUndefined();
+  });
+
   // Runtime context, unit: reference material reaches the normal message body,
   // while the authorization source remains the owner's original message.
   it('adds selected runtime context as reference material without adding user authority', async () => {

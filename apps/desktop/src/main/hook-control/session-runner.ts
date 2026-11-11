@@ -37,7 +37,7 @@ import { app } from 'electron';
 import { materializeTaskImageTextResult } from '../cindy-media/taskImageDelivery';
 import { rewriteTaskImageReferences } from '../cindy-media/taskImageMarkdown';
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
-import { MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
+import { AUTO_REVIEW_SOURCE_CONTENT, MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
 
 import type {
   AgentKind,
@@ -1508,8 +1508,18 @@ export function createMakerHookSessionRunner(deps: {
         let outgoingMessage: UserMessage = goalInactiveNote
           ? (prependNoteToWireUserMessage(withPlanReconcile, goalInactiveNote) as UserMessage)
           : withPlanReconcile;
-        const runtimeMessage = composeRuntimePluginMessageForSend(session.id, outgoingMessage);
-        if (runtimeMessage) outgoingMessage = await runtimeMessage;
+        const runtimeMessage = composeRuntimePluginMessageForSend(session.id, outgoingMessage, userText);
+        if (runtimeMessage) {
+          outgoingMessage = await runtimeMessage;
+          if (req.isCancelRequested?.()) {
+            return {
+              status: 'error',
+              finalText: '',
+              errorMessage: '任务已被用户喊停，本条消息没有执行。',
+              durationMs: Date.now() - startedAt,
+            };
+          }
+        }
         const trustedChannelOrigin = mainOwnedChannelOrigin(req.source?.im);
         // 新任务从入口起绑定账号: 建行后的补写、附件与上下文准备期间换了账号, 就终止这次
         // 派发(下面的 catch 统一收尾并回失败), 不让迟到的 send 在 teardown 之后重新启动
@@ -1527,6 +1537,7 @@ export function createMakerHookSessionRunner(deps: {
           ...runtimeOptions,
           origin,
           planMode: false,
+          ...(runtimeMessage ? { [AUTO_REVIEW_SOURCE_CONTENT]: userText } : {}),
           ...(trustedChannelOrigin
             ? {
                 [MAIN_OWNED_SEND_CONTEXT]: {

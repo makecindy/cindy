@@ -13,10 +13,10 @@
 | `will-schedule-run` | 每次自动化(定时任务,含脚本模式)运行前;恢复中断的续跑不再问 | allow / skip / block | 30 秒 |
 | `will-routine-run` | 兼容保留,不再触发:伙伴例行任务已改成项目自动化(2026-11-08),声明照常安装 | allow / skip / block | 30 秒 |
 | `will-start-task` | 新任务(含 `/goal` 开的)第一条消息发出、任务建好之前;只问一次,之后的消息不再问;伙伴对话不问 | allow / route | 8 秒 |
-| `will-start-turn` | 任务中每条消息发给引擎之前；只问任务设置中选中的插件 | allow / route / skip / block | 8 秒 |
-| `will-model-request` | 本机 Pi 的每次模型请求，包含工具结果后的继续请求 | allow / route（select 阶段）/ transform（payload 阶段）/ skip / block | 每次询问 8 秒 |
-| `will-compose-context` | 每条模型消息装配时，为选了该插件的任务补参考资料 | allow / context / skip / block | 8 秒 |
-| `will-search-memory` | 所选任务调用已有 `cindy_memory.memory_search` 时 | allow / memories | 8 秒，失败保留 Cindy 结果 |
+| `will-start-turn` | 任务中每条消息发给引擎之前；只问任务设置中选中的插件 | allow / route / skip / block | 1 秒 |
+| `will-model-request` | 本机 Pi 的每次模型请求，包含工具结果后的继续请求 | allow / route（select 阶段）/ transform（payload 阶段）/ skip / block | 每次请求的 select＋payload 合计 1 秒 |
+| `will-compose-context` | 每条模型消息装配时，为选了该插件的任务补参考资料 | allow / context / skip / block | 2 秒 |
+| `will-search-memory` | 所选任务调用已有 `cindy_memory.memory_search` 时 | allow / memories | 1.5 秒，失败保留 Cindy 结果 |
 | `system-prompt` | 装配所选任务的系统提示词；由清单 `systemPrompt` 静态提供，不发送询问 | 无运行期裁决 | 不启动插件 |
 
 运行时用 `host-request` 查当前 Cindy 实际提供哪些节点,别靠版本号猜:
@@ -72,8 +72,21 @@ cindy.onHostMessage(async (msg) => {
 - **出错处理归用户**:超时、崩溃、连续 3 次失败(熔断),或插件被停用、卸载时,主机按用户在
   该任务里选的处理执行(照常运行 / 跳过本次 / 停止并记为失败,默认停止并记为失败,与脚本前置
   检查一致)。插件读不到也改不了这个设置。
-- 自动化／例行任务的前置检查只选一个插件；「任务插件」可选多个，按选择顺序串行处理。`reason` 最长 200 字符。
+- 自动化／例行任务的前置检查只选一个插件；「任务插件」可选多个：路由和请求正文处理串行保序；资料与记忆提供者并行询问，再按选择顺序归并。`reason` 最长 200 字符。
 - 只投给当前登录账号自己电脑上的流程;手机或另一台电脑触发的运行,在执行的那台电脑上询问。
+
+### 任务运行时等待预算
+
+四个新增运行时节点共用每轮 **5 秒**插件等待预算。每条消息在统一发送准备入口开启新预算，
+工具续轮和同一轮内的多次模型请求不重置。每次询问还受上表单点时限约束；
+`will-model-request` 的 `select` 与 `payload` 共用该次请求的 **1 秒**，下一请求重新取得
+请求预算，但继续消费本轮剩余的 5 秒。实际 `deadline` 会按两项剩余预算缩短。
+
+预算只统计插件等待，包括插件按需唤醒；并行等待重叠的墙钟时间只计一次。宿主的
+`readRoute`、`applyRoute`、Agent 会话关闭／恢复、模型 HTTP 和工具执行不计入，
+所以这不是整条消息或整轮完成时间的上限。预算耗尽后不再询问剩余插件，按每个插件在该任务
+设置的 `onFailure`（allow / skip / block）处理，不擅自放行；记忆节点仍只允许 allow。
+未选择插件时同步短路，不建立预算或新增定时器。旧的自动化和新任务节点时限保持不变。
 
 ### 为新任务选模型(`will-start-task`)
 
@@ -146,7 +159,7 @@ cindy.send({
   使用 Pi 原生虚拟模型路由，实际响应记实际模型，不永久改任务的模型选择。
 - `phase: "payload"`：额外带 `request`（供应商请求 JSON 正文，无连接密钥和认证头）。可回
   `{ type: "event-verdict", hookId, action: "transform", request: { ...msg.data.request, max_tokens: 2048 } }`。
-  可以处理参数和正文，包括模型字段；宿主只校验请求结构仍合法和 1 MiB 大小上限，不按字段设业务白名单。
+  可以处理参数和正文，包括模型字段；宿主只校验请求结构仍合法及序列化后最多 1048576 字符，不按字段设业务白名单。
   后选插件读取前一个插件处理后的正文。日志只记任务、来源插件和处理阶段，不记录正文。
 
 | 引擎 | 每条消息前路由 | 每次模型请求前路由／正文处理 |
@@ -190,7 +203,10 @@ cindy.send({ type: 'event-verdict', hookId: msg.hookId, action: 'memories',
 每批最多 50 项、全文合计最多 32768 字符；`id` 最多 128 字符、`title` 最多 256 字符，
 `type` 可选 `user / feedback / project / reference`。来源 `sourcePlugin: { id, name }`
 始终由宿主填写；插件自报的来源会被丢弃。结果全文直接在 `memory_search` 返回，不伪造本地
-文件名，也不要求 Agent 再调用其它工具。Cindy 原有结果与插件结果各保留自身排序，交替合并
+文件名，也不要求 Agent 再调用其它工具。多插件结果按用户选择顺序填充，所有提供者合计最多 **50 条**、`content` 正文合计最多
+**32768 字符**；超出时截断，`memory_search` 返回的 `data.truncated` 为 `true`，被截短的
+内联条目也带 `truncated: true`。标题、ID 和宿主来源仍受各自字段上限约束。
+Cindy 原有结果与插件结果各保留自身排序，交替合并
 并遵守调用者的总 `limit`；不同索引的分数不混排。
 
 沿用现有 `cindy_memory` 的启用与账号／任务边界，不另建记忆库或额外工具。需已有记忆检索

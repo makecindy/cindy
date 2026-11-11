@@ -39,10 +39,13 @@ export function registerMemorySearchTool(registry: MemoryToolRegistry, deps: Mem
         if (limit) opts.limit = limit;
         const hits = await store.search(query, opts);
         let provided: MemoryProviderHit[];
+        let truncated = false;
         try {
           const pending = deps.searchProviders?.(query, opts, deps.getSessionContext?.());
           if (!pending) return { hits, count: hits.length };
-          provided = await pending;
+          const result = await pending;
+          provided = Array.isArray(result) ? result : result.hits;
+          truncated = !Array.isArray(result) && result.truncated === true;
         }
         catch { return { hits, count: hits.length }; }
         if (!provided.length) return { hits, count: hits.length };
@@ -54,7 +57,7 @@ export function registerMemorySearchTool(registry: MemoryToolRegistry, deps: Mem
           if (i < hits.length) merged.push(hits[i]);
           if (i < provided.length && merged.length < max) merged.push(provided[i]);
         }
-        return { hits: merged, count: merged.length };
+        return { hits: merged, count: merged.length, ...(truncated ? { truncated: true } : {}) };
       }),
   });
 }

@@ -5106,6 +5106,7 @@ export async function prepareUnhealthySessionForSend(sessionId: string): Promise
 
 let runtimePluginDirectSendPreparer: ReturnType<typeof createTaskRuntimePlugins>['prepare'] | undefined;
 let runtimePluginMessageComposer: ReturnType<typeof createTaskRuntimePlugins>['compose'] | undefined;
+let runtimePluginBudgetClearer: ((sessionId: string) => void) | undefined;
 type RuntimePluginSessionOptions = Parameters<ReturnType<typeof getMaker>['createSession']>[0];
 let runtimePluginSessionStarter: ((opts: RuntimePluginSessionOptions, signal?: AbortSignal) => ReturnType<ReturnType<typeof getMaker>['createSession']>) | undefined;
 
@@ -5114,8 +5115,8 @@ export function prepareRuntimePluginsForDirectSend(sessionId: string, message: u
   return runtimePluginDirectSendPreparer?.(sessionId, message, signal);
 }
 
-export function composeRuntimePluginMessageForSend(sessionId: string, message: UserMessage, signal?: AbortSignal) {
-  return runtimePluginMessageComposer?.(sessionId, message, signal);
+export function composeRuntimePluginMessageForSend(sessionId: string, message: UserMessage, currentText: string, signal?: AbortSignal) {
+  return runtimePluginMessageComposer?.(sessionId, message, currentText, signal);
 }
 
 /** Keep task prompt assembly identical at Desktop, IM and hook startup entries. */
@@ -6113,6 +6114,10 @@ const sessionBindings = createSessionBindingLifecycle<WiredSession, WiredSession
     return { closeReason, closedDirectAbortBoundary, preserveAutoResumeIntent };
   },
   cleanupClosedSession: (session: WiredSession, context) => {
+    if ((context.closeReason === 'requested' || context.closeReason === 'unexpected')
+      && !context.preserveAutoResumeIntent && !rehydrateCloseSuppression.isSuppressed(session.id)) {
+      runtimePluginBudgetClearer?.(session.id);
+    }
     // Normal terminal events already release this input. A close without one
     // must retire the exact group execution before its identity is discarded.
     const inputId = agentInputCoordinatorHolder?.getActiveInputClientId(session.id) ?? null;
@@ -18425,6 +18430,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   pluginTargetReviewReady = true;
 
   const runtimePluginControl = getGhostRuntimePluginControl();
+  runtimePluginBudgetClearer = runtimePluginControl.forgetSession;
   const taskRuntimePlugins = createTaskRuntimePlugins({
     control: runtimePluginControl, readSettings: readRuntimePluginSettings,
     composeContext: composeGhostRuntimeContext,

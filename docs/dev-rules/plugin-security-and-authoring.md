@@ -314,11 +314,19 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   原控制点；用户在任务菜单的「任务插件」多选并逐插件指定出错策略。无人选时不查询消息、
   模型目录或唤醒插件；流式事件不扫描插件。异步结果在应用前复核账号、任务选择及安装批准。
   日志只记录来源插件和阶段，不记录请求正文。
+  新增节点时限分别为 turn 1s、context 2s、memory 1.5s、model-request 的 select＋payload
+  每请求合计 1s；同一轮所有插件等待共用 5s，工具续轮不重置。并行重叠等待按墙钟计一次，
+  包括插件唤醒；宿主 readRoute／applyRoute／Agent 进程恢复、模型 HTTP 和工具执行不计入。
+  耗尽按任务中各插件 onFailure 处理，不擅自放行。资料和记忆并行询问后按选择顺序归并，
+  路由与正文变换串行；未选择任务不创建预算或定时器。旧控制点时限不变。
 - **运行时资料与记忆**：`will-compose-context` 返回有界静态资料块，复用普通附带资料通道，
   不进 system prompt、不改主人原话、不进入自动审核的用户授权来源。`sessionContext` 仍只供工具参数。
   `will-search-memory` 接在现有 `cindy_memory.memory_search`，不加工具或第二个记忆库，沿用
   原有启用与账号守卫。只投当前查询，Host 给完整条目标注插件来源，交替合并并遵守总 limit；
   超时／停用／非法结果保留 Cindy 原结果。记忆节点只能配置 allow-on-failure，不允许插件阻断记忆检索。
+  多插件记忆按选择顺序填充，全局最多 50 条且 content 合计不超过 32768 字符，超出截断；
+  memory_search 的 data 与被截短的插件条目以可选 truncated:true 标明。普通资料含来源与
+  分隔符的装配总量不超过 32768 字符，不把多插件的单批上限累加成无界上下文。
 - **任务系统提示词片段**：清单 `systemPrompt` 只允许静态文本，显式声明整数顺序与
   `scope: "selected-task"`，可按引擎过滤。安装／更新确认独立展示完整原文，内容或顺序变化
   进入原有新增权限比较；沿用 `approvedControlPoints` 中的 `system-prompt`，不新增授权账本。
