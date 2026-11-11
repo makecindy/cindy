@@ -16,13 +16,13 @@ import { spacing, typeScale, lineHeight } from '@/theme/tokens';
 import { TeammateProcess, TeammateWorkSegment, useTeammateElapsedTitle } from './TeammateProcess';
 import { BotGroupMarkdownText } from './BotGroupMessageText';
 import { MessagePayloadModal, WorkToolActivityRow } from './MessageRenderer';
-import type { MessagePayload } from './messagePayload';
+import { buildTextPayload, type MessagePayload } from './messagePayload';
 import { ImageLightbox } from './ImageLightbox';
 import { isLightboxMediaKind } from './messageGallery';
 import { useBotGroupRemoteMedia } from './useBotGroupRemoteMedia';
 import { normalizeRemoteMessages } from './messageNormalize';
 import { buildMessageContentLayout } from './messageContentLayout';
-import { fetchMobileToolInputDetail, type MobileToolInputProjection } from './messageToolPayloadProjection';
+import { fetchMobileToolInputDetail, formatFullToolInput, type MobileToolInputProjection } from './messageToolPayloadProjection';
 import type { RemoteMessage } from './types';
 
 type ProcessMessage = BotGroupProcessMessage & Partial<Pick<RemoteMessage, 'id' | 'mobileToolInputProjection'>>;
@@ -180,6 +180,10 @@ export function BotGroupProcessEntries({ messages, id, deviceId, sessionId, runn
             ? { ...normalized, secondaryBody: normalized.secondaryBody ?? activity.toolResult }
             : normalized;
           return tool ? <WorkToolActivityRow key={activity.key} actions={actions} contentLayout={contentLayout}
+            onOpenInput={!tool.toolInputProjection && activity.message.toolInput != null
+              ? () => setPayload(buildTextPayload(t('message.renderer.toolInputTitle', { label: activity.message.toolName ?? tool.label }),
+                formatFullToolInput(activity.message.toolInput)))
+              : undefined}
             activity={{ ...activity, message: { ...activity.message, normalized: tool } }} /> : null;
         })}
       </TeammateWorkSegment>;

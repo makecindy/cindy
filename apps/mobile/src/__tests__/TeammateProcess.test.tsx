@@ -54,7 +54,7 @@ vi.mock('@/session/MessageRenderer', async () => {
   const { buildToolResultPayload, buildTextPayload, buildMediaPayload } = await import('@/session/messagePayload');
   const { readToolProcessMedia } = await import('@cindy/maker-shared/tool-process-media');
   return {
-    WorkToolActivityRow: ({ activity, actions }: any) => {
+    WorkToolActivityRow: ({ activity, actions, onOpenInput }: any) => {
       history.toolActions = actions;
       const tool = activity.message.normalized;
       return el('div', { 'data-message-id': tool.source.id, 'data-session-id': tool.source.sessionId },
@@ -64,6 +64,7 @@ vi.mock('@/session/MessageRenderer', async () => {
         tool.toolInputProjection && el('button', { disabled: !actions.onLoadToolInput, onClick: () => {
           void actions.onLoadToolInput(tool.toolInputProjection).then((detail: any) => actions.onOpenPayload(buildTextPayload('Full input', detail.body)));
         } }, 'Load full input'),
+        !tool.toolInputProjection && onOpenInput && el('button', { onClick: onOpenInput }, 'View full input'),
         el('button', { disabled: !actions.onOpenPayload, onClick: () => actions.onOpenPayload?.(buildToolResultPayload(tool)) }, 'View full output'));
     },
     MessagePayloadModal: ({ payload, onClose }: any) => payload ? el('div', { role: 'dialog' }, payload.body, el('button', { onClick: onClose }, 'Close output')) : null,
@@ -303,6 +304,27 @@ it.each([false, true])('loads a projected input from its execution device and re
   await expect(history.toolActions.onLoadToolInput(projection)).rejects.toThrow('tool input is unavailable');
   history.invoke.mockResolvedValueOnce([full]);
   await expect(history.toolActions.onLoadToolInput(projection)).resolves.toMatchObject({ toolName: 'WebFetch' });
+});
+
+// #8979 r4523117292 / unit: a normal Bash input is below the projection limit,
+// but its shared command detail is clipped at 200 characters. Preserve its tail
+// through the group's payload handoff for both live and historical records.
+it.each([false, true])('opens the full ordinary tool input without fetching it (running=%s)', async running => {
+  const command = 'x'.repeat(250) + 'COMPLETE_COMMAND_END';
+  const tool = { clientId: 'ordinary-tool', role: 'tool_use', toolUseId: 'ordinary-tool-id',
+    content: { toolName: 'Bash', toolUseId: 'ordinary-tool-id', input: { command } }, agentMeta: meta };
+  const messages = [source, tool, { clientId: 'ordinary-result', role: 'tool_result', toolUseId: 'ordinary-tool-id', content: 'done', agentMeta: meta }, final];
+  history.invoke.mockResolvedValue(messages);
+  await act(async () => root.render(running
+    ? el(BotGroupProcessEntries, { messages, id: 'ordinary-input', running, deviceId: 'mac', sessionId: 'lane' })
+    : group()));
+  if (!running) await act(async () => header().click());
+  await act(async () => Array.from(node.querySelectorAll('button')).find(button => button.getAttribute('aria-expanded') === 'false')!.click());
+  const button = Array.from(node.querySelectorAll('button')).find(button => button.textContent === 'View full input');
+  expect(button).toBeDefined();
+  await act(async () => button!.click());
+  expect(node.querySelector('[role="dialog"]')?.textContent).toContain(command);
+  expect(history.invoke.mock.calls.filter(call => call[1] === 'local-db:messages:around')).toHaveLength(0);
 });
 
 it.each(['AskUserQuestion', 'ExitPlanMode'])('retains %s call, input and result in group process', async toolName => {
