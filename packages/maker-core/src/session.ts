@@ -381,7 +381,7 @@ export interface SessionTurnLifecycleObserver {
   /** Last synchronous authorization check; no asynchronous work may follow before handle.send. */
   onDispatching?(): void;
   /** Awaited after option validation and before any provider-owned start hook or send. */
-  beforeProviderStart(turnGeneration: number): void | Promise<void>;
+  beforeProviderStart(turnGeneration: number, signal?: AbortSignal): void | Promise<void>;
   /** Called when a prepared generation never crosses the provider dispatch boundary. */
   onUndispatched(turnGeneration: number): void | Promise<void>;
   /** Called before event listeners for a foreground unclaimed done or terminal error. */
@@ -1052,9 +1052,22 @@ export class Session {
       if (cancelledAfterReservation !== null) return cancelledAfterReservation;
       this.handle.validateSendOptions?.(handleOpts);
       if (turnLifecycleObserver) {
-        await turnLifecycleObserver.beforeProviderStart(reservedTurnGeneration);
+        try {
+          await turnLifecycleObserver.beforeProviderStart(
+            reservedTurnGeneration,
+            reservation.abortController.signal,
+          );
+        } catch (error) {
+          // A cancelled readiness wait never reached provider dispatch. Release
+          // its reservation normally, while preserving genuine startup errors.
+          const cancelled = finishCancelledBeforeDispatch();
+          if (cancelled !== null) return cancelled;
+          throw error;
+        }
         turnLifecyclePrepared = true;
       }
+      const cancelledAfterPreparation = finishCancelledBeforeDispatch();
+      if (cancelledAfterPreparation !== null) return cancelledAfterPreparation;
       if (beforeProviderStart) await beforeProviderStart();
       const cancelledBeforeAcceptance = finishCancelledBeforeDispatch();
       if (cancelledBeforeAcceptance !== null) return cancelledBeforeAcceptance;

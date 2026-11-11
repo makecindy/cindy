@@ -878,6 +878,7 @@
       "assignLocalAria": "Permitir que {{name}} acepte nuevas tareas de otras computadoras",
       "moreAria": "Otras acciones para {{name}}",
       "remove": "Eliminar del grupo",
+      "removeLocalBlocked": "El ordenador que acoge el grupo no se puede eliminar",
       "status": {
         "checking": "Comprobando…",
         "idle": "Inactivo",
@@ -3676,6 +3677,36 @@
           "invalid": "Vista previa no disponible; verifique la configuración o seleccione el archivo nuevamente",
           "skipped": "Saltado; seleccione el archivo nuevamente para importar esta entrada",
           "authorizationPending": "Conexión agregada; completa la autorización en la configuración del proveedor"
+        },
+        "local": {
+          "title": "Importar desde aplicaciones locales",
+          "note": "Lee las configuraciones de API guardadas en este equipo sin modificar las aplicaciones de origen. Claude Code: solo settings.json del usuario, incluido CLAUDE_CONFIG_DIR. No lee variables del shell ni ajustes del proyecto o administrados.",
+          "review": "Revisar e importar ({{count}})",
+          "scanning": "Leyendo configuraciones guardadas…",
+          "empty": "No se encontraron configuraciones de API guardadas.",
+          "failed": "No se pudo completar la lectura. Inténtalo de nuevo.",
+          "edit": "Editar",
+          "editFailed": "Revisa la URL, el protocolo y la clave, e inténtalo de nuevo.",
+          "editNote": "Deja la clave vacía para conservar la credencial leída. Cambiar la URL o el protocolo requiere una clave nueva.",
+          "name": "Nombre visible",
+          "baseUrl": "URL base",
+          "protocol": "Protocolo de API",
+          "chooseProtocol": "Elige un protocolo",
+          "apiKey": "Clave de API",
+          "keepKey": "Dejar vacío para conservar la clave leída",
+          "missingUrl": "Se requiere una URL",
+          "status": {
+            "missing": "No se encontró ninguna configuración",
+            "readFailed": "No se pudo leer; revisa los permisos o inténtalo de nuevo",
+            "invalid": "Formato desconocido; revisa o edita la configuración",
+            "limit": "Se alcanzó el límite; esta fuente no se leyó por completo",
+            "unsupported": "Esta configuración no se puede importar automáticamente. No se ejecutan comandos ni apiKeyHelper; añade la configuración de API manualmente.",
+            "needsInput": "Es necesario completar la configuración",
+            "changed": "La fuente cambió; vuelve a buscar",
+            "duplicate": "Ya existe una conexión idéntica"
+          },
+          "rescan": "Volver a buscar",
+          "sourceDisabled": "Desactivado en la aplicación de origen"
         }
       },
       "order": {
@@ -12718,47 +12749,47 @@
         "claude-code": {
           "ask": {
             "label": "Permisos predeterminados",
-            "description": "Permite el acceso de lectura y escritura dentro del espacio de trabajo y pide autorización antes de usar permisos elevados, acceso a la red o rutas fuera del espacio de trabajo."
+            "description": "Tú apruebas las acciones cuando es necesario."
           },
           "acceptEdits": {
             "label": "Aceptar ediciones automáticamente",
-            "description": "Acepta automáticamente las solicitudes de edición de archivos para reducir las confirmaciones repetidas. Los comandos o permisos de mayor riesgo siguen sujetos a la política de permisos subyacente."
+            "description": "Las ediciones de archivos se permiten directamente; tú apruebas otras acciones cuando es necesario."
           },
           "auto": {
             "label": "Revisión automática",
-            "description": "Permite el acceso de lectura y escritura dentro del espacio de trabajo y revisa automáticamente las solicitudes de elevación de permisos; las acciones de alto riesgo pueden denegarse o requerir confirmación. Esto reduce las interrupciones, pero puede cometer errores."
+            "description": "Un modelo de IA aprueba las acciones, lo que puede requerir más espera; tú confirmas cuando es necesario."
           },
           "bypassPermissions": {
             "label": "Acceso completo",
-            "description": "Permite editar cualquier archivo y ejecutar comandos con acceso a la red sin otra confirmación. Riesgo máximo; úsalo solo para tareas de confianza."
+            "description": "Las acciones habituales se permiten directamente, incluidos archivos fuera del espacio de trabajo y comandos de red."
           }
         },
         "codex": {
           "ask": {
             "label": "Permisos predeterminados",
-            "description": "Permite el acceso de lectura y escritura dentro del espacio de trabajo y pide autorización antes de usar permisos elevados, acceso a la red o rutas fuera del espacio de trabajo."
+            "description": "Tú apruebas las acciones cuando es necesario."
           },
           "auto": {
             "label": "Revisión automática",
-            "description": "Ejecuta comandos automáticamente dentro del entorno aislado protegido del espacio de trabajo. Las acciones que exceden los límites del entorno aislado pasan a un revisor automático; las acciones de alto riesgo pueden denegarse o requerir confirmación."
+            "description": "Un modelo de IA aprueba las acciones, lo que puede requerir más espera; tú confirmas cuando es necesario."
           },
           "bypassPermissions": {
             "label": "Acceso completo",
-            "description": "Permite editar cualquier archivo y ejecutar comandos con acceso a la red sin otra confirmación. Riesgo máximo; úsalo solo para tareas de confianza."
+            "description": "Las acciones habituales se permiten directamente, incluidos archivos fuera del espacio de trabajo y comandos de red."
           }
         },
         "pi": {
           "ask": {
             "label": "Permisos predeterminados",
-            "description": "Las herramientas de solo lectura se ejecutan directamente; escribir archivos, ejecutar comandos y usar herramientas MCP requiere autorización cada vez."
+            "description": "Tú apruebas las acciones cuando es necesario."
           },
           "auto": {
             "label": "Revisión automática",
-            "description": "La escritura dentro del espacio de trabajo y los comandos seguros se ejecutan automáticamente; la escritura fuera del espacio de trabajo, los comandos riesgosos y las herramientas MCP siguen requiriendo autorización."
+            "description": "Un modelo de IA aprueba las acciones, lo que puede requerir más espera; tú confirmas cuando es necesario."
           },
           "bypassPermissions": {
             "label": "Acceso completo",
-            "description": "Permite editar cualquier archivo y ejecutar comandos con acceso a la red sin otra confirmación. Riesgo máximo; úsalo solo para tareas de confianza."
+            "description": "Las acciones habituales se permiten directamente, incluidos archivos fuera del espacio de trabajo y comandos de red."
           }
         }
       }
@@ -13629,8 +13660,8 @@
       "dismissTitle": "Descartar aviso de falla anterior"
     },
     "worktreeRestoreBanner": {
-      "text": "Se eliminó el worktree de esta sesión (falta el directorio).",
-      "textPendingSnapshot": "Esta sesión tiene una instantánea de cambios sin aplicar.",
+      "text": "Se eliminó el worktree «{{name}}» de esta sesión (falta el directorio).",
+      "textPendingSnapshot": "El worktree «{{name}}» de esta sesión tiene una instantánea de cambios sin aplicar.",
       "restoreAction": "Restaurar worktree",
       "applySnapshotAction": "Aplicar cambios",
       "restoring": "Restaurando…",
@@ -14224,7 +14255,7 @@
       "errors": {
         "noPriorAssistantPreview": "Retrocede desde una pregunta que siga a una respuesta de la IA (esta no tiene una respuesta previa del asistente)",
         "sessionRunning": "La tarea no se detuvo a tiempo. Vuelve a intentar retroceder",
-        "noLiveQuery": "La sesión está inactiva. Envía primero cualquier mensaje (incluso solo \"ok\") para activar el SDK antes de retroceder",
+        "noLiveQuery": "No se pudo restaurar el entorno de ejecución de la tarea. No se completó el retroceso.",
         "noPriorAssistantCommit": "Retrocede desde una pregunta que siga a una respuesta de la IA",
         "commitGeneric": "No se pudo retroceder. Vuelve a intentarlo",
         "remoteNotSupported": "Las sesiones remotas de Claude Code aún no permiten retroceder"

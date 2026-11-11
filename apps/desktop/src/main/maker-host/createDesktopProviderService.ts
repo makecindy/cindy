@@ -30,7 +30,7 @@ import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 
 import { hasConnectedSubscriptionPool, refreshSubscriptionPool } from '../subscription-accounts/runtime.js';
-import { readPool } from '../subscription-accounts/store.js';
+import { readPool, migrateLegacyCodexAccounts, readLegacyCodexAccountId } from '../subscription-accounts/store.js';
 import {
   BUNDLED_CATALOG,
   compareModelRegistryRevisions,
@@ -144,13 +144,14 @@ import {
 import { clearXaiMediaModels } from './model-discovery/xai-media.js';
 import { getAuthState } from '../authManager.js';
 import { getCindyAiProviderName, getCindyAiProviderLogoKind } from '../cindyAiProviderName.js';
-import { getActiveAppSession } from '../appSessionState.js';
+import { getActiveAppSession, activeOwnerScopeKey } from '../appSessionState.js';
 import { filterProviderCatalogForAccount } from './provider-access-policy.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import {
   claimDetectedNativeProviderAuth,
   getNativeProviderAuthSource,
   isNativeProviderAuthBound,
+  isNativeProviderAuthSharedSystemCredential,
   isNativeProviderAuthRevoked,
   migrateLegacyNativeProviderAuthBindings,
 } from './nativeProviderAuthBinding.js';
@@ -703,13 +704,14 @@ export async function refreshCustomProvidersIntoCatalog(
   }
   const generation = ++customProviderCatalogRefreshGeneration;
   const owner = getActiveAppSession();
+  const ownerScope = activeOwnerScopeKey();
   const ownerIsCurrent = (): boolean => {
     const current = getActiveAppSession();
     // The readiness barrier can adopt same-owner work across a generation bump.
     // Its predicate also invalidates real owner/ABA transitions. Unscoped callers
     // have no adoption authority and must retain the strict generation check.
-    return owner.dataOwnerId === current.dataOwnerId
-      && (shouldApply ? shouldApply() : owner.generation === current.generation);
+    return owner.mode === current.mode && owner.dataOwnerId === current.dataOwnerId
+      && (shouldApply ? shouldApply() : ownerScope === activeOwnerScopeKey());
   };
   const isCurrent = (): boolean =>
     generation === customProviderCatalogRefreshGeneration && ownerIsCurrent();
@@ -760,6 +762,20 @@ export async function refreshCustomProvidersIntoCatalog(
     }
     setCustomProviderConfigs(next, { skipUnchanged: true });
     recoverCustomProviderModelSources(next, ownerIsCurrent);
+    // Publish old routes first: imported accounts retain these IDs for history and revocation.
+    const access = readModelDisableOverrides();
+    const nativeDefault = isNativeProviderAuthBound('openai');
+    try {
+      await migrateLegacyCodexAccounts(
+        next.filter(config => config.auth?.method === 'oauth' && config.auth.native === 'codex')
+          .map(config => ({ providerId: config.id, paused: isProviderDisabled(access, config.id) })),
+        { preserveDefault: nativeDefault, legacyDefault: nativeDefault && !isNativeProviderAuthSharedSystemCredential('openai'), isCurrent },
+      );
+    } catch {
+      // Failed metadata writes leave every original connection available for the next refresh.
+      log.warn('legacy Codex account migration did not complete');
+    }
+    if (!isCurrent()) return;
     requestCodexApiModelProbe();
     log.info('custom providers merged into active catalog', { count: next.length });
   } catch (err) {
@@ -894,9 +910,28 @@ let singleton: ProviderService | null = null;
  * Cindy account session keeps the full active catalog.
  */
 export function getDesktopSelectableCatalog(): Catalog {
-  return filterProviderCatalogForAccount(filterLegacyGptContextProfiles(getActiveCatalog()), {
+  const catalog = filterProviderCatalogForAccount(filterLegacyGptContextProfiles(getActiveCatalog()), {
     canUseCindyGateway: getAppCapabilities().canUseCindyGateway,
   });
+  const pool = readPool('openai');
+  const aliases = pool?.legacyCodexAccounts;
+  if (!aliases || pool.disconnected) return catalog;
+  const accounts = new Set(pool.accounts.filter(account => !account.paused).map(account => account.id));
+  const imported = catalog.providers.filter(provider => provider.auth.native === 'codex'
+    && Object.hasOwn(aliases, provider.id) && accounts.has(aliases[provider.id])
+    && codexAccountState(provider.id).authenticated);
+  if (!imported.length) return catalog;
+  // Reuse these accounts' existing membership; do not discover an unrelated default CLI login.
+  return { ...catalog, providers: catalog.providers.map(provider => {
+    if (provider.id !== 'openai') return provider;
+    const models = Object.fromEntries(provider.agents.map(agent => {
+      const models = new Map((provider.models[agent] ?? []).map(model => [model.id, model]));
+      for (const source of imported) for (const model of source.models[agent] ?? [])
+        if (!models.has(model.id)) models.set(model.id, model);
+      return [agent, [...models.values()]];
+    }));
+    return { ...provider, models };
+  }) };
 }
 
 /** 进程内单例：注入 active-catalog（同步读）+ 实时连接状态读取器。 */
@@ -921,7 +956,12 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
   if (singleton) return singleton;
   singleton = createProviderService({
     getModelContextLimits: readModelContextLimits,
-    projectProvider: projectSubscriptionFastPolicy,
+    projectProvider: provider => {
+      const projected = projectSubscriptionFastPolicy(provider);
+      return readLegacyCodexAccountId(provider.id)
+        ? { ...projected, subscriptionPoolAlias: true }
+        : projected;
+    },
     getProviderPresentation: (providerId) => {
       const presentation = readProviderPresentation(providerId);
       if (providerId !== 'xd') return presentation;

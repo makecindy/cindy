@@ -972,5 +972,8 @@
     "background": "Dieses Panel kann geschlossen werden. Der Import läuft auf dem Computer weiter.",
     "missingDir": "Der ursprüngliche Ordner existiert nicht mehr. Zum Fortsetzen einen Ordner auf dem Computer auswählen.",
     "title": "Aus anderen Werkzeugen importieren"
+  },
+  "liveActivity": {
+    "waitingForUpdate": "Warte auf Aktualisierung"
   }
 }
