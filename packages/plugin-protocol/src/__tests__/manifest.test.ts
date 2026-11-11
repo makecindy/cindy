@@ -2080,7 +2080,7 @@ describe('interactive page declarations', () => {
   });
   // UI opening: old unknown positions confer no authority; newly understood
   // placements and provider input must be separately approved. Tier: unit.
-  it.each(['sidebar.navigation', 'session.menu', 'settings.section', 'composer.completion'])(
+  it.each(['sidebar.navigation', 'session.menu', 'settings.section', 'composer.completion', 'window.titlebar'])(
     'approves the understood %s placement without changing an existing entry token', position => {
       const old = { id: 'legacy', title: 'Open', position: 'composer.toolbar', tool: 'help' };
       const entry = { id: 'extension', title: 'Extension', position,

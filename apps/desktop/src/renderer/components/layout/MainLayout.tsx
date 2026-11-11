@@ -1,7 +1,7 @@
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { PerformanceTrace, openPerformanceTrace } from '@/components/performance-trace/PerformanceTrace';
 import { readInstalledGhostsSnapshot } from '@/cindy-brain/useInstalledGhosts';
-import { readPluginUiSettings, readPluginUiEntries } from '@/cindy-brain/PluginUiContributions';
+import { readPluginUiSettings, readPluginUiEntries, PluginUiSlotControls } from '@/cindy-brain/PluginUiContributions';
 import { installedGhostStoragePart, resolvePluginInstanceQuery } from '../../../shared/pluginIdentity';
 import { drainPendingDeepLinks } from '@/lib/pendingDeepLinks';
 import { ChatInviteHost, reportMalformedChatInvite, requestChatInvite } from '@/features/bots/ChatInviteHost';
@@ -1698,6 +1698,7 @@ export function MainLayout() {
   // unrelated updates from invalidating the entire routed conversation again.
   const pluginSettings = readPluginUiSettings();
   const pluginSidebarSections = readPluginUiEntries('sidebar.section');
+  const pluginTitlebarEntries = readPluginUiEntries('window.titlebar');
   const outletContext = useMemo(() => ({
     sidebarWidth,
     pluginSettings,
@@ -1838,7 +1839,11 @@ export function MainLayout() {
                   // mac:远程桌面入口落在顶栏右端,紧挨窗口右上角的右栏开关(右栏展开时
                   // 仍在聊天区顶栏右端)。Windows 走下方内容区 chip 栈。
                   trailing={
-                    isMac && remoteDesktopDeviceId ? (
+                    pluginTitlebarEntries.length > 0 ? <>
+                      <PluginUiSlotControls entries={pluginTitlebarEntries} sessionId={rightSidebarSessionId} appearance="titlebar" />
+                      {isMac && remoteDesktopDeviceId && <TaskRemoteDesktopButton key={remoteDesktopDeviceId}
+                        deviceId={remoteDesktopDeviceId} className={rightSidebarAvailable ? 'mr-1' : 'mr-2'} />}
+                    </> : isMac && remoteDesktopDeviceId ? (
                       <TaskRemoteDesktopButton
                         key={remoteDesktopDeviceId}
                         deviceId={remoteDesktopDeviceId}

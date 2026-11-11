@@ -58,6 +58,7 @@
 | `composer.completion` | 输入 `/` 或 `@` 后的文本补全提供者 |
 | `composer.attachment` | 用户新添加附件的处理提供者 |
 | `sidebar.section` | 侧栏中的折叠 MCP App 分区 |
+| `window.titlebar` | 窗口标题区的原生图标按钮 |
 
 `statusbar` 等原生控件位置支持 `button`、`select` 和 `status`。需要点击打开页面或调用工具时，
 声明 `kind:"button"` 并指定 `view` 或 `tool`；示例的底部「示例已就绪」按钮会打开当前任务页。
@@ -76,6 +77,10 @@
 `cindy_ui.sessionId` 由 Host 填写，插件不能用静态 arguments 改写。菜单只在打开时订阅小状态。
 `settings.section` 必须引用全局 view，页面使用原 AppBridge、CSP 和生命周期。
 这几个位置不支持 `presentation:"popover"`。未批准新位置不会继承原工具栏的批准。
+
+`window.titlebar` 声明 `view` 或 `tool`，仅支持按钮；`icon` 使用原导航图标名，缺省为 puzzle。
+按钮在主窗（含完整任务副窗）和分离侧栏窗口的原标题区内显示，提示带插件来源，沿原页面/工具入口执行。
+系统窗口控件、菜单和快捷键保留原行为；没有任务时，引用任务 view 的按钮不可用。
 
 任务列表的每行内容、内置分组和任意布局面板不开放贡献位：前者处于长列表性能路径，后者由宿主布局树管理。
 插件可用全局 MCP App 和侧栏入口呈现自己的任务视图及分组，不向宿主列表逐行挂载组件。

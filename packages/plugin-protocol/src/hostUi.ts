@@ -6,6 +6,7 @@ export const HOST_UI_POSITIONS = [
   'turn.footer', 'message.body', 'tool.body',
   'sidebar.navigation', 'session.menu', 'settings.section', 'composer.completion',
   'composer.attachment', 'sidebar.section',
+  'window.titlebar',
 ] as const;
 export type GhostHostUiPosition = typeof HOST_UI_POSITIONS[number];
 export const HOST_UI_CAPABILITIES = ['context', 'draft', 'appearance', 'visibility'] as const;
@@ -130,7 +131,7 @@ export function parseGhostHostUi(
       } else if (!action(item)) return null;
       if ((item.position === 'message.body' || item.position === 'tool.body') &&
           (item.view === undefined || item.tool !== undefined || item.kind !== undefined && item.kind !== 'button')) return null;
-      if (['message.menu', 'session.menu', 'sidebar.navigation', 'settings.section', 'composer.completion', 'composer.attachment', 'sidebar.section'].includes(String(item.position)) &&
+      if (['message.menu', 'session.menu', 'sidebar.navigation', 'settings.section', 'composer.completion', 'composer.attachment', 'sidebar.section', 'window.titlebar'].includes(String(item.position)) &&
           item.kind !== undefined && item.kind !== 'button') return null;
       if (item.position === 'settings.section' && (item.view === undefined ||
           (raw.views as GhostHostUiView[]).find(view => view.id === item.view)?.scope === 'task')) return null;
@@ -146,7 +147,7 @@ export function parseGhostHostUi(
       } else if (item.accept !== undefined) return null;
       if (item.presentation !== undefined && (!['sidebar', 'popover'].includes(String(item.presentation)) ||
           item.view === undefined || item.kind !== undefined && item.kind !== 'button' ||
-          ['message.body', 'tool.body', 'message.menu', 'session.menu', 'sidebar.navigation', 'settings.section', 'composer.completion', 'composer.attachment', 'sidebar.section'].includes(item.position as string))) return null;
+          ['message.body', 'tool.body', 'message.menu', 'session.menu', 'sidebar.navigation', 'settings.section', 'composer.completion', 'composer.attachment', 'sidebar.section', 'window.titlebar'].includes(item.position as string))) return null;
       if (item.kind === 'select') {
         if (!Array.isArray(item.options) || !item.options.length || item.options.some(option =>
           !object(option) || !title(option.label) || typeof option.value !== 'string' || option.value.length > 256) ||

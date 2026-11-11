@@ -226,6 +226,22 @@ describe('MCP App persistence and IPC wiring', () => {
     await expect(state.handle!(event, null, input)).rejects.toThrow('MCP_APP_SOURCE_UNAVAILABLE');
     expect(stored).toEqual({ private: 'keep', enabled: false });
   });
+  // Unit regression: cancel can arrive at the first await, before tool dispatch.
+  // The existing cancellation case waits for dispatch and misses this window.
+  it.each(['composer.completion', 'composer.attachment'] as const)('cancels %s before its first asynchronous source check finishes', async position => {
+    state.plugin = { host: { contributions: [{ id: 'provider', title: 'Provider', position, tool: 'provider',
+      ...(position === 'composer.completion' ? { trigger: '@' as const } : { accept: { extensions: ['.pdf'] } }) }] },
+      config: { id: 'plugin-source', url: '', transport: 'in-process', plugin: { assertCurrent() {} } as AppServerConfig['plugin'] } };
+    const event = { sender: { id: 1, isDestroyed: () => false } };
+    const input = position === 'composer.completion' ? { trigger: '@', query: 'record' }
+      : { attachment: { name: 'input.pdf', uri: path.resolve('input.pdf'), size: 5, mimeType: 'application/pdf' } };
+    state.action.mockResolvedValue({ structuredContent: { handled: false } });
+    const pending = state.handle!(event, null, { op: 'plugin-action', instanceId: 'local__demo', id: 'provider', requestId: 'early', input });
+    const rejected = expect(pending).rejects.toThrow('MCP_APP_REQUEST_FAILED');
+    await state.handle!(event, null, { op: 'plugin-action-cancel', requestId: 'early' });
+    await rejected;
+    expect(state.action).not.toHaveBeenCalled();
+  });
   it('injects the persistent vault key lazily instead of using a transient Host key', () => {
     expect(state.revisionKey).not.toHaveBeenCalled();
     expect(state.deps!.revisionKey!()).toBe('a'.repeat(64));

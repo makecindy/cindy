@@ -13,6 +13,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/lib/toast';
 import { ChevronDown, ChevronRight, Puzzle } from 'lucide-react';
 import { SidebarIconButton } from '@/components/sidebar/SidebarIconButton';
+import { ChromeIconButton } from '@/components/title-bar/ChromeIconButton';
 import { SectionCollapse } from '@/features/cc-agent/sidebar/SectionCollapse';
 import { MAIN_VIEW_ICONS } from './mainViewIcons';
 import { isPluginUiElementVisible, subscribePluginUiRegions } from './pluginUiVisibility';
@@ -230,7 +231,7 @@ export function PluginUiSessionMenuItems({ sessionId, disabled, className }: { s
       .catch(() => toast.error(t('pluginUi.actionFailed')))} />)}</>;
 }
 
-function EntryControl({ entry, sessionId, clientId, active, appearance }: { entry: PluginUiEntry; sessionId: string | null; clientId?: string; active: boolean; appearance?: 'navigation' | 'rail' }) {
+function EntryControl({ entry, sessionId, clientId, active, appearance }: { entry: PluginUiEntry; sessionId: string | null; clientId?: string; active: boolean; appearance?: 'navigation' | 'rail' | 'titlebar' }) {
   const { t } = useTranslation();
   const [pending, setPending] = useState(false);
   const [value, setValue] = useState('');
@@ -250,6 +251,14 @@ function EntryControl({ entry, sessionId, clientId, active, appearance }: { entr
   if (state?.visible === false) return null;
   const title = state?.title ?? action.title;
   const Icon = MAIN_VIEW_ICONS[action.icon as keyof typeof MAIN_VIEW_ICONS] ?? Puzzle;
+  if (appearance === 'titlebar') {
+    const view = action.view && getApprovedGhostHostUi(entry.ghost)?.views?.find(view => view.id === action.view);
+    const unavailable = !!sessionId && !!getStickySessionDeviceId(sessionId) || !!view && view.scope === 'task' && !sessionId;
+    return <ChromeIconButton aria-label={`${title} · ${entry.ghost.manifest.name}`} tooltipSide="bottom"
+      disabled={pending || state?.disabled || unavailable} onClick={() => void run()} className="shrink-0">
+      <Icon size={14} />
+    </ChromeIconButton>;
+  }
   if (appearance === 'rail') return <SidebarIconButton icon={Icon} label={`${title} · ${entry.ghost.manifest.name}`}
     disabled={pending || state?.disabled} onClick={() => void run()} />;
   if (appearance === 'navigation') return <button type="button" disabled={pending || state?.disabled} onClick={() => void run()}
@@ -281,7 +290,7 @@ export function PluginUiSlot({ position, ...target }: Target & { position: Ghost
 }
 
 export function PluginUiSlotControls({ entries, sessionId = null, clientId, appearance }: {
-  entries: readonly PluginUiEntry[]; sessionId?: string | null; clientId?: string; appearance?: 'navigation' | 'rail';
+  entries: readonly PluginUiEntry[]; sessionId?: string | null; clientId?: string; appearance?: 'navigation' | 'rail' | 'titlebar';
 }) {
   const root = useRef<HTMLSpanElement>(null);
   const [active, setActive] = useState(false);
@@ -292,7 +301,8 @@ export function PluginUiSlotControls({ entries, sessionId = null, clientId, appe
   }, []);
   return <span ref={root} className={appearance === 'navigation'
     ? 'flex min-w-0 flex-col gap-0.5 [-webkit-app-region:no-drag]'
-    : 'inline-flex min-w-0 flex-wrap items-center gap-1 [-webkit-app-region:no-drag]'}>
+    : appearance === 'titlebar' ? 'inline-flex min-w-0 max-w-[min(16rem,30vw)] flex-nowrap items-center gap-1 overflow-x-auto [-webkit-app-region:no-drag]'
+      : 'inline-flex min-w-0 flex-wrap items-center gap-1 [-webkit-app-region:no-drag]'}>
     {entries.map(entry => <EntryControl key={`${entry.instanceId}:${entry.contribution.id}`} entry={entry}
       sessionId={sessionId} clientId={clientId} active={active} appearance={appearance} />)}
   </span>;

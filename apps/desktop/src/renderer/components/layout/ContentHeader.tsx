@@ -238,7 +238,7 @@ export function ContentHeaderSlot({
   trailing,
   children,
 }: Omit<ContentHeaderProps, 'hidden'> & { children: ReactNode }) {
-  const hidden = useContentHeaderHidden({ sidebarVisible, rightSidebarAvailable });
+  const hidden = useContentHeaderHidden({ sidebarVisible, rightSidebarAvailable }) && !trailing;
   return (
     <>
       <ContentHeader

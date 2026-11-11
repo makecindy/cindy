@@ -13,6 +13,8 @@ import { buildPluginSettingsPages, buildPluginSettingsSearchDocuments } from '..
 import { SessionTaskMenu } from '../../../src/renderer/features/cc-agent/sidebar/SessionTaskMenu';
 import { DropdownMenu, DropdownMenuTrigger } from '../../../src/renderer/components/ui/dropdown-menu';
 import { Button } from '../../../src/renderer/components/ui/button';
+import { ContentHeaderSlot } from '../../../src/renderer/components/layout/ContentHeader';
+import { FeatureSidebarSlotProvider } from '../../../src/renderer/features/feature-context';
 import { ctx, mountPage } from '../../ui-page/harness';
 
 // The isolated HTTP fixture needs local correlation IDs for attachment/provider calls.
@@ -54,6 +56,7 @@ function Scene() {
   const [menuOpen, setMenuOpen] = useState(false);
   const entries = readPluginUiEntries('sidebar.navigation');
   const sections = readPluginUiEntries('sidebar.section');
+  const titlebar = readPluginUiEntries('window.titlebar');
   return <div className="flex h-full min-w-0 bg-[var(--settings-bg)] text-[var(--text-primary)]">
     <aside className="flex w-60 shrink-0 flex-col gap-5 border-r border-[var(--border-default)] p-4">
       {entries.length > 0 && <PluginUiSlotControls entries={entries} appearance="navigation" />}
@@ -68,8 +71,11 @@ function Scene() {
       </DropdownMenu>
     </aside>
     <main className="min-w-0 flex-1 overflow-y-auto px-6">
+      <ContentHeaderSlot sidebarVisible showCollapsedActions={false} isSidebarRail={false} rightSidebarAvailable={false}
+        trailing={titlebar.length > 0 ? <PluginUiSlotControls entries={titlebar} appearance="titlebar" /> : undefined}>
       {ctx.case === 'input' || ctx.case === 'attachment-error' ? <InputScene />
         : <PluginSettingsFields instanceId={pages[0].instanceId} title={manifest.name} fields={fields} />}
+      </ContentHeaderSlot>
     </main>
   </div>;
 }
@@ -97,4 +103,4 @@ void mountPage({ host: {
   }, onPluginUiState: () => noOp },
   sharedTask: { host: async () => ({ detail: null }) },
   appPreferenceControl: { onSettingsChanged: () => noOp },
-}, render: () => <PluginUiProvider><Scene /></PluginUiProvider> });
+}, render: () => <FeatureSidebarSlotProvider isCollapsed={false}><PluginUiProvider><Scene /></PluginUiProvider></FeatureSidebarSlotProvider> });

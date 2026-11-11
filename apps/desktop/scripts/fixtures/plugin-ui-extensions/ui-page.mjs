@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 export default {
   name: 'plugin-ui-extensions', entry: './plugin-ui-extensions-fixture.tsx',
   viewport: { width: 900, height: 650 },
-  real: 'PluginUiProvider, navigation controls, collapsed sidebar sections, SessionTaskMenu, SettingsSidebarNav, PluginSettingsFields, completion bridge/AtMentionPanel, attachment hook and tray',
+  real: 'PluginUiProvider, navigation controls, collapsed sidebar sections, titlebar controls/ContentHeaderSlot, SessionTaskMenu, SettingsSidebarNav, PluginSettingsFields, completion bridge/AtMentionPanel, attachment hook and tray',
   notCovered: 'MCP App iframe, editor selection, real file handoff, installation/approval and persistence; IPC state is supplied in memory',
   stubs: {
     'src/renderer/contexts/AuthContext': 'export const useAuth = () => ({ dataOwnerId: null }); export const useOptionalAuthDeviceId = () => null;',
@@ -19,6 +19,7 @@ export default {
   async ready(page) { await page.getByRole('button', { name: '示例摘要 · 插件界面示例', exact: true }).waitFor(); },
   async check(page, ui) {
     assert.equal(await page.locator('iframe').count(), 0);
+    assert.ok(await page.getByRole('button', { name: '打开示例工作台 · 插件界面示例', exact: true }).isVisible());
     assert.ok(await page.getByRole('button', { name: '示例摘要 · 插件界面示例', exact: true }).isVisible());
     if (ui.case === 'input' || ui.case === 'attachment-error') {
       await page.getByText('示例引用：记录 · 插件界面示例', { exact: true }).waitFor();
