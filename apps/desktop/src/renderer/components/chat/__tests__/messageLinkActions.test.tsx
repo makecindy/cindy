@@ -28,6 +28,7 @@ import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContri
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { UserMessageImageLink } from '../UserMessageImageLink';
 import { UserMessage } from '../UserMessage';
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
 import { MemoryRouter } from 'react-router-dom';
 import { toMessageAutomationOrigin } from '@/lib/messageAutomationOrigin';
 import { _resetLinkOpenPreferenceForTests } from '@/hooks/useLinkOpenPreference';

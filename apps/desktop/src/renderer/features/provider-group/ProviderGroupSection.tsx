@@ -34,7 +34,11 @@ import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 
 import {
-  PROVIDER_GROUP_MAX_LIMIT,
+  CONCURRENCY_LIMIT_OPTIONS,
+  CONCURRENCY_LIMIT_UNLIMITED,
+  concurrencyLimitFromOption,
+  concurrencyLimitOptionValue,
+  concurrencyLimitPatch,
   PROVIDER_GROUP_MAX_WEIGHT,
   PROVIDER_GROUP_STRATEGIES,
   providerGroupDeviceCount,
@@ -66,7 +70,6 @@ export { memberStatusText };
 const SELECTABLE_STRATEGIES = PROVIDER_GROUP_STRATEGIES.filter((value) => value !== 'usage');
 const selectableStrategy = (strategy: ProviderGroupStrategy): ProviderGroupStrategy =>
   strategy === 'usage' ? 'least' : strategy;
-const LIMIT_OPTIONS = Array.from({ length: PROVIDER_GROUP_MAX_LIMIT }, (_, i) => String(i + 1));
 const WEIGHT_OPTIONS = ['1', '2', '3', '5', '10', '20', '50', String(PROVIDER_GROUP_MAX_WEIGHT)];
 const MEMBER_MORE_BUTTON =
   'flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[var(--text-tertiary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]';
@@ -494,9 +497,14 @@ function MemberRow({
           <div className="flex shrink-0 items-center gap-1.5">
             <Select
               label={t('providerGroup.member.limitAria', { name: label })}
-              value={String(member.limit)}
-              options={LIMIT_OPTIONS.map((value) => ({ value, label: t('providerGroup.member.limitOption', { count: Number(value) }) }))}
-              onValueChange={(value) => onChange({ limit: Number(value) })}
+              value={concurrencyLimitOptionValue(member)}
+              options={CONCURRENCY_LIMIT_OPTIONS.map((value) => ({
+                value,
+                label: value === CONCURRENCY_LIMIT_UNLIMITED
+                  ? t('providerGroup.member.limitUnlimited')
+                  : t('providerGroup.member.limitOption', { count: Number(value) }),
+              }))}
+              onValueChange={(value) => onChange(concurrencyLimitPatch(concurrencyLimitFromOption(value)))}
               disabled={disabled}
               className="w-[104px]"
             />
