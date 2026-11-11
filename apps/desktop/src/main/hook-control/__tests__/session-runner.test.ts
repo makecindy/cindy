@@ -3114,7 +3114,7 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     });
     const outcome = await p;
     expect(outcome.status).toBe('error');
-    expect(outcome.errorMessage).toContain('⚠️ 供应商额度不足：「OpenAI」已达到工作区所有者设置的花费上限');
+    expect(outcome.errorMessage).toContain('⚠️ 已达供应商限额：「OpenAI」已达到工作区所有者设置的花费上限');
     expect(outcome.errorMessage).toContain('Telegram 官方 bot');
     expect(outcome.errorMessage).toContain('GPT-6 Astra');
     expect(outcome.errorMessage).toContain('测试任务（sess-new）');

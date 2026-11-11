@@ -33,7 +33,7 @@ describe('DingTalk UI text follows the interface language', () => {
   it('serves its own copy and the inherited pack in English, with variables filled', () => {
     setMainLocale('en');
     expect(ui.slash.interactiveCommandUnsupported?.('/model')).toBe(
-      "DingTalk doesn't support interactive choices for /model yet. Make this setting in Cindy Desktop.",
+      "DingTalk doesn't support interactive choices for /model yet. Change this setting in Cindy Desktop instead.",
     );
     expect(ui.slash.unknownCommand('/ctr')).toContain("I don't recognize the command `/ctr`");
     expect(ui.slash.help).toContain('/new   Start a new chat');

@@ -1499,7 +1499,7 @@
       "awaitingPlan": "En espera de revisión del plan",
       "permissionPromptTitle": "Confirmar permiso",
       "permissionPromptTitleWithTool": "¿Permitir {{toolName}}?",
-      "allowOnce": "permitir una vez",
+      "allowOnce": "Permitir una vez",
       "alwaysAllowForSession": "Permitir siempre esta sesión",
       "deny": "Denegar"
     }
@@ -12575,10 +12575,10 @@
           },
           "model": {
             "title": "🤖 Cambiar de modelo",
-            "currentLineWithEffort": "**Actual**: {{label}} · intensidad `{{effort}}`\n_{{description}}_",
+            "currentLineWithEffort": "**Actual**: {{label}} · intensidad de razonamiento `{{effort}}`\n_{{description}}_",
             "currentLine": "**Actual**: {{label}}\n_{{description}}_",
             "hint": "Toca abajo para cambiar. Usaré automáticamente la intensidad de razonamiento más alta del modelo elegido",
-            "resolvedWithEffort": "✅ Cambiado a {{label}} (intensidad: {{effort}})",
+            "resolvedWithEffort": "✅ Cambiado a {{label}} (intensidad de razonamiento: {{effort}})",
             "resolved": "✅ Cambiado a {{label}}",
             "failed": "❌ No se pudo cambiar de modelo: {{reason}}"
           },
@@ -12821,14 +12821,14 @@
           "stopDoneDropped_one": "⏹ Se detuvo la tarea actual y se quitó {{count}} mensaje en cola.",
           "stopDoneDropped_many": "⏹ Se detuvo la tarea actual y se quitaron {{count}} mensajes en cola.",
           "stopIdle": "No hay ninguna tarea en ejecución ni en cola.",
-          "scheduledTaskHeaderNamed": "🤖 Tarea automática “{{name}}”",
-          "scheduledTaskHeader": "🤖 Tarea automática",
+          "scheduledTaskHeaderNamed": "🤖 Automatización “{{name}}”",
+          "scheduledTaskHeader": "🤖 Automatización",
           "unsupportedOnly": "🙏 Por ahora no puedo procesar este mensaje:\n{{items}}",
           "unsupportedNotice": "ℹ️ No se pudo procesar lo siguiente:\n{{items}}\n\nEl resto se seguirá procesando.",
           "authMissing": {
             "providerFallback": "Proveedor actual",
-            "reasonGatewayKey": "primero configura una clave de Cindy AI",
-            "reasonProviderKey": "aún no se ha configurado la clave de API de este proveedor",
+            "reasonGatewayKey": "primero configura una Cindy AI Key",
+            "reasonProviderKey": "aún no se ha configurado la API Key de este proveedor",
             "reasonProviderDisconnected": "la conexión se perdió o caducó",
             "reasonLogin": "primero inicia sesión en {{agentKind}}",
             "message": "⚠️ Esta conversación de WeCom usa “{{provider}}” ({{model}}): {{reason}}.",
@@ -12860,11 +12860,11 @@
           },
           "model": {
             "title": "🤖 Cambiar modelo",
-            "currentLineWithEffort": "**Actual**: {{label}} · effort `{{effort}}`\n_{{description}}_",
+            "currentLineWithEffort": "**Actual**: {{label}} · intensidad de razonamiento `{{effort}}`\n_{{description}}_",
             "currentLine": "**Actual**: {{label}}\n_{{description}}_",
             "hint": "Elige el modelo que quieres usar.",
             "resolved": "✅ Cambiado a {{label}}",
-            "resolvedWithEffort": "✅ Cambiado a {{label}} (effort: {{effort}})",
+            "resolvedWithEffort": "✅ Cambiado a {{label}} (intensidad de razonamiento: {{effort}})",
             "failed": "❌ No se pudo cambiar el modelo: {{reason}}"
           },
           "permissionMode": {
@@ -13182,7 +13182,7 @@
             "title": "🎮 Elige un espacio de trabajo",
             "emptyBody": "_Todavía no hay espacios de trabajo que puedas controlar~ Abre o crea una sesión en la app de escritorio y vuelve_",
             "hint": "Toca un espacio de trabajo para seguir; toca 🚪 Salir para cancelar",
-            "attachedSwitchHint": "🎮 Controlando ahora: **{{sessionTitle}}**\nElige una sesión nueva para cambiar; toca 🚪 Salir para dejarlo como está",
+            "attachedSwitchHint": "🎮 Controlando ahora: **{{sessionTitle}}**\nElige otra sesión para cambiar; toca 🚪 Salir para dejarlo como está",
             "btnExit": "🚪 Salir",
             "resolvedExit": "🚪 Listo, salí. Cuando quieras volver a controlarlo a distancia, envía /ctr",
             "sessionPickerTitle": "🎮 Sesiones de {{displayName}}",

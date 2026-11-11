@@ -12460,7 +12460,7 @@
             "resolved": "✅ Selected: {{option}}"
           },
           "plan": {
-            "title": "📋 Here's my plan",
+            "title": "📋 Here's My Plan",
             "btnApprove": "✅ Go Ahead",
             "btnReject": "❌ Hold On",
             "resolvedApproved": "✅ Approved — on it",
@@ -12481,9 +12481,9 @@
             "hint": "Tap below to switch. auto = routine actions go through, sensitive ones bring up a card; bypass = everything goes through; ask/default/plan/acceptEdits = approve via cards",
             "resolved": "✅ Permission mode switched to {{label}}",
             "failed": "❌ Couldn't switch the permission mode: {{reason}}",
-            "fullAccessConfirmTitle": "⚠️ Enable Full access?",
+            "fullAccessConfirmTitle": "⚠️ Enable Full Access?",
             "fullAccessConfirmBody": "Full access disables the workspace sandbox and skips routine approvals. Cindy can modify files outside the workspace and run network commands without asking; built-in high-risk operations will still require confirmation.",
-            "btnConfirmFullAccess": "Enable Full access",
+            "btnConfirmFullAccess": "Enable Full Access",
             "btnCancelFullAccess": "Keep Current Permissions",
             "fullAccessCancelled": "Canceled — current permissions kept"
           },
@@ -12504,7 +12504,7 @@
             "title": "🎮 Pick a Workspace",
             "emptyBody": "_No workspaces to take over yet. Open or create a session in desktop, then come back._",
             "hint": "Tap a workspace to continue; tap 🚪 Exit to cancel",
-            "attachedSwitchHint": "🎮 Currently taken over: **{{title}}**\nPick another session to switch right over; tap 🚪 Exit to keep things as they are",
+            "attachedSwitchHint": "🎮 Currently controlling: **{{title}}**\nPick another session to switch right over; tap 🚪 Exit to keep things as they are",
             "btnExit": "🚪 Exit",
             "resolvedExit": "🚪 I'm out. Send /ctr next time you want remote control",
             "sessionPickerTitle": "🎮 Sessions in {{name}}",
@@ -12709,13 +12709,13 @@
           "stopDoneDropped_other": "⏹ Stopped the current task and removed {{count}} queued messages.",
           "stopDoneDropped_one": "⏹ Stopped the current task and removed {{count}} queued message.",
           "stopIdle": "No task is running or queued right now.",
-          "scheduledTaskHeaderNamed": "🤖 Automated task “{{name}}”",
-          "scheduledTaskHeader": "🤖 Automated task",
+          "scheduledTaskHeaderNamed": "🤖 Automation “{{name}}”",
+          "scheduledTaskHeader": "🤖 Automation",
           "unsupportedOnly": "🙏 Can't handle this message yet:\n{{items}}",
           "unsupportedNotice": "ℹ️ Couldn't process the following:\n{{items}}\n\nThe rest will still be processed.",
           "authMissing": {
             "providerFallback": "Current provider",
-            "reasonGatewayKey": "set up a Cindy AI key first",
+            "reasonGatewayKey": "set up a Cindy AI Key first",
             "reasonProviderKey": "this provider's API key isn't set up yet",
             "reasonProviderDisconnected": "the connection was lost or has expired",
             "reasonLogin": "sign in to {{agentKind}} first",
@@ -12808,7 +12808,7 @@
         "slash": {
           "help": "🤖 Here's what I can do:\n\n/new   Start a new chat (clears the current context)\n/stop  Stop the current run and drop queued messages\n/help  Show available commands\n\nChange the model, permissions, and remote takeover in Cindy Desktop.",
           "unknownCommand": "I don't recognize the command `{{cmd}}` 🤔\nCommands I understand: /new, /stop, /help",
-          "interactiveCommandUnsupported": "DingTalk doesn't support interactive choices for {{cmd}} yet. Make this setting in Cindy Desktop."
+          "interactiveCommandUnsupported": "DingTalk doesn't support interactive choices for {{cmd}} yet. Change this setting in Cindy Desktop instead."
         },
         "interaction": {
           "permissionTitle": "Confirmation needed: {{toolName}}",
@@ -12826,7 +12826,7 @@
         "slash": {
           "help": "🤖 Here's what I can do:\n\n/new   Start a new chat (clears the current context)\n/stop  Stop the current run and drop queued messages\n/help  Show available commands\n\nChange the model, permissions, and remote takeover in Cindy Desktop.",
           "unknownCommand": "I don't recognize the command `{{cmd}}` 🤔\nCommands I understand: /new, /stop, /help",
-          "interactiveCommandUnsupported": "iMessage doesn't support interactive choices for {{cmd}} yet. Make this setting in Cindy Desktop."
+          "interactiveCommandUnsupported": "iMessage doesn't support interactive choices for {{cmd}} yet. Change this setting in Cindy Desktop instead."
         }
       },
       "feishu": {
@@ -12916,9 +12916,9 @@
             "hint": "Tap below to switch. auto = routine actions allowed, sensitive ones get a card; bypass = everything allowed; ask/default/plan/acceptEdits = approve via cards",
             "resolved": "✅ Permission mode switched to {{label}}",
             "failed": "❌ Couldn't switch permission mode: {{reason}}",
-            "fullAccessConfirmTitle": "⚠️ Turn on Full access?",
+            "fullAccessConfirmTitle": "⚠️ Turn On Full Access?",
             "fullAccessConfirmBody": "Full access turns off the workspace sandbox and skips routine approvals. Cindy can modify files outside the workspace and run commands with network access without asking; built-in high-risk actions still require confirmation.",
-            "btnConfirmFullAccess": "Turn on Full access",
+            "btnConfirmFullAccess": "Turn On Full Access",
             "btnCancelFullAccess": "Keep Current Permissions",
             "fullAccessCancelled": "Canceled — current permissions kept"
           },
@@ -13099,7 +13099,7 @@
           "stillProcessing": "Still working on it…",
           "ownerOnlyCommands": "Only the owner can use bot commands.",
           "companionManagedCommand": "Open this teammate in Cindy: change the model in the teammate's settings, and switch permissions below the input box.",
-          "help": "Commands: /new new conversation; /stop stop the current run; /stop all stop all runs; /status check status; /help show help.",
+          "help": "Commands: /new start a new conversation; /stop stop the current run; /stop all stop all runs; /status check status; /help show help.",
           "status_one": "Cindy's WeChat connection is OK. {{count}} message queued.",
           "status_other": "Cindy's WeChat connection is OK. {{count}} messages queued.",
           "stopped": "Stopped.",

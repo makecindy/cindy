@@ -36,7 +36,7 @@ describe('WeCom UI text follows the interface language', () => {
         missing: 'gateway-key',
       }),
     ).toBe(
-      '⚠️ This WeCom chat uses “Cindy AI” (opus): set up a Cindy AI key first.\n' +
+      '⚠️ This WeCom chat uses “Cindy AI” (opus): set up a Cindy AI Key first.\n' +
         'Update “New Conversation Configuration”, then just keep sending messages. If this chat has its own model selected, send `/new` to start a new task.',
     );
     setMainLocale('zh-CN');

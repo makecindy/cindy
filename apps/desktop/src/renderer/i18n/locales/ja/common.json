@@ -12162,7 +12162,7 @@
           "detachedBySlash": "🚪 リモート操作を終了し、Discord の DM に戻りました。またデスクトップを操作したいときは /ctr を送ってください。",
           "detachedByRevoke": "⚠️ デスクトップ側でリモート操作が解除されました。以降のメッセージは Discord の DM に戻ります。",
           "notAttached": "🤷 いまはどのセッションもリモート操作していないので、/exctr ですることはありません。",
-          "companionManagedCommand": "🧭 この Bot はパートナーに引き継がれています。モデル・権限・作業ディレクトリはパートナーの設定に従います。変更するには Cindy のパートナー設定で調整してください。"
+          "companionManagedCommand": "🧭 この Bot は仲間に任されています。モデル・権限・作業ディレクトリは仲間の設定に従います。変更するには Cindy の仲間の設定で調整してください。"
         },
         "agent": {
           "completedNoText": "✅ 完了しました（このターン、Agent からの発言はありませんでした）",
@@ -12272,7 +12272,7 @@
             "offlineNotice": "🔔 しばらくオフラインだったので、その間のメッセージは届いていないかもしれません〜"
           },
           "ownerBinding": {
-            "welcome": "🎉 この bot の owner として登録しました〜\n今後、私と話せるのはあなただけです。owner を変更するには、Cindy デスクトップ版の「設定」で bot の認証情報を消去してから、もう一度保存してください。"
+            "welcome": "🎉 この bot のオーナーとして登録しました〜\n今後、私と話せるのはあなただけです。オーナーを変更するには、Cindy デスクトップ版の「設定」で bot の認証情報を消去してから、もう一度保存してください。"
           },
           "group": {
             "threadOrphanNotice": "スレッドを開くときに問題が発生し、このメッセージを処理できませんでした。もう一度 @ でメンションしてください〜"
@@ -12428,9 +12428,9 @@
             "hint": "下から選んで切り替えます。auto = 通常の操作は許可し、重要な操作はカードで確認。bypass = すべて許可。ask/default/plan/acceptEdits = カードで承認",
             "resolved": "✅ 権限モードを {{label}} に切り替えました",
             "failed": "❌ 権限モードを切り替えられませんでした: {{reason}}",
-            "fullAccessConfirmTitle": "⚠️ Full access を有効にしますか？",
-            "fullAccessConfirmBody": "Full access はワークスペースのサンドボックスを無効にし、通常の承認を省略します。Cindy は確認なしでワークスペース外のファイルを変更したり、ネットワークコマンドを実行したりできるようになります。組み込みの高リスク操作では引き続き確認が必要です。",
-            "btnConfirmFullAccess": "Full access を有効にする",
+            "fullAccessConfirmTitle": "⚠️ フルアクセスをオンにしますか？",
+            "fullAccessConfirmBody": "フルアクセスはワークスペースのサンドボックスを無効にし、通常の承認を省略します。Cindy は確認なしでワークスペース外のファイルを変更したり、ネットワークを使うコマンドを実行したりできるようになります。組み込みの高リスク操作では引き続き確認が必要です。",
+            "btnConfirmFullAccess": "フルアクセスをオン",
             "btnCancelFullAccess": "現在の権限を維持",
             "fullAccessCancelled": "キャンセルしました。現在の権限を維持します"
           },
@@ -12568,7 +12568,7 @@
         },
         "slash": {
           "detachFailed": "❌ 引き継ぎを終了できませんでした: {{error}}",
-          "companionManaged": "🧭 この接続はパートナーに引き渡されています。モデル、権限、作業ディレクトリはパートナーの設定に従います。Cindy のパートナー設定で変更してください。"
+          "companionManaged": "🧭 この接続は仲間に任されているため、モデル・権限・作業ディレクトリは仲間の設定に従います。Cindy の仲間の設定で変更してください。"
         },
         "turn": {
           "groupApprovalOwnerDm": "🔐 グループチャットのタスクがあなたの承認を待っています。承認カードはグループには送られないので、ここで確認してください。",
@@ -12591,7 +12591,7 @@
         },
         "desktopConfirm": {
           "notice": "🔔 {{what}}が Cindy Desktop であなたの確認を待っています。時間切れになると自動的にキャンセルされます。続けるには Cindy Desktop で操作してください。",
-          "inputHandoff": "🔐 代理入力が必要です: {{taskTitle}} · Cindy で開く",
+          "inputHandoff": "🔐 あなたの入力が必要です: {{taskTitle}} · Cindy で開く",
           "subject": {
             "githubIssue": "「GitHub Issue を提出」の確認カード",
             "renameSessions": "「タスク名の一括変更」の確認カード",
@@ -12655,8 +12655,8 @@
           "stopDone": "⏹ 現在のタスクを中止しました。",
           "stopDoneDropped_other": "⏹ 現在のタスクを中止し、待機中のメッセージ {{count}} 件を削除しました。",
           "stopIdle": "実行中または待機中のタスクはありません。",
-          "scheduledTaskHeaderNamed": "🤖 自動タスク「{{name}}」",
-          "scheduledTaskHeader": "🤖 自動タスク",
+          "scheduledTaskHeaderNamed": "🤖 自動化「{{name}}」",
+          "scheduledTaskHeader": "🤖 自動化",
           "unsupportedOnly": "🙏 このメッセージは現在処理できません:\n{{items}}",
           "unsupportedNotice": "ℹ️ 次の内容は処理できませんでした:\n{{items}}\n\nそれ以外の内容は引き続き処理します。",
           "authMissing": {
@@ -12694,11 +12694,11 @@
           },
           "model": {
             "title": "🤖 モデルを切り替え",
-            "currentLineWithEffort": "**現在**: {{label}} · effort `{{effort}}`\n_{{description}}_",
+            "currentLineWithEffort": "**現在**: {{label}} · 推論強度 `{{effort}}`\n_{{description}}_",
             "currentLine": "**現在**: {{label}}\n_{{description}}_",
             "hint": "使用するモデルを選んでください。",
             "resolved": "✅ {{label}} に切り替えました",
-            "resolvedWithEffort": "✅ {{label}} に切り替えました（effort: {{effort}}）",
+            "resolvedWithEffort": "✅ {{label}} に切り替えました（推論強度: {{effort}}）",
             "failed": "❌ モデルを切り替えられませんでした: {{reason}}"
           },
           "permissionMode": {
@@ -12928,7 +12928,7 @@
       "wechat": {
         "slash": {
           "new": "🌱 新しく始めました — これまでの会話はクリアしました。最初からどうぞ〜",
-          "help": "🤖 できること：\n\n/new         新しく始める（現在の会話コンテキストをクリア）\n/model       モデルを切り替える\n/permission  権限モードを調整（auto / bypass / ask など）\n/ctr         デスクトップアプリのワークスペースをリモートで引き継ぐ（引き継ぎ中に再送するとセッションを切り替え）\n/exctr       引き継ぎを終了し、WeChat の個別チャットに戻る\n/help        できることを表示\n\n実行中の作業を止めたいときは `!stop` を送ってください。現在の実行をすぐに中止し、待機中のメッセージも取り消します。セッションは残るので、続きから再開できます。\n\n普段はそのままメッセージを送ってください。お待ちしています〜",
+          "help": "🤖 できること:\n\n/new         新しく始める（現在の会話コンテキストをクリア）\n/model       モデルを切り替える\n/permission  権限モードを調整（auto / bypass / ask など）\n/ctr         デスクトップアプリのワークスペースをリモートで引き継ぐ（引き継ぎ中に再送するとセッションを切り替え）\n/exctr       引き継ぎを終了し、WeChat の個別チャットに戻る\n/help        できることを表示\n\n実行中の作業を止めたいときは `!stop` を送ってください。現在の実行をすぐに中止し、待機中のメッセージも取り消します。セッションは残るので、続きから再開できます。\n\n普段はそのままメッセージを送ってください。お待ちしています〜",
           "unknownCommand": "コマンド `{{cmd}}` はわかりませんでした 🤔\n使えるコマンド: /new、/model、/permission、/ctr、/exctr、/help",
           "detachedBySlash": "🚪 引き継ぎを終了しました。WeChat の個別チャットに戻ります。またデスクトップアプリをリモート操作したいときは /ctr を送ってください",
           "detachedByRevoke": "⚠️ デスクトップアプリ側で引き継ぎが解除されました。以降のメッセージは WeChat の個別チャットに戻ります。",
@@ -13001,7 +13001,7 @@
           "permissionMode": {
             "title": "🛡️ 権限モードを調整",
             "currentLine": "**現在**: {{label}}\n_{{description}}_",
-            "hint": "下から選んで切り替えてください。auto = 通常の操作は許可、機密性の高い操作はカードで確認。bypass = すべて許可。ask/default/plan/acceptEdits = カードで承認",
+            "hint": "下から選んで切り替えてください。auto = 通常の操作は許可、注意が必要な操作はカードで確認。bypass = すべて許可。ask/default/plan/acceptEdits = カードで承認",
             "resolved": "✅ 権限モードを {{label}} に切り替えました",
             "failed": "❌ 権限モードを切り替えられませんでした: {{reason}}",
             "fullAccessConfirmTitle": "⚠️ フルアクセスをオンにしますか？",
@@ -13031,7 +13031,7 @@
             "sessionBusyPrompt3": "🤖 **{{sessionTitle}}** は取り込み中です — Agent がまだキーボードを叩いていて、割り込むと集中が途切れてしまいます。\n数秒待ってから、もう一度 `/ctr` を試してください",
             "sessionBusyPrompt4": "☕ まあまあ、慌てずに — **{{sessionTitle}}** はまだこの一局の途中です。\nAgent が手元の作業を終えたら、すぐに操作をお渡しします",
             "takeoverLoadingPrompt1": "⏳ **{{sessionTitle}}** を引き継いでいます…\n_📦 セッションのメタデータを読み込み中_  ·  _🔌 Agent との通信路を接続中_  ·  _🧠 前のターンを振り返り中_\n_数秒で終わるので、コーヒーは一気に飲まなくて大丈夫です_",
-            "takeoverLoadingPrompt2": "🎮 **{{sessionTitle}}** にログイン中…\n_初期のバージョンでは、待ちきれないプレイヤーが WeChat のアイコンを連打していました。でも、まったく効果はありません_",
+            "takeoverLoadingPrompt2": "🎮 **{{sessionTitle}}** にログイン中…\n_初期のバージョンでは、待ちきれないプレイヤーが WeChat のアイコンを連打していました。でも、まったく効果はありませんでした_",
             "takeoverLoadingPrompt3": "⌛ **{{sessionTitle}}** を読み込み中…  99%\n_このプログレスバーは本物です — 前のターンで何を話していたか確認しています_",
             "takeoverLoadingPrompt4": "🛰️ **{{sessionTitle}}** に接続しています…\n_(Wi-Fi の電波が弱いのかな…いえ、どう説明しようか考えているところです)_",
             "newSessionWelcomePrompt1": "🎯 引き継ぎと新規セッション作成が一度に完了 — **{{workspaceName}}** の準備ができ、Agent が待機しています。\n最初の指示を送って始めてください。抜けるときはいつでも `/exctr`",

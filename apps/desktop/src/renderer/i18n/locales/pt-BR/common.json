@@ -12564,7 +12564,7 @@
           },
           "ask": {
             "noOptionsHint": "_(Esta pergunta não tem opções predefinidas — é só me responder com texto.)_",
-            "resolved": "✅ Escolhido: {{option}}"
+            "resolved": "✅ Selecionado: {{option}}"
           },
           "plan": {
             "title": "📋 Veja o que pretendo fazer",
@@ -12575,10 +12575,10 @@
           },
           "model": {
             "title": "🤖 Trocar de modelo",
-            "currentLineWithEffort": "**Atual**: {{label}} · esforço `{{effort}}`\n_{{description}}_",
+            "currentLineWithEffort": "**Atual**: {{label}} · esforço de raciocínio `{{effort}}`\n_{{description}}_",
             "currentLine": "**Atual**: {{label}}\n_{{description}}_",
             "hint": "Toque abaixo para trocar. Vou usar automaticamente o maior esforço de raciocínio do modelo escolhido",
-            "resolvedWithEffort": "✅ Trocado para {{label}} (esforço: {{effort}})",
+            "resolvedWithEffort": "✅ Trocado para {{label}} (esforço de raciocínio: {{effort}})",
             "resolved": "✅ Trocado para {{label}}",
             "failed": "❌ Não foi possível trocar o modelo: {{reason}}"
           },
@@ -12589,7 +12589,7 @@
             "resolved": "✅ Modo de permissão trocado para {{label}}",
             "failed": "❌ Não foi possível trocar o modo de permissão: {{reason}}",
             "fullAccessConfirmTitle": "⚠️ Ativar acesso total?",
-            "fullAccessConfirmBody": "O acesso total desativa o sandbox do espaço de trabalho e dispensa aprovações de rotina. Cindy poderá modificar arquivos fora do espaço de trabalho e executar comandos de rede sem perguntar; as operações integradas de alto risco ainda exigirão confirmação.",
+            "fullAccessConfirmBody": "O acesso total desativa o sandbox do espaço de trabalho e dispensa aprovações de rotina. O Cindy poderá modificar arquivos fora do espaço de trabalho e executar comandos de rede sem perguntar; as operações integradas de alto risco ainda exigirão confirmação.",
             "btnConfirmFullAccess": "Ativar acesso total",
             "btnCancelFullAccess": "Manter permissões",
             "fullAccessCancelled": "Cancelado, as permissões atuais foram mantidas"
@@ -12654,10 +12654,10 @@
           "autoReviewUnavailable": "A revisão automática não chegou a uma decisão, então as ações que exigem revisão agora precisam da sua confirmação. Mude esta tarefa para Acesso total se preferir não ser interrompido. Esse modo apresenta maior risco.",
           "autoReviewUnavailableWechat": "A revisão automática não chegou a uma decisão, então as ações que exigem revisão agora precisam da sua confirmação. O WeChat pessoal não pode usar Acesso total. Confirme esta ação diretamente.",
           "autoReviewConfirmUndelivered": "A revisão automática não terminou e a confirmação não foi entregue ou não foi respondida. Esta recusa não foi feita por você.",
-          "rateLimitRetrying": "Solicitação limitada por taxa. Tentando novamente de forma automática ({{attempt}}/{{maxAttempts}})…",
+          "rateLimitRetrying": "Limite de solicitações atingido. Tentando novamente de forma automática ({{attempt}}/{{maxAttempts}})…",
           "overloadRetrying": "O serviço do modelo está ocupado. Tentando novamente de forma automática ({{attempt}}/{{maxAttempts}})…",
           "overloadRetryingNoCount": "O serviço do modelo está ocupado. Tentando novamente de forma automática…",
-          "overloadFailed": "⚠️ O serviço do modelo está ocupado — o serviço de origem está sem capacidade no momento. Reenvie esta mensagem aqui para tentar novamente ou mude para outro modelo no Cindy. (Clicar em \"Tentar novamente\" no app para desktop também continua a tarefa, mas o resultado não volta para esta mensagem.)"
+          "overloadFailed": "⚠️ O serviço do modelo está ocupado — o serviço de origem está sem capacidade no momento. Reenvie esta mensagem aqui para tentar novamente ou mude para outro modelo no Cindy. (Clicar em “Tentar novamente” no app para desktop também continua a tarefa, mas o resultado não volta para esta mensagem.)"
         },
         "toolLoop": {
           "generic": "O modelo chamou ferramentas repetidamente vezes demais, então o Cindy interrompeu este turno para evitar um loop infinito. Envie uma nova mensagem para continuar.",
@@ -12770,7 +12770,7 @@
       },
       "hook": {
         "interaction": {
-          "askTimeout": "O tempo de espera pela resposta esgotou. A tarefa continuou como \"sem resposta\".",
+          "askTimeout": "O tempo de espera pela resposta esgotou. A tarefa continuou como “sem resposta”.",
           "planTitle": "📋 Plano aguardando revisão",
           "planApprove": "Aprovar e executar",
           "planReject": "Devolver",
@@ -12827,7 +12827,7 @@
           "unsupportedNotice": "ℹ️ Não foi possível processar o seguinte:\n{{items}}\n\nO restante continuará sendo processado.",
           "authMissing": {
             "providerFallback": "Provedor atual",
-            "reasonGatewayKey": "configure primeiro uma chave do Cindy AI",
+            "reasonGatewayKey": "configure primeiro uma Cindy AI Key",
             "reasonProviderKey": "a chave de API deste provedor ainda não foi configurada",
             "reasonProviderDisconnected": "a conexão caiu ou expirou",
             "reasonLogin": "faça login no {{agentKind}} primeiro",
@@ -12860,11 +12860,11 @@
           },
           "model": {
             "title": "🤖 Trocar modelo",
-            "currentLineWithEffort": "**Atual**: {{label}} · effort `{{effort}}`\n_{{description}}_",
+            "currentLineWithEffort": "**Atual**: {{label}} · esforço de raciocínio `{{effort}}`\n_{{description}}_",
             "currentLine": "**Atual**: {{label}}\n_{{description}}_",
             "hint": "Escolha o modelo que deseja usar.",
             "resolved": "✅ Trocado para {{label}}",
-            "resolvedWithEffort": "✅ Trocado para {{label}} (effort: {{effort}})",
+            "resolvedWithEffort": "✅ Trocado para {{label}} (esforço de raciocínio: {{effort}})",
             "failed": "❌ Não foi possível trocar o modelo: {{reason}}"
           },
           "permissionMode": {

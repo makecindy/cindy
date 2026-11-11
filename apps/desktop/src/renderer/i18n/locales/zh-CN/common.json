@@ -12227,9 +12227,9 @@
             "hint": "点下面切换。auto = 常规放行+敏感操作弹卡片；bypass = 全放行；ask/default/plan/acceptEdits = 走卡片审批",
             "resolved": "✅ 权限模式切到 {{label}} 了",
             "failed": "❌ 权限模式没切过去：{{reason}}",
-            "fullAccessConfirmTitle": "⚠️ 确认开启 Full access？",
-            "fullAccessConfirmBody": "Full access 会关闭工作区沙箱并跳过常规审批。Cindy 可以修改工作区外的文件、执行联网命令且不再询问；内置高风险操作仍会要求确认。",
-            "btnConfirmFullAccess": "开启 Full access",
+            "fullAccessConfirmTitle": "⚠️ 确认开启「完全访问」？",
+            "fullAccessConfirmBody": "「完全访问」会关闭工作区沙箱并跳过常规审批。Cindy 可以修改工作区外的文件、执行联网命令且不再询问；内置高风险操作仍会要求确认。",
+            "btnConfirmFullAccess": "开启完全访问",
             "btnCancelFullAccess": "保留当前权限",
             "fullAccessCancelled": "已取消，保留当前权限"
           },
@@ -12242,7 +12242,7 @@
             "resolvedExit": "🚪 走了，下次想远程操控再 /ctr",
             "sessionPickerTitle": "🎮 {{displayName}} 里的存档",
             "sessionPickerHint": "挑个任务继续打 · ➕ 新建 开新存档 · ↩️ 后退 换工作区 · 🚪 退出 取消",
-            "sessionPickerEmptyBody": "_工作区 **{{displayName}}** 这边还没有 active 任务~ 不如点 ➕ 新建 开一个？_",
+            "sessionPickerEmptyBody": "_工作区 **{{displayName}}** 这边还没有活跃任务~ 不如点 ➕ 新建 开一个？_",
             "btnNew": "➕ 新建",
             "btnBack": "↩️ 后退",
             "resolvedSessionPick": "🎯 上号了：**{{sessionTitle}}**（{{workspaceName}}）\n接下来你发消息我就直接进这个任务；想撤随时 `/exctr`",
@@ -12287,7 +12287,7 @@
               "engine": "🚀 引擎预热中…",
               "thoughts": "🌀 思绪整理中…",
               "spell": "🪄 念个咒语…",
-              "draft": "📝 草稿打中…",
+              "draft": "📝 打草稿中…",
               "puzzle": "🧩 拼图组装中…",
               "coffee": "☕ 续杯，马上回~",
               "target": "🎯 瞄准答案中…"
@@ -12305,7 +12305,7 @@
           },
           "card": {
             "imageLoadFailed": "_[图片加载失败：{{target}}]_",
-            "choiceReceived": "已收到您的选择"
+            "choiceReceived": "已收到你的选择"
           },
           "connection": {
             "conflict": "该 App 已被另一台设备占用 (exceed_conn_limit)",
@@ -12324,7 +12324,7 @@
         },
         "common": {
           "cardExpired": "卡片已过期",
-          "secretWriteFailed": "无法安全保存凭证(系统安全存储不可用)"
+          "secretWriteFailed": "无法安全保存凭证（系统安全存储不可用）"
         },
         "telegram": {
           "groupJoined": "👥 我被「{{actor}}」加进了群「{{title}}」（chat_id：{{chatId}}）。",
@@ -12428,9 +12428,9 @@
             "hint": "点下面切换。auto = 常规放行+敏感操作弹卡片；bypass = 全放行；ask/default/plan/acceptEdits = 走卡片审批",
             "resolved": "✅ 权限模式切到 {{label}} 了",
             "failed": "❌ 权限模式没切过去：{{reason}}",
-            "fullAccessConfirmTitle": "⚠️ 确认开启 Full access？",
-            "fullAccessConfirmBody": "Full access 会关闭工作区沙箱并跳过常规审批。Cindy 可以修改工作区外的文件、执行联网命令且不再询问；内置高风险操作仍会要求确认。",
-            "btnConfirmFullAccess": "开启 Full access",
+            "fullAccessConfirmTitle": "⚠️ 确认开启「完全访问」？",
+            "fullAccessConfirmBody": "「完全访问」会关闭工作区沙箱并跳过常规审批。Cindy 可以修改工作区外的文件、执行联网命令且不再询问；内置高风险操作仍会要求确认。",
+            "btnConfirmFullAccess": "开启完全访问",
             "btnCancelFullAccess": "保留当前权限",
             "fullAccessCancelled": "已取消，保留当前权限"
           },
@@ -12456,7 +12456,7 @@
             "resolvedExit": "🚪 走了，下次想远程操控再 /ctr",
             "sessionPickerTitle": "🎮 {{name}} 里的任务",
             "sessionPickerHint": "挑个任务继续 · ➕ 新建 开新任务 · ↩️ 后退 换工作区 · 🚪 退出 取消",
-            "sessionPickerEmptyBody": "_工作区 **{{name}}** 这边还没有 active 任务~ 不如点 ➕ 新建 开一个？_",
+            "sessionPickerEmptyBody": "_工作区 **{{name}}** 这边还没有活跃任务~ 不如点 ➕ 新建 开一个？_",
             "btnNew": "➕ 新建",
             "btnBack": "↩️ 后退",
             "resolvedSessionPick": "🎯 上号了：**{{title}}**（{{workspace}}）\n接下来你发消息我就直接进这个任务；想撤随时 `/exctr`",
@@ -12507,7 +12507,7 @@
           "contract": "模型连续触发了无效的工具调用，Cindy 已在 {{n}} 次失败后停止本轮，以避免无限循环。可以发送新消息继续。"
         },
         "quota": {
-          "prefix": "⚠️ 供应商额度不足",
+          "prefix": "⚠️ 已达供应商限额",
           "currentProvider": "当前供应商",
           "namedProvider": "「{{name}}」",
           "headlineSpendCap": "{{prefix}}：{{who}}已达到工作区所有者设置的花费上限，这个任务暂时无法继续。",
@@ -12546,11 +12546,11 @@
         },
         "card": {
           "askContinue": "继续",
-          "truncated": "…(已截断)",
+          "truncated": "…（已截断）",
           "askResolvedContinue": "✅ 已选择：继续"
         },
         "takeover": {
-          "summaryFailedThread": "_(回顾失败了，在这个 thread 里直接发消息接着聊就行)_",
+          "summaryFailedThread": "_(回顾失败了，在这个话题里直接发消息接着聊就行)_",
           "summaryFailed": "_(回顾失败了，直接发消息接着聊就行)_",
           "lastMessage": "最后一条处理的消息为：{{text}}"
         },
@@ -12655,8 +12655,8 @@
           "stopDone": "⏹ 已中止当前任务。",
           "stopDoneDropped_other": "⏹ 已中止当前任务，并移除 {{count}} 条排队消息。",
           "stopIdle": "当前没有正在运行或排队的任务。",
-          "scheduledTaskHeaderNamed": "🤖 自动任务「{{name}}」",
-          "scheduledTaskHeader": "🤖 自动任务",
+          "scheduledTaskHeaderNamed": "🤖 自动化「{{name}}」",
+          "scheduledTaskHeader": "🤖 自动化",
           "unsupportedOnly": "🙏 暂时无法处理这条消息：\n{{items}}",
           "unsupportedNotice": "ℹ️ 以下内容未能处理：\n{{items}}\n\n其它内容将继续处理。",
           "authMissing": {
@@ -12707,9 +12707,9 @@
             "hint": "请选择权限模式。",
             "resolved": "✅ 权限模式已切换到 {{label}}",
             "failed": "❌ 权限模式切换失败：{{reason}}",
-            "fullAccessConfirmTitle": "⚠️ 确认开启 Full access？",
-            "fullAccessConfirmBody": "Full access 会关闭工作区沙箱并跳过常规审批。Cindy 可以修改工作区外文件并执行联网命令；内置高风险操作仍会要求确认。",
-            "btnConfirmFullAccess": "开启 Full access",
+            "fullAccessConfirmTitle": "⚠️ 确认开启「完全访问」？",
+            "fullAccessConfirmBody": "「完全访问」会关闭工作区沙箱并跳过常规审批。Cindy 可以修改工作区外文件并执行联网命令；内置高风险操作仍会要求确认。",
+            "btnConfirmFullAccess": "开启完全访问",
             "btnCancelFullAccess": "保留当前权限",
             "fullAccessCancelled": "已取消，保留当前权限"
           },
@@ -12729,7 +12729,7 @@
             "resolvedNewSession": "✨ 已在 **{{workspaceName}}** 新建并接管任务",
             "attachFailed": "❌ 接管失败：{{reason}}",
             "sessionBusyOldCardPlaceholder": "⏳ 该任务仍在运行，请稍后重试。",
-            "sessionBusyPrompt": "⏳ **{{sessionTitle}}** 正在运行，请等待当前回合结束。",
+            "sessionBusyPrompt": "⏳ **{{sessionTitle}}** 正在运行，请等待当前这一轮结束。",
             "takeoverLoadingPrompt": "⏳ 正在接管 **{{sessionTitle}}**…",
             "newSessionWelcomePrompt": "✨ 已在 **{{workspaceName}}** 创建新任务，可以发送第一条指令。"
           }
@@ -12772,7 +12772,7 @@
         "slash": {
           "help": "🤖 我能帮你做这些：\n\n/new   开个新对话（清掉当前上下文）\n/stop  中止当前执行，并撤掉排队消息\n/help  查看可用命令\n\n模型、权限和远程接管请在 Cindy 桌面端调整。",
           "unknownCommand": "没认出 `{{cmd}}` 这个命令 🤔\n我能听懂的：/new、/stop、/help",
-          "interactiveCommandUnsupported": "iMessage暂不支持 {{cmd}} 的交互选择，请在 Cindy 桌面端完成对应设置。"
+          "interactiveCommandUnsupported": "iMessage 暂不支持 {{cmd}} 的交互选择，请在 Cindy 桌面端完成对应设置。"
         }
       },
       "feishu": {
@@ -12850,10 +12850,10 @@
           "model": {
             "title": "🤖 换个模型",
             "currentLine": "**当前**：{{label}}\n_{{description}}_",
-            "currentLineWithEffort": "**当前**：{{label}} · effort `{{effort}}`\n_{{description}}_",
-            "hint": "点下面切换。我会自动给所选模型用最高 effort 跑",
+            "currentLineWithEffort": "**当前**：{{label}} · 推理强度 `{{effort}}`\n_{{description}}_",
+            "hint": "点下面切换。我会自动给所选模型用最高推理强度跑",
             "resolved": "✅ 已切到 {{label}}",
-            "resolvedWithEffort": "✅ 已切到 {{label}}（effort：{{effort}}）",
+            "resolvedWithEffort": "✅ 已切到 {{label}}（推理强度：{{effort}}）",
             "failed": "❌ 模型没切过去：{{reason}}"
           },
           "permissionMode": {
@@ -12884,7 +12884,7 @@
             "resolvedExit": "🚪 走了，下次想远程操控再 /ctr",
             "sessionPickerTitle": "🎮 {{workspace}} 里的存档",
             "sessionPickerHint": "挑个任务继续打 · ➕ 新建 开新存档 · ↩️ 后退 换工作区 · 🚪 退出 取消",
-            "sessionPickerEmptyBody": "_工作区 **{{workspace}}** 这边还没有 active 任务~ 不如点 ➕ 新建 开一个？_",
+            "sessionPickerEmptyBody": "_工作区 **{{workspace}}** 这边还没有活跃任务~ 不如点 ➕ 新建 开一个？_",
             "btnNew": "➕ 新建",
             "btnBack": "↩️ 后退",
             "resolvedSessionPick": "🎯 上号了：**{{title}}**（{{workspace}}）\n接下来你发消息我就直接进这个任务；想撤随时 `/exctr`",
@@ -12992,10 +12992,10 @@
           "model": {
             "title": "🤖 换个模型",
             "currentLine": "**当前**：{{label}}\n_{{description}}_",
-            "currentLineWithEffort": "**当前**：{{label}} · effort `{{effort}}`\n_{{description}}_",
-            "hint": "点下面切换。我会自动给所选模型用最高 effort 跑",
+            "currentLineWithEffort": "**当前**：{{label}} · 推理强度 `{{effort}}`\n_{{description}}_",
+            "hint": "点下面切换。我会自动给所选模型用最高推理强度跑",
             "resolved": "✅ 已切到 {{label}}",
-            "resolvedWithEffort": "✅ 已切到 {{label}}（effort：{{effort}}）",
+            "resolvedWithEffort": "✅ 已切到 {{label}}（推理强度：{{effort}}）",
             "failed": "❌ 模型没切过去：{{reason}}"
           },
           "permissionMode": {
@@ -13019,7 +13019,7 @@
             "resolvedExit": "🚪 走了，下次想远程操控再 /ctr",
             "sessionPickerTitle": "🎮 {{displayName}} 里的存档",
             "sessionPickerHint": "挑个任务继续打 · ➕ 新建 开新存档 · ↩️ 后退 换工作区 · 🚪 退出 取消",
-            "sessionPickerEmptyBody": "_工作区 **{{displayName}}** 这边还没有 active 任务~ 不如点 ➕ 新建 开一个？_",
+            "sessionPickerEmptyBody": "_工作区 **{{displayName}}** 这边还没有活跃任务~ 不如点 ➕ 新建 开一个？_",
             "btnNew": "➕ 新建",
             "btnBack": "↩️ 后退",
             "resolvedSessionPick": "🎯 上号了：**{{sessionTitle}}**（{{workspaceName}}）\n接下来你发消息我就直接进这个任务；想撤随时 `/exctr`",

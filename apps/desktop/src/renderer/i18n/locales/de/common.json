@@ -12230,7 +12230,7 @@
           "authMissing": {
             "defaultProvider": "Aktueller Anbieter",
             "gatewayKey": "⚠️ Diese Discord-Unterhaltung nutzt den Anbieter „{{provider}}“ ({{model}}). Dafür muss zuerst ein Cindy AI Key eingerichtet werden.",
-            "providerKey": "⚠️ Diese Discord-Unterhaltung nutzt den Anbieter „{{provider}}“ ({{model}}), für den noch kein API-Key eingerichtet ist.",
+            "providerKey": "⚠️ Diese Discord-Unterhaltung nutzt den Anbieter „{{provider}}“ ({{model}}), für den noch kein API-Schlüssel eingerichtet ist.",
             "providerDisconnected": "⚠️ Diese Discord-Unterhaltung nutzt den Anbieter „{{provider}}“ ({{model}}), der nicht verbunden ist oder dessen Verbindung abgelaufen ist.",
             "agentLogin": "⚠️ Diese Discord-Unterhaltung nutzt den Anbieter „{{provider}}“ ({{model}}). Dafür musst du dich zuerst mit den {{agentKind}}-Anmeldedaten anmelden.",
             "fixAttached": "Behebe die Authentifizierung auf dem Desktop unter Einstellungen → Anbieter und schreib dann einfach weiter.",
@@ -12277,8 +12277,8 @@
             "fullAccessConfirmTitle": "⚠️ Vollzugriff aktivieren?",
             "fullAccessConfirmBody": "Vollzugriff schaltet die Sandbox des Arbeitsbereichs ab und überspringt die üblichen Freigaben. Cindy kann dann ohne Rückfrage Dateien außerhalb des Arbeitsbereichs ändern und Befehle mit Netzwerkzugriff ausführen; integrierte Hochrisiko-Aktionen erfordern weiterhin eine Bestätigung.",
             "btnConfirmFullAccess": "Vollzugriff aktivieren",
-            "btnCancelFullAccess": "Aktuelle Rechte behalten",
-            "fullAccessCancelled": "Abgebrochen – die aktuellen Rechte bleiben bestehen"
+            "btnCancelFullAccess": "Aktuelle Berechtigungen behalten",
+            "fullAccessCancelled": "Abgebrochen – die aktuellen Berechtigungen bleiben bestehen"
           },
           "control": {
             "title": "🎮 Arbeitsbereich wählen",
@@ -12297,7 +12297,7 @@
             "attachFailed": "❌ Übernahme fehlgeschlagen: {{reason}}",
             "sessionBusyOldCardPlaceholder": "⏳ Diese Sitzung läuft noch – unten wartet eine neue Karte, wähl dort noch einmal.",
             "sessionBusyPrompt1": "⏳ **{{sessionTitle}}** steckt gerade mitten im Bosskampf.\nDer Agent denkt und programmiert noch – warte, bis diese Runde vorbei ist, dann steig mit `/ctr` ein.",
-            "sessionBusyPrompt2": "🚧 Noch kein Reinkommen – **{{sessionTitle}}** muss noch eine Runde abschließen.\nTrink einen Schluck Wasser und warte ein paar Sekunden; sobald der Agent fertig ist, bist du dran.",
+            "sessionBusyPrompt2": "🚧 Du kommst noch nicht rein – **{{sessionTitle}}** muss noch eine Runde abschließen.\nTrink einen Schluck Wasser und warte ein paar Sekunden; sobald der Agent fertig ist, bist du dran.",
             "sessionBusyPrompt3": "🤖 **{{sessionTitle}}** ist gerade beschäftigt – der Agent fliegt noch über die Tastatur, und Dazwischenfunken würde ihn ablenken.\nWarte ein paar Sekunden und versuch `/ctr` noch einmal.",
             "sessionBusyPrompt4": "☕ Nur keine Eile – **{{sessionTitle}}** hat diese Runde noch nicht beendet.\nSobald der Agent fertig ist, übergibt er dir sofort das Steuer.",
             "takeoverLoadingPrompt1": "⏳ Übergebe dir die Steuerung von **{{sessionTitle}}**…\n_📦 Spielstand-Metadaten werden geladen_  ·  _🔌 Verbindung zum Agent wird hergestellt_  ·  _🧠 Letzte Runde wird rekapituliert_\n_Nur ein paar Sekunden – du musst deinen Kaffee nicht in einem Zug austrinken_",
@@ -12307,7 +12307,7 @@
             "newSessionWelcomePrompt1": "🎯 Übernahme und neue Sitzung in einem Rutsch – **{{workspaceName}}** ist bereit, der Agent steht in den Startlöchern.\nSende deine erste Anweisung, um loszulegen; `/exctr` jederzeit zum Verlassen.",
             "newSessionWelcomePrompt2": "✨ Neue Sitzung erstellt – das Arbeitsverzeichnis **{{workspaceName}}** ist bereit, der Agent wartet auf dein Wort.\nMit deiner ersten Nachricht geht’s los; `/exctr` jederzeit zum Verlassen.",
             "newSessionWelcomePrompt3": "🎮 Alles bereit – ich habe dir in **{{workspaceName}}** eine brandneue Sitzung angelegt.\nSag mir, was du brauchst, der Agent ist online.  `/exctr` zum Beenden.",
-            "newSessionWelcomePrompt4": "🆕 Neues Spiel – das Arbeitsverzeichnis **{{workspaceName}}** ist bereit.\nDeine erste Anweisung legt los; wenn du keine Lust mehr hast: `/exctr`."
+            "newSessionWelcomePrompt4": "🆕 Neues Spiel – das Arbeitsverzeichnis **{{workspaceName}}** ist bereit.\nMit deiner ersten Anweisung geht’s los; wenn du keine Lust mehr hast: `/exctr`."
           }
         }
       },
@@ -12319,7 +12319,7 @@
             "offlineNotice": "🔔 Ich war eine Weile offline – Nachrichten aus dieser Zeit sind vielleicht nicht bei mir angekommen."
           },
           "ownerBinding": {
-            "welcome": "🎉 Dieser Bot ist jetzt mit dir verknüpft.\nAb sofort kannst nur du mit mir chatten. Um den Inhaber zu wechseln, lösche die Bot-Zugangsdaten in den Einstellungen von Cindy Desktop und speichere sie erneut."
+            "welcome": "🎉 Du bist jetzt Inhaber dieses Bots.\nAb sofort kannst nur du mit mir chatten. Um den Inhaber zu wechseln, lösche die Bot-Zugangsdaten in den Einstellungen von Cindy Desktop und speichere sie erneut."
           },
           "group": {
             "threadOrphanNotice": "Beim Öffnen des Threads ist etwas schiefgelaufen, deshalb konnte ich diese Nachricht nicht bearbeiten. Erwähne mich bitte noch einmal mit @."
@@ -12405,7 +12405,7 @@
           "settingsCompanion": "⚙️ Aktuelle Einstellungen (Teammitglied)\n\nProjekt: {{workspace}}\nAgent: {{agent}}\nModell: {{model}}\nDenkintensität: {{effort}}\nBerechtigungen: {{permission}}\n\nModell, Berechtigungen und Arbeitsverzeichnis folgen den Einstellungen des Teammitglieds. Ändere sie in Cindy in den Einstellungen des Teammitglieds.",
           "detachedBySlash": "🚪 Übernahme beendet — wir sind zurück im Telegram-Chat. Wenn du den Desktop wieder fernsteuern willst, sende /ctr",
           "detachedByRevoke": "⚠️ Du hast die Übernahme am Desktop beendet. Weitere Nachrichten gehen wieder in den Telegram-Chat.",
-          "notAttached": "🤷 Du übernimmst gerade keine Sitzung, /exctr hat also nichts zu tun.",
+          "notAttached": "🤷 Du hast gerade keine Sitzung übernommen, /exctr hat also nichts zu tun.",
           "companionDmNew": "🧭 Das ist die Hauptunterhaltung deines Teammitglieds — sie läuft einfach weiter, es wird keine neue Sitzung geöffnet. Willst du das Thema wechseln, sag es einfach; für eigenständige Aufgaben startet dein Teammitglied selbst Hintergrundaufgaben.",
           "companionLaneNew": "🌱 Für diese Gruppe wurde eine neue Unterhaltung gestartet. Der bisherige Kontext ist weggeräumt — auf zu einem frischen Start!",
           "companionManagedCommand": "🧭 Diese Verbindung wurde an ein Teammitglied übergeben, daher folgen Modell, Berechtigungen und Arbeitsverzeichnis dessen Einstellungen. Ändere sie in Cindy in den Einstellungen des Teammitglieds."
@@ -12416,7 +12416,7 @@
           "sendInternalError": "❌ Interner Fehler: {{error}}",
           "apiKeyMissing": "⚠️ Der Cindy AI Key ist noch nicht eingerichtet.\nVerbinde Cindy AI am Desktop unter Einstellungen → Anbieter und melde dich dann wieder bei mir",
           "controlInProgress": "🎮 Du bist noch mitten in der Auswahl von /ctr — schließ zuerst die Karte oben ab (oder tippe auf 🚪 Beenden), bevor du etwas anderes sendest.",
-          "credentialBusy": "⏳ Der lokale Agent führt gerade eine andere Runde aus, daher lässt sich der Anmeldedaten-Modus im Moment nicht wechseln. Sende es einfach noch einmal, sobald die Runde fertig ist.",
+          "credentialBusy": "⏳ Der lokale Agent führt gerade eine andere Runde aus, daher lässt sich der Anmeldemodus im Moment nicht wechseln. Sende es einfach noch einmal, sobald die Runde fertig ist.",
           "queuedNoticeFirst": "⏳ Die vorige Runde läuft noch, diese Nachricht wartet daher in der Warteschlange — danach geht es automatisch weiter. Um sofort zu stoppen, sende `!stop`",
           "queuedNotice": "⏳ Die vorige Runde läuft noch. Diese Nachricht ist Nummer {{position}} in der Warteschlange und geht der Reihe nach an den Agent. Um sofort zu stoppen, sende `!stop`",
           "stopDone": "⏹ Die aktuelle Ausführung wurde gestoppt. Die Sitzung bleibt bestehen — sende jederzeit eine neue Anweisung, um weiterzumachen.",
@@ -12431,7 +12431,7 @@
           "authMissing": {
             "currentProvider": "aktueller Anbieter",
             "reasonGatewayKey": "zuerst muss ein Cindy AI Key eingerichtet werden",
-            "reasonProviderKey": "für diesen Anbieter ist noch kein API Key eingerichtet",
+            "reasonProviderKey": "für diesen Anbieter ist noch kein API-Schlüssel eingerichtet",
             "reasonProviderDisconnected": "er ist nicht verbunden oder die Verbindung ist abgelaufen",
             "reasonAgentLogin": "du musst dich zuerst mit den {{agentKind}}-Anmeldedaten anmelden",
             "message": "⚠️ Dieser Telegram-Chat nutzt den Anbieter „{{provider}}“ ({{model}}), aber {{reason}}.",
@@ -12484,7 +12484,7 @@
             "fullAccessConfirmTitle": "⚠️ Vollzugriff aktivieren?",
             "fullAccessConfirmBody": "Vollzugriff deaktiviert die Arbeitsbereich-Sandbox und überspringt routinemäßige Genehmigungen. Cindy kann dann ohne Rückfrage Dateien außerhalb des Arbeitsbereichs ändern und Netzwerkbefehle ausführen; integrierte risikoreiche Vorgänge erfordern weiterhin eine Bestätigung.",
             "btnConfirmFullAccess": "Vollzugriff aktivieren",
-            "btnCancelFullAccess": "Aktuelle Rechte behalten",
+            "btnCancelFullAccess": "Aktuelle Berechtigungen behalten",
             "fullAccessCancelled": "Abgebrochen, aktuelle Berechtigungen bleiben bestehen"
           },
           "project": {
@@ -12591,7 +12591,7 @@
           "previewUnserializable": "<nicht serialisierbar>",
           "previewTruncated": "…(gekürzt)",
           "choiceReceived": "Deine Auswahl ist angekommen.",
-          "allowedSession": "✅ Erlaubt (diese Aufgabe)",
+          "allowedSession": "✅ Erlaubt (für diese Sitzung)",
           "allowedOnce": "✅ Erlaubt (nur dieses Mal)",
           "expired": "⌛ Diese Bestätigung ist abgelaufen",
           "denied": "❌ Abgelehnt",
@@ -12647,7 +12647,7 @@
           "inputHandoff": "🔐 Deine Eingabe wird benötigt: {{taskTitle}} · In Cindy öffnen",
           "subject": {
             "githubIssue": "Die Bestätigungskarte „GitHub-Issue einreichen“",
-            "renameSessions": "Die Bestätigungskarte „Aufgaben gesammelt umbenennen“",
+            "renameSessions": "Die Bestätigungskarte „Mehrere Sitzungen umbenennen“",
             "pluginFileGrant": "Die Bestätigungskarte „Plugin-Dateizugriff erlauben“"
           }
         },
@@ -12702,20 +12702,20 @@
           "sendInternalError": "❌ Nachricht konnte nicht gesendet werden: {{error}}",
           "apiKeyMissing": "⚠️ Das aktuelle Modell ist noch nicht authentifiziert. Verbinde in den Einstellungen von Cindy Desktop einen Modellanbieter und versuche es erneut.",
           "controlInProgress": "🎮 Die Auswahl für die Fernsteuerung ist noch nicht abgeschlossen. Kümmere dich zuerst um die vorherige interaktive Nachricht.",
-          "credentialBusy": "⏳ Der lokale Agent läuft gerade, daher kann der Anmeldedatenmodus jetzt nicht gewechselt werden. Versuche es später erneut.",
+          "credentialBusy": "⏳ Der lokale Agent läuft gerade, daher kann der Anmeldemodus jetzt nicht gewechselt werden. Versuche es später erneut.",
           "queuedNoticeNext": "⏳ Die vorherige Runde läuft noch, daher wurde diese Nachricht in die Warteschlange gestellt. Sende `!stop`, um abzubrechen.",
           "queuedNoticePosition": "⏳ Die vorherige Runde läuft noch. Diese Nachricht steht an Position {{position}} der Warteschlange. Sende `!stop`, um abzubrechen.",
           "stopDone": "⏹ Aktuelle Aufgabe gestoppt.",
           "stopDoneDropped_other": "⏹ Aktuelle Aufgabe gestoppt und {{count}} wartende Nachrichten entfernt.",
           "stopDoneDropped_one": "⏹ Aktuelle Aufgabe gestoppt und {{count}} wartende Nachricht entfernt.",
           "stopIdle": "Derzeit läuft oder wartet keine Aufgabe.",
-          "scheduledTaskHeaderNamed": "🤖 Automatische Aufgabe „{{name}}“",
-          "scheduledTaskHeader": "🤖 Automatische Aufgabe",
+          "scheduledTaskHeaderNamed": "🤖 Automatisierung „{{name}}“",
+          "scheduledTaskHeader": "🤖 Automatisierung",
           "unsupportedOnly": "🙏 Diese Nachricht kann ich gerade nicht verarbeiten:\n{{items}}",
           "unsupportedNotice": "ℹ️ Folgendes konnte nicht verarbeitet werden:\n{{items}}\n\nDer Rest wird weiter verarbeitet.",
           "authMissing": {
             "providerFallback": "Aktueller Anbieter",
-            "reasonGatewayKey": "Richte zuerst einen Cindy AI-Schlüssel ein",
+            "reasonGatewayKey": "Richte zuerst einen Cindy AI Key ein",
             "reasonProviderKey": "Für diesen Anbieter ist noch kein API-Schlüssel konfiguriert",
             "reasonProviderDisconnected": "Die Verbindung wurde getrennt oder ist abgelaufen",
             "reasonLogin": "Melde dich zuerst bei {{agentKind}} an",
@@ -12748,11 +12748,11 @@
           },
           "model": {
             "title": "🤖 Modell wechseln",
-            "currentLineWithEffort": "**Aktuell**: {{label}} · effort `{{effort}}`\n_{{description}}_",
+            "currentLineWithEffort": "**Aktuell**: {{label}} · Denkintensität `{{effort}}`\n_{{description}}_",
             "currentLine": "**Aktuell**: {{label}}\n_{{description}}_",
             "hint": "Wähle das Modell, das verwendet werden soll.",
             "resolved": "✅ Gewechselt zu {{label}}",
-            "resolvedWithEffort": "✅ Gewechselt zu {{label}} (effort: {{effort}})",
+            "resolvedWithEffort": "✅ Gewechselt zu {{label}} (Denkintensität: {{effort}})",
             "failed": "❌ Modell konnte nicht gewechselt werden: {{reason}}"
           },
           "permissionMode": {
@@ -12863,7 +12863,7 @@
             "defaultProvider": "aktueller Anbieter",
             "message": "⚠️ Diese Unterhaltung nutzt den Anbieter „{{provider}}“ ({{model}}): {{reason}}.",
             "reasonGatewayKey": "zuerst muss der Cindy AI Key eingerichtet werden",
-            "reasonProviderKey": "für diesen Anbieter ist noch kein API Key eingerichtet",
+            "reasonProviderKey": "für diesen Anbieter ist noch kein API-Schlüssel eingerichtet",
             "reasonProviderDisconnected": "er ist nicht verbunden oder die Verbindung ist abgelaufen",
             "reasonAgentLogin": "du musst dich zuerst mit deinen {{agentKind}}-Zugangsdaten anmelden",
             "attachedHint": "Behebe die Authentifizierung in der Desktop-App unter Einstellungen → Anbieter und schreib dann einfach weiter.",
@@ -12925,7 +12925,7 @@
           "permissionModeFix": {
             "title": "🛡️ Gruppensitzung zurück auf „Automatische Prüfung“ stellen",
             "body": "Deine letzte Nachricht in der Gruppe bzw. im Thread konnte nicht starten: **{{title}}** nutzt die Berechtigungsstufe „Vollzugriff“, aber der Gruppenkontext enthält Inhalte, die Mitglieder steuern können – daher müssen Aktionsbestätigungen aktiv bleiben.\n\nTippe auf die Schaltfläche unten, um auf „Automatische Prüfung“ (auto) umzustellen, und schreib dann in der Gruppe weiter.",
-            "btnFix": "✅ Auf Automatische Prüfung umstellen",
+            "btnFix": "✅ Auf „Automatische Prüfung“ umstellen",
             "resolved": "✅ Auf „Automatische Prüfung“ umgestellt – schreib einfach in der Gruppe weiter~",
             "failed": "❌ Umstellen fehlgeschlagen: {{reason}}. Du kannst /permission auto senden, um manuell umzustellen"
           },
@@ -12982,7 +12982,7 @@
       "wechat": {
         "slash": {
           "new": "🌱 Neustart — die bisherige Unterhaltung ist gelöscht. Wir fangen von vorn an~",
-          "help": "🤖 Das kann ich für dich tun:\n\n/new         Neu anfangen (löscht den Kontext der aktuellen Unterhaltung)\n/model       Modell wechseln\n/permission  Berechtigungsmodus anpassen (auto / bypass / ask usw.)\n/ctr         Einen Workspace in der Desktop-App fernsteuern (während der Übernahme erneut senden, um die Sitzung zu wechseln)\n/exctr       Übernahme beenden und zurück in unseren WeChat-Privatchat\n/help        Zeigen, was ich kann\n\nLäuft gerade etwas, das du stoppen willst? Sende einfach `!stop` – ich breche die aktuelle Ausführung sofort ab und verwerfe wartende Nachrichten. Die Sitzung bleibt erhalten, du kannst weitermachen.\n\nAnsonsten schreib mir einfach, ich höre zu~",
+          "help": "🤖 Das kann ich für dich tun:\n\n/new         Neu anfangen (löscht den Kontext der aktuellen Unterhaltung)\n/model       Modell wechseln\n/permission  Berechtigungsmodus anpassen (auto / bypass / ask usw.)\n/ctr         Einen Arbeitsbereich in der Desktop-App fernsteuern (während der Übernahme erneut senden, um die Sitzung zu wechseln)\n/exctr       Übernahme beenden und zurück in unseren WeChat-Privatchat\n/help        Zeigen, was ich kann\n\nLäuft gerade etwas, das du stoppen willst? Sende einfach `!stop` – ich breche die aktuelle Ausführung sofort ab und verwerfe wartende Nachrichten. Die Sitzung bleibt erhalten, du kannst weitermachen.\n\nAnsonsten schreib mir einfach, ich höre zu~",
           "unknownCommand": "Den Befehl `{{cmd}}` kenne ich nicht 🤔\nDiese Befehle verstehe ich: /new, /model, /permission, /ctr, /exctr, /help",
           "detachedBySlash": "🚪 Übernahme beendet – wir sind zurück in unserem WeChat-Privatchat. Wenn du die Desktop-App wieder fernsteuern willst, sende /ctr",
           "detachedByRevoke": "⚠️ Du hast die Übernahme in der Desktop-App zurückgenommen. Weitere Nachrichten landen wieder in unserem WeChat-Privatchat.",
@@ -13008,7 +13008,7 @@
           "authMissing": {
             "currentProvider": "aktueller Anbieter",
             "reasonGatewayKey": "Zuerst muss ein Cindy AI Key eingerichtet werden",
-            "reasonProviderKey": "Für diesen Anbieter ist noch kein API Key eingerichtet",
+            "reasonProviderKey": "Für diesen Anbieter ist noch kein API-Schlüssel eingerichtet",
             "reasonProviderDisconnected": "Er ist nicht verbunden oder die Verbindung ist abgelaufen",
             "reasonAgentLogin": "Du musst dich zuerst mit {{agentKind}}-Zugangsdaten anmelden",
             "message": "⚠️ Diese WeChat-Unterhaltung nutzt den Anbieter „{{provider}}“ ({{model}}): {{reason}}.",
@@ -13059,20 +13059,20 @@
             "resolved": "✅ Berechtigungsmodus auf {{label}} umgestellt",
             "failed": "❌ Berechtigungsmodus konnte nicht umgestellt werden: {{reason}}",
             "fullAccessConfirmTitle": "⚠️ Vollzugriff aktivieren?",
-            "fullAccessConfirmBody": "Vollzugriff schaltet die Workspace-Sandbox ab und überspringt die üblichen Freigaben. Cindy kann dann Dateien außerhalb des Workspace ändern und Netzwerkbefehle ohne Rückfrage ausführen; integrierte Hochrisiko-Aktionen erfordern weiterhin eine Bestätigung.",
+            "fullAccessConfirmBody": "Vollzugriff schaltet die Sandbox des Arbeitsbereichs ab und überspringt die üblichen Freigaben. Cindy kann dann Dateien außerhalb des Arbeitsbereichs ändern und Netzwerkbefehle ohne Rückfrage ausführen; integrierte Hochrisiko-Aktionen erfordern weiterhin eine Bestätigung.",
             "btnConfirmFullAccess": "Vollzugriff aktivieren",
-            "btnCancelFullAccess": "Aktuelle Rechte behalten",
-            "fullAccessCancelled": "Abgebrochen, die aktuellen Rechte bleiben"
+            "btnCancelFullAccess": "Aktuelle Berechtigungen behalten",
+            "fullAccessCancelled": "Abgebrochen, die aktuellen Berechtigungen bleiben"
           },
           "control": {
-            "title": "🎮 Workspace auswählen",
-            "emptyBody": "_Noch keine Workspaces zum Übernehmen~ Öffne oder erstelle eine Sitzung in der Desktop-App und komm dann wieder_",
-            "hint": "Tippe auf einen Workspace, um weiterzumachen; tippe auf 🚪 Beenden, um abzubrechen",
+            "title": "🎮 Arbeitsbereich wählen",
+            "emptyBody": "_Noch keine Arbeitsbereiche zum Übernehmen~ Öffne oder erstelle eine Sitzung in der Desktop-App und komm dann wieder_",
+            "hint": "Tippe auf einen Arbeitsbereich, um weiterzumachen; tippe auf 🚪 Beenden, um abzubrechen",
             "attachedSwitchHint": "🎮 Aktuell übernommen: **{{sessionTitle}}**\nWähle eine neue Sitzung, um direkt zu wechseln; tippe auf 🚪 Beenden, um alles so zu lassen",
             "btnExit": "🚪 Beenden",
             "resolvedExit": "🚪 Beendet. Sende /ctr, wenn du wieder fernsteuern willst",
             "sessionPickerTitle": "🎮 Sitzungen in {{displayName}}",
-            "sessionPickerHint": "Wähle eine Sitzung zum Weitermachen · ➕ Neu für eine neue · ↩️ Zurück zum Workspace-Wechsel · 🚪 Beenden zum Abbrechen",
+            "sessionPickerHint": "Wähle eine Sitzung zum Weitermachen · ➕ Neu für eine neue · ↩️ Zurück zum Wechseln des Arbeitsbereichs · 🚪 Beenden zum Abbrechen",
             "sessionPickerEmptyBody": "_In **{{displayName}}** gibt es noch keine aktive Sitzung~ Wie wäre es mit ➕ Neu?_",
             "btnNew": "➕ Neu",
             "btnBack": "↩️ Zurück",
@@ -13089,7 +13089,7 @@
             "takeoverLoadingPrompt3": "⌛ **{{sessionTitle}}** wird geladen…  99%\n_Dieser Fortschrittsbalken ist echt – ich lese gerade nach, worüber ihr in der letzten Runde gesprochen habt_",
             "takeoverLoadingPrompt4": "🛰️ Verbindung zu **{{sessionTitle}}** wird aufgebaut…\n_(Das WLAN scheint etwas schwach… ach nein, ich überlege nur, wie ich dich am besten briefe)_",
             "newSessionWelcomePrompt1": "🎯 Übernommen und neue Sitzung gestartet, alles in einem Rutsch – **{{workspaceName}}** ist bereit, der Agent wartet.\nSchick deine erste Anweisung, um loszulegen; mit `/exctr` gehst du jederzeit raus",
-            "newSessionWelcomePrompt2": "✨ Neue Sitzung erstellt – das Arbeitsverzeichnis **{{workspaceName}}** ist bereit, der Agent wartet auf dein Kommando.\nDeine erste Nachricht legt los; mit `/exctr` gehst du jederzeit raus",
+            "newSessionWelcomePrompt2": "✨ Neue Sitzung erstellt – das Arbeitsverzeichnis **{{workspaceName}}** ist bereit, der Agent wartet auf dein Kommando.\nMit deiner ersten Nachricht geht’s los; mit `/exctr` gehst du jederzeit raus",
             "newSessionWelcomePrompt3": "🎮 Alles bereit – ich habe dir in **{{workspaceName}}** eine brandneue Sitzung angelegt.\nSag mir, was du brauchst, der Agent ist online~  `/exctr` zum Aufhören",
             "newSessionWelcomePrompt4": "🆕 Neues Spiel – das Arbeitsverzeichnis **{{workspaceName}}** ist bereit.\nSchick deine erste Anweisung, um loszulegen; keine Lust mehr? `/exctr`"
           }

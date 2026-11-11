@@ -12166,7 +12166,7 @@
         },
         "agent": {
           "completedNoText": "✅ 毕矣（此轮 Agent 未发一言）",
-          "runtimeError": "⚠️ Agent 失手了：{{error}}",
+          "runtimeError": "⚠️ Agent 生谬误：{{error}}",
           "sendInternalError": "❌ 内部谬误：{{error}}",
           "apiKeyMissing": "⚠️ Cindy AI Key 尚未设置~\n请于 desktop 之「规制 → 模型供方」连接 Cindy AI，再来唤吾",
           "controlInProgress": "🎮 君之 /ctr 尚在择选 — 先毕上方之卡（或点 🚪 撤矣），再遣他讯~",
@@ -12395,7 +12395,7 @@
           "permission": {
             "title": "🔧 调用工具：{{tool}}",
             "paramsLabel": "**参数先览**",
-            "btnAllowOnce": "✅ 仅此一次",
+            "btnAllowOnce": "✅ 仅许此次",
             "btnAllowAlways": "✅ 恒许之",
             "btnDeny": "❌ 拒之",
             "resolvedAllowOnce": "✅ 已许（仅此一次）",
@@ -12429,7 +12429,7 @@
             "resolved": "✅ 权柄之式已切至 {{label}}",
             "failed": "❌ 权柄之式未能切换：{{reason}}",
             "fullAccessConfirmTitle": "⚠️ 确开 Full access 乎？",
-            "fullAccessConfirmBody": "Full access 将阖工作区沙箱并略过常规审批。Cindy 可修改工作区外之卷、运行联网命令而不再询问；内置高风险之举仍须确认。",
+            "fullAccessConfirmBody": "Full access 将阖工作区沙箱并略过常规审批。Cindy 可修改工作区外之卷、执行联网命令而不再询问；内置高风险之举仍须确认。",
             "btnConfirmFullAccess": "开 Full access",
             "btnCancelFullAccess": "仍守今之权柄",
             "fullAccessCancelled": "已罢，仍守今之权柄"
@@ -12478,7 +12478,7 @@
               "variant1": "⏳ 方令君接掌 **{{title}}**…\n_📦 方载差事之元数据_  ·  _🔌 方通 Agent 之道_  ·  _🧠 方覆前轮之进展_\n_须臾即毕_",
               "variant2": "🎮 方接入 **{{title}}**…\n_方移上下文而来，顷刻即好_",
               "variant3": "⌛ **{{title}}** 方载…  99%\n_此进度条乃真——方翻前轮所谈_",
-              "variant4": "🛰️ 方与 **{{title}}** 相通…\n_(方思如何为君略陈)_"
+              "variant4": "🛰️ 方与 **{{title}}** 相通…\n_（方思如何为君略陈）_"
             },
             "newSessionWelcomePrompts": {
               "variant1": "🎯 接掌与新立，一气呵成——**{{workspace}}** 已就位，Agent 候命。\n遣首令开谈；欲退，随时 `/exctr`",
@@ -12495,9 +12495,9 @@
           "autoReviewUnavailableWechat": "自动审批暂不能断，须审批之操作已改由君确认。个人微信不可用「完全访问」，请径确认此举。",
           "autoReviewConfirmUndelivered": "自动审批未竟，确认或未送达，或无人点选。此番之拒，非君所点。",
           "rateLimitRetrying": "请求受限流，方自动再试（{{attempt}}/{{maxAttempts}}）…",
-          "overloadRetrying": "模型之服繁忙，方自动再试（{{attempt}}/{{maxAttempts}}）…",
-          "overloadRetryingNoCount": "模型之服繁忙，方自动再试…",
-          "overloadFailed": "⚠️ 模型之服繁忙：上游暂无余力。可于此重发此讯再试，或于 Cindy 易一模型。（于桌面端点「再试」亦可续其差事，然其果不返此讯。）"
+          "overloadRetrying": "模型服务繁忙，方自动再试（{{attempt}}/{{maxAttempts}}）…",
+          "overloadRetryingNoCount": "模型服务繁忙，方自动再试…",
+          "overloadFailed": "⚠️ 模型服务繁忙：上游暂无余力。可于此重发此讯再试，或于 Cindy 易一模型。（于桌面端点「再试」亦可续其差事，然其果不返此讯。）"
         },
         "toolLoop": {
           "generic": "模型屡呼工具过甚，Cindy 已止此轮，以免无穷循环。可遣新讯以续。",
@@ -12568,7 +12568,7 @@
         },
         "slash": {
           "detachFailed": "❌ 结束接管未成：{{error}}",
-          "companionManaged": "🧭 此连接已付同僚，模型、权限与工作目录皆从同僚之规制。请于 Cindy 同僚规制中更之。"
+          "companionManaged": "🧭 此连接已付同僚，模型、权柄与工作目录皆从同僚之规制。请于 Cindy 同僚规制中更之。"
         },
         "turn": {
           "groupApprovalOwnerDm": "🔐 群议中之差事待君授权。授权之卡不发于群，于此确认即可。",
@@ -12616,7 +12616,7 @@
           "allowOnce": "许一次",
           "alwaysAllowForSession": "此差事恒许",
           "deny": "拒",
-          "permissionTimeout": "候授权逾时，已拒此权限之请"
+          "permissionTimeout": "候授权逾时，已拒此权柄之请"
         },
         "run": {
           "routeReselectHint": "。请于 规制 → IM 机器人 为此渠道之工作目录重择模型。",
@@ -12859,7 +12859,7 @@
           "permissionMode": {
             "title": "🛡️ 调权柄之式",
             "currentLine": "**今用**：{{label}}\n_{{description}}_",
-            "hint": "点下方以切换。auto = 常事放行，要事弹卡；bypass = 尽放行；ask/default/plan/acceptEdits = 皆以卡审之",
+            "hint": "点下方以切换。auto = 常事放行，敏感之事弹卡；bypass = 尽放行；ask/default/plan/acceptEdits = 皆以卡审之",
             "resolved": "✅ 权柄之式已切至 {{label}}",
             "failed": "❌ 权柄之式未能切换：{{reason}}",
             "fullAccessConfirmTitle": "⚠️ 确欲启 Full access 乎？",
@@ -12916,7 +12916,7 @@
           "platformFeishu": "飞书",
           "contextFetchFailedGroup": "⚠️ 取群中讯录未成，方才群中之 @ 唯能据讯本身作答，不见群中上下文。",
           "contextFetchFailedThread": "⚠️ 取话题讯录未成，方才话题中之 @ 唯能据讯本身作答，不见话题中上下文。",
-          "contextFetchFailedHowTo": "开启之法：{{platform}}开放平台 → 开发者后台 → 择本应用 → 权限管理 → 搜索并开通 (im:message.group_msg) 与 (im:message.group_msg.include_bot:read) → 立版本而发布（自建应用须管理员审核）。",
+          "contextFetchFailedHowTo": "开启之法：{{platform}}开放平台 → 开发者后台 → 择本应用 → 权限管理 → 搜索并开通 (im:message.group_msg) 与 (im:message.group_msg.include_bot:read) → 创建版本并发布（自建应用须管理员审核）。",
           "contextFetchFailedDetail": "谬误详情：{{error}}",
           "contextFetchFailedLink": "[点此前往]({{link}})"
         },
@@ -13017,8 +13017,8 @@
             "attachedSwitchHint": "🎮 方接管：**{{sessionTitle}}**\n择新差事即可换乘；点 🚪 退 则一仍其旧",
             "btnExit": "🚪 退",
             "resolvedExit": "🚪 去矣，他日欲远程操持，再 /ctr",
-            "sessionPickerTitle": "🎮 {{displayName}} 之存档",
-            "sessionPickerHint": "择一差事续之 · ➕ 新开 立新档 · ↩️ 归 易工作区 · 🚪 退 罢之",
+            "sessionPickerTitle": "🎮 {{displayName}} 之差事",
+            "sessionPickerHint": "择一差事续之 · ➕ 新开 立新差事 · ↩️ 归 易工作区 · 🚪 退 罢之",
             "sessionPickerEmptyBody": "_工作区 **{{displayName}}** 尚无活跃差事~ 何不点 ➕ 新开 立其一？_",
             "btnNew": "➕ 新开",
             "btnBack": "↩️ 归",
@@ -13030,7 +13030,7 @@
             "sessionBusyPrompt2": "🚧 未得其门——**{{sessionTitle}}** 尚有一合未竟。\n且饮水稍候，Agent 毕其手中之事，即来相唤",
             "sessionBusyPrompt3": "🤖 **{{sessionTitle}}** 方忙——Agent 指飞于键上，强入则乱其神。\n稍候数息，再试 `/ctr`",
             "sessionBusyPrompt4": "☕ 莫急莫急——**{{sessionTitle}}** 此局未终。\nAgent 毕其手中之事，即以号令相授",
-            "takeoverLoadingPrompt1": "⏳ 方授君以 **{{sessionTitle}}**…\n_📦 载存档之诠_  ·  _🔌 通 Agent 之道_  ·  _🧠 复前合之战况_\n_须臾即毕，咖啡勿一饮而尽_",
+            "takeoverLoadingPrompt1": "⏳ 方授君以 **{{sessionTitle}}**…\n_📦 载存档之元数据_  ·  _🔌 通 Agent 之道_  ·  _🧠 复盘前合之战况_\n_须臾即毕，咖啡勿一饮而尽_",
             "takeoverLoadingPrompt2": "🎮 方入 **{{sessionTitle}}**…\n_昔时旧版，性急之客狂点微信之图，然实无益也_",
             "takeoverLoadingPrompt3": "⌛ **{{sessionTitle}}** 方载…  99%\n_此进度条非虚——方览前合所谈_",
             "takeoverLoadingPrompt4": "🛰️ 方与 **{{sessionTitle}}** 通连…\n_(WiFi 似微弱…噫非也，乃思何以为君陈其要)_",
@@ -13041,9 +13041,9 @@
           }
         },
         "reply": {
-          "unsupportedMedia": "今版尚不能理此类微信之媒。",
+          "unsupportedMedia": "今版尚不能理此类微信媒体。",
           "stillProcessing": "差事犹在理中…",
-          "ownerOnlyCommands": "唯主人可用此机之令。",
+          "ownerOnlyCommands": "唯主人可用机器人之令。",
           "companionManagedCommand": "请于 Cindy 开此同僚：模型于同僚之设中调之，权柄于言谈输入框下易之。",
           "help": "可用之令：/new 新开言谈；/stop 止当前之行；/stop all 尽止诸行；/status 观其状；/help 观说明。",
           "status_one": "Cindy 微信连接无恙，今候列 {{count}} 则。",

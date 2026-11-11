@@ -12162,7 +12162,7 @@
           "detachedBySlash": "🚪 원격 제어를 끝내고 Discord DM으로 돌아왔어요. 다음에 데스크톱을 원격 제어하려면 /ctr을 보내 주세요.",
           "detachedByRevoke": "⚠️ 데스크톱에서 원격 제어를 회수했습니다. 이후 메시지는 다시 Discord DM으로 돌아갑니다.",
           "notAttached": "🤷 지금은 원격 제어 중인 세션이 없어서 /exctr로 할 일이 없어요.",
-          "companionManagedCommand": "🧭 이 봇은 파트너에게 넘겨졌어요. 모델, 권한, 작업 디렉터리는 파트너 설정을 따르니, 바꾸려면 Cindy의 파트너 설정에서 조정해 주세요~"
+          "companionManagedCommand": "🧭 이 봇은 동료에게 넘겨졌어요. 모델, 권한, 작업 디렉터리는 동료 설정을 따르니, 바꾸려면 Cindy의 동료 설정에서 조정해 주세요~"
         },
         "agent": {
           "completedNoText": "✅ 완료했어요 (이번 턴에서 Agent가 남긴 말은 없어요)",
@@ -12253,7 +12253,7 @@
             "sessionBusyPrompt2": "🚧 아직 들어갈 수 없어요. **{{sessionTitle}}**에 마무리 못 한 라운드가 남아 있어요.\n물 한 모금 마시며 몇 초만 기다려 주세요. Agent가 하던 걸 끝내면 차례가 와요",
             "sessionBusyPrompt3": "🤖 **{{sessionTitle}}**은(는) 지금 바빠요. Agent가 키보드 위를 날아다니는 중이라 끼어들면 집중이 흐트러져요.\n몇 초 뒤에 `/ctr`을 다시 시도해 주세요",
             "sessionBusyPrompt4": "☕ 서두르지 마세요~ **{{sessionTitle}}**의 이번 판이 아직 안 끝났어요.\nAgent가 하던 일을 마치면 바로 제어권을 넘겨드릴게요",
-            "takeoverLoadingPrompt1": "⏳ **{{sessionTitle}}** 제어권을 넘겨받는 중…\n_📦 세션 정보 불러오는 중_  ·  _🔌 Agent 연결 중_  ·  _🧠 지난 라운드 돌아보는 중_\n_몇 초면 돼요. 커피는 천천히 드세요_",
+            "takeoverLoadingPrompt1": "⏳ **{{sessionTitle}}** 제어권을 넘겨드리는 중…\n_📦 세션 정보 불러오는 중_  ·  _🔌 Agent 연결 중_  ·  _🧠 지난 라운드 돌아보는 중_\n_몇 초면 돼요. 커피는 천천히 드세요_",
             "takeoverLoadingPrompt2": "🎮 **{{sessionTitle}}**에 접속하는 중…\n_초기 버전에서는 참지 못한 플레이어들이 Discord 아이콘을 마구 눌렀지만, 사실 아무 소용 없었어요_",
             "takeoverLoadingPrompt3": "⌛ **{{sessionTitle}}** 불러오는 중…  99%\n_이 진행률은 진짜예요. 지난 라운드에 나눈 이야기를 훑어보는 중이에요_",
             "takeoverLoadingPrompt4": "🛰️ **{{sessionTitle}}**에 연결하는 중…\n_(WiFi 신호가 좀 약한가… 아, 아니에요. 어떻게 브리핑할지 고민 중이에요)_",
@@ -12272,7 +12272,7 @@
             "offlineNotice": "🔔 한동안 오프라인이었어서 그동안 보낸 메시지는 못 받았을 수 있어요~"
           },
           "ownerBinding": {
-            "welcome": "🎉 이 bot의 owner로 등록되었어요~\n이제부터 저와는 이 계정만 대화할 수 있어요. owner를 바꾸려면 Cindy 데스크톱의 설정에서 bot 자격 증명을 지운 뒤 다시 저장하세요."
+            "welcome": "🎉 이 봇의 소유자로 등록되었어요~\n이제부터 저와는 이 계정만 대화할 수 있어요. 소유자를 바꾸려면 Cindy 데스크톱의 설정에서 봇 자격 증명을 지운 뒤 다시 저장하세요."
           },
           "group": {
             "threadOrphanNotice": "스레드를 여는 중에 문제가 생겨 이 메시지를 처리하지 못했어요. 한 번 더 @로 불러 주세요~"
@@ -12305,7 +12305,7 @@
           },
           "card": {
             "imageLoadFailed": "_[이미지를 불러오지 못했습니다: {{target}}]_",
-            "choiceReceived": "선택을 받았습니다"
+            "choiceReceived": "선택을 확인했습니다"
           },
           "connection": {
             "conflict": "이 App은 다른 기기에서 사용 중입니다 (exceed_conn_limit)",
@@ -12428,9 +12428,9 @@
             "hint": "아래에서 눌러 전환하세요. auto = 일반 작업은 허용하고 민감한 작업은 카드로 확인, bypass = 모두 허용, ask/default/plan/acceptEdits = 카드로 승인",
             "resolved": "✅ 권한 모드를 {{label}}(으)로 전환했어요",
             "failed": "❌ 권한 모드를 전환하지 못했어요: {{reason}}",
-            "fullAccessConfirmTitle": "⚠️ Full access를 활성화할까요?",
-            "fullAccessConfirmBody": "Full access는 작업 공간 샌드박스를 비활성화하고 일반 승인을 건너뜁니다. Cindy는 확인 없이 작업 공간 밖의 파일을 수정하고 네트워크 명령을 실행할 수 있습니다. 기본 제공 고위험 작업은 계속 확인을 요청합니다.",
-            "btnConfirmFullAccess": "Full access 활성화",
+            "fullAccessConfirmTitle": "⚠️ 전체 접근을 켤까요?",
+            "fullAccessConfirmBody": "전체 접근을 켜면 워크스페이스 샌드박스가 꺼지고 일반 승인 절차를 건너뜁니다. Cindy가 묻지 않고 워크스페이스 밖의 파일을 수정하고 네트워크를 사용하는 명령을 실행할 수 있습니다. 기본 제공 고위험 작업은 여전히 확인을 요청합니다.",
+            "btnConfirmFullAccess": "전체 접근 켜기",
             "btnCancelFullAccess": "현재 권한 유지",
             "fullAccessCancelled": "취소했습니다. 현재 권한을 유지합니다"
           },
@@ -12491,13 +12491,13 @@
       },
       "shared": {
         "retry": {
-          "autoReviewUnavailable": "자동 리뷰가 판단을 내리지 못했습니다. 검토가 필요한 작업은 직접 확인하도록 바뀌었습니다. 중단을 줄이려면 이 작업을 전체 접근으로 전환하세요. 위험도는 더 높습니다.",
+          "autoReviewUnavailable": "자동 리뷰가 판단을 내리지 못했습니다. 검토가 필요한 작업은 직접 확인하도록 바뀌었습니다. 중단을 줄이려면 이 세션을 전체 접근으로 전환하세요. 위험도는 더 높습니다.",
           "autoReviewUnavailableWechat": "자동 리뷰가 판단을 내리지 못했습니다. 검토가 필요한 작업은 직접 확인하도록 바뀌었습니다. 개인 WeChat에서는 전체 접근을 사용할 수 없습니다. 이번 작업을 직접 확인하세요.",
           "autoReviewConfirmUndelivered": "자동 리뷰가 끝나지 않았고, 확인 요청도 전달되지 않았거나 응답이 없었습니다. 이번 거부는 직접 선택하신 것이 아닙니다.",
           "rateLimitRetrying": "요청이 속도 제한에 걸렸습니다. 자동으로 다시 시도하는 중입니다({{attempt}}/{{maxAttempts}})…",
           "overloadRetrying": "모델 서비스가 혼잡합니다. 자동으로 다시 시도하는 중입니다({{attempt}}/{{maxAttempts}})…",
           "overloadRetryingNoCount": "모델 서비스가 혼잡합니다. 자동으로 다시 시도하는 중입니다…",
-          "overloadFailed": "⚠️ 모델 서비스가 혼잡합니다. 상위 서비스에 여유 용량이 없습니다. 여기서 이 메시지를 다시 보내 재시도하거나 Cindy에서 다른 모델로 바꿔 주세요. (데스크톱에서 \"다시 시도\"를 눌러도 작업은 이어지지만, 결과는 이 메시지로 돌아오지 않습니다.)"
+          "overloadFailed": "⚠️ 모델 서비스가 혼잡합니다. 상위 서비스에 여유 용량이 없습니다. 여기서 이 메시지를 다시 보내 재시도하거나 Cindy에서 다른 모델로 바꿔 주세요. (데스크톱에서 “다시 시도”를 눌러도 작업은 이어지지만, 결과는 이 메시지로 돌아오지 않습니다.)"
         },
         "toolLoop": {
           "generic": "모델이 도구를 너무 여러 번 반복 호출해서, 무한 루프를 막기 위해 Cindy가 이번 턴을 중지했습니다. 새 메시지를 보내면 이어서 진행할 수 있습니다.",
@@ -12507,7 +12507,7 @@
           "contract": "모델이 유효하지 않은 도구 호출을 계속했습니다. 무한 루프를 막기 위해 Cindy가 {{n}}번 실패한 뒤 이번 턴을 중지했습니다. 새 메시지를 보내면 이어서 진행할 수 있습니다."
         },
         "quota": {
-          "prefix": "⚠️ 제공자 한도 부족",
+          "prefix": "⚠️ 제공자 한도 도달",
           "currentProvider": "현재 제공자",
           "namedProvider": "“{{name}}”",
           "headlineSpendCap": "{{prefix}}: 워크스페이스 소유자가 설정한 지출 한도에 도달했습니다({{who}}). 이 작업은 지금 계속할 수 없습니다.",
@@ -12525,8 +12525,8 @@
           "untitledTask": "작업"
         },
         "outputLimit": {
-          "usage": "이번 모델 요청은 {{outputTokens}} tokens를 출력했습니다.",
-          "usageWithReasoning": "이번 모델 요청은 {{outputTokens}} tokens를 출력했고, 그중 {{reasoningTokens}} tokens를 사고에 사용했습니다.",
+          "usage": "이번 모델 요청은 토큰 {{outputTokens}}개를 출력했습니다.",
+          "usageWithReasoning": "이번 모델 요청은 토큰 {{outputTokens}}개를 출력했고, 그중 {{reasoningTokens}}개를 사고에 사용했습니다.",
           "reasoningDominated": "사고가 이번 출력 예산의 대부분을 사용해 답장이 불완전할 수 있습니다. 추론 강도를 낮추거나 먼저 대화 기록을 압축한 뒤 계속하세요.",
           "generic": "모델이 출력 길이 한도에 도달해 이번 턴의 답장이 불완전할 수 있습니다. 새 메시지를 보내면 이어서 진행할 수 있습니다. 계속 발생하면 추론 강도를 낮추거나 먼저 대화 기록을 압축하세요.",
           "join": "{{usage}} {{guidance}}",
@@ -12537,8 +12537,8 @@
           "autoReviewReason": "자동 리뷰가 직접 결정해 달라고 요청합니다: {{reason}}",
           "previewUnserializable": "<직렬화할 수 없음>",
           "previewTruncated": "…(생략됨)",
-          "choiceReceived": "선택을 받았습니다.",
-          "allowedSession": "✅ 허용됨(이 작업)",
+          "choiceReceived": "선택을 확인했습니다.",
+          "allowedSession": "✅ 허용됨(이 세션)",
           "allowedOnce": "✅ 허용됨(이번만)",
           "expired": "⌛ 이 확인 요청은 만료되었습니다",
           "denied": "❌ 거부됨",
@@ -12568,7 +12568,7 @@
         },
         "slash": {
           "detachFailed": "❌ 이어받기를 종료하지 못했습니다: {{error}}",
-          "companionManaged": "🧭 이 연결은 파트너에게 넘겨졌습니다. 모델, 권한, 작업 디렉터리는 파트너 설정을 따릅니다. Cindy의 파트너 설정에서 변경하세요."
+          "companionManaged": "🧭 이 연결은 동료에게 넘겨졌습니다. 모델, 권한, 작업 디렉터리는 동료 설정을 따릅니다. Cindy의 동료 설정에서 변경하세요."
         },
         "turn": {
           "groupApprovalOwnerDm": "🔐 그룹 채팅의 작업에 승인이 필요합니다. 승인 카드는 그룹에 올라가지 않으니 여기서 확인하세요.",
@@ -12606,7 +12606,7 @@
       },
       "hook": {
         "interaction": {
-          "askTimeout": "답변 대기 시간이 초과되어 작업을 \"답변 없음\"으로 계속 진행했습니다",
+          "askTimeout": "답변 대기 시간이 초과되어 작업을 ‘답변 없음’으로 계속 진행했습니다",
           "planTitle": "📋 계획 검토 대기",
           "planApprove": "승인 후 실행",
           "planReject": "반려",
@@ -12655,8 +12655,8 @@
           "stopDone": "⏹ 현재 작업을 중지했습니다.",
           "stopDoneDropped_other": "⏹ 현재 작업을 중지하고 대기 중인 메시지 {{count}}개를 삭제했습니다.",
           "stopIdle": "실행 중이거나 대기 중인 작업이 없습니다.",
-          "scheduledTaskHeaderNamed": "🤖 자동 작업 ‘{{name}}’",
-          "scheduledTaskHeader": "🤖 자동 작업",
+          "scheduledTaskHeaderNamed": "🤖 자동화 ‘{{name}}’",
+          "scheduledTaskHeader": "🤖 자동화",
           "unsupportedOnly": "🙏 이 메시지는 아직 처리할 수 없습니다:\n{{items}}",
           "unsupportedNotice": "ℹ️ 다음 내용은 처리하지 못했습니다:\n{{items}}\n\n나머지 내용은 계속 처리합니다.",
           "authMissing": {
@@ -12694,11 +12694,11 @@
           },
           "model": {
             "title": "🤖 모델 전환",
-            "currentLineWithEffort": "**현재**: {{label}} · effort `{{effort}}`\n_{{description}}_",
+            "currentLineWithEffort": "**현재**: {{label}} · 추론 강도 `{{effort}}`\n_{{description}}_",
             "currentLine": "**현재**: {{label}}\n_{{description}}_",
             "hint": "사용할 모델을 선택하세요.",
             "resolved": "✅ {{label}}(으)로 전환했습니다",
-            "resolvedWithEffort": "✅ {{label}}(으)로 전환했습니다(effort: {{effort}})",
+            "resolvedWithEffort": "✅ {{label}}(으)로 전환했습니다(추론 강도: {{effort}})",
             "failed": "❌ 모델을 전환하지 못했습니다: {{reason}}"
           },
           "permissionMode": {
@@ -12716,7 +12716,7 @@
           "control": {
             "title": "🎮 워크스페이스 선택",
             "emptyBody": "_아직 원격 제어할 수 있는 워크스페이스가 없습니다. 먼저 Cindy Desktop에서 작업을 만드세요._",
-            "hint": "워크스페이스를 선택해 계속하거나 이번 작업을 종료하세요.",
+            "hint": "워크스페이스를 선택해 계속하거나 나가세요.",
             "attachedSwitchHint": "현재 원격 제어 중: **{{sessionTitle}}**",
             "btnExit": "🚪 나가기",
             "resolvedExit": "🚪 원격 제어를 종료했습니다",
@@ -12749,7 +12749,7 @@
       "dingtalk": {
         "channelName": "DingTalk",
         "error": {
-          "permissionModeUnsupported": "이 그룹 메시지는 아직 실행되지 않았습니다. 현재 작업의 권한 수준으로는 그룹 메시지에 필요한 작업 승인을 제공할 수 없습니다. 봇에 연결된 사용자가 Cindy에서 현재 작업을 ‘자동 리뷰’로 바꾼 뒤 다시 보내세요."
+          "permissionModeUnsupported": "이 그룹 메시지는 아직 실행되지 않았습니다. 현재 세션의 권한 수준으로는 그룹 메시지에 필요한 작업 승인을 제공할 수 없습니다. 봇에 연결된 사용자가 Cindy에서 현재 세션을 ‘자동 리뷰’로 바꾼 뒤 다시 보내세요."
         },
         "slash": {
           "help": "🤖 제가 할 수 있는 일이에요:\n\n/new   새 대화 시작(현재 컨텍스트 지우기)\n/stop  현재 실행을 중지하고 대기 중인 메시지 취소\n/help  사용 가능한 명령어 보기\n\n모델, 권한, 원격 제어는 Cindy Desktop에서 조정하세요.",
@@ -12930,7 +12930,7 @@
           "new": "🌱 새로 시작했어요 — 이전 대화는 지웠어요. 처음부터 이야기해요~",
           "help": "🤖 제가 할 수 있는 일이에요:\n\n/new         새로 시작하기 (현재 대화 컨텍스트 초기화)\n/model       모델 바꾸기\n/permission  권한 모드 조정 (auto / bypass / ask 등)\n/ctr         데스크톱 앱의 워크스페이스를 원격으로 넘겨받기 (넘겨받은 상태에서 다시 보내면 세션 전환)\n/exctr       원격 제어를 끝내고 WeChat 1:1 채팅으로 돌아가기\n/help        제가 할 수 있는 일 보기\n\n실행 중인 작업을 멈추고 싶다면 `!stop`을 보내 주세요. 현재 실행을 바로 중단하고 대기 중인 메시지도 취소해요. 세션은 그대로 남아 있어 이어서 할 수 있어요.\n\n평소에는 그냥 메시지를 보내면 돼요. 듣고 있어요~",
           "unknownCommand": "`{{cmd}}` 명령은 모르겠어요 🤔\n제가 알아듣는 명령: /new, /model, /permission, /ctr, /exctr, /help",
-          "detachedBySlash": "🚪 원격 제어를 끝냈어요. WeChat 1:1 채팅으로 돌아왔어요. 다음에 데스크톱 앱을 원격으로 조작하고 싶으면 /ctr를 보내 주세요",
+          "detachedBySlash": "🚪 원격 제어를 끝냈어요. WeChat 1:1 채팅으로 돌아왔어요. 다음에 데스크톱 앱을 원격으로 조작하고 싶으면 /ctr을 보내 주세요",
           "detachedByRevoke": "⚠️ 데스크톱 앱에서 원격 제어를 회수했어요. 이후 메시지는 WeChat 1:1 채팅으로 돌아와요.",
           "notAttached": "🤷 지금은 넘겨받은 세션이 없어서 /exctr로 할 일이 없어요."
         },
@@ -13016,7 +13016,7 @@
             "hint": "워크스페이스를 눌러 계속하세요. 🚪 나가기를 누르면 이번 요청을 취소해요",
             "attachedSwitchHint": "🎮 현재 넘겨받은 세션: **{{sessionTitle}}**\n새 세션을 고르면 바로 갈아타요. 🚪 나가기를 누르면 지금 상태를 유지해요",
             "btnExit": "🚪 나가기",
-            "resolvedExit": "🚪 나갔어요. 다음에 원격으로 조작하고 싶으면 /ctr를 보내 주세요",
+            "resolvedExit": "🚪 나갔어요. 다음에 원격으로 조작하고 싶으면 /ctr을 보내 주세요",
             "sessionPickerTitle": "🎮 {{displayName}}의 세션",
             "sessionPickerHint": "세션을 골라 이어서 하기 · ➕ 새로 만들기로 새 세션 시작 · ↩️ 뒤로로 워크스페이스 변경 · 🚪 나가기로 취소",
             "sessionPickerEmptyBody": "_워크스페이스 **{{displayName}}**에 아직 활성 세션이 없어요~ ➕ 새로 만들기를 눌러 하나 만들어 볼까요?_",
@@ -13029,7 +13029,7 @@
             "sessionBusyPrompt1": "⏳ **{{sessionTitle}}**은(는) 지금 보스전 중이에요~\nAgent가 아직 생각하거나 코드를 짜고 있어요. 이번 판이 끝나면 `/ctr`로 들어오세요",
             "sessionBusyPrompt2": "🚧 아직 들어갈 수 없어요 — **{{sessionTitle}}**에 마무리 중인 턴이 있어요.\n물 한 모금 마시면서 몇 초만 기다려 주세요. Agent가 하던 일을 끝내면 불러 드릴게요",
             "sessionBusyPrompt3": "🤖 **{{sessionTitle}}**은(는) 지금 바빠요 — Agent가 아직 키보드 위를 날아다니는 중이라 끼어들면 집중이 깨져요.\n몇 초 뒤에 다시 `/ctr`를 시도해 주세요",
-            "sessionBusyPrompt4": "☕ 진정하세요 — **{{sessionTitle}}**은(는) 아직 이번 판이 안 끝났어요.\nAgent가 하던 일을 마치면 바로 지휘권을 넘겨 드릴게요",
+            "sessionBusyPrompt4": "☕ 서두르지 마세요~ — **{{sessionTitle}}**은(는) 아직 이번 판이 안 끝났어요.\nAgent가 하던 일을 마치면 바로 지휘권을 넘겨 드릴게요",
             "takeoverLoadingPrompt1": "⏳ **{{sessionTitle}}**을(를) 넘겨받는 중…\n_📦 세션 메타데이터 불러오는 중_  ·  _🔌 Agent 채널 연결 중_  ·  _🧠 지난 턴 복기 중_\n_2~3초면 돼요. 커피는 천천히 드세요_",
             "takeoverLoadingPrompt2": "🎮 **{{sessionTitle}}**에 로그인하는 중…\n_초기 버전에서는 참지 못한 플레이어들이 WeChat 아이콘을 연타하곤 했지만, 사실 아무 소용이 없었어요_",
             "takeoverLoadingPrompt3": "⌛ **{{sessionTitle}}** 불러오는 중…  99%\n_이 진행 바는 진짜예요 — 지난 턴에 무슨 얘기를 했는지 훑어보는 중이에요_",
