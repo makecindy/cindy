@@ -1190,6 +1190,86 @@ describe('chatBridgeCapabilitiesForRoute', () => {
     setCustomProviders([]);
   });
 
+  // #10024: the local Chat handler bypasses transformRequest. Exercise the real
+  // routing/dispatch entry, not just the gateway transform. Unit tier, fake auth
+  // and transport only; the minimal failure is call -> assistant -> result.
+  it.each([
+    { auth: 'oauth', model: 'k3' },
+    { auth: 'oauth', model: 'k3[1m]' },
+    { auth: 'api-key', model: 'k3' },
+    { auth: 'api-key', model: 'k3[1m]' },
+    { auth: 'api-key', model: 'k3[1m]', child: true },
+    { auth: 'api-key', model: 'k3', native: true },
+    { auth: 'api-key', model: 'k3', upstream: 'https://api.openai.com/v1' },
+    { auth: 'oauth', model: 'k3', upstream: 'https://api.kimi.com.evil.example/coding/v1' },
+    { auth: 'api-key', model: 'k3', upstream: 'https://api.kimi.com/coding/v10', child: true },
+  ])('orders Kimi local bridge history for $auth / $model / child=$child / upstream=$upstream / native=$native', async ({ auth, model, child, upstream, native }) => {
+    const host = await freshCodexProxyHost();
+    const { buildUserProvider, providerPresetOAuth } = await import('@cindy/model-providers');
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader, setOAuthTokenReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setCustomProviders([buildUserProvider({
+      id: 'kimi-history', name: 'Kimi',
+      ...(auth === 'oauth' ? { auth: { method: 'oauth' as const, oauth: providerPresetOAuth('kimi')! } } : {}),
+      runtimes: { codex: { baseUrl: upstream ?? 'https://api.kimi.com/coding/v1', wireProtocol: 'openai-chat', models: [
+        { id: model, name: model, ...(native ? { api: 'openai-completions' as const } : {}) },
+      ] } },
+    })]);
+    setCustomProviderKeyReader(() => 'fixture-kimi-key');
+    setOAuthTokenReader(() => 'fixture-kimi-oauth');
+    host.registerComposed('session-kimi-history', 'thread-kimi-history', 'PRODUCT_PROMPT',
+      child ? { subagentRoute: { providerId: 'kimi-history', catalogModel: model } } : undefined);
+    setSessionProvider('session-kimi-history', child ? 'openai' : 'kimi-history');
+    host.setCodexProxyAuthInjection('oauth-bearer');
+    const call = { type: 'function_call', name: 'read', call_id: 'exec:83', arguments: '{}' };
+    const assistant = { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Checking.' }] };
+    const output = { type: 'function_call_output', call_id: 'exec:83', output: 'result' };
+    try {
+      for (const scenario of [
+        { url: '/responses', input: [call, assistant, output], expected: upstream ? [call, assistant, output] : [call, output, assistant] },
+        { url: '/responses', input: [assistant], expected: [assistant] },
+        { url: '/responses/compact', input: [call, assistant, output], expected: [call, assistant, output] },
+      ]) {
+        mockState.handlePiProviderRequest.mockClear();
+        const body = { model: child ? 'gpt-5.6-sol' : model, input: scenario.input };
+        const headers: Record<string, string> = child ? {
+          'thread-id': 'thread-kimi-history-child', 'x-openai-subagent': 'collab_spawn',
+          'x-codex-parent-thread-id': 'thread-kimi-history',
+        } : { 'thread-id': 'thread-kimi-history' };
+        const ctx = { reqId: 10024, method: 'POST', url: scenario.url, headers };
+        const decision = await host.createModelRoutingTransform()(body, ctx);
+        if (!decision?.localHandler) throw new Error('expected Kimi local handler');
+        await decision.localHandler({ rawBody: Buffer.from(JSON.stringify(body)), parsedBody: body, ctx, res: {} as never });
+        if (native) {
+          expect(mockState.handlePiProviderRequest).toHaveBeenCalledWith(expect.any(Function),
+            expect.objectContaining({ model, input: scenario.expected }), expect.anything());
+        } else {
+          const bridge = mockState.createResponsesChatHandler.mock.results.at(-1)?.value;
+          expect(bridge?.handle).toHaveBeenCalledWith(expect.objectContaining({
+            parsedBody: expect.objectContaining({ model, input: scenario.expected }),
+          }));
+          if (!upstream && scenario.expected.length === 3 && scenario.url === '/responses') {
+            const sent = bridge!.handle.mock.calls.at(-1)![0].parsedBody;
+            const chat = translateResponsesRequest(sent);
+            expect(chat.messages.slice(-3)).toMatchObject([
+              { role: 'assistant', tool_calls: [{ id: 'exec:83' }] },
+              { role: 'tool', tool_call_id: 'exec:83', content: 'result' },
+              { role: 'assistant', content: 'Checking.' },
+            ]);
+          }
+        }
+        expect(body.input).toEqual(scenario.input);
+      }
+    } finally {
+      host.unregister('session-kimi-history');
+      clearSessionProvider('session-kimi-history');
+      setCustomProviderKeyReader(() => null);
+      setOAuthTokenReader(() => null);
+      setCustomProviders([]);
+    }
+  });
+
   it('strips agent message ciphertext before a cross-provider Chat bridge request', async () => {
     const host = await freshCodexProxyHost();
     const { buildUserProvider } = await import('@cindy/model-providers');
