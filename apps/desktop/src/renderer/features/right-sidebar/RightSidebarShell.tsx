@@ -527,8 +527,8 @@ export function RightSidebarShell({
   ]);
 
   // 面板收束后不再注册的历史页签在 hydration 后静默关闭，避免显示死页签。
-  // `ghost:*`、`bot-delegations`、`bot-artifacts` 和 `bot-workbench`(伙伴工作台已并入聊天头部
-  // 的近况浮层)只作为数据库历史值保留。
+  // `ghost:*`、`bot-delegations`、`bot-artifacts`、`bot-workbench`(伙伴工作台已并入聊天头部
+  // 的近况浮层)和 `routines`(V1 伙伴例行工作已改为项目自动化)只作为数据库历史值保留。
   // 这些 kind 已无渲染方,
   // 留着只会落到 PlaceholderBody 变成"敬请期待"的死页签。
   useEffect(() => {
@@ -537,7 +537,8 @@ export function RightSidebarShell({
       tab.kind.startsWith('ghost:') ||
       tab.kind === ('bot-delegations' as TabKindId) ||
       tab.kind === ('bot-artifacts' as TabKindId) ||
-      tab.kind === ('bot-workbench' as TabKindId),
+      tab.kind === ('bot-workbench' as TabKindId) ||
+      tab.kind === ('routines' as TabKindId),
     );
     if (legacyGhostTabs.length === 0) return;
     void (async () => {
@@ -947,8 +948,7 @@ export function RightSidebarShell({
             pillVariant="chip"
             addButtonWrapperClassName="h-[30px]"
           />
-          {/* 面板自属控件始终跟随面板：detach → maximize → 收起。固定唤起入口只在
-              面板收起或分离时存在；展开态不渲染无效的 show 按钮，也不预留空位。 */}
+          {/* 面板自属控件：分离 → 最大化 → 关闭；显示入口留在聊天区。 */}
           <div
             data-testid="right-sidebar-topbar-actions"
             className="flex h-full shrink-0 items-center gap-0.5"
@@ -965,6 +965,7 @@ export function RightSidebarShell({
             )}
             {onCloseSidebar && (
               <RightSidebarToggle
+                action="close"
                 collapsed={false}
                 onToggle={onCloseSidebar}
                 side={panelSide}

@@ -83,6 +83,7 @@ vi.mock('../WebMicAudioEngine', () => ({
 }));
 
 import { useVoiceInput } from '../useVoiceInput';
+import { START_CUE_CAPTURE_WAIT_MS } from '../startCue';
 import {
   createComposerLongPressVoiceGesture,
   COMPOSER_LONG_PRESS_VOICE_INPUT_MS,
@@ -160,6 +161,7 @@ beforeEach(() => {
   mocks.startEngine.mockReset().mockResolvedValue(undefined);
   mocks.stopEngine.mockReset();
   mocks.drainEngine.mockReset();
+  mocks.promptExpired.mockReset();
   mocks.releasePreparation.mockReset();
   mocks.prepareMicrophone.mockReset().mockReturnValue(mocks.releasePreparation);
 });
@@ -360,7 +362,10 @@ describe('local voice capture independent of startup checks and cloud', () => {
     expect(h.api.appendAudio).toHaveBeenLastCalledWith(chunk(1, 40));
   });
 
-  it('retains all 8 seconds while both cloud and system mute are pending; signals ready only after PCM', async () => {
+  // Regression, 2026-11-11: the cue used to start together with the microphone
+  // request. Starting idle speakers delayed the first captured audio by about
+  // 450 ms, so the cue now follows the first retained PCM.
+  it('retains all 8 seconds while both cloud and system mute are pending; signals ready and plays the cue only after PCM', async () => {
     const h = mount();
     const cue = vi.fn();
     let starting!: boolean;
@@ -368,7 +373,7 @@ describe('local voice capture independent of startup checks and cloud', () => {
       starting = h.result.current.start({ onStartFeedback: cue });
     });
     expect(mocks.startEngine).toHaveBeenCalledTimes(1);
-    expect(cue).toHaveBeenCalledTimes(1);
+    expect(cue).not.toHaveBeenCalled();
     expect(h.result.current.isCaptureReady).toBe(false);
     const frames = Array.from({ length: 200 }, (_, i) => chunk(i));
     await act(async () => {
@@ -396,6 +401,9 @@ describe('local voice capture independent of startup checks and cloud', () => {
     });
     expect(mocks.startEngine).toHaveBeenCalledTimes(1);
     expect(h.api.start).not.toHaveBeenCalled();
+    // System mute touches the speakers too: without a cue it still waits for
+    // the microphone, which has not produced a frame yet.
+    expect(h.api.muteSystemAudio).not.toHaveBeenCalled();
     await act(async () => {
       h.mute.resolve({ ok: true });
       preflight.resolve(false);
@@ -406,16 +414,23 @@ describe('local voice capture independent of startup checks and cloud', () => {
     expect(h.api.start).not.toHaveBeenCalled();
   });
 
-  it('plays feedback and mutes without waiting for a slow microphone', async () => {
+  it('holds feedback and mute for the microphone, but only up to the cap when it is slow', async () => {
     const h = mount();
     const device = deferred<void>();
     mocks.startEngine.mockReturnValue(device.promise);
-    const cue = vi.fn(() => {
-      expect(mocks.startEngine).toHaveBeenCalledTimes(1);
-    });
+    const cue = vi.fn();
     let starting!: boolean;
     await act(async () => {
       starting = h.result.current.start({ onStartFeedback: cue });
+    });
+    expect(mocks.startEngine).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(START_CUE_CAPTURE_WAIT_MS - 1);
+    });
+    expect(cue).not.toHaveBeenCalled();
+    expect(h.api.muteSystemAudio).not.toHaveBeenCalled();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
     });
     expect(cue).toHaveBeenCalledTimes(1);
     expect(h.api.muteSystemAudio).toHaveBeenCalledTimes(1);
@@ -455,7 +470,7 @@ describe('local voice capture independent of startup checks and cloud', () => {
     expect(h.api.appendAudio.mock.calls.map(([frame]) => frame)).toEqual([chunk(0), chunk(1)]);
   });
 
-  it('closes a late microphone after cancellation and does not replay the start cue', async () => {
+  it('closes a late microphone after cancellation, never plays the start cue and restores audio without waiting for the cap', async () => {
     const h = mount();
     const device = deferred<void>();
     mocks.startEngine.mockReturnValue(device.promise);
@@ -475,7 +490,8 @@ describe('local voice capture independent of startup checks and cloud', () => {
       mocks.engines[0].emit(chunk(0));
     });
     expect(mocks.stopEngine).toHaveBeenCalledTimes(2);
-    expect(cue).toHaveBeenCalledTimes(1);
+    expect(cue).not.toHaveBeenCalled();
+    expect(h.api.restoreSystemAudio).toHaveBeenCalledOnce();
     expect(h.api.appendAudio).not.toHaveBeenCalled();
     expect(h.result.current.isBusy).toBe(false);
     expect(h.api.cancel).toHaveBeenCalledWith({ runId: 'cancelled-run' });
@@ -555,6 +571,55 @@ describe('local voice capture independent of startup checks and cloud', () => {
       await nextStart;
     });
     expect(h.api.appendAudio).toHaveBeenCalledExactlyOnceWith(chunk(0));
+  });
+
+  // 测试价值：真实 useVoiceInput 连续 start/stop 后必须仍能停止当前麦克风。
+  // 依据：2026-11-09 旧 done 把新输入置为 done，后续 start 覆盖仍在采集的 engine。
+  // 缺口：已有 immediate-restart 测试只模拟旧 start 返回，没有旧 run 的 IPC 事件。
+  // 最小输入：A stop → B start → A done → B start 返回 → B stop；另保留早到 auth。
+  // tier: unit，mock 设备/IPC、假时钟；修复前定向墙钟 1.47s（16 过/1 失败）。
+  it('ignores a cancelled run finishing while the next microphone is already open', async () => {
+    const h = mount();
+    await act(async () => { h.result.current.start(); });
+    await act(async () => {
+      h.mute.resolve({ ok: true });
+      await h.result.current.stop();
+    });
+    const nextConnection = deferred<{ ok: true; runId: string }>();
+    h.api.start.mockReturnValue(nextConnection.promise);
+    await act(async () => { h.result.current.start(); });
+    const stopCount = mocks.stopEngine.mock.calls.length;
+    await act(async () => {
+      // main can finish the cancelled connection after the next capture starts.
+      h.connection.resolve({ ok: true, runId: 'old' });
+    });
+    act(() => {
+      h.api.onEvent.mock.calls.at(-1)![0]({ type: 'state', runId: 'old', state: 'done' });
+    });
+    expect(h.result.current.state).toBe('listening');
+    expect(mocks.stopEngine).toHaveBeenCalledTimes(stopCount);
+    await act(async () => { nextConnection.resolve({ ok: true, runId: 'new' }); });
+    expect(h.result.current.state).toBe('listening');
+    await act(async () => { await h.result.current.stop(); });
+    expect(mocks.stopEngine).toHaveBeenCalledTimes(stopCount + 1);
+    expect(h.result.current.state).toBe('done');
+  });
+
+  it('delivers an early auth event only after the matching start owns the run', async () => {
+    const h = mount();
+    await act(async () => { h.result.current.start(); });
+    act(() => {
+      h.api.onEvent.mock.calls.at(-1)![0]({
+        type: 'auth-required', runId: 'current', provider: 'codex', reason: 'expired',
+      });
+    });
+    expect(mocks.promptExpired).not.toHaveBeenCalled();
+    await act(async () => { h.connection.resolve({ ok: true, runId: 'current' }); });
+    expect(mocks.promptExpired).toHaveBeenCalledExactlyOnceWith('expired');
+    await act(async () => {
+      h.mute.resolve({ ok: true });
+      await h.result.current.cancel();
+    });
   });
 
   it('cleans up local capture when readiness IPC rejects', async () => {

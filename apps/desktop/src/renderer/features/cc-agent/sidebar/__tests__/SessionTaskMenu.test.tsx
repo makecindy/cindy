@@ -24,7 +24,7 @@ const state = vi.hoisted(() => ({
 }));
 vi.mock('../sessionNotificationMute', () => ({ setSessionNotificationsMuted: state.setMuted }));
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string, values?: { title: string; link: string }) => key === 'sharedTask.invitationMessage' ? `Join ${values?.title}\n${values?.link}\nOpen Cindy on mobile.` : key.startsWith('taskMigration.') ? key : key.split('.').at(-1) }),
+  useTranslation: () => ({ t: (key: string, values?: { title: string; link: string }) => key === 'sharedTask.invitationMessage' ? `Join ${values?.title}\n${values?.link}\nOpen Cindy on mobile.` : key === 'runtimePlugins.title' ? 'taskPlugins' : key.startsWith('taskMigration.') ? key : key.split('.').at(-1) }),
 }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
   remoteProjectsStore: { removeDevice: state.removeDevice, getDeviceName: () => undefined },
@@ -105,6 +105,7 @@ it('loads only on open and groups task organization, sharing, viewing and remova
     'rename',
     'muteNotifications',
     'tags',
+    'taskPlugins',
     'copy',
     'title',
     'moveToProject',
@@ -168,6 +169,7 @@ it('shows unpin without a branch entry even for a forked Pi task', () => {
     'rename',
     'muteNotifications',
     'tags',
+    'taskPlugins',
     'copy',
     'title',
     'moveToProject',
@@ -181,7 +183,7 @@ it('shows unpin without a branch entry even for a forked Pi task', () => {
 it('keeps restore and delete last for archived tasks and does not expose sharing', () => {
   render(<Harness target={{ ...session, status: 'archived' }} />);
   openMenu();
-  expect(labels()).toEqual(['rename', 'tags', 'copy', 'export', 'unarchive', 'delete']);
+  expect(labels()).toEqual(['rename', 'tags', 'taskPlugins', 'copy', 'export', 'unarchive', 'delete']);
 });
 
 it('shows only leave sharing for guests without disabled actions or separators', () => {
@@ -242,7 +244,7 @@ it('shows stop sharing for an active host and closes only after confirmation', a
   state.host.mockResolvedValue({ available: true, detail: { sharedTaskId: 'share', status: 'active' } });
   render(<Harness />); openMenu();
   await screen.findByRole('menuitem', { name: 'manageSharing' });
-  expect(labels()).toEqual(['pin', 'rename', 'muteNotifications', 'tags', 'copy', 'manageSharing', 'moveToProject', 'export', 'openInNewWindow', 'archived', 'delete']);
+  expect(labels()).toEqual(['pin', 'rename', 'muteNotifications', 'tags', 'taskPlugins', 'copy', 'manageSharing', 'moveToProject', 'export', 'openInNewWindow', 'archived', 'delete']);
   expect(screen.queryByRole('menuitem', { name: 'cancelSharing' })).toBeNull();
   await openSharingSubmenu();
   fireEvent.click(screen.getByRole('menuitem', { name: 'cancelSharing' }));

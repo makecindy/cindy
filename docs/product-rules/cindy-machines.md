@@ -29,9 +29,10 @@
 
 ## 3. list_machines（2026-11-02）
 
-- 是 `cindy_helper` 的顶层工具，能用 `cindy_helper` 的任务都直接可见；运行在 SSH 主机上的普通任务目前不注入 `cindy_helper`，暂时看不到（2026-11-02 用户裁决：`list_tools` 二级入口不稳，Agent 想不到去查就等于没有，只适合放不重要的能力；
+- 是 `cindy_helper` 的顶层工具，能用 `cindy_helper` 的任务都直接可见；SSH 普通任务同样可用：Claude Code 注入绑定任务实例的 helper，Codex 在每条已绑定任务上启用 helper，共享 daemon 配置仍默认关闭；Pi 沿用原有宿主桥接（2026-11-02 用户裁决：`list_tools` 二级入口不稳，Agent 想不到去查就等于没有，只适合放不重要的能力；
   多机器相关的基础能力放一级）。Pi 由 bridge 注册同名原生工具，不经 `cindy_mcp_list_tools`。与「用户能在设备列表看到」同权；共享任务里拒绝（`PERMISSION_DENIED`），
   访客不能经 Agent 看到账号下的机器。
+- SSH 普通任务只沿用 helper 的既有远程自省能力面；不因此开放本机更新、控制或伙伴专属工具。实例缺失／失效、工具停用与共享任务拒绝仍按原规则处理。
 - 调用时向在线电脑问一次 `maker:machine:status`，不定时上报，不花模型额度。这是普通只读 invoke，不新增协议帧，
   中转（含自建）只转发，不需要适配。读取走后台链路，不让对方进入受控状态。旧版本返回 `CHANNEL_NOT_ALLOWED` 或不支持后台链路（`UNSUPPORTED_CAPABILITY`），都显示 `update_required`。
 - 读不到的电脑不从结果消失，写明原因：`offline`、`remote_control_off`、`control_off`、`update_required`、`unreachable`。
@@ -60,3 +61,13 @@
 
 按机器执行（`shell` / `read_file` / `await_shell` / `copy_file`）、账号级模型资源、失败时换到另一台、大脑租约按顺序另行交付，
 不在当前实现内。
+
+## 请求远程控制授权（2026-11-10）
+
+`request_remote_control` 使用 `list_machines` 返回的精确设备 ID 和工作目的，向同账号在线
+电脑发起本机确认。CC/Codex 顶层可见，统一 helper 目录也提供 `devices.remote-consent`
+发现与 `call_tool` 入口（包含 Pi）。共享任务拒绝；手机、SSH、离线与撤权设备不可请求。
+用户点「开启远程控制」后复用现有持久设置与 presence 广播；提示说明运行任务、访问文件
+及持续有效的范围。Agent 等明确 enabled 后继续原工作，其余结果不授予权限。
+旧版／网络无响应如实报告，不猜测已批准，也不自动重复弹窗。拒绝、到期、并发请求与重复
+请求的处理见 [协议说明](../dev-rules/protocol-compatibility/device-link-remote-control-consent.md)。

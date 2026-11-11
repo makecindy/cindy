@@ -11,6 +11,7 @@ vi.mock('../maker-host/logger-adapter.js', () => ({
 
 import { DEFAULT_APPEARANCE_SETTINGS } from '../../shared/appearanceSettings';
 import {
+  appearancePortableSettings,
   readAppearanceSettingsState,
   writeAppearanceSettingsPatch,
 } from '../appearance-settings-store';
@@ -58,5 +59,55 @@ describe('terminal appearance overrides', () => {
     await writeAppearanceSettingsPatch({ terminalSize: 13 });
     expect(fs.existsSync(file)).toBe(false);
     expect(readAppearanceSettingsState().isCustomized).toBe(false);
+  });
+
+  // PR #9496 / discussion_r4537053002: exporting no resource pointer must not
+  // leave its generated family on another computer. Existing terminal tests
+  // do not cover portable export. Minimum: selected fonts in three roles; unit.
+  it('exports font traits without device-local plugin resources or their matching families', async () => {
+    const [ui, code, body] = ['a', 'b', 'c'].map(letter => ({
+      source: { instanceId: 'example', key: 'd'.repeat(64) }, reference: `asset:font-${letter}`,
+      hash: letter.repeat(64), family: `CindyPlugin_${letter.repeat(64)}`,
+    }));
+    await writeAppearanceSettingsPatch({ uiFamily: ui.family, codeFamily: code.family,
+      uiSize: 17, codeSize: 19, uiFontResource: ui, codeFontResource: code, bodyFontResource: body,
+      bodyFont: { family: body.family, size: 20, weight: 600, style: 'italic' } });
+    expect(appearancePortableSettings.readCustomized()).toEqual({ uiSize: 17, codeSize: 19,
+      bodyFont: { size: 20, weight: 600, style: 'italic' } });
+    expect(readAppearanceSettingsState().value.uiFamily).toBe(ui.family);
+    expect(readAppearanceSettingsState().value.bodyFont?.family).toBe(body.family);
+  });
+
+  it('keeps manually chosen families instead of filtering by a generated-name prefix', async () => {
+    const hash = 'a'.repeat(64), family = `CindyPlugin_${hash}`;
+    const resource = { source: { instanceId: 'example', key: 'b'.repeat(64) }, reference: 'asset:font', hash, family };
+    await writeAppearanceSettingsPatch({ uiFamily: 'Inter', uiFontResource: resource,
+      codeFamily: family, bodyFontResource: resource, bodyFont: { family: 'Local Body', size: 20 } });
+    expect(appearancePortableSettings.readCustomized()).toEqual({
+      uiFamily: 'Inter', codeFamily: family, bodyFont: { family: 'Local Body', size: 20 },
+    });
+  });
+
+  it('does not export an empty body override when its only trait is a plugin family', async () => {
+    const hash = 'a'.repeat(64), family = `CindyPlugin_${hash}`;
+    await writeAppearanceSettingsPatch({ bodyFont: { family }, bodyFontResource: {
+      source: { instanceId: 'example', key: 'b'.repeat(64) }, reference: 'asset:font', hash, family,
+    } });
+    expect(appearancePortableSettings.readCustomized()).toEqual({});
+    expect(readAppearanceSettingsState().value.bodyFont?.family).toBe(family);
+  });
+
+  it('still reports a locally selected plugin font to the migration write conflict guard', async () => {
+    const hash = 'a'.repeat(64), family = `CindyPlugin_${hash}`;
+    await writeAppearanceSettingsPatch({ uiFamily: family, uiFontResource: {
+      source: { instanceId: 'example', key: 'b'.repeat(64) }, reference: 'asset:font', hash, family,
+    } });
+    let localFamily: unknown;
+    await appearancePortableSettings.applyPatch(customizedHere => {
+      localFamily = customizedHere.uiFamily;
+      return { uiSize: 20 };
+    });
+    expect(localFamily).toBe(family);
+    expect(readAppearanceSettingsState().value.uiFamily).toBe(family);
   });
 });

@@ -234,7 +234,7 @@ export function buildManagedConfig(options: ManagedBrowserConfigOptions = {}): B
       ...(executablePath ? { executablePath } : {}),
       // A persistent directory alone does not restore session cookies after a
       // clean exit. Apply Chrome's native session restore to both profiles and
-      // routes; --no-startup-window still keeps automation launches unobtrusive.
+      // routes; silent headed startup still keeps automation unobtrusive.
       extraArgs: [
         '--restore-last-session',
         // Website cookies are copied without Chrome OAuth identity. Disable

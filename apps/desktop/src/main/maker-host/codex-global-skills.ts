@@ -86,7 +86,7 @@ async function cleanupLegacyAggregate(codexHome: string): Promise<void> {
   }
 
   for (const entry of entries) {
-    await fsp.rm(path.join(legacyAggregateDir, entry), { recursive: true, force: true });
+    await removeManagedLink(path.join(legacyAggregateDir, entry));
   }
   await fsp.rmdir(legacyAggregateDir).catch(() => undefined);
 }

@@ -12,7 +12,7 @@ const modelSelectorI18nRef = vi.hoisted(() => ({
 }));
 
 // The shared-quota rail observes auth; this component fixture has no auth host.
-vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null, useOptionalAuthDeviceId: () => null }));
+vi.mock('@/contexts/AuthContext', () => ({ useOptionalDataOwnerGeneration: () => 0, useOptionalAuthUser: () => null, useOptionalAuthDeviceId: () => null }));
 
 vi.mock('react-i18next', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-i18next')>()),
@@ -586,6 +586,7 @@ describe('ModelSelector trigger variants', () => {
     visibleModelsRef.models = [];
     const view = render(
       React.createElement(ModelSelector, {
+        remoteAgent: undefined,
         modelId: 'remote-model',
         effort: 'medium',
         onModelChange: vi.fn(),
@@ -619,6 +620,7 @@ describe('ModelSelector trigger variants', () => {
     visibleModelsRef.models = [];
     const view = render(
       React.createElement(ModelSelector, {
+        remoteAgent: undefined,
         modelId: 'remote-model',
         effort: 'medium',
         onModelChange: vi.fn(),
@@ -658,6 +660,7 @@ describe('ModelSelector trigger variants', () => {
     visibleModelsRef.models = [];
     const view = render(
       React.createElement(SharedModelSelector, {
+        remoteAgent: undefined,
         modelId: 'remote-model',
         effort: 'medium',
         onModelChange: vi.fn(),
@@ -717,6 +720,7 @@ describe('ModelSelector trigger variants', () => {
     try {
       render(
         React.createElement(ModelSelectorContent, {
+          remoteAgent: undefined,
           modelId: 'claude-opus-4-8',
           effort: 'high',
           onModelChange: vi.fn(),
@@ -739,6 +743,7 @@ describe('ModelSelector trigger variants', () => {
   it('requests a silent refresh when a local selector opens, but not for a remote device', async () => {
     const local = render(
       React.createElement(ModelSelector, {
+        remoteAgent: undefined,
         modelId: 'claude-opus-4-8',
         effort: 'high',
         onModelChange: vi.fn(),
@@ -756,6 +761,7 @@ describe('ModelSelector trigger variants', () => {
     requestProviderModelsAutoRefresh.mockClear();
     render(
       React.createElement(ModelSelector, {
+        remoteAgent: undefined,
         modelId: 'claude-opus-4-8',
         effort: 'high',
         onModelChange: vi.fn(),
@@ -779,6 +785,7 @@ describe('ModelSelector trigger variants', () => {
     try {
       render(
         React.createElement(ModelSelector, {
+          remoteAgent: undefined,
           modelId: 'claude-opus-4-8',
           effort: 'high',
           onModelChange: vi.fn(),
@@ -816,6 +823,7 @@ describe('ModelSelector trigger variants', () => {
     try {
       render(
         React.createElement(ModelSelector, {
+          remoteAgent: undefined,
           modelId: 'claude-opus-4-8',
           effort: 'high',
           onModelChange: vi.fn(),
@@ -852,6 +860,7 @@ describe('ModelSelector trigger variants', () => {
     try {
       render(
         React.createElement(ModelSelector, {
+          remoteAgent: undefined,
           modelId: 'claude-opus-4-8',
           effort: 'high',
           onModelChange: vi.fn(),
@@ -905,6 +914,7 @@ describe('ModelSelector trigger variants', () => {
 
   it('bounds the default-session trigger in wide, narrow and ultra-narrow composers', () => {
     const props = {
+      remoteAgent: undefined,
       modelId: 'claude-opus-4-8',
       effort: 'xhigh' as Effort,
       onModelChange: vi.fn(),
@@ -950,6 +960,7 @@ describe('ModelSelector trigger variants', () => {
 
   it('caps the toolbar panel while field panels still follow their field width', () => {
     const props = {
+      remoteAgent: undefined,
       modelId: 'claude-opus-4-8',
       effort: 'high' as Effort,
       onModelChange: vi.fn(),
@@ -1005,6 +1016,7 @@ describe('ModelSelector trigger variants', () => {
 
     try {
       const props = {
+        remoteAgent: undefined,
         modelId: model.id,
         effort: 'medium' as Effort,
         onModelChange: vi.fn(),
@@ -1042,6 +1054,7 @@ describe('ModelSelector trigger variants', () => {
   it('does not infer a current Agent from the fallback vendor before session identity loads', () => {
     render(
       React.createElement(ModelSelector, {
+        remoteAgent: undefined,
         modelId: 'claude-opus-4-8',
         effort: 'high' as Effort,
         onModelChange: vi.fn(),
@@ -1068,6 +1081,7 @@ describe('ModelSelector trigger variants', () => {
     }];
     try {
       const props = {
+        remoteAgent: undefined,
         modelId: 'gpt-6-astra', effort: 'high' as Effort, fastMode: false,
         onModelChange: vi.fn(), onEffortChange: vi.fn(), vendorKey: 'cc' as const,
         currentProviderId: 'openai', actualRoute: true,
@@ -1096,6 +1110,7 @@ describe('ModelSelector trigger variants', () => {
     ];
     try {
       render(React.createElement(ModelSelector, {
+        remoteAgent: undefined,
         modelId: 'gpt-6-astra', effort: 'high' as Effort, fastMode: true,
         onModelChange: vi.fn(), onEffortChange: vi.fn(), vendorKey: 'codex',
         currentProviderId: 'openai', actualRoute: true, sourceDisconnected: true,
@@ -1114,6 +1129,7 @@ describe('ModelSelector trigger variants', () => {
     const navigate = vi.fn();
     try {
       render(React.createElement(ModelSelector, {
+        remoteAgent: undefined,
         modelId: 'gpt-6-astra', effort: 'high' as Effort, onModelChange: vi.fn(), onEffortChange: vi.fn(),
         vendorKey: 'codex', currentProviderId: 'openai', actualRoute: true, sourceDisconnected: true,
         onProviderChange: vi.fn(), onNavigateToProviders: vi.fn(), onReconnectSource: navigate, unifiedPanel: true,
@@ -1131,6 +1147,7 @@ describe('ModelSelector trigger variants', () => {
   it('keeps the disconnected status in the compact trigger title', () => {
     render(
       React.createElement(ModelSelector, {
+        remoteAgent: undefined,
         modelId: 'claude-opus-4-8',
         effort: 'xhigh' as Effort,
         onModelChange: vi.fn(),
@@ -1202,6 +1219,7 @@ describe('ModelSelector trigger variants', () => {
       const intent = makerChatStore.getAgentSwitchIntent(sessionId);
       const displayAgent = lightState.agentSwitchIntent?.target ?? 'claude-code';
       return React.createElement(ModelSelector, {
+        remoteAgent: undefined,
         modelId: intent?.model ?? 'claude-opus-4-8',
         effort: (intent?.effort ?? 'high') as Effort,
         onModelChange: vi.fn(),
@@ -1258,6 +1276,7 @@ describe('ModelSelector trigger variants', () => {
   it('renders the field trigger as a settings input and localizes effort before provider labels', () => {
     render(
       React.createElement(ModelSelector, {
+        remoteAgent: undefined,
         modelId: 'claude-opus-4-8',
         effort: 'xhigh',
         onModelChange: vi.fn(),
@@ -1316,6 +1335,7 @@ describe('ModelSelector trigger variants', () => {
     try {
       render(
         React.createElement(ModelSelector, {
+          remoteAgent: undefined,
           modelId: models[0].id,
           effort: 'high',
           onModelChange: vi.fn(),
@@ -1374,6 +1394,7 @@ describe('ModelSelector trigger variants', () => {
     try {
       const view = render(
         React.createElement(ModelSelectorContent, {
+          remoteAgent: undefined,
           modelId: 'claude-opus-4-8',
           effort: 'high',
           onModelChange: vi.fn(),
@@ -1386,6 +1407,7 @@ describe('ModelSelector trigger variants', () => {
 
       view.rerender(
         React.createElement(ModelSelectorContent, {
+          remoteAgent: undefined,
           modelId: 'claude-sonnet-4-6',
           effort: 'medium',
           onModelChange: vi.fn(),
@@ -1406,6 +1428,7 @@ describe('ModelSelector trigger variants', () => {
     pricingRef.renderCalls = 0;
     render(
       React.createElement(ModelSelector, {
+        remoteAgent: undefined,
         modelId: 'claude-opus-4-8',
         effort: 'high',
         onModelChange: vi.fn(),
@@ -1473,6 +1496,7 @@ describe('ModelSelector trigger variants', () => {
     try {
       const discounted = render(
         React.createElement(ModelSelector, {
+          remoteAgent: undefined,
           modelId: 'claude-opus-4-8',
           effort: 'high',
           onModelChange: vi.fn(),
@@ -1492,6 +1516,7 @@ describe('ModelSelector trigger variants', () => {
       pricingRef.pricing = {};
       render(
         React.createElement(ModelSelector, {
+          remoteAgent: undefined,
           modelId: 'claude-sonnet-4-6',
           effort: 'medium',
           onModelChange: vi.fn(),
@@ -1551,6 +1576,7 @@ describe('ModelSelector trigger variants', () => {
     try {
       const triggerView = render(
         React.createElement(ModelSelector, {
+          remoteAgent: undefined,
           modelId: 'claude-opus-4-8',
           effort: 'high',
           onModelChange: vi.fn(),
@@ -1570,6 +1596,7 @@ describe('ModelSelector trigger variants', () => {
 
       render(
         React.createElement(ModelSelectorContent, {
+          remoteAgent: undefined,
           modelId: 'claude-opus-4-8',
           effort: 'high',
           onModelChange: vi.fn(),
@@ -1773,6 +1800,7 @@ describe('ModelSelector trigger variants', () => {
       try {
         render(
           React.createElement(ModelSelectorContent, {
+            remoteAgent: undefined,
             modelId: currentModel.id,
             effort: 'high',
             fastMode: false,
@@ -1812,6 +1840,7 @@ describe('ModelSelector trigger variants', () => {
   it('renders an active fallback option without model effort metadata', () => {
     render(
       React.createElement(ModelSelector, {
+        remoteAgent: undefined,
         modelId: '',
         effort: 'high',
         onModelChange: vi.fn(),
@@ -1834,6 +1863,7 @@ describe('ModelSelector trigger variants', () => {
   it('localizes missing model metadata without presenting an empty selection', () => {
     render(
       React.createElement(ModelSelector, {
+        remoteAgent: undefined,
         modelId: 'missing-model',
         effort: 'high',
         onModelChange: vi.fn(),
@@ -1849,6 +1879,7 @@ describe('ModelSelector trigger variants', () => {
   it('can hide model effort and Fast editing controls for model-id-only settings', () => {
     render(
       React.createElement(ModelSelectorContent, {
+        remoteAgent: undefined,
         modelId: 'claude-opus-4-8',
         effort: 'high',
         onModelChange: vi.fn(),
@@ -1936,6 +1967,7 @@ describe('ModelSelector trigger variants', () => {
       try {
         render(
           React.createElement(ModelSelectorContent, {
+            remoteAgent: undefined,
             modelId: currentModel.id,
             effort: 'high',
             onModelChange: vi.fn(),
@@ -1977,6 +2009,7 @@ describe('ModelSelector trigger variants', () => {
     try {
       render(
         React.createElement(ModelSelectorContent, {
+          remoteAgent: undefined,
           modelId: '',
           effort: 'high',
           onModelChange: vi.fn(),
@@ -1996,6 +2029,7 @@ describe('ModelSelector trigger variants', () => {
   it('forwards an overlay-specific z-index to the model information panel', () => {
     render(
       React.createElement(ModelSelectorContent, {
+        remoteAgent: undefined,
         modelId: 'claude-opus-4-8',
         effort: 'high',
         onModelChange: vi.fn(),
@@ -2013,6 +2047,7 @@ describe('ModelSelector trigger variants', () => {
     vi.useFakeTimers();
     render(
       React.createElement(ModelSelectorContent, {
+        remoteAgent: undefined,
         modelId: 'claude-opus-4-8',
         effort: 'high',
         onModelChange: vi.fn(),
@@ -2080,6 +2115,7 @@ describe('ModelSelector trigger variants', () => {
     try {
       render(
         React.createElement(ModelSelectorContent, {
+          remoteAgent: undefined,
           modelId: 'claude-opus-4-8',
           effort: 'high',
           onModelChange: vi.fn(),
@@ -2116,6 +2152,7 @@ describe('ModelSelector trigger variants', () => {
     try {
       render(
         React.createElement(ModelSelectorContent, {
+          remoteAgent: undefined,
           modelId: 'claude-opus-4-8',
           effort: 'high',
           onModelChange: vi.fn(),
@@ -2156,6 +2193,7 @@ describe('ModelSelector trigger variants', () => {
 
     render(
       React.createElement(ModelSelectorContent, {
+        remoteAgent: undefined,
         modelId: 'claude-opus-4-8',
         effort: 'high',
         onModelChange: vi.fn(),
@@ -2186,6 +2224,7 @@ describe('ModelSelector trigger variants', () => {
     try {
       render(
         React.createElement(ModelSelectorContent, {
+          remoteAgent: undefined,
           modelId: 'claude-opus-4-8',
           effort: 'high',
           onModelChange: vi.fn(),
@@ -2224,6 +2263,7 @@ describe('ModelSelector trigger variants', () => {
     try {
       render(
         React.createElement(ModelSelectorContent, {
+          remoteAgent: undefined,
           modelId: 'claude-opus-4-8',
           effort: 'high',
           onModelChange: vi.fn(),
@@ -2284,6 +2324,7 @@ describe('ModelSelector trigger variants', () => {
 
     try {
       const props = {
+        remoteAgent: undefined,
         modelId: 'claude-opus-4-8',
         effort: 'high' as Effort,
         onModelChange: vi.fn(),
@@ -2301,38 +2342,47 @@ describe('ModelSelector trigger variants', () => {
       providersRef.providers = providersRef.DEFAULT_PROVIDERS;
       view.rerender(React.createElement(ModelSelectorContent, props));
 
-      await waitFor(() => expect(instances).toHaveLength(1));
       const firstPane = document.querySelector<HTMLElement>('[data-model-tag-density]');
       expect(firstPane).not.toBeNull();
-      expect(instances[0].observe).toHaveBeenCalledWith(firstPane);
+      // #9687: the real menu also observes highlight geometry. Select the pane's
+      // density observer by its target, not by the number/order of all observers.
+      const observersFor = (pane: HTMLElement | null) => instances.filter((instance) =>
+        instance.disconnect.mock.calls.length === 0
+        && instance.observe.mock.calls.some(([target]) => target === pane),
+      );
+      await waitFor(() => expect(observersFor(firstPane)).toHaveLength(1));
+      const firstObserver = observersFor(firstPane)[0]!;
+      expect(firstObserver.observe).toHaveBeenCalledWith(firstPane);
       expect(firstPane?.getAttribute('data-model-tag-density')).toBe('full');
 
       act(() => {
-        instances[0].callback(
+        firstObserver.callback(
           [
             {
               target: firstPane,
               contentRect: { width: 320 },
             } as unknown as ResizeObserverEntry,
           ],
-          instances[0] as unknown as ResizeObserver,
+          firstObserver as unknown as ResizeObserver,
         );
       });
       expect(firstPane?.getAttribute('data-model-tag-density')).toBe('hidden');
 
       providersRef.providers = [];
       view.rerender(React.createElement(ModelSelectorContent, props));
-      await waitFor(() => expect(instances[0].disconnect).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(firstObserver.disconnect).toHaveBeenCalledTimes(1));
 
       providersRef.providers = providersRef.DEFAULT_PROVIDERS;
       view.rerender(React.createElement(ModelSelectorContent, props));
-      await waitFor(() => expect(instances).toHaveLength(2));
       const secondPane = document.querySelector<HTMLElement>('[data-model-tag-density]');
       expect(secondPane).not.toBeNull();
-      expect(instances[1].observe).toHaveBeenCalledWith(secondPane);
+      await waitFor(() => expect(observersFor(secondPane)).toHaveLength(1));
+      const secondObserver = observersFor(secondPane)[0]!;
+      expect(secondObserver).not.toBe(firstObserver);
+      expect(secondObserver.observe).toHaveBeenCalledWith(secondPane);
 
       view.unmount();
-      expect(instances[1].disconnect).toHaveBeenCalledTimes(1);
+      expect(secondObserver.disconnect).toHaveBeenCalledTimes(1);
     } finally {
       rectSpy.mockRestore();
       Object.defineProperty(globalThis, 'ResizeObserver', {
@@ -2384,6 +2434,7 @@ describe('ModelSelector trigger variants', () => {
     try {
       render(
         React.createElement(ModelSelectorContent, {
+          remoteAgent: undefined,
           modelId: 'qwen-3.7',
           effort: 'high',
           onModelChange: vi.fn(),
@@ -2454,6 +2505,7 @@ describe('ModelSelector trigger variants', () => {
     try {
       const loading = render(
         React.createElement(ModelSelectorContent, {
+          remoteAgent: undefined,
           modelId: 'free-gateway-model',
           effort: 'high',
           onModelChange: vi.fn(),
@@ -2471,6 +2523,7 @@ describe('ModelSelector trigger variants', () => {
       pricingRef.pricing = {};
       render(
         React.createElement(ModelSelectorContent, {
+          remoteAgent: undefined,
           modelId: 'free-gateway-model',
           effort: 'high',
           onModelChange: vi.fn(),
@@ -2502,6 +2555,7 @@ describe('ModelSelector trigger variants', () => {
   it('shows model information even when a model has no configurable options', () => {
     render(
       React.createElement(ModelSelectorContent, {
+        remoteAgent: undefined,
         modelId: 'claude-opus-4-8',
         effort: 'high',
         onModelChange: vi.fn(),
@@ -2523,6 +2577,7 @@ describe('ModelSelector trigger variants', () => {
 
     render(
       React.createElement(ModelSelectorContent, {
+        remoteAgent: undefined,
         modelId: 'claude-opus-4-8',
         effort: 'high',
         onModelChange: vi.fn(),
@@ -2555,6 +2610,7 @@ describe('ModelSelector trigger variants', () => {
 
     render(
       React.createElement(ModelSelectorContent, {
+        remoteAgent: undefined,
         modelId: 'claude-opus-4-8',
         effort: 'high',
         onModelChange: vi.fn(),
@@ -2593,6 +2649,7 @@ describe('ModelSelector trigger variants', () => {
 
     render(
       React.createElement(ModelSelectorContent, {
+        remoteAgent: undefined,
         modelId: 'claude-opus-4-8',
         effort: 'high',
         onModelChange: vi.fn(),
@@ -2647,6 +2704,7 @@ describe('ModelSelector trigger variants', () => {
     try {
       render(
         React.createElement(ModelSelectorContent, {
+          remoteAgent: undefined,
           modelId: 'claude-opus-4-8',
           effort: 'high',
           fastMode: false,
@@ -2690,6 +2748,7 @@ describe('ModelSelector trigger variants', () => {
         modelId: 'claude-opus-4-8',
       });
       return React.createElement(ModelSelector, {
+        remoteAgent: undefined,
         modelId: selection.modelId,
         effort: 'high',
         onModelChange: (modelId: string) => setSelection((current) => ({ ...current, modelId })),
@@ -2727,6 +2786,7 @@ describe('ModelSelector trigger variants', () => {
     function Harness() {
       const [switching, setSwitching] = React.useState(false);
       return React.createElement(ModelSelector, {
+        remoteAgent: undefined,
         modelId: 'claude-opus-4-8',
         effort: 'high',
         onModelChange: vi.fn(),
@@ -2832,6 +2892,7 @@ describe('ModelSelector trigger variants', () => {
     try {
       render(
         React.createElement(ModelSelectorContent, {
+          remoteAgent: undefined,
           modelId: 'claude-opus-4-8',
           effort: 'medium',
           onModelChange: vi.fn(),
@@ -2906,6 +2967,7 @@ describe('ModelSelector trigger variants', () => {
     const confirmBrowseSwitch = vi.fn(async () => false);
     render(
       React.createElement(ModelSelectorContent, {
+        remoteAgent: undefined,
         modelId: 'claude-opus-4-8',
         effort: 'high',
         onModelChange: vi.fn(),
@@ -2932,6 +2994,7 @@ describe('ModelSelector trigger variants', () => {
     );
     render(
       React.createElement(ModelSelector, {
+        remoteAgent: undefined,
         modelId: 'claude-opus-4-8',
         effort: 'high',
         onModelChange: vi.fn(),
@@ -2973,6 +3036,7 @@ describe('ModelSelector trigger variants', () => {
     // 对话 A 当前用 Sonnet,把非当前的 Opus 全局预设改成 High。
     const conversationA = render(
       React.createElement(ModelSelectorContent, {
+        remoteAgent: undefined,
         modelId: 'claude-sonnet-4-6',
         effort: 'medium',
         onModelChange: vi.fn(),
@@ -2995,6 +3059,7 @@ describe('ModelSelector trigger variants', () => {
     // 对话 B 当前用别的模型,其 Opus 非当前行立即读取同一份 High 预设。
     const conversationB = render(
       React.createElement(ModelSelectorContent, {
+        remoteAgent: undefined,
         modelId: 'claude-haiku-4-5',
         effort: 'medium',
         onModelChange: vi.fn(),
@@ -3016,6 +3081,7 @@ describe('ModelSelector trigger variants', () => {
     // 对话 C 正在用 Opus/Medium:选中行以 live 值为准,不被全局 High 覆盖。
     render(
       React.createElement(ModelSelectorContent, {
+        remoteAgent: undefined,
         modelId: 'claude-opus-4-8',
         effort: 'medium',
         onModelChange: vi.fn(),
@@ -3062,6 +3128,7 @@ describe('ModelSelector trigger variants', () => {
     try {
       render(
         React.createElement(ModelSelector, {
+          remoteAgent: undefined,
           modelId: 'claude-opus-4-8',
           effort: 'high',
           onModelChange: vi.fn(),
@@ -3106,6 +3173,7 @@ describe('ModelSelector trigger variants', () => {
     try {
       render(
         React.createElement(ModelSelector, {
+          remoteAgent: undefined,
           modelId: 'claude-opus-4-8',
           effort: 'high',
           onModelChange: vi.fn(),

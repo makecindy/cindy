@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { effectiveSourceIdForModel, isModelVisible, type ProviderView } from '@cindy/model-providers';
+import { effectiveSourceIdForModel, isModelVisible, isModelSelectableForNewRoute, type ProviderView } from '@cindy/model-providers';
 import type { resolveNewMakerDefaultTuple } from '../../shared/newMakerDefaultTuple.js';
 import type { BotModelRoute } from '../../shared/botModelChain.js';
 import { sameModelRoute, type AppDefaultModelSelection } from '../../shared/appDefaultModelSelection.js';
@@ -27,7 +27,8 @@ function resolveAvailableLocalRoute(
   if (!args.availableAgents.has(agent === 'claude-code' ? 'cc' : agent)) return null;
   const providers = args.providers.filter(p => p.connected && !p.suspended && !p.modelDiscoveryFailure)
     .map(p => ({ ...p, models: { ...p.models, [agent]: (p.models[agent] ?? []).filter(m =>
-      args.isModelEnabled?.(agent, p.id, m) ?? m.defaultEnabled !== false) } }));
+      isModelSelectableForNewRoute(m, { userProvider: p.source === 'user' }) &&
+      (args.isModelEnabled?.(agent, p.id, m) ?? m.defaultEnabled !== false)) } }));
   const providerId = effectiveSourceIdForModel(providers, preferred.providerId, preferred.model, agent);
   return providerId ? { ...preferred, providerId } : null;
 }
@@ -157,17 +158,19 @@ export async function validateTaskModel(route: BotModelRoute): Promise<boolean> 
 }
 
 /** Wait for a fresh owner-fenced mirror after the real setter persisted the selected route. */
-export async function changeAppDefaultModel(id: string, effort?: string, assertCaller: () => void = () => {}) {
-  assertCaller();
+export async function changeAppDefaultModel(id: string, effort?: string, assertCaller: () => void | Promise<void> = () => {}, fastMode?: boolean | 'ultrafast') {
+  await assertCaller();
   const state = await readSelection();
-  assertCaller();
+  await assertCaller();
   const choice = state.available.find(item => item.id === id);
   if (!choice || (effort !== undefined && effort !== '' && !choice.efforts.some(value => value === effort)))
     throw new Error('该模型或思考档不可用，请重新查询已启用模型');
-  const route = { ...choice.route, ...(effort !== undefined ? { effort } : {}) };
+  if (fastMode && (!choice.supportsFastMode || (fastMode === 'ultrafast' && !choice.supportsUltrafastMode)))
+    throw new Error('该模型不支持所选 Fast 档位，请重新查询');
+  const route = { ...choice.route, ...(effort !== undefined ? { effort } : {}), ...(fastMode !== undefined ? { fastMode } : {}) };
   if (!dispatchSelection) throw new Error('客户端默认模型设置入口尚未就绪');
   state.assertOwner();
-  assertCaller();
+  await assertCaller();
   const dispatch = dispatchSelection;
   await new Promise<void>((resolve, reject) => {
     const requestId = randomUUID();
@@ -186,7 +189,7 @@ export async function changeAppDefaultModel(id: string, effort?: string, assertC
     } catch (error) { clearTimeout(timer); off(); reject(error); }
   });
   state.assertOwner();
-  assertCaller();
+  await assertCaller();
   const current = getSelectedNewMakerRoute(state.owner);
   if (!sameModelRoute(current, route)) throw new Error('默认模型已被其他操作改变，请重新查询');
   return { current: route };

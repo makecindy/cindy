@@ -1,0 +1,11 @@
+[package]
+name = "agent-net-udp"
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+description = "agent-net 的真机 UDP 驱动：套接字、时钟、计时循环、按连接号分发和换端口。只用标准库。"
+
+# 和核心一样不引入第三方 crate。
+[dependencies]
+agent-net-core = { path = ".." }

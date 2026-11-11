@@ -44,7 +44,7 @@ async function canonicalSessionOf(botId: string, scope: BotSkillSettingsScope): 
 
 /** The shared core file every teammate on this computer mounts (it does not state per-teammate switches). */
 export function readBotCoreSkill(): BotCoreSkill {
-  return { name: TEAMMATE_GUIDE_NAME, description: TEAMMATE_GUIDE_DESCRIPTION, body: buildTeammateGuide({ shared: true }) };
+  return { name: TEAMMATE_GUIDE_NAME, description: TEAMMATE_GUIDE_DESCRIPTION, body: buildTeammateGuide() };
 }
 
 export async function readBotSkillForSettings(botId: string, slug: string, scope: BotSkillSettingsScope = {}): Promise<BotSkillDetail | null> {

@@ -121,7 +121,7 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
       const archivedRowStaysInList = listFilter === 'all';
       const leaveArchivedSession = () => {
         if (sessionId === activeSessionId && isSessionRemovalRouteCurrent(sessionId)) {
-          navigate('/cc-agent/new');
+          navigate('/cc-agent/new', { state: { workspacePrompt: 'generic' } });
         }
       };
       if (archivedRowStaysInList) flushSync(leaveArchivedSession);
@@ -183,7 +183,7 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
         if (!remoteStatus) {
           remoteStatus = beginRemoteArchive(sessionId, statusWriteTarget.deviceId, activeSessionId);
         } else if (sessionId === activeSessionId && isSessionRemovalRouteCurrent(sessionId)) {
-          navigate('/cc-agent/new');
+          navigate('/cc-agent/new', { state: { workspacePrompt: 'generic' } });
         }
       } else if (action === 'archive') {
         // 乐观更新的顺序取决于**被归档的行还会不会留在当前列表里**,两种情况相反:
@@ -212,7 +212,7 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
         const archivedRowStaysInList = listFilter === 'all';
         const leaveArchivedSession = () => {
           if (sessionId === activeSessionId && isSessionRemovalRouteCurrent(sessionId)) {
-            navigate('/cc-agent/new');
+            navigate('/cc-agent/new', { state: { workspacePrompt: 'generic' } });
           }
         };
         statusTransition = await sessionsStore.beginStatusTransitionWhenReady(
@@ -327,8 +327,15 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
       // 上下文时会传入按当前可见顺序解析好的 route；否则回落到 /cc-agent
       // 让 CCAgentIndexRedirect 做默认恢复。
       if (action === 'delete' && sessionId === activeSessionId) {
-        navigate(deleteRedirectRoute ?? '/cc-agent');
+        const route = deleteRedirectRoute ?? '/cc-agent';
+        if (route === '/cc-agent/new') {
+          navigate(route, { state: { workspacePrompt: 'generic' } });
+        } else {
+          navigate(route);
+        }
       }
+      // 写库成功:需要知道结果的调用方(如合并后自动归档的撤销提示)据此继续。
+      return true;
     },
     [navigate, patchLocal, listFilter, beginRemoteArchive, archiveBlockedByRunning, t],
   );

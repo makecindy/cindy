@@ -24,8 +24,14 @@ const MANIFEST_FILE = '.cindy-system-skills.json';
 const VERSIONS_DIRECTORY = '.versions';
 const ACTIVE_BUNDLE_LINK = '.active';
 const BUILT_IN_SKILL_MUTATION_WAIT_MS = 5_000;
-/** Increment whenever shipped built-in Skill bytes change between releases. */
-export const BUILT_IN_SKILLS_BUNDLE_VERSION = 61;
+/**
+ * Compatibility floor for historical hand-incremented bundles; never lower it.
+ * The version is this base plus the number of record files shipped in
+ * `<bundled root>/_versions/`, see readBuiltInSkillsBundleVersion.
+ */
+export const BUILT_IN_SKILLS_BUNDLE_VERSION_BASE = 107;
+/** Directory beside the bundled Skills holding one record file per bundle change. */
+export const BUILT_IN_SKILLS_VERSION_RECORDS_DIRECTORY = '_versions';
 const PLUGIN_CREATOR_FIRST_BUNDLE_VERSION = 13;
 
 export interface BuiltInSkillDescriptor {
@@ -124,6 +130,58 @@ export function builtInSkillDescriptors(
   userDataDir: string,
   appDataDir?: string,
 ): BuiltInSkillDescriptor[] {
+  try {
+    const snapshot = readBuiltInSkillSnapshot(userDataDir, appDataDir);
+    if (!snapshot) return [];
+    for (const descriptor of snapshot.descriptors) {
+      if (!fs.lstatSync(descriptor.absolutePath).isDirectory()) return [];
+      if (hashDirectorySync(descriptor.absolutePath) !== snapshot.manifest.fingerprints[descriptor.name]) return [];
+      if (!fs.lstatSync(path.join(descriptor.absolutePath, 'SKILL.md')).isFile()) return [];
+    }
+    return snapshot.descriptors;
+  } catch {
+    return [];
+  }
+}
+
+/** List discovery yields during full content verification, without caching trust. */
+export async function builtInSkillDescriptorsAsync(
+  userDataDir: string,
+  appDataDir?: string,
+): Promise<BuiltInSkillDescriptor[]> {
+  try {
+    const snapshot = readBuiltInSkillSnapshot(userDataDir, appDataDir);
+    if (!snapshot) return [];
+    const entries = new Map<string, fs.BigIntStats>();
+    for (const descriptor of snapshot.descriptors) {
+      // Pin reads to the version selected before yielding, not a moving .active link.
+      const directory = path.join(snapshot.target, descriptor.name);
+      if (!(await fsp.lstat(directory)).isDirectory()) return [];
+      if (await hashDirectory(directory, entries) !== snapshot.manifest.fingerprints[descriptor.name]) return [];
+      if (!(await fsp.lstat(path.join(directory, 'SKILL.md'))).isFile()) return [];
+    }
+    const current = readBuiltInSkillSnapshot(userDataDir, appDataDir);
+    if (!current || current.raw !== snapshot.raw || current.target !== snapshot.target
+      || current.realTarget !== snapshot.realTarget
+      || current.targetStat.dev !== snapshot.targetStat.dev
+      || current.targetStat.ino !== snapshot.targetStat.ino) return [];
+    // No further yields: reject edits to an early Skill while a later one was
+    // hashing. Recheck metadata, not file contents, to bound synchronous I/O.
+    // Directory stamps also detect added/deleted/replaced children; ctime catches
+    // same-size writes even when a writer restores the original mtime.
+    for (const [entry, before] of entries) {
+      const after = fs.lstatSync(entry, { bigint: true });
+      if (before.dev !== after.dev || before.ino !== after.ino || before.mode !== after.mode
+        || before.size !== after.size || before.mtimeNs !== after.mtimeNs
+        || before.ctimeNs !== after.ctimeNs) return [];
+    }
+    return snapshot.descriptors;
+  } catch {
+    return [];
+  }
+}
+
+function readBuiltInSkillSnapshot(userDataDir: string, appDataDir?: string) {
   const root = appDataDir
     ? sharedBuiltInSkillsRoot(appDataDir)
     : builtInSkillsRoot(userDataDir);
@@ -132,26 +190,24 @@ export function builtInSkillDescriptors(
   try {
     const raw = readAtomicFileSync(path.join(root, MANIFEST_FILE));
     const manifest = raw === null ? null : parseManifest(raw);
-    if (manifest?.schemaVersion !== 3 || !manifest.activeBundle) return [];
+    if (manifest?.schemaVersion !== 3 || !manifest.activeBundle) return null;
     const active = path.join(root, ACTIVE_BUNDLE_LINK);
     const target = activeBundleTarget(root, manifest.activeBundle);
-    if (!fs.lstatSync(active).isSymbolicLink()) return [];
-    if (!samePath(path.resolve(root, fs.readlinkSync(active)), target)) return [];
+    if (!fs.lstatSync(active).isSymbolicLink()) return null;
+    if (!samePath(path.resolve(root, fs.readlinkSync(active)), target)) return null;
     // A lexical in-root link must not escape through a substituted parent,
     // bundle, or Skill directory either.
     for (const directory of [path.dirname(target), target]) {
-      if (!fs.lstatSync(directory).isDirectory()) return [];
+      if (!fs.lstatSync(directory).isDirectory()) return null;
     }
-    if (!samePath(fs.realpathSync.native(active), fs.realpathSync.native(target))) return [];
+    const realTarget = fs.realpathSync.native(target);
+    if (!samePath(fs.realpathSync.native(active), realTarget)) return null;
+    const targetStat = fs.lstatSync(target);
+    if (!targetStat.isDirectory()) return null;
     const descriptors = committedSkillDescriptors(stableBuiltInSkillDescriptors(root, userDataDir), manifest);
-    for (const descriptor of descriptors) {
-      if (!fs.lstatSync(descriptor.absolutePath).isDirectory()) return [];
-      if (hashDirectorySync(descriptor.absolutePath) !== manifest.fingerprints[descriptor.name]) return [];
-      if (!fs.lstatSync(path.join(descriptor.absolutePath, 'SKILL.md')).isFile()) return [];
-    }
-    return descriptors;
+    return { raw, manifest, target, realTarget, targetStat, descriptors };
   } catch {
-    return [];
+    return null;
   }
 }
 
@@ -237,9 +293,14 @@ function hashDirectorySync(root: string): string {
   return hash.digest('hex');
 }
 
-async function hashDirectory(root: string): Promise<string> {
+async function hashDirectory(root: string, observed?: Map<string, fs.BigIntStats>): Promise<string> {
   const hash = createHash('sha256');
   const visit = async (directory: string): Promise<void> => {
+    if (observed) {
+      const stat = await fsp.lstat(directory, { bigint: true });
+      if (!stat.isDirectory()) throw new Error('bundled Skill directory changed');
+      observed.set(directory, stat);
+    }
     const entries = await fsp.readdir(directory, { withFileTypes: true });
     entries.sort((a, b) => a.name.localeCompare(b.name));
     for (const entry of entries) {
@@ -247,7 +308,14 @@ async function hashDirectory(root: string): Promise<string> {
       const relative = path.relative(root, absolute).split(path.sep).join('/');
       hash.update(entry.isDirectory() ? `d\0${relative}\0` : `f\0${relative}\0`);
       if (entry.isDirectory()) await visit(absolute);
-      else if (entry.isFile()) hash.update(await fsp.readFile(absolute));
+      else if (entry.isFile()) {
+        if (observed) {
+          const stat = await fsp.lstat(absolute, { bigint: true });
+          if (!stat.isFile()) throw new Error('bundled Skill file changed');
+          observed.set(absolute, stat);
+        }
+        hash.update(await fsp.readFile(absolute));
+      }
       else throw new Error(`unsupported bundled Skill entry: ${relative}`);
     }
   };
@@ -971,6 +1039,35 @@ async function projectBuiltInSkillLinksUnlocked(
 }
 
 /**
+ * Bundle version of the Skills shipped at `bundledRoot`: the base plus one per
+ * `*.md` record in its `_versions/` directory. A change to shipped Skill bytes
+ * adds a new record file instead of editing a shared number, so two changes
+ * never touch the same line and a merge of both is automatically newer than
+ * either. `pnpm check:built-in-skills` keeps the count from going backwards
+ * and from being reused for different bytes.
+ *
+ * A missing or empty directory is an incomplete package, not version zero:
+ * guessing low would make this build treat its own Skills as older than the
+ * installed ones and silently keep stale bytes.
+ */
+export async function readBuiltInSkillsBundleVersion(bundledRoot: string): Promise<number> {
+  const recordsRoot = path.join(bundledRoot, BUILT_IN_SKILLS_VERSION_RECORDS_DIRECTORY);
+  let entries: fs.Dirent[];
+  try {
+    entries = await fsp.readdir(recordsRoot, { withFileTypes: true });
+  } catch (error) {
+    throw new Error(
+      `built-in Skill version records are missing at ${recordsRoot}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  const records = entries.filter((entry) => entry.isFile() && entry.name.endsWith('.md')).length;
+  if (records < 1) {
+    throw new Error(`built-in Skill version records are empty at ${recordsRoot}`);
+  }
+  return BUILT_IN_SKILLS_BUNDLE_VERSION_BASE + records;
+}
+
+/**
  * Materialize Cindy-owned Skill bytes, keep every managed Agent projection on
  * the stable active path, then publish the whole bundle through one pointer.
  * The immutable old bundle remains available throughout the transaction.
@@ -984,7 +1081,7 @@ export async function prepareBuiltInSkills(
   const warnings: string[] = [];
   let changed = false;
   let projectionSafe = false;
-  const bundleVersion = options.bundleVersion ?? BUILT_IN_SKILLS_BUNDLE_VERSION;
+  const bundleVersion = options.bundleVersion ?? await readBuiltInSkillsBundleVersion(options.bundledRoot);
   if (!Number.isSafeInteger(bundleVersion) || bundleVersion < 1) {
     throw new Error(`invalid built-in Skill bundle version: ${bundleVersion}`);
   }

@@ -11,11 +11,15 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
+import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
 
 import {
   classifyCodexError,
   extractRolloutUpdatePlanFunctionCallEvent,
   newCodexRuntimeState,
+  finalizeCodexCitationText,
+  normalizeCodexFileCitations,
+  stableCitationBoundary,
   translateErrorNotification,
   translateAgentMessageDelta,
   translateAccountRateLimitsUpdated,
@@ -28,6 +32,8 @@ import {
   pauseCodexGeneration,
   resetCodexGenerationTiming,
   resumeCodexGeneration,
+  codexSpeedSnapshot,
+  settleCodexSpeedUsage,
 } from './translator.js';
 import type { CodexRuntimeState } from './translator.js';
 import type { CodexErrorInfo } from './app-server/protocol.js';
@@ -35,6 +41,9 @@ import { createAsyncQueue } from '../shared/async-queue.js';
 import type { AsyncQueue } from '../shared/async-queue.js';
 import type { AgentEvent } from '../../types/events.js';
 import { makeGhostManual64KiBFixture } from '../shared/ghost-manual-fixture.js';
+import { expandCodexStream, type RecordedCodexStream } from './recorded-stream-fixture.js';
+import recordedAnswer from './fixtures/recorded-stream-answer.json';
+import recordedToolLoop from './fixtures/recorded-stream-tool-loop.json';
 
 function noopLog(): {
   info: () => void;
@@ -132,6 +141,10 @@ describe('Codex assistant text streaming contract', () => {
       'progress', 'failed-commentary', 'failed-answer',
       'successful-commentary', 'successful-intro', 'successful-answer',
     ]);
+    expect(events.filter(event => (event.data as { assistantSamplingAccepted?: unknown }).assistantSamplingAccepted))
+      .toEqual([expect.objectContaining({ type: 'tool_result_full', source: 'codex',
+        data: expect.objectContaining({ assistantSamplingAccepted: { agentMessageIds: ['progress'] } }) })]);
+    expect(events.filter(event => event.type === 'status')).toHaveLength(0);
     expect(events.find(event => event.type === 'error')).toMatchObject({
       data: { isTerminal: false, willRetry: true, assistantAttemptFailure: {
         threadId: 't1', turnId: 'turn-a', attempt: 1,
@@ -577,7 +590,8 @@ describe('Codex generation timing', () => {
     try {
       const rt = newCodexRuntimeState();
       beginCodexGenerationTurn(rt, 'turn-1', 1_000);
-      rt.tokenSpeed.recordUsage(10, 1_000);
+      settleCodexSpeedUsage(rt, { outputTokens: 10 }, 2_000);
+      expect(rt.tokenSpeed.snapshot()).toMatchObject({ tokens: 10 });
       wallClockSpy.mockReturnValue(40_000);
       finalizeCodexGenerationTurn(rt, 'turn-1', 2_000);
       expect(codexGenerationDurationMs(rt)).toBeUndefined();
@@ -924,6 +938,38 @@ describe('translateErrorNotification', () => {
       reason: 'context-overflow',
       isTerminal: true,
     });
+  });
+
+  it.each([
+    'unexpected status 400 Bad Request: {"error":{"code":"model_not_found"}}',
+    "The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.",
+  ])('tells the user to switch models on a definitive Codex error: %s', async message => {
+    const q = createAsyncQueue<AgentEvent>();
+    translateErrorNotification(makeParams({ willRetry: false, message }), q, makeCtx(newCodexRuntimeState()));
+    expect(await collect(q)).toEqual([
+      expect.objectContaining({ type: 'error', data: expect.objectContaining({
+        message: expect.stringContaining('[MODEL_SELECTION_UNAVAILABLE]'),
+        reason: 'model_unavailable', isTerminal: true,
+      }) }),
+    ]);
+  });
+
+  it('does not interpret a generic HTTP 404 or reconnect notice as an unavailable model', () => {
+    expect(classifyCodexError({ message: 'unexpected status 404 Not Found' }).reason).toBeUndefined();
+    expect(classifyCodexError({ message: 'Reconnecting... 1/5' }).reason).toBeUndefined();
+    expect(classifyCodexError({
+      message: '{"error":{"code":"invalid_request","metadata":{"code":"model_not_found"}}}',
+    }).reason).toBeUndefined();
+  });
+
+  it('keeps structured rate limits and explicit 5xx failures on their existing error paths', () => {
+    const modelCode = '{"error":{"code":"model_not_found"}}';
+    expect(classifyCodexError({
+      message: modelCode,
+      codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 429 } },
+    }).reason).toBeUndefined();
+    expect(classifyCodexError({ message: `HTTP/1.1 503: ${modelCode}` }).reason).toBeUndefined();
+    expect(classifyCodexError({ message: `unexpected status code 502: ${modelCode}` }).reason).toBeUndefined();
   });
 
   it('classifyCodexError 把 contextWindowExceeded 与 overload 映射成稳定 reason', () => {
@@ -2248,6 +2294,106 @@ describe('extractRolloutUpdatePlanFunctionCallEvent', () => {
 });
 
 describe('codex internal citation 归一化 (#785)', () => {
+  // 测试价值：通过 dedicated delta / completed 生产入口验证每步可见文本与既有全文口径相同。
+  // 依据：maker-core-and-agent-behavior §3.2–3.3，增量化不得丢失、错序或改写正文。
+  // 缺口：既有引用用例以 updated 全文为主，未覆盖专用流在任意字符边界拆分、两类引用嵌套
+  // 与引用剥除后暴露停止串。最小输入包括 ['正文 ', '<|eos|>']，逐尾转换不能吞掉后一段。
+  // tier：unit；复用公开全文转换作为每步参考，不复制解析实现，也不以计时阈值判断通过。
+  // 实测：pnpm --dir packages/maker-core exec vitest run src/agents/codex/translator.test.ts，0.43 秒。
+  it.each([
+    ['普通文本', '正文 😀\n第二行。'],
+    ['文件路径内引号、转义和花括号', String.raw`前 :codex-file-citation{path="/tmp/a{b}\"c.md" line=2} 后`],
+    ['文件路径内嵌引用开头', '前 :codex-file-citation{path="/tmp/:codex-file-citation{a.md"} 后'],
+    ['裸花括号畸形后仍有有效引用', '前 :codex-file-citation{oops{ 后 :codex-file-citation{path="a.md"}。'],
+    ['删除文件引用后拼成 web 开头', 'a\uE200ci:codex-file-citation{}te\uE202x\uE201b'],
+    ['并列文件和 web 引用及截断残尾', '前 :codex-file-citation{path="a.md"} \uE200cite\uE202turn1\uE201 后 \uE200ci'],
+    ['正文后停止标记', '正文 <|eos|><|eo 后'],
+    ['独立混合停止串', ' \n<|eos|> <|eot_id|>\n'],
+    ['仅 web 引用和停止串后恢复正文', '\uE200cite\uE202turn1\uE201<|eos|> 后'],
+    ['无 path 引用和停止串后恢复正文', ':codex-file-citation{line=2}<|eos|> 后'],
+    ['文件路径内嵌 web 引用', '前 :codex-file-citation{path="a\uE200cite\uE202turn1\uE201b.md"} 后'],
+    ['web 引用载荷内嵌文件引用', '前 \uE200cite\uE202:codex-file-citation{path="a.md"}\uE201 后'],
+  ])('dedicated delta 任意切分保持全文转换语义：%s', async (_name, raw) => {
+    const chunkings = Array.from({ length: raw.length + 1 }, (_, split) => [raw.slice(0, split), raw.slice(split)]);
+    chunkings.push(raw.split(''));
+    for (const chunks of chunkings) {
+      const rt = newCodexRuntimeState();
+      const q = createAsyncQueue<AgentEvent>();
+      const ctx = makeCtx(rt);
+      const expected: string[] = [];
+      let accumulated = '';
+      let previousLength = 0;
+      for (const delta of chunks) {
+        translateAgentMessageDelta({ threadId: 't', turnId: 'turn', itemId: 'm', delta }, q, ctx);
+        accumulated += delta;
+        const visible = stripInternalWebCitations(
+          normalizeCodexFileCitations(accumulated.slice(0, stableCitationBoundary(accumulated))),
+        );
+        const next = visible.slice(previousLength);
+        if (next) expected.push(next);
+        previousLength = visible.length;
+      }
+      translateItemNotification('completed', {
+        threadId: 't', turnId: 'turn', item: { type: 'agentMessage', id: 'm', text: raw },
+      }, q, ctx);
+      // Reusing the identity after completed must start with fresh parser context.
+      translateAgentMessageDelta({ threadId: 't', turnId: 'next', itemId: 'm', delta: '<|eos|>' }, q, ctx);
+      translateAgentMessageDelta({ threadId: 't', turnId: 'next', itemId: 'm', delta: 'answer' }, q, ctx);
+      const events = (await collect(q)).filter(event => event.type === 'text');
+      expect(events, JSON.stringify(chunks)).toEqual([
+        ...expected.map(text => ({ type: 'text', source: 'codex', data: { text, isFinal: false, agentMessageId: 'm' } })),
+        { type: 'text', source: 'codex', data: { text: finalizeCodexCitationText(raw), isFinal: true, isFullText: true, agentMessageId: 'm' } },
+        { type: 'text', source: 'codex', data: { text: '<|eos|>answer', isFinal: false, agentMessageId: 'm' } },
+      ]);
+    }
+  });
+
+  // Long replies exercise repeated prefix commits, unlike the short split-marker cases above.
+  // Unit: verify the actual stream and final calibration retain all 1,000 chunks, without a timing assertion.
+  it('preserves a long mixed-citation reply in the delta stream and completed full text', async () => {
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(newCodexRuntimeState());
+    const chunk = `${'文'.repeat(20)}:codex-file-citation{path="src/index.ts" line=10} \uE200cite\uE202turn1\uE201 后\n`;
+    const visibleChunk = `${'文'.repeat(20)}\`src/index.ts\`  后\n`;
+    for (let i = 0; i < 1_000; i += 1) {
+      translateAgentMessageDelta({ threadId: 't', turnId: 'turn', itemId: 'm', delta: chunk }, q, ctx);
+    }
+    translateItemNotification('completed', {
+      threadId: 't', turnId: 'turn', item: { type: 'agentMessage', id: 'm', text: chunk.repeat(1_000) + '完成。' },
+    }, q, ctx);
+    const events = (await collect(q)).filter(event => event.type === 'text');
+    const deltas = events.filter(event => !(event.data as { isFinal: boolean }).isFinal);
+    expect(deltas.map(event => (event.data as { text: string }).text).join('')).toBe(visibleChunk.repeat(1_000));
+    expect(events.filter(event => (event.data as { isFinal: boolean }).isFinal)).toEqual([
+      { type: 'text', source: 'codex', data: {
+        text: visibleChunk.repeat(1_000) + '完成。', isFinal: true, isFullText: true, agentMessageId: 'm',
+      } },
+    ]);
+  });
+
+  // The existing divergent snapshot test contains only plain text; this one retains a pending citation
+  // across the rejected branch and checks final calibration, not just the internal parser cursor.
+  it('keeps a pending citation on the accepted delta branch until completed calibrates a divergent snapshot', async () => {
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(newCodexRuntimeState());
+    const send = (delta: string) => translateAgentMessageDelta({ threadId: 't', turnId: 'turn', itemId: 'm', delta }, q, ctx);
+    send('前 :codex-file-citation{path="delta');
+    translateItemNotification('updated', {
+      threadId: 't', turnId: 'turn', item: { type: 'agentMessage', id: 'm', text: '前 :codex-file-citation{path="other.md"} 分叉' },
+    }, q, ctx);
+    // The snapshot differs inside the pending citation, despite sharing the already visible prefix.
+    // It must not replace that raw prefix or contaminate the parser's retained tail.
+    send('.md"} 后');
+    translateItemNotification('completed', {
+      threadId: 't', turnId: 'turn', item: { type: 'agentMessage', id: 'm', text: '前 :codex-file-citation{path="final.md"} 最终' },
+    }, q, ctx);
+    expect((await collect(q)).filter(event => event.type === 'text').map(event => event.data)).toEqual([
+      { text: '前 ', isFinal: false, agentMessageId: 'm' },
+      { text: '`delta.md` 后', isFinal: false, agentMessageId: 'm' },
+      { text: '前 `final.md` 最终', isFinal: true, isFullText: true, agentMessageId: 'm' },
+    ]);
+  });
+
   it('normalizeCodexFileCitations 把标记换成行内代码路径,畸形标记整个剥掉', async () => {
     const { normalizeCodexFileCitations } = await import('./translator.js');
     expect(
@@ -2604,23 +2750,28 @@ it('carries the provider final phase from item start onto the first delta', asyn
   expect(await collect(q)).toContainEqual({ type: 'text', source: 'codex', data: { text: 'Visible now', isFinal: false, agentMessageId: 'final', phase: 'final_answer' } });
 });
 
-it('does not count visible summaries as output and pauses the usage clock while a command runs', () => {
+it('counts the streamed answer while it arrives and stops the clock while a command runs', () => {
   vi.useFakeTimers();
   try {
     const rt = newCodexRuntimeState(), q = createAsyncQueue<AgentEvent>(), ctx = makeCtx(rt);
     vi.setSystemTime(1_000);
     beginCodexGenerationTurn(rt, 'turn', 1_000);
-    translateItemNotification('started', { threadId: 'thread', turnId: 'turn', item: { type: 'agentMessage', id: 'm1', text: '' } }, q, ctx);
+    // Hidden reasoning: time the model spends, with nothing to count until usage arrives.
+    translateItemNotification('started', { threadId: 'thread', turnId: 'turn', item: { type: 'reasoning', id: 'r1', summary: [], content: [] } }, q, ctx);
     vi.setSystemTime(1_500);
-    translateAgentMessageDelta({ threadId: 'thread', turnId: 'turn', itemId: 'm1', delta: 'one two three four' }, q, ctx);
     expect(rt.tokenSpeed.snapshot()).toBeUndefined();
+    translateItemNotification('started', { threadId: 'thread', turnId: 'turn', item: { type: 'agentMessage', id: 'm1', text: '' } }, q, ctx);
+    vi.setSystemTime(2_000);
+    translateAgentMessageDelta({ threadId: 'thread', turnId: 'turn', itemId: 'm1', delta: 'one two three four' }, q, ctx);
+    expect(rt.tokenSpeed.snapshot()).toMatchObject({ streaming: true, tokens: 4 });
     translateItemNotification('started', { threadId: 'thread', turnId: 'turn', item: { type: 'commandExecution', id: 'c1', command: 'ls' } }, q, ctx);
     vi.setSystemTime(9_500);
     // The command is still running: its time is not generation time.
-    expect(rt.generationDurationMs).toBe(500);
-    rt.tokenSpeed.recordUsage(20, rt.generationDurationMs);
+    expect(rt.generationDurationMs).toBe(1_000);
+    settleCodexSpeedUsage(rt, { outputTokens: 20, reasoningOutputTokens: 8 });
     rt.tokenSpeed.stop();
-    expect(rt.tokenSpeed.snapshot()).toMatchObject({ streaming: false, tokens: 20, elapsedMs: 500, average: 40 });
+    // The response's real 20 tokens over the second between its first item and the command.
+    expect(rt.tokenSpeed.snapshot()).toMatchObject({ streaming: false, tokens: 20, elapsedMs: 1_000, average: 20 });
   } finally {
     vi.useRealTimers();
   }
@@ -2644,4 +2795,118 @@ it('projects imageView once and retains mixed MCP media', async () => {
     { toolUseId: 'mcp', fullText: 'captured', isError: false,
       processMedia: [{ kind: 'image', mimeType: 'image/png', data: 'aW1hZ2U=' }] },
   ]);
+});
+
+// Recorded Codex turns (scripts/token-speed-replay.ts). The speed used to divide each
+// response's output by its model time, wait for the first byte included, and to appear only
+// once a response had finished: 38.8 tok/s after a 30s answer that streamed at 63, and
+// 26 tok/s for a turn of tool calls whose answer streamed at 114. Unit tier, through the
+// translator entry points the agent calls; the smallest failing input is one streamed answer.
+it.each([
+  ['a long streamed answer', recordedAnswer as RecordedCodexStream, 42, 44],
+  ['a loop of tool calls', recordedToolLoop as RecordedCodexStream, 32, 50],
+])('times %s from its first byte and reads its speed while it streams', (_name, recorded, slowest, fastest) => {
+  vi.useFakeTimers();
+  vi.setSystemTime(0);
+  try {
+    const rt = newCodexRuntimeState(), q = createAsyncQueue<AgentEvent>(), ctx = makeCtx(rt);
+    let realOutput = 0;
+    const readings: number[] = [];
+    for (const { t, msg } of expandCodexStream(recorded)) {
+      // Advance rather than jump: the suspend heartbeat has to see time pass.
+      vi.advanceTimersByTime(Math.max(0, t - Date.now()));
+      const params = msg.params as never;
+      if (msg.method === 'turn/started') beginCodexGenerationTurn(rt, 'recorded-turn', t);
+      else if (msg.method === 'item/started') translateItemNotification('started', params, q, ctx);
+      else if (msg.method === 'item/completed') translateItemNotification('completed', params, q, ctx);
+      else if (msg.method === 'item/agentMessage/delta') {
+        translateAgentMessageDelta(params, q, ctx);
+        const shown = codexSpeedSnapshot(rt);
+        if (shown?.streaming && shown.rate > 0) readings.push(shown.rate);
+      } else if (msg.method === 'thread/tokenUsage/updated') {
+        const last = (msg.params as { tokenUsage: { last: { outputTokens: number; reasoningOutputTokens: number } } }).tokenUsage.last;
+        realOutput += last.outputTokens;
+        settleCodexSpeedUsage(rt, last);
+      } else if (msg.method === 'turn/completed') {
+        finalizeCodexGenerationTurn(rt, 'recorded-turn');
+        rt.tokenSpeed.stop();
+      }
+    }
+    const final = codexSpeedSnapshot(rt);
+    expect(final).toMatchObject({ streaming: false, tokens: realOutput });
+    expect(final!.average).toBeGreaterThan(slowest);
+    expect(final!.average).toBeLessThan(fastest);
+    // The answer is read while it streams, at the pace it streams.
+    expect(readings.length).toBeGreaterThan(0);
+    expect(Math.min(...readings)).toBeGreaterThan(40);
+    // The recorded answer itself speeds up to about 150 words a second near its end.
+    expect(Math.max(...readings)).toBeLessThan(170);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+// Review of the speed meter (PR 9597): output that streams while a tool owns the turn, and
+// waits for the user, used to leak into the next response's speed. Unit tier, translator entry points.
+describe('codex speed around unpaired output and human waits', () => {
+  const answer = (rt: CodexRuntimeState, q: ReturnType<typeof createAsyncQueue<AgentEvent>>, ctx: ReturnType<typeof makeCtx>, id: string, from: number, words: number, perDelta = 5) => {
+    translateItemNotification('started', { threadId: 't', turnId: 'turn', item: { type: 'agentMessage', id, text: '' } }, q, ctx);
+    for (let at = from + 100; at <= from + 100 * (words / perDelta); at += 100) {
+      vi.setSystemTime(at);
+      translateAgentMessageDelta({ threadId: 't', turnId: 'turn', itemId: id, delta: 'w '.repeat(perDelta) }, q, ctx);
+    }
+  };
+
+  it('drops output that streamed while tools owned the turn instead of timing the next response with it', () => {
+    vi.useFakeTimers();
+    try {
+      const rt = newCodexRuntimeState(), q = createAsyncQueue<AgentEvent>(), ctx = makeCtx(rt);
+      vi.setSystemTime(0);
+      beginCodexGenerationTurn(rt, 'turn', 0);
+      // A response of 250 tokens at 50 tok/s.
+      answer(rt, q, ctx, 'a1', 0, 250);
+      vi.setSystemTime(5_000);
+      expect(settleCodexSpeedUsage(rt, { outputTokens: 250 })?.requestTps).toBeCloseTo(50, -1);
+      // A background tool owns the turn while 50 more tokens stream, then the tool runs for 10s.
+      translateItemNotification('started', { threadId: 't', turnId: 'turn', item: { type: 'mcpToolCall', id: 'tool', server: 's', tool: 't', arguments: {} } }, q, ctx);
+      vi.setSystemTime(6_000);
+      translateAgentMessageDelta({ threadId: 't', turnId: 'turn', itemId: 'a1', delta: 'w '.repeat(50) }, q, ctx);
+      vi.setSystemTime(16_000);
+      expect(settleCodexSpeedUsage(rt, { outputTokens: 50 })).toBeUndefined();
+      expect(codexSpeedSnapshot(rt)).toBeUndefined();
+      translateItemNotification('completed', { threadId: 't', turnId: 'turn', item: { type: 'mcpToolCall', id: 'tool', server: 's', tool: 't', arguments: {} } }, q, ctx);
+      // The next response is timed from its own first byte, at its own 50 tok/s.
+      vi.setSystemTime(17_000);
+      answer(rt, q, ctx, 'a2', 17_000, 250);
+      vi.setSystemTime(22_000);
+      const report = settleCodexSpeedUsage(rt, { outputTokens: 250 });
+      expect(report?.requestTps).toBeCloseTo(50, -1);
+      expect(report!.requestMs).toBeLessThan(6_000);
+      expect(codexSpeedSnapshot(rt)).toMatchObject({ tokens: 500 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops the speed clock while the user owes an answer, and restarts it with the next output', () => {
+    vi.useFakeTimers();
+    try {
+      const rt = newCodexRuntimeState(), q = createAsyncQueue<AgentEvent>(), ctx = makeCtx(rt);
+      vi.setSystemTime(0);
+      beginCodexGenerationTurn(rt, 'turn', 0);
+      answer(rt, q, ctx, 'a1', 0, 250);
+      vi.setSystemTime(5_000);
+      // An approval or a question to the user is not an item with a boundary of its own.
+      pauseCodexGeneration(rt, 'turn', 'approval:cmd-1', 5_000);
+      vi.setSystemTime(65_000);
+      expect(codexSpeedSnapshot(rt)).toMatchObject({ streaming: false, elapsedMs: 5_000 });
+      resumeCodexGeneration(rt, 'turn', 'approval:cmd-1', 65_000);
+      answer(rt, q, ctx, 'a2', 65_000, 250);
+      vi.setSystemTime(70_000);
+      expect(settleCodexSpeedUsage(rt, { outputTokens: 500 })?.requestTps).toBeCloseTo(50, -1);
+      expect(codexSpeedSnapshot(rt)).toMatchObject({ tokens: 500, elapsedMs: 10_000, average: 50 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

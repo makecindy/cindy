@@ -239,6 +239,10 @@ Primitive 与 Pattern 默认只绑定 semantic 角色。只有品牌表达、兼
 
 UI 路径与 design-inventory 共用唯一来源（§11）本批未做。行高 `leading-4/5/6` 是否随字号缩放尚未核实，未纳入。回退：撤回本批脚本、测试与豁免表改动即可，不影响 DS-7 / DS-10 既有接线；续期的 4 条豁免回退后恢复为过期前的放行行为。
 
+### 阴影、渐变与失效写法门禁（2026-11-07）
+
+`designEffectsDiscipline.test.ts`（登记在 Desktop guard 层）扫描 renderer 源码：无类型 `shadow-[var(--x)]`、HSL 三元组直接当颜色、优先级低于 Button 变体的 `enabled:hover:` 零容忍；阴影和渐变只留逐文件计数的登记例外，与 DESIGN.md §2、§6、§7 对应。失败信息带文件、行号和改法。未覆盖 CSS 与行内 style，也未覆盖 `sidebar-item-active-*` 这类跨主题混合格式的 token。存量已在同一 PR 清零。
+
 ### DS-10 报告准确性与维护（提交候选已验证）
 
 沿用 DS-7 的颜色增量阻断、inventory 新鲜度和 Token unit tier 生成保护，不新增 CI 步骤、required 或豁免。`design-layer-report.mjs` 从 Token `desktop-bindings.json` 的 foundations.spacing/css 读取真实变量：例如 `--space-4` 已登记，`--spacing-4` 未登记，不能凭命名猜测合法性。审计结果的 scriptHashes 同时绑定这份输入。
@@ -349,7 +353,7 @@ DS-4/4b 尚有公开附件交接与完整设置页/部分状态证据缺口，DS
 | `docs/design-rules/token-decision-table.md` | 登录改版 token 决策记录（其自身已声明非现行清单） | 维持决策档案定位，非数值真相 |
 | `docs/design-rules/design-decision-log.md` | 全局设计决策史台账 | 维持只增不改；治理裁决（含 §10 待裁决项）关闭后在此归档 |
 | `DESIGN.md §10` Tier-1 slot 表 | DS-8 GENERATED 精确值摘要（用途与规则人工维护） | DS-8 同一 Terrazzo 流程生成，不再人工编辑表中数值 |
-| `DESIGN.md §16.1` 登录 token 表 | 登录域现行 token 清单（DS-8 起由 `packages/design-tokens` 生成，用途说明来自 `desktop-bindings.json`） | 同上，不再人工编辑表中数值；品牌保护项 `--login-brand-accent*` 在表外保留 |
+| `login-flow.md §16.1` 登录 token 表 | 登录域现行 token 清单（DS-8 起由 `packages/design-tokens` 生成，用途说明来自 `desktop-bindings.json`） | 同上，不再人工编辑表中数值；品牌保护项 `--login-brand-accent*` 在表外保留 |
 | UI 设计哨兵（插件仓） | SSR 抽取式扫描工具 | 仅用于发现组件、统计硬编码、定位代码与观察迁移进度；其样张不得充当视觉证据（§2 视觉真相行） |
 
 ## 12. 公开实施路线与目标验收

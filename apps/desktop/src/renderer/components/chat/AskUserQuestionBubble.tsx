@@ -5,10 +5,9 @@
  * pairs, so the original prompt and the user's answer remain visible together
  * after the agent moves on.
  *
- * Only the *answered* state reaches the stream: pending questions live in the
- * bottom input overlay, and expired/unanswered ones have no selection worth
- * showing. Those states are filtered out in MessageStream.buildRenderItems —
- * we also guard defensively here.
+ * Pending questions live in the input overlay. Answered and expired questions
+ * reach the stream, preserving the prompt and any explicit withdrawal reason
+ * without inventing an answer or marking unanswered cards answered.
  *
  * Answer shapes covered:
  *   - single-select option       → plain label string
@@ -71,7 +70,7 @@ function buildQuestionAnswerPairs(message: ChatMessage): QuestionAnswerPair[] {
 
   if (questions && questions.length > 0) {
     return questions.map((q) => {
-      const rawAnswer = answersMap?.[q.question] ?? '';
+      const rawAnswer = (q.id ? answersMap?.[q.id] : undefined) ?? answersMap?.[q.question] ?? '';
       const answerItems = parseAnswerItems(rawAnswer);
       return {
         question: q.question,
@@ -101,8 +100,8 @@ export function AskUserQuestionBubble({ message }: AskUserQuestionBubbleProps) {
   const { t } = useTranslation();
   const { askUserStatus: status } = message;
 
-  // Defensive: only the answered state is meant to surface in the stream.
-  if (status !== 'answered') return null;
+  // Preserve unanswered history as well as answers and explicit withdrawals.
+  if (status !== 'answered' && status !== 'expired') return null;
 
   const pairs = buildQuestionAnswerPairs(message);
 
@@ -138,9 +137,15 @@ export function AskUserQuestionBubble({ message }: AskUserQuestionBubbleProps) {
 
           <div className="flex min-w-0 items-start gap-[8px]">
             <span className="mt-[1px] w-[14px] shrink-0 select-none text-12 font-medium leading-[1.4] text-[var(--text-primary)]">
-              ✓
+              {status === 'expired' ? '–' : '✓'}
             </span>
-            {pair.skipped ? (
+            {status === 'expired' ? (
+              <span className="min-w-0 flex-1 whitespace-pre-wrap text-13 leading-[1.45] text-[var(--text-secondary)] [overflow-wrap:anywhere]">
+                {message.askUserWithdrawalReason
+                  ? `${t('chat.askUserQuestion.withdrawn')} · ${message.askUserWithdrawalReason}`
+                  : t('chat.askUserQuestion.unanswered')}
+              </span>
+            ) : pair.skipped ? (
               <span className="min-w-0 flex-1 whitespace-pre-wrap text-13 font-medium italic leading-[1.45] text-[var(--text-tertiary)] [overflow-wrap:anywhere]">
                 {t('chat.askUserQuestion.skippedAnswer')}
               </span>

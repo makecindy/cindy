@@ -21,7 +21,9 @@ import type { ProviderGroupRouter } from '../../provider-group/router';
 import { decideProviderGroupFailure } from '../../provider-group/failurePolicy';
 
 import { RemoteAgentPoller } from '../controller/poller';
-import { RemoteAgentRemoteError, RemoteAgentRunClient } from '../controller/runClient';
+import { RemoteAgentRemoteError, RemoteAgentRunClient, type RemoteAgentRunHandlers } from '../controller/runClient';
+import { createRemoteAgentHandle, parseStartedInfo } from '../controller/proxyHandle';
+import { ExecutorWorkspace } from '../executor/workspace';
 import { LineSplitter } from '../eventLog';
 import { relayConnId, relayKeyFor, reshareKeyFor, type RelayRunFailure } from '../host/groupRelay';
 import { createGuestProviderRouteBinder, resolveGuestProviderId } from '../host/providerAccess';
@@ -36,6 +38,7 @@ import {
   type HostedStartInput,
   type RemoteAgentGroupRelayDeps,
 } from '../host/runHost';
+import { managedSkillDigest } from '../managedSkillDigest';
 
 const GUEST_A = 'share-guest-a';
 const GUEST_B = 'share-guest-b';
@@ -77,8 +80,10 @@ function fakeAgentHost(name: string, started: Started[], options: {
   resolveProvider?: NonNullable<Parameters<typeof createRemoteAgentHost>[0]['providerAccess']>['resolve'];
   modelAccess?: Partial<NonNullable<Parameters<typeof createRemoteAgentHost>[0]['providerAccess']>>;
   bindGuestProviderRoute?: Parameters<typeof createRemoteAgentHost>[0]['bindGuestProviderRoute'];
+  managedSkills?: Parameters<typeof createRemoteAgentHost>[0]['managedSkills'];
 }) {
   return createRemoteAgentHost({
+    ...(options.managedSkills ? { managedSkills: options.managedSkills } : {}),
     forkHosted: async (_kind, opts) => ({ newSdkSessionId: `${opts.sourceSdkSessionId}-fork`, uuidMap: new Map([['old', 'new']]) }),
     prepareImageEvent: options.prepareImageEvent,
     imageArtifacts: options.imageArtifacts,
@@ -256,6 +261,7 @@ function setup(options: {
   memberBinder?: Parameters<typeof createRemoteAgentHost>[0]['bindGuestProviderRoute'];
   /** 组所在电脑本机的 Agent 表现(组选中本机这一台时)。 */
   owner?: { failStart?: boolean; onSend?: (record: Started) => void | Promise<void>;
+    managedSkills?: Parameters<typeof createRemoteAgentHost>[0]['managedSkills'];
     resolveProvider?: NonNullable<Parameters<typeof createRemoteAgentHost>[0]['providerAccess']>['resolve'];
     prepareImageEvent?: Parameters<typeof createRemoteAgentHost>[0]['prepareImageEvent'];
     modelAccess?: Partial<NonNullable<Parameters<typeof createRemoteAgentHost>[0]['providerAccess']>>;
@@ -326,7 +332,7 @@ function runId(): string {
   return `11111111-1111-4111-8111-${String(runSeq).padStart(12, '0')}`;
 }
 
-async function openAsGuest(env: ReturnType<typeof setup>, guest: string, payload: Record<string, unknown>) {
+async function openAsGuest(env: ReturnType<typeof setup>, guest: string, payload: Record<string, unknown>, observer?: Partial<RemoteAgentRunHandlers>) {
   const poller = new RemoteAgentPoller(async (args) => jsonRoundTrip(await env.owner.handle(guest, jsonRoundTrip(args[0]))));
   let counter = 0;
   /** 受邀者按顺序收到的事件与状态。 */
@@ -334,14 +340,17 @@ async function openAsGuest(env: ReturnType<typeof setup>, guest: string, payload
   const client = new RemoteAgentRunClient(runId(), poller, {
     onEvent: (event) => {
       stream.push({ t: 'event', event: event as AgentEvent });
+      observer?.onEvent?.(event);
     },
     onState: (state) => {
       stream.push({ t: 'state', state });
+      observer?.onState?.(state);
     },
     onRequest: async () => ({ type: 'callback', value: undefined }),
     onWs: () => undefined,
-    onClosed: (reason) => {
+    onClosed: (reason, error, idleReclaimed) => {
       closedReason = reason;
+      observer?.onClosed?.(reason, error, idleReclaimed);
     },
   }, () => `22222222-2222-4222-8222-${String(++counter + runSeq * 100).padStart(12, '0')}`);
   let closedReason: string | null = null;
@@ -362,6 +371,55 @@ function switchTokenIn(stream: Awaited<ReturnType<typeof openAsGuest>>['stream']
 }
 
 describe('provider group relay for shared users', () => {
+  // #9985 unit: G's real proxy must retain an unfinished M -> O -> G close.
+  // Existing relay tests only observed closed frames, not the consuming handle.
+  // O already forwards the raw close; do not expand group switching or replay.
+  it('delivers a member EOF to the unfinished guest turn even after an idle snapshot', async () => {
+    let interrupt = false;
+    const env = setup({
+      mini: { onSend: record => { record.running = true; } },
+      intercept: async (device, request, forward) => {
+        const result = await forward();
+        if (device !== 'mini' || request.op !== 'poll' || !interrupt) return result;
+        interrupt = false;
+        const data = Buffer.from(JSON.stringify({ t: 'state', state: { turnRunning: false } }) + '\n');
+        return { runs: (request.runs as Array<{ runId: string; cursor: number }>).map(run => ({
+          ...run, cursor: run.cursor + data.length, data: data.toString('base64'), done: true,
+        })) };
+      },
+    });
+    let controller: ReturnType<typeof createRemoteAgentHandle> | undefined;
+    const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }), {
+      onEvent: event => controller?.onEvent(event),
+      onState: state => controller?.onState(state),
+      onClosed: (reason, error) => controller?.onClosed(reason, error?.message, guest.client.runId),
+    });
+    controller = createRemoteAgentHandle({
+      client: guest.client, started: parseStartedInfo(guest.started, 'claude-code'),
+      workspace: new ExecutorWorkspace({ workingDir: root }),
+      recordApproval() {}, newId: runId, dispose: async () => undefined,
+    });
+    try {
+      await controller.handle.send({ type: 'user', content: 'work once' });
+      interrupt = true;
+      env.memberStarted.mini[0].emit({ type: 'status', source: 'claude-code', data: { status: 'wake-poll' } });
+      const seen: AgentEvent[] = [];
+      for await (const event of controller.handle.events()) seen.push(event);
+      expect(seen.filter(event => event.type === 'error')).toEqual([expect.objectContaining({
+        data: expect.objectContaining({ reason: 'remote_agent_closed', remoteCloseReason: 'ended', remoteRunId: guest.client.runId }),
+      })]);
+      expect(guest.closedReason()).toBe('ended');
+      expect(env.memberStarted.mini[0].sends).toHaveLength(1);
+      expect(env.relay.plan).toHaveBeenCalledOnce();
+      expect(env.relay.noteRunFailure).not.toHaveBeenCalled();
+      expect(switchTokenIn(guest.stream)).toBeUndefined();
+    } finally {
+      await controller.handle.close({ reason: 'navigation' });
+      await env.owner.dispose();
+      await Promise.all(Object.values(env.members).map(member => member.dispose()));
+    }
+  });
+
   const signedOutProvider: ProviderView = {
     id: 'shared-provider', name: 'Shared', source: 'builtin', auth: { method: 'none' },
     connected: false, agents: ['claude-code'],
@@ -1347,6 +1405,8 @@ describe('provider group relay for shared users', () => {
     }, () => '33333333-3333-4333-8333-333333333333');
     await client.open('claude-code', openPayload('relayed', { relay: relayKeyFor(GUEST_A), groupAssigned: true }));
     expect(started[0].input.guest).toBe(true);
+    expect(started[0].input.hostSessionId).toBe(hostSessionIdFor(`${OWNER_DEVICE}\0relay:${relayKeyFor(GUEST_A)}`, 'relayed'));
+    expect(started[0].input.hostSessionId).not.toBe(hostSessionIdFor(`${GUEST_A}\0relay:${relayKeyFor(GUEST_A)}`, 'relayed'));
     // 被中转的任务不能凭 id 接上这台主人自己的会话。
     await expect(new RemoteAgentRunClient(runId(), poller, {
       onEvent: () => undefined,
@@ -2253,6 +2313,65 @@ describe('provider group reshare consent', () => {
     const second = await openAsGuest(env, C_AT_B, openPayload('task-2'));
     // 同账号的组内电脑不需要同意，不带键。
     expect(opens[1]).not.toHaveProperty('reshareKey');
+    await second.client.close('close', 'navigation');
+  });
+
+  // 受邀者按组所在电脑的指纹只报了名字：组内电脑有同样一份的继续只报名字，没有的由组所在电脑补上文件；
+  // 旧版组内电脑不认单独的托管额度，文件放回 files。
+  it('fills in managed skills the chosen group computer does not have', async () => {
+    const own = (name: string) => {
+      const dir = path.join(root, 'own', name);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'SKILL.md'), name);
+      return dir;
+    };
+    const pr = own('pr');
+    const learn = own('learn');
+    const secret = own('secret');
+    // 指纹允许比同步限制更大的 Skill：补文件时也要按同步限制，放不下就整个不带。
+    const big = own('big');
+    fs.writeFileSync(path.join(big, 'asset.bin'), Buffer.alloc(600 * 1024, 1));
+    const opens: Array<{ personal: Record<string, unknown> }> = [];
+    let oldMember = false;
+    const env = setup({
+      plans: [{ kind: 'member', ...MEMBER_MINI }, { kind: 'member', ...MEMBER_MINI }],
+      owner: { managedSkills: async () => [
+        { command: 'cindy:pr', dir: pr }, { command: 'cindy:learn', dir: learn }, { command: 'cindy-plugin-x:secret', dir: secret },
+        { command: 'cindy:big', dir: big },
+      ] },
+      intercept: async (_agentDeviceId, request, forward) => {
+        if (request.op === 'caps') {
+          const caps = { ...await forward() as Record<string, unknown> };
+          delete caps.managedSkills;
+          return oldMember ? caps : { ...caps, managedSkills: { digests: { 'cindy:pr': await managedSkillDigest(pr) } } };
+        }
+        if (request.op === 'open') opens.push((request.payload as { json: { personal: Record<string, unknown> } }).json);
+        return forward();
+      },
+    });
+    const personal = { files: [], managedSkills: [
+      { command: 'cindy:pr', dir: '.claude/skills/cindy-pr', digest: await managedSkillDigest(pr), reuse: true },
+      { command: 'cindy:learn', dir: '.claude/skills/cindy-learn', digest: await managedSkillDigest(learn), reuse: true },
+      { command: 'cindy:big', dir: '.claude/skills/cindy-big', digest: await managedSkillDigest(big), reuse: true },
+      // 受邀者点名提供者装的插件 Skill：组所在电脑不替它补文件。
+      { command: 'cindy-plugin-x:secret', dir: '.claude/skills/cindy-plugin-x-secret-00000000', digest: await managedSkillDigest(secret), reuse: true },
+    ] };
+    const learnFile = { path: '.claude/skills/cindy-learn/SKILL.md', data: Buffer.from('learn').toString('base64') };
+    const first = await openAsGuest(env, C_AT_B, openPayload('task-1', { personal }));
+    expect(opens[0].personal).toMatchObject({
+      files: [],
+      managedSkills: [personal.managedSkills[0], { command: 'cindy:learn', dir: '.claude/skills/cindy-learn' }],
+      managedFiles: [learnFile],
+    });
+    expect((opens[0].personal.managedSkills as Array<Record<string, unknown>>)[1]).not.toHaveProperty('reuse');
+    await first.client.close('close', 'navigation');
+    oldMember = true;
+    const second = await openAsGuest(env, C_AT_B, openPayload('task-2', { personal }));
+    expect(opens[1].personal.files).toEqual([
+      { path: '.claude/skills/cindy-pr/SKILL.md', data: Buffer.from('pr').toString('base64') },
+      learnFile,
+    ]);
+    expect(opens[1].personal).not.toHaveProperty('managedFiles');
     await second.client.close('close', 'navigation');
   });
 

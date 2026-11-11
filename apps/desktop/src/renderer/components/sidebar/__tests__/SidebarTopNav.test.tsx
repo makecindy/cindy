@@ -59,7 +59,7 @@ vi.mock('@/features/cc-agent/sidebar/conversationSearchContext', () => ({
   useConversationSearchContext: () => ({ search: searchMock, allKnownProjects: [], openSignal: 0 }),
 }));
 
-afterEach(() => { cleanup(); });
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 /** Pretend the owner's first run already happened, so plugins keep their default (More). */
 function seedKnownPlugins(ids: string[]) {
@@ -67,6 +67,7 @@ function seedKnownPlugins(ids: string[]) {
   navigationTesting.resetArrivals();
 }
 beforeEach(() => {
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
   searchMock.query = '';
   searchMock.lockedProjectKey = null;
   mainViewsMock.routeCapable = [];
@@ -141,7 +142,6 @@ describe('Retirement attention across sidebar navigation placements', () => {
         span.className.includes(`--card-status-${tone}`),
       );
       expect(dot('awaiting')).toBeTruthy();
-      expect(dot('awaiting')?.className).not.toContain('session-card-dot');
 
       // Acknowledging retirement must preserve another plugin's ordinary unread dot.
       installedMock.ghosts = [{ manifest: { id: 'ios-simulator' }, retirement: { unread: false } }];

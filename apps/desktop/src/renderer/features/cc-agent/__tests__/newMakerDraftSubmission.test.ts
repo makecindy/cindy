@@ -117,6 +117,8 @@ async function submit(options: {
   agentKind?: 'pi' | 'codex' | 'claude-code';
   remoteHostId?: string;
   agentDeviceId?: string;
+  catalogHostDeviceId?: string;
+  authCatalogKey?: string;
   message?: string;
   builtInSkillIntent?: BuiltInSkillDraftIntent;
   skills?: AgentSkillCommand[];
@@ -173,7 +175,7 @@ async function submit(options: {
     if (channel === 'maker:list-agent-commands') return { success: true, commands: [] };
     if (channel === 'worktree:create') return { ok: true,
       meta: { ...args[0], path: worktreePath, branch: 'cindy/creator', createdAt: new Date().toISOString() } };
-    if (channel === 'maker:create-session') return { sessionId: args[0].id, workDir: args[0].workingDir };
+    if (channel === 'maker:create-session') return { sessionId: args[0].id ?? 'remote-created', workDir: args[0].workingDir };
     throw new Error(`Unexpected remote invoke: ${channel}`);
   });
   const enableOrca = vi.fn(async () => {
@@ -205,9 +207,14 @@ async function submit(options: {
   const worktreeFinished = new Promise<void>(resolve => { finishWorktree = resolve; });
   const noop = () => {};
   const setPending = vi.fn();
+  const setPendingGoal = vi.fn();
   const toastError = vi.fn();
+  const checkAndConfirm = vi.fn(async (_vendor, params) => ({
+    proceed: options.authCatalogKey === undefined || params.deviceId === options.authCatalogKey,
+  }));
   const environment = {
-    deviceDisplayName, dbToMakerAgentKind, askPluginModelRoute, writePluginModelRouteNote,
+    deviceDisplayName, dbToMakerAgentKind, askPluginModelRoute, writePluginModelRouteNote, modelCatalogKey,
+    controlledModelRoute: { catalogHostDeviceId: options.catalogHostDeviceId },
     activePluginModel: options.pluginRoute ? { pluginId: 'router', pluginName: 'Router', id: 'auto', name: 'Auto' } : null,
     ...draftEffort, getModel, window,
     localProviders: providers, draftLocalProviders: providers, localProvidersLoading: false, providers,
@@ -227,7 +234,8 @@ async function submit(options: {
     effectiveRemoteHostId: options.remoteHostId, effectiveAgentDeviceId: options.agentDeviceId,
     effectiveWorkingDir: hasWorktree ? baseRepo : options.remoteHostId ? '/remote/project' : null,
     effectiveExtraDirs: [], effectiveWritableDirs: [], effectiveFastMode: false, effectivePlanMode: false,
-    effectiveDeviceLinkDeviceId: options.deviceId, effectiveDeviceLinkDeviceName: options.deviceId, catalogDeviceId: options.deviceId,
+    effectiveDeviceLinkDeviceId: options.deviceId, effectiveDeviceLinkDeviceName: options.deviceId,
+    catalogDeviceId: modelCatalogKey(options.agentDeviceId ?? options.deviceId, options.catalogHostDeviceId),
     agentCatalogProviders: providers, deviceProvidersLoading: false,
     matchNavigationCommandName: () => null,
     wtRef: { current: hasWorktree
@@ -239,7 +247,7 @@ async function submit(options: {
     isDataOwnerGenerationCurrent: () => true,
     markSendInFlight: (value: boolean) => { if (!value) done(); },
     t: (key: string) => key, authVendor: agentKind,
-    vendorAuthGate: { checkAndConfirm: async () => ({ proceed: true }) },
+    vendorAuthGate: { checkAndConfirm },
     localDraftSessionIdRef: { current: 'draft-id' }, optimisticFirstMessageTitle: () => null,
     createSession, toastCreateSessionFailed: noop, carryDraftFavoriteAnchorToSession: noop,
     makerChatStore: { setSessionRuntime: noop, sendMessage, autoNameSession: noop }, sessionsStore: { patchLocal: noop },
@@ -247,7 +255,7 @@ async function submit(options: {
     rehomeDraftAttachments: async () => [], getComposerDraft: () => options.builtInSkillIntent
       ? { builtInSkillIntent: options.builtInSkillIntent } : null,
     NEW_MAKER_DRAFT_KEY: 'fixture', rewriteBrowserCommentsFromRehomedFiles: () => [],
-    leadingSlashInvocation, rebaseInlineRangesAfterSlashCommandRewrite, rewriteBuiltInSkillDraftForSend, setPending,
+    leadingSlashInvocation, rebaseInlineRangesAfterSlashCommandRewrite, rewriteBuiltInSkillDraftForSend, setPending, setPendingGoal,
     rewritePiSkillMessageForSend: async ({ message }: { message: string }) => message,
     clearComposerDraftAndNotify: noop, attachmentState: { clearFiles: noop },
     resetDraftWorkspaceAfterSend: noop, navigate: vi.fn(), setWtCreating: noop,
@@ -298,7 +306,7 @@ async function submit(options: {
     }
     await finished;
     if (hasWorktree && createSession.mock.calls.length) await worktreeFinished;
-    return { createSession, ipcCreate, sendMessage, setGoal, errors, environment, setPending, toastError, listAgentSkills, invokeRemote, enableOrca, createNote };
+    return { createSession, ipcCreate, sendMessage, setGoal, errors, environment, setPending, setPendingGoal, toastError, listAgentSkills, invokeRemote, enableOrca, createNote, checkAndConfirm };
   } finally { vi.unstubAllGlobals(); }
 }
 
@@ -503,6 +511,42 @@ describe('homepage submission to Main admission and first-message handoff', () =
     expect(result.ipcCreate.mock.calls[0][0]).toMatchObject({ providerId: 'other', effort: 'high' });
     expect(result.setGoal).toHaveBeenCalledOnce();
     await vi.waitFor(() => expect(result.createNote).toHaveBeenCalledOnce());
+  });
+  // Bug: a routed share's model was saved on a local session. Both creation paths must
+  // persist the exact Agent location; local-only route cases did not observe this. Tier: unit.
+  it.each(['send', 'goal'] as const)('creates %s on the share selected by the plugin', async (entry) => {
+    const result = await submit({ entry, pluginRoute: async () => ({
+      outcome: 'routed', pluginName: 'Router', modelName: modelId, reason: 'fixture',
+      route: { agentKind: 'pi', model: modelId, providerId, agentDeviceId: 'share:fixture' },
+    }) });
+    expect(result.errors).toEqual([]);
+    expect(result.ipcCreate.mock.calls[0][0]).toMatchObject({ agentDeviceId: 'share:fixture', providerId });
+  });
+  // PR #8460 / unit: a source reachable only through task computer B must keep B in
+  // the readiness catalog key. Existing fixtures always allowed readiness regardless
+  // of its location. Exercise both production submit callbacks with a gate that
+  // rejects a direct lookup; also cover changed and local plugin selections.
+  describe.each(['send', 'goal'] as const)('%s via a controlled task computer', (entry) => {
+    it.each(['absent', 'kept', 'changed', 'local'] as const)('preserves the catalog relay when the plugin is %s', async (verdict) => {
+      const taskDeviceId = 'task-b';
+      const agentDeviceId = verdict === 'local' ? undefined : verdict === 'changed' ? 'share:new' : 'share:original';
+      const catalogKey = modelCatalogKey(agentDeviceId ?? taskDeviceId, taskDeviceId);
+      const result = await submit({
+        entry, deviceId: taskDeviceId, agentDeviceId: 'share:original',
+        catalogHostDeviceId: taskDeviceId, authCatalogKey: catalogKey,
+        ...(verdict === 'absent' ? {} : { pluginRoute: async (): Promise<GhostStartTaskRouteResult> => verdict === 'kept'
+          ? { outcome: 'kept', pluginName: 'Router', modelName: modelId, why: 'no-opinion' }
+          : { outcome: 'routed', pluginName: 'Router', modelName: modelId, reason: 'fixture',
+              route: { agentKind: 'pi', model: modelId, providerId, ...(agentDeviceId ? { agentDeviceId } : {}) } } }),
+      });
+      expect(result.errors).toEqual([]);
+      expect(result.checkAndConfirm).toHaveBeenCalledWith('pi', { deviceId: catalogKey });
+      const created = result.invokeRemote.mock.calls.find(([, channel]) => channel === 'maker:create-session');
+      expect(created?.[0]).toBe(taskDeviceId);
+      expect(created?.[2]?.[0]?.agentDeviceId).toBe(agentDeviceId);
+      if (entry === 'goal') expect(result.setPendingGoal).toHaveBeenCalledWith('remote-created', expect.objectContaining({ objective: 'hello goal' }));
+      else expect(result.setPending).toHaveBeenCalledWith('remote-created', expect.objectContaining({ text: 'hello' }));
+    });
   });
   it('keeps the selected route and still sends when the plugin call fails', async () => {
     const result = await submit({

@@ -25,11 +25,11 @@ import { clearWorkspaceProviderSourcesForRemoteModelChanges } from './workspaceP
 
 const log = createLogger('hook-control');
 
-export type HookPrefsChannel = 'slack' | 'telegram' | 'x';
+export type HookPrefsChannel = 'slack' | 'telegram' | 'x' | 'feishu';
 
 export interface WorkspacePrefsEntry {
   channel: HookPrefsChannel;
-  /** Slack multi-team 归属；Telegram / X / 单绑定为 null。 */
+  /** Slack multi-team 归属；Telegram / X / 飞书 / 单绑定为 null。 */
   teamId: string | null;
   workspace: string;
   model: string | null;
@@ -62,7 +62,7 @@ function filePath(): string {
 }
 
 function isChannel(value: unknown): value is HookPrefsChannel {
-  return value === 'slack' || value === 'telegram' || value === 'x';
+  return value === 'slack' || value === 'telegram' || value === 'x' || value === 'feishu';
 }
 
 function isNullablePrefField(value: unknown): value is string | null {
@@ -115,7 +115,7 @@ function readStore(fp: string): StoreFile {
     const r = raw as Record<string, unknown>;
     const migrated: StoreFile['migrated'] = {};
     if (r.migrated && typeof r.migrated === 'object') {
-      for (const channel of ['slack', 'telegram', 'x'] as const) {
+      for (const channel of ['slack', 'telegram', 'x', 'feishu'] as const) {
         if ((r.migrated as Record<string, unknown>)[channel] === true) {
           migrated[channel] = true;
         }

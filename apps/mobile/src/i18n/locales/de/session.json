@@ -2,7 +2,7 @@
   "githubPrs": {
     "title": "PR-Links verwalten",
     "hint": "Bis zu 3 in der Kopfzeile; angeheftete PRs erscheinen zuerst",
-    "empty": "Füge zum Hinzufügen einen GitHub-PR-Link ein",
+    "empty": "Füge zum Hinzufügen einen GitHub-PR- oder GitLab-MR-Link ein",
     "removed": "Entfernt: {{count}}",
     "legacy": "Unbestätigte Verweise: {{count}}",
     "addLabel": "PR-Link hinzufügen",
@@ -10,7 +10,7 @@
     "loading": "Wird geladen…",
     "restore": "PR wiederherstellen",
     "pin": "In der Kopfzeile anheften",
-    "unpin": "PR lösen",
+    "unpin": "PR / MR lösen",
     "pinLimit": "Bis zu 3 PRs anheften",
     "reorderHint": "Mit Alt+↑/↓ innerhalb der angehefteten oder nicht angehefteten Gruppe umsortieren.",
     "dragHandle": "Ziehen, um {{repo}} #{{number}} umzusortieren",
@@ -18,12 +18,13 @@
     "errors": {
       "duplicate": "Dieser PR ist bereits verknüpft; entfernte Links lassen sich aus der Liste wiederherstellen",
       "notFound": "PR nicht gefunden oder Zugriff verweigert",
-      "invalidUrl": "Gib einen gültigen GitHub-PR-Link ein",
+      "invalidUrl": "Gib einen gültigen GitHub-PR- oder GitLab-MR-Link ein",
       "reorderFailed": "Die Reihenfolge wurde nicht gespeichert. Versuche es erneut.",
-      "verifyFailed": "Der PR konnte nicht geprüft werden; prüfe deine GitHub-Anmeldung und Zugriffsrechte",
+      "verifyFailed": "Der PR konnte nicht geprüft werden; prüfe deine Anmeldung und Zugriffsrechte bei GitHub oder GitLab",
       "unsupported": "Die Version dieses Computers unterstützt die Verwaltung von PR-Links nicht",
       "failed": "PR-Links konnten nicht aktualisiert werden"
     },
+    "urlPlaceholder": "GitHub-PR- oder GitLab-MR-Link",
     "moveUp": "Nach oben"
   },
   "paneResize": {
@@ -72,6 +73,10 @@
     "text": "Ein automatischer Durchlauf ist fehlgeschlagen.",
     "precheck": "Automatische Prüfungen sind vorübergehend blockiert.",
     "rateLimited": "Automatische Prüfungen sind wegen eines Anfragelimits vorübergehend blockiert.",
+    "pluginMissing": "Automatische Prüfungen sind blockiert: Das Plugin „{{name}}“ ist nicht installiert. Nach der Installation auf dem Computer laufen sie automatisch weiter.",
+    "pluginMissingUnnamed": "Automatische Prüfungen sind blockiert: Ein benötigtes Plugin ist nicht installiert. Nach der Installation auf dem Computer laufen sie automatisch weiter.",
+    "pluginDisabled": "Automatische Prüfungen sind blockiert: Das Plugin „{{name}}“ ist deaktiviert. Nach dem Aktivieren auf dem Computer laufen sie automatisch weiter.",
+    "pluginDisabledUnnamed": "Automatische Prüfungen sind blockiert: Ein benötigtes Plugin ist deaktiviert. Nach dem Aktivieren auf dem Computer laufen sie automatisch weiter.",
     "dismissTitle": "Hinweis auf früheren Fehler schließen"
   },
   "common": {
@@ -88,6 +93,7 @@
     "context": "Kontext",
     "screenshot": "Screenshot",
     "photo": "Fotos",
+    "photosAndVideos": "Fotos und Videos",
     "takePhoto": "Foto aufnehmen",
     "file": "Datei",
     "joinConversation": "Zum Chat hinzufügen ({{num}})",
@@ -239,7 +245,25 @@
       },
       "context": {
         "title": "Kontextnutzung",
-        "unavailable": "Keine Kontextdaten"
+        "unavailable": "Keine Kontextdaten",
+        "estimate": {
+          "title": "Textschätzungen",
+          "delivery": "Antwortdarstellung",
+          "host": "Cindy-Anweisungen",
+          "plugins": "Plugin-Katalog",
+          "memoryRules": "Speicheranweisungen",
+          "memoryIndex": "Speicherindex",
+          "profile": "Teammitglied-Profil",
+          "user": "Benutzeranweisungen",
+          "directories": "Zusätzliche Verzeichnisse",
+          "native": "Pi-Anweisungen",
+          "skills": "Skill-Katalog",
+          "project": "Projektanweisungen",
+          "tools": "Werkzeugdefinitionen",
+          "messages": "Gesprächstext",
+          "other": "Weitere Anweisungen",
+          "note": "Schätzung des aktuellen Texts, keine Modell-Tokenisierung. Ohne Bilder und Anbieterformatierung; die Summe weicht vom nativen Gesamtwert ab."
+        }
       },
       "rateLimit": {
         "plan": "Plan",
@@ -458,11 +482,17 @@
     "worktreeCleanupPending": "Der vorherige Worktree wartet noch auf die Bereinigung. Verbinde das Gerät erneut und versuch es noch einmal."
   },
   "menu": {
+    "moveToProject": "Aufgabe verschieben",
+    "moveFailed": "Aufgabe konnte nicht verschoben werden",
+    "moveRunning": "Diese Aufgabe läuft. Verschiebe sie, sobald sie beendet ist.",
+    "moveWorktree": "Das Arbeitsverzeichnis dieser Aufgabe ist ein Worktree. Sie kann daher noch nicht in ein anderes Projekt verschoben werden.",
+    "moveUnsupported": "Aktualisiere Cindy auf dem verbundenen Computer, um Aufgaben zu verschieben.",
     "details": "Sitzungsdetails",
     "chipPinned": "Angeheftet",
     "chipArchived": "Archiviert",
     "titleFallback": "Remote-Sitzung",
     "unnamedTitle": "Unbenannte Sitzung",
+    "openSection": "Öffnen",
     "renameAction": "Sitzung umbenennen",
     "copyLinkAction": "Sitzungslink kopieren",
     "unpin": "Lösen",
@@ -598,7 +628,10 @@
     "dismissNotice": "Hinweis schließen",
     "ignore": "Ignorieren",
     "executionResultUnavailable": "Das Ausführungsergebnis konnte nicht abgerufen werden. Die automatische Fortsetzung wurde gestoppt. Bitte den Assistenten, das vorhandene Ausführungsergebnis zu prüfen.",
-    "outputLimit": "Das Modell hat sein Ausgabelimit erreicht. Diese Antwort ist daher möglicherweise unvollständig. Sende die nächste Nachricht, um fortzufahren.",
+    "outputLimit": "Das Modell hat sein Ausgabelimit erreicht. Diese Antwort ist möglicherweise unvollständig. Sende eine neue Nachricht, um fortzufahren. Wenn dies wiederholt auftritt, reduziere den Denkaufwand oder komprimiere zuerst den Gesprächsverlauf.",
+    "outputLimitReasoning": "Das Denken hat den Großteil des Ausgabebudgets dieser Anfrage verbraucht. Die Antwort ist möglicherweise unvollständig. Reduziere den Denkaufwand oder komprimiere den Gesprächsverlauf, bevor du fortfährst.",
+    "outputLimitUsage": "Diese Modellanfrage hat {{outputTokens}} Ausgabetokens verwendet, davon {{reasoningTokens}} Denktokens.",
+    "outputLimitOutputUsage": "Diese Modellanfrage hat {{outputTokens}} Ausgabetokens verwendet.",
     "toolUseLoopDetected": "Das Modell hat einen Tool-Aufruf zu oft wiederholt. Cindy hat diesen Durchgang gestoppt, um eine Endlosschleife zu verhindern. Sende eine neue Nachricht, um fortzufahren.",
     "toolUseLoopDetectedWithCount": "Das Modell hat wiederholt ungültige Tool-Aufrufe ausgeführt. Cindy hat diesen Durchgang nach {{count}} Fehlern gestoppt, um eine Endlosschleife zu verhindern. Sende eine neue Nachricht, um fortzufahren.",
     "toolUseLoopDetectedConsecutiveWithCount": "Das Modell hat denselben Tool-Aufruf {{count}} Mal wiederholt. Cindy hat diesen Durchgang gestoppt, um eine Endlosschleife zu verhindern. Sende eine neue Nachricht, um fortzufahren.",
@@ -631,6 +664,8 @@
     "taskAlreadyCreated": "Diese Aufgabe existiert bereits auf dem Computer. Ihre gespeicherten Nachrichten werden dort fortgesetzt."
   },
   "remoteError": {
+    "REMOTE_AGENT_GROUP_FULL": "Alle Konten bzw. Computer, die diese Aufgabe ausführen können, haben ihr Parallelitätslimit erreicht. Warte, bis eine laufende Aufgabe endet, oder erhöhe das Limit in den Anbietereinstellungen.",
+    "SUBSCRIPTION_ACCOUNTS_FULL": "Alle Konten bzw. Computer, die diese Aufgabe ausführen können, haben ihr Parallelitätslimit erreicht. Warte, bis eine laufende Aufgabe endet, oder erhöhe das Limit in den Anbietereinstellungen.",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "Bei dieser SSH-Aufgabe lässt sich der Harness nicht wechseln. Wähle ein Modell im aktuellen Harness oder erstelle eine neue SSH-Aufgabe mit dem benötigten Harness.",
     "MODEL_SELECTION_UNAVAILABLE": "Das ausgewählte Modell ist bei seinem Anbieter nicht mehr verfügbar. Prüfe die Verbindung in den Einstellungen oder wähle ein anderes verfügbares Modell.",
     "HARNESS_SWITCH_NOT_READY": "Der Harness-Wechsel ist noch nicht bereit. Prüfe die Fehlerdetails und versuche es erneut, sobald der Harness bereit ist.",
@@ -659,7 +694,7 @@
     "REMOTE_PROVIDER_UPDATING": "Die Zugangsdaten dieses Modellanbieters werden aktualisiert. Versuch es gleich erneut.",
     "REMOTE_WORKDIR_UNAVAILABLE": "Das Remote-Arbeitsverzeichnis ist nicht verfügbar. Prüfe, ob der Ordner auf diesem Computer noch existiert, und versuch es erneut.",
     "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "Der Computer kann noch nicht bestätigen, ob diese Nachricht gesendet wurde. Warte kurz und versuch es erneut. Sende dieselbe Nachricht nicht zweimal.",
-    "REMOTE_AGENT_UNAVAILABLE": "Der Computer, auf dem der Agent läuft, ist nicht erreichbar. Stelle sicher, dass er online ist und Fernsteuerung erlaubt, und versuch es erneut.",
+    "REMOTE_AGENT_UNAVAILABLE": "Die Verbindung zum Computer, auf dem der Agent läuft, wurde unterbrochen. Versuch es erneut. Wenn das öfter passiert, stelle sicher, dass er online ist und Fernsteuerung erlaubt.",
     "REMOTE_AGENT_PEER_TOO_OLD": "Cindy auf dem anderen Computer ist zu alt, um den Agent für diesen Computer auszuführen. Aktualisiere Cindy dort zuerst.",
     "REMOTE_AGENT_EXPIRED": "Diese Sitzung wurde auf dem Computer, auf dem der Agent läuft, bereits beendet. Sende deine Nachricht erneut.",
     "REMOTE_AGENT_NOT_FOUND": "Diese Sitzung wurde auf dem Computer, auf dem der Agent läuft, bereits beendet. Sende deine Nachricht erneut.",
@@ -673,6 +708,7 @@
     "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Dieser Computer erlaubt die Remote-Nutzung dieses Anbieters nicht. Aktiviere dort „Remote-Nutzung erlauben“ unter Einstellungen → Anbieter oder wähle ein anderes Modell.",
     "REMOTE_AGENT_FORK_FAILED": "Der Computer, auf dem der Agent läuft, konnte von hier aus keine neue Sitzung starten. Versuch es erneut oder wähle eine andere Nachricht.",
     "REMOTE_AGENT_SHARE_PAUSED": "Der Eigentümer hat diese Freigabe für dich pausiert. Diese Modelle können erst wieder genutzt werden, wenn sie fortgesetzt wird. Wechsle zu einem anderen Modell, um fortzufahren.",
+    "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "Dies ist eine ältere Freigabe; sie ist nicht nutzbar, solange „Nur Agent-Net verwenden“ aktiviert ist. Schalte die Option aus, um fortzufahren, oder wechsle zu einem anderen Modell.",
     "REMOTE_AGENT_SHARE_REMOVED": "Diese Freigabe ist nicht mehr verfügbar (der Eigentümer hat sie entfernt oder du hast sie verlassen). Wechsle zu einem anderen Modell, um fortzufahren.",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "Der freigegebene Anbieter ist vorübergehend nicht verfügbar. Der Computer des Eigentümers ist möglicherweise offline oder die Freigabe ist derzeit deaktiviert. Versuch es später erneut oder wechsle zu einem anderen Modell, um fortzufahren."
   },
@@ -698,21 +734,34 @@
     "remoteDirPathHint": "Der Ordner wird auf dem Ausführungsgerät geprüft. Ein fehlender Ordner führt zu einem Fehler. Der Ordner des Lead wird niemals ersatzweise verwendet.",
     "remoteDirInvalid": "Gib einen absoluten Pfad auf dem Ausführungsgerät ein.",
     "roleLabel": "Rollenname",
-    "roleHint": "Nur ein Name, um Beteiligte zu unterscheiden. Er ändert keine Fähigkeiten.",
-    "customRole": "Benutzerdefiniert",
-    "customRolePlaceholder": "Eigener Rollenname",
-    "customRolePredefinedError": "Ein eigener Rollenname darf keiner vordefinierten Rolle entsprechen",
+    "taskLabel": "Was der Worker übernimmt",
+    "enableHint": "Diese Aufgabe wird zum Lead: Sie verteilt die Arbeit und prüft die Ergebnisse. Der Worker ist ein eigenständiger Agent, der die Arbeit ausführt und Bericht erstattet.",
+    "roles": {
+      "reviewer": {
+        "name": "Review",
+        "task": "Sieh dir die Arbeit des Leads an und mach ein paar Vorschläge."
+      },
+      "developer": {
+        "name": "Entwickeln"
+      },
+      "tester": {
+        "name": "Testen",
+        "task": "Teste die bisherige Arbeit des Leads und melde Fehler mit Schritten zur Reproduktion."
+      }
+    },
+    "addRole": "Rolle hinzufügen",
+    "removeRoleHint": "Zum Entfernen gedrückt halten",
+    "removeRoleConfirmTitle": "„{{role}}“ entfernen?",
+    "removeRoleConfirmDesc": "Über „Rolle hinzufügen“ kannst du sie jederzeit wieder hinzufügen.",
+    "removeRoleConfirm": "Rolle entfernen",
+    "moreSettings": "Weitere Einstellungen",
     "agentLabel": "Agent",
-    "modelLabel": "Modell",
     "modelDefault": "Standard",
     "modelDefaultHint": "Verwendet das Standardmodell für Worker des Computers",
-    "permissionLabel": "Berechtigungsmodus",
     "permissionAuto": "Automatische Prüfung",
     "permissionFull": "Vollzugriff",
-    "permissionAutoHint": "Liest und schreibt im Arbeitsbereich und prüft automatisch Anfragen nach erweiterten Rechten. Aktionen mit hohem Risiko können abgelehnt werden oder eine Bestätigung erfordern.",
-    "permissionFullHint": "Kann jede Datei ändern und Befehle mit Netzwerkzugriff ohne erneute Rückfrage ausführen. Höchstes Risiko; nur für vertrauenswürdige Aufgaben verwenden.",
     "initialTaskLabel": "Erste Aufgabe (optional)",
-    "initialTaskPlaceholder": "Eine optionale erste Aufgabe für diesen Worker",
+    "initialTaskPlaceholder": "Erste Aufgabe für den Worker eingeben oder leer lassen, dann verteilt der Lead die Arbeit",
     "workerCountSummary_one": "{{count}} Worker · {{running}} aktiv",
     "workerCountSummary_other": "{{count}} Workers · {{running}} aktiv",
     "loading": "Workers werden geladen…",
@@ -788,12 +837,6 @@
     "failed": "Speichern fehlgeschlagen. Versuch es erneut.",
     "restore": "Standardwerte wiederherstellen"
   },
-  "followUp": {
-    "title": "Soll ich deine Sitzungen weiterverfolgen?",
-    "start": "Nachverfolgung starten",
-    "notNow": "Nicht jetzt",
-    "saveFailed": "Speichern fehlgeschlagen. Versuche es erneut."
-  },
   "providerGroupRebalance": {
     "title": "Auf {{label}} fortsetzen?",
     "body": "Um das Kontingent aller Konten gleichmäßig zu nutzen, sende diese Nachricht über {{label}} ({{quota}}). Die letzten Nachrichten und eine Zusammenfassung werden übernommen; ältere Details können verloren gehen.",
@@ -801,7 +844,10 @@
     "quotaReset": "{{left}} % übrig · Zurücksetzung in {{reset}}",
     "confirm": "Wechseln",
     "remember": "Wechseln und künftig automatisch wechseln (nur für diese Aufgabe)",
-    "cancel": "Abbrechen"
+    "cancel": "Abbrechen",
+    "disable": "Nicht automatisch wechseln (diese Aufgabe)",
+    "disableFailed": "Es konnte nicht bestätigt werden, ob deine Auswahl gespeichert wurde. Prüfe die Verbindung und ob Cindy auf dem Computer mit dieser Aufgabe aktuell ist, und versuche es erneut. Diese Nachricht wird wie gewohnt gesendet.",
+    "moreOptions": "Weitere Optionen"
   },
   "messageEdit": {
     "editing": "Nachricht bearbeiten",

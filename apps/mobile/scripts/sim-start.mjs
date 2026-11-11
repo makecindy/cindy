@@ -46,6 +46,7 @@ import {
   extractMobileDevRegionArgs,
   withLocalMobileRegionConfig,
 } from './lib/mobile-dev-region.mjs';
+import { metroLogEnv, prepareMetroLog, removeMetroLog } from './lib/sim-logcheck.mjs';
 import {
   classifySimMetroListener,
   extractSimMetroPortArgs,
@@ -180,6 +181,13 @@ const portArgIdx = args.indexOf('--port');
 if (portArgIdx >= 0) console.log(`  Metro 端口:${args[portArgIdx + 1]}(模拟器 build label 会显示 host:port,确认没连错分支)`);
 console.log('  注入 EXPO_PUBLIC_XDT_GIT_SOURCE / EXPO_PUBLIC_XDT_GIT_BRANCH / EXPO_PUBLIC_XDT_GIT_COMMIT 给 __DEV__ build label\n');
 
+// 只在真正启动时建日志:复用已有 Metro 的分支在上面已退出。日志路径记进 Metro 归属记录,
+// logcheck 只读这次启动的日志;建不出来时记 null,logcheck 报无法判定。
+const metroLog = prepareMetroLog(portArgs.port, { source: sourceIdentity, region });
+console.log(metroLog
+  ? `  Metro 日志:${metroLog}(验证后运行 pnpm mobile:sim:logcheck)\n`
+  : '  ⚠ 无法创建 Metro 日志,mobile:sim:logcheck 将无法判定\n');
+
 // 用 `pnpm exec expo`:pnpm 不在 apps/mobile/node_modules/.bin 放 expo bin,但 pnpm exec
 // 能按包依赖解析到 expo CLI(直接 node node_modules/.bin/expo 会 MODULE_NOT_FOUND)。
 const invocation = resolvePnpmInvocation(args, {
@@ -192,6 +200,7 @@ const child = spawn(invocation.command, invocation.args, {
     ...process.env,
     ...buildEnv,
     ...(invocation.env ?? {}),
+    ...(metroLog ? metroLogEnv(metroLog, process.env.NODE_OPTIONS) : {}),
     EXPO_PUBLIC_XDT_GIT_BRANCH: branch,
     EXPO_PUBLIC_XDT_GIT_COMMIT: commit,
     EXPO_PUBLIC_XDT_GIT_SOURCE: sourceIdentity,
@@ -201,20 +210,49 @@ const child = spawn(invocation.command, invocation.args, {
 });
 
 if (Number.isInteger(child.pid)) {
-  writeMetroOwner(portArgs.port, {
-    pid: child.pid,
-    launcherPid: child.pid,
-    source: sourceIdentity,
-    region,
-    loginScenario,
-    envFingerprint,
-    worktreeRoot,
+  // 先挂清理再写归属记录:写记录失败时 Metro 已经在跑,日志也要随它一起清掉。
+  child.once('exit', () => {
+    clearMetroOwner(portArgs.port, child.pid);
+    removeMetroLog(metroLog);
   });
-  child.once('exit', () => clearMetroOwner(portArgs.port, child.pid));
+  try {
+    writeMetroOwner(portArgs.port, {
+      pid: child.pid,
+      launcherPid: child.pid,
+      source: sourceIdentity,
+      region,
+      loginScenario,
+      envFingerprint,
+      worktreeRoot,
+      metroLogPath: metroLog,
+    });
+  } catch (error) {
+    // 没有归属记录,whoami / logcheck 都认不出这个 Metro;停掉它,不留无人认领的进程和日志。
+    // Windows 上 child 只是 pnpm/cmd 外壳,沿用接管时的整树终止,并等它真正停下。
+    const stopped = await terminateMetro(child.pid, { worktreeRoot });
+    removeMetroLog(metroLog);
+    console.error(stopped
+      ? `✗ 无法写入 Metro 归属记录,已停止 Metro: ${error.message}`
+      : `✗ 无法写入 Metro 归属记录,且未能在限定时间内停止 Metro(pid=${child.pid}): ${error.message}`);
+    process.exit(1);
+  }
 }
 
 child.once('error', (error) => {
+  removeMetroLog(metroLog);
   console.error(`✗ 无法启动 Metro: ${error.message}`);
   process.exit(1);
 });
 child.on('exit', (code) => process.exit(code ?? 0));
+
+// Ctrl-C 会同时发给本进程和 Metro;Node 默认会立即退出本进程,来不及等 Metro 的 exit 清理
+// 归属记录和日志。接管这些信号:转给 Metro,由上面的 exit 回调清理后再退出。
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+  process.on(signal, () => {
+    try {
+      child.kill(signal);
+    } catch {
+      // Metro 已经退出时 exit 回调会照常收尾。
+    }
+  });
+}

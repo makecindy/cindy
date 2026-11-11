@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, createElement } from 'react';
+import { act, createElement, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({
@@ -11,6 +11,7 @@ const h = vi.hoisted(() => ({
   disk: new Map<string, string>(),
   history: new Map<string, string>(),
   historyWriteFails: false,
+  focused: true,
   foreground: new Set<(state: string) => void>(),
   put: vi.fn(async (..._args: unknown[]) => {}),
 }));
@@ -29,16 +30,17 @@ vi.mock('@/session/mobileDurableOutbox', async () => {
 vi.mock('expo-crypto', () => ({ randomUUID: () => 'fixture-operation-id' }));
 vi.mock('@/session/mobileAttachmentUpload', () => ({ putMobileAttachmentUploadFromFile: (...args: unknown[]) => h.put(...args) }));
 vi.mock('react-native', () => ({ AppState: { currentState: 'active', addEventListener: (_: string, fn: (state: string) => void) => { h.foreground.add(fn); return { remove: () => h.foreground.delete(fn) }; } } }));
-vi.mock('expo-router', async () => { const { useEffect } = await import('react'); return { useIsFocused: () => true, useFocusEffect: (fn: any) => useEffect(fn, [fn]) }; });
+vi.mock('expo-router', async () => { const { useEffect } = await import('react'); return { useIsFocused: () => h.focused, useFocusEffect: (fn: any) => useEffect(() => h.focused ? fn() : undefined, [fn, h.focused]) }; });
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ i18n: { language: 'en' } }) }));
 vi.mock('@/i18n', () => ({ default: { t: (key: string) => key } }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => h.auth }));
-vi.mock('@/config/env', () => ({ getActiveMobileSessionRealm: () => 'global', getMobileEndpointForRealm: () => 'https://chat.example.invalid', loadMobileEndpointsForRealm: vi.fn() }));
+vi.mock('@/config/env', () => ({ BUILD_AUTH_REGION: 'global', getActiveMobileSessionRealm: () => 'global', getMobileEndpointForRealm: () => 'https://chat.example.invalid', loadMobileEndpointsForRealm: vi.fn() }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => h.link }));
 vi.mock('@/device-link/revokedDevicesStore', () => ({ useRevokedDevices: () => new Set() }));
 vi.mock('@/session/useRemoteResourceList', () => ({ useRemoteResourceList: () => h.legacy }));
 vi.mock('@/device-link/remoteStatus', () => ({ formatRemoteError: String }));
 import { useBotGroupChat } from '@/session/useBotGroupChat';
+import { apiFetchRaw } from '@/api/client';
 import { useBotGroupRoster } from '@/session/useBotGroupRoster';
 import { botGroupRoute } from '@/session/botGroupNavigation';
 import { mobileDurableOutbox } from '@/session/mobileDurableOutbox';
@@ -61,7 +63,8 @@ let roster: ReturnType<typeof useBotGroupRoster>;
 let chat: ReturnType<typeof useBotGroupChat>;
 let showChat = false;
 let threadRootId: string | undefined;
-function Probe() { roster = useBotGroupRoster(h.targets, !showChat); chat = useBotGroupChat(host, showChat ? id : '', threadRootId); return null; }
+const timelineChanges = vi.fn();
+function Probe() { roster = useBotGroupRoster(h.targets, !showChat); chat = useBotGroupChat(host, showChat ? id : '', threadRootId); useEffect(() => { timelineChanges(); }, [chat.state]); return null; }
 async function render() { root ??= createRoot(document.createElement('div')); await act(async () => root!.render(createElement(Probe))); }
 async function send(input: Record<string, unknown>) {
   await chat.act('send', input);
@@ -73,6 +76,7 @@ async function send(input: Record<string, unknown>) {
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 beforeEach(async () => {
   h.historyWriteFails = false;
+  h.focused = true;
   setMobileAuthOwner(null); peekChatMessages(id); await clearHistoryDisk();
   await clearRemoteResourceCache(); h.auth.user.id = 'owner';
   await mobileDurableOutbox.activate(''); h.disk.clear(); h.history.clear(); setMobileAuthOwner('owner');
@@ -87,13 +91,28 @@ beforeEach(async () => {
     if (path.startsWith('/v1/changes?')) return { head: '1', cursor: '1', changes: [], hasMore: false };
     if (path.endsWith('/members')) return [{ id: self, kind: 'human', state: 'joined', name: 'Me', ownerActorId: self, ownerName: '', role: 'member', avatar: null }];
     if (path.endsWith('/snapshot')) return { room, members: [{ id: self, kind: 'human', state: 'joined', name: 'Me', ownerActorId: self, ownerName: '', role: 'member', avatar: null }], messages: [], cursor: '1' };
-    if ((path.endsWith('/executions') || path.includes('/execution-failures?'))) return [];
+    if ((path.endsWith('/executions') || path.includes('/execution-failures?') || path.endsWith('/plans'))) return [];
     if (path.includes('/messages?')) return [{ id: self, seq: '9007199254740993', authorId: self, author: { kind: 'human', name: 'Me' }, content: [{ type: 'text', text: 'Fixture message' }], createdAt: '2026-10-09', deleted: false, threadRootId: null }];
     if (path.endsWith('/messages')) return { id: self };
     throw new Error('Unexpected request');
   });
 });
 // Regression: entering a saved group must not depend on Chat Server latency.
+// Unit: exercise the direct Chat Server path too; the remote-computer hook alone
+// cannot protect against identical load + thread-hydration snapshots rebuilding rows.
+it('keeps an unchanged direct group timeline stable across refresh and thread hydration', async () => {
+  showChat = true; await render();
+  const first = chat.state;
+  timelineChanges.mockClear();
+  for (let i = 0; i < 10; i++) await act(async () => { chat.reload(); });
+  expect(timelineChanges).not.toHaveBeenCalled();
+  expect(chat.state).toBe(first);
+  expect(chat.state).toMatchObject({ kind: 'ready', group: { messages: [{ content: 'Fixture message' }] } });
+  h.auth.apiFetch.mockRejectedValue({ status: 403 });
+  await act(async () => { chat.reload(); });
+  expect(chat.state.kind).toBe('missing');
+});
+
 // Integration tier: real hook, real disk store, controlled native IO / HTTP.
 it('reopens saved history offline from memory and disk, and purges it after membership loss', async () => {
   setMobileAuthOwner('owner'); showChat = true; await render();
@@ -127,6 +146,116 @@ it('does not show one account\'s saved group to another account', async () => {
   expect(chat.state.kind).toBe('loading');
 });
 afterEach(() => { act(() => root?.unmount()); root = undefined; vi.unstubAllGlobals(); vi.useRealTimers(); });
+
+// #5759, unit: exercise the actual direct hook/client, not the remote-resource
+// mock. A human-signed proposal previously rendered as text and rejected plan-start.
+// The blur cases retain the original group in the navigation stack while its snapshot is pending.
+it('sends a future skip from the mobile hook without requiring a nonexistent execution', async () => {
+  const planId = '00000000-0000-4000-8000-000000000040';
+  const plan = { id: planId, revision: 2, creator_id: self, organizer_id: self, source_message_id: self,
+    request_text: 'Talk', kind: 'talk', status: 'running', current_step: 0, supportsPendingSkip: true,
+    activeExecution: { id: self, status: 'running' }, created_at: '2026-10-09', updated_at: '2026-10-09',
+    steps: [0, 1].map(position => ({ position, botId: self, botName: 'Bot', task: '', status: position === 0 ? 'running' : 'pending' })) };
+  const writes: unknown[] = [];
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    if (path.includes('/plans') && options.method === 'POST') { writes.push(options.body); return { ok: true }; }
+    if (path.includes('/plans')) return [plan];
+    return original(path, options);
+  });
+  showChat = true; await render();
+  await act(async () => { await chat.act('plan-edit', { planId, expectedRevision: 2, action: 'skip', position: 1 }); });
+  expect(writes).toEqual([expect.objectContaining({ expectedRevision: 2, action: 'skip', position: 1 })]);
+  expect(writes[0]).not.toHaveProperty('executionId');
+});
+
+it.each(['receipt', 'leave', 'unmount', 'blur', 'refocus', 'blur-before-submit'])('handles a direct plan action across %s without a duplicate or stale write', async transition => {
+  const planId = '00000000-0000-4000-8000-000000000040';
+  let plan = { id: planId, revision: 2, creator_id: self, organizer_id: self, source_message_id: self,
+    request_text: 'Build', kind: 'work', status: 'proposed', current_step: null as number | null,
+    created_at: '2026-10-09', updated_at: '2026-10-09',
+    steps: [{ position: 0, botId: self, botName: 'Builder', task: 'Build', status: 'pending' }] };
+  let finish!: () => void;
+  let writes = 0;
+  const fetch = vi.fn(); vi.stubGlobal('fetch', fetch);
+  const mutation = new Promise<void>(resolve => { finish = resolve; });
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    if (path.includes('/plans') && options.method === 'POST') {
+      await mutation;
+      if (transition === 'blur-before-submit') return apiFetchRaw(path, options);
+      writes++;
+      return { ok: true };
+    }
+    if (path.includes('/plans')) return [plan];
+    return original(path, options);
+  });
+  showChat = true; await render();
+  expect(chat.state).toMatchObject({ kind: 'ready', group: { plans: [{ id: planId, status: 'proposed' }] } });
+  if (transition !== 'receipt' && transition !== 'blur-before-submit') {
+    const loaded = h.auth.apiFetch.getMockImplementation()!;
+    h.auth.apiFetch.mockImplementation(async (path, options) => {
+      if (path.endsWith('/snapshot')) await mutation;
+      return loaded(path, options);
+    });
+  }
+  let first!: Promise<unknown>;
+  await act(async () => { first = chat.act('plan-start', { planId, expectedRevision: 2 }); });
+  await act(async () => { await expect(chat.act('plan-start', { planId, expectedRevision: 2 })).rejects.toThrow('PLAN_OPEN'); });
+  if (transition !== 'receipt') {
+    await act(async () => {
+      if (transition === 'unmount') { root!.unmount(); root = undefined; }
+      else if (transition === 'blur' || transition === 'refocus' || transition === 'blur-before-submit') { h.focused = false; await render(); }
+      else { showChat = false; await render(); }
+    });
+    if (transition === 'refocus') { h.focused = true; await render(); }
+    await act(async () => {
+      finish();
+      await expect(first).rejects.toThrow(transition === 'blur-before-submit' ? 'Request cancelled' : 'OWNER_CHANGED');
+    });
+    expect(writes).toBe(0);
+    if (transition !== 'blur-before-submit') {
+      expect(h.auth.apiFetch.mock.calls.some(([path, options]) => path.includes('/plans/') && options.method === 'POST')).toBe(false);
+    } else {
+      // Auth can still be awaiting a token after preflight; the real transport must not send.
+      expect(fetch).not.toHaveBeenCalled();
+    }
+    if (transition === 'refocus') {
+      await act(async () => { await chat.act('plan-start', { planId, expectedRevision: 2 }); });
+      expect(h.auth.apiFetch.mock.calls.filter(([path, options]) => path.includes('/plans/') && options.method === 'POST')).toHaveLength(1);
+    }
+    return;
+  }
+  plan = { ...plan, revision: 3, status: 'running', current_step: 0, steps: [{ ...plan.steps[0], status: 'running' }] };
+  await act(async () => { finish(); await first; });
+  expect(h.auth.apiFetch.mock.calls.filter(([path, options]) => path.includes('/plans/') && options.method === 'POST')).toHaveLength(1);
+  expect(chat.state).toMatchObject({ kind: 'ready', group: { plans: [{ status: 'running' }] } });
+  expect(h.link.invoke).not.toHaveBeenCalled();
+});
+
+// #8456, unit: refresh while a positional edit is open; the old callback must not borrow a newer revision.
+it('rejects a stale step edit after refresh and sends the displayed revision on a new edit', async () => {
+  const planId = '00000000-0000-4000-8000-000000000040';
+  let plan = { id: planId, revision: 2, creator_id: self, organizer_id: self,
+    status: 'proposed', current_step: null, created_at: '2026-10-09', updated_at: '2026-10-09',
+    steps: [0, 1, 2].map(position => ({ position, botId: self, botName: 'Builder', task: 'Build', status: 'pending' })) };
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  const writes: unknown[] = [];
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    if (path.includes('/plans') && options.method === 'POST') { writes.push(options.body); return { ok: true }; }
+    if (path.includes('/plans')) return [plan];
+    return original(path, options);
+  });
+  showChat = true; await render();
+  const oldAct = chat.act;
+  plan = { ...plan, revision: 3, steps: plan.steps.slice(1).map((step, position) => ({ ...step, position })) };
+  await act(async () => { chat.reload(); });
+  await act(async () => { await expect(oldAct('plan-edit', { planId, position: 0, action: 'remove', expectedRevision: 2 })).rejects.toThrow('REVISION_CONFLICT'); });
+  expect(writes).toEqual([]);
+  await act(async () => { await expect(chat.act('plan-start', { planId })).rejects.toThrow('REVISION_CONFLICT'); });
+  await act(async () => { await chat.act('plan-start', { planId, expectedRevision: 3 }); });
+  expect(writes).toEqual([expect.objectContaining({ expectedRevision: 3, action: 'start' })]);
+});
 
 // #7847 review: real hook/client pagination must survive a concurrent summary read.
 // Existing root-loss tests never completed hydration between starting and finishing an older page (unit).
@@ -262,15 +391,22 @@ it('keeps the account owner label when quoting from a direct phone entry', async
     mentions: [botId], content: [expect.objectContaining({ data: expect.objectContaining({ authorName: 'Companion X (Account B)' }) }), { type: 'text', text: 'Agreed' }],
   }) }));
 });
-it.each(['', 'look at this'])('uploads and sends direct media with all computers offline, text=%s', async text => {
+// Integration: useBotGroupChat -> upload -> durable outbox -> real HTTP serializer.
+// Topic attachment parity: existing media cases only covered the main timeline;
+// an attachment-only topic reply must retain its root in the eventual POST.
+it.each([
+  { text: '', topic: false }, { text: 'look at this', topic: false },
+  { text: '', topic: true }, { text: 'look at this', topic: true },
+])('uploads and sends direct media with all computers offline, text=$text topic=$topic', async ({ text, topic }) => {
   const mediaId = '00000000-0000-4000-8000-000000000003';
   const original = h.auth.apiFetch.getMockImplementation()!;
   h.auth.apiFetch.mockImplementation(async (path, options) => {
     if (path.endsWith('/media')) return { id: mediaId, uploadUrl: 'https://upload.example.invalid/signed' };
     if (path.endsWith('/complete')) return {};
+    if (path.endsWith(`/messages/${self}`)) return (await original(`/v1/conversations/${id}/messages?limit=100`, options))[0];
     return original(path, options);
   });
-  showChat = true; await render();
+  showChat = true; threadRootId = topic ? self : undefined; await render();
   expect(chat.state).toMatchObject({ kind: 'ready', group: { supportsAttachments: true } });
   const attachment = await chat.uploadAttachment!({ name: 'photo.jpg', mimeType: 'image/jpeg', size: 42 }, 'file:///photo', { token: 'fixture' });
   const input = { clientId: 'same-media-send', text, mentions: { all: false, botIds: [] }, attachments: [attachment] };
@@ -278,6 +414,7 @@ it.each(['', 'look at this'])('uploads and sends direct media with all computers
   const posts = h.auth.apiFetch.mock.calls.filter(([path]) => path.endsWith('/messages'));
   expect(posts).toHaveLength(1);
   expect(posts[0][1].body).toEqual({ operationId: 'same-media-send', mentions: [],
+    ...(topic ? { threadRootId: self } : {}),
     content: [...(text ? [{ type: 'text', text }] : []), { type: 'media', mediaId, caption: 'photo.jpg' }] });
   expect(h.put).toHaveBeenCalledWith('https://upload.example.invalid/signed', 'file:///photo', 'image/jpeg', {},
     { signal: undefined, signedHeaders: { 'Content-Type': 'image/jpeg' } });
@@ -815,13 +952,16 @@ it.each(['missing', 'empty', 'read-error'] as const)('keeps initial loading corr
 
 // Integration: the actual ledger and HTTP adapter survive a process restart after
 // a committed POST loses its response. Existing direct-send tests cannot cover it.
-it.each([false, true])('persists the exact uncertain send across restart and never rebuilds its recipients (media=%s)', async withMedia => {
+it.each([
+  { withMedia: false, topic: false }, { withMedia: true, topic: false }, { withMedia: true, topic: true },
+])('persists the exact uncertain send across restart and never rebuilds its recipients (media=$withMedia topic=$topic)', async ({ withMedia, topic }) => {
   const storage = { getAllKeys: async () => [...h.disk.keys()], getItem: async (key: string) => h.disk.get(key) ?? null,
     setItem: async (key: string, value: string) => { h.disk.set(key, value); }, removeItem: async (key: string) => { h.disk.delete(key); } };
   const account = getMobileAuthOwner().accountKey;
   let store = createDurableOutbox(storage); await store.activate(account);
   const attachments = withMedia ? [{ id, name: 'report.pdf', path: '', ext: 'pdf', size: 42, mimeType: 'application/pdf', category: 'file' as const }] : [];
-  await enqueueChatMessage(store, account, id, { clientId: 'lost-response', text: 'saved offline', mentions: { all: true, botIds: [] }, attachments }, 1);
+  await enqueueChatMessage(store, account, id, { clientId: 'lost-response', text: 'saved offline', mentions: { all: true, botIds: [] }, attachments,
+    ...(topic ? { threadRootId: self } : {}) }, 1);
   expect(store.getSnapshot()[0]).toMatchObject({ state: 'queued', item: { text: 'saved offline' } });
   const posted: unknown[] = [];
   let memberReads = 0;
@@ -835,6 +975,7 @@ it.each([false, true])('persists the exact uncertain send across restart and nev
   await delivery().run();
   expect(store.getSnapshot()[0]).toMatchObject({ state: 'queued', enqueueStarted: true, chat: { body: { operationId: 'lost-response', mentions: [id] } } });
   expect(posted[0]).toMatchObject({ content: [{ type: 'text', text: 'saved offline' }, ...(withMedia ? [{ type: 'media', mediaId: id, caption: 'report.pdf' }] : [])] });
+  expect((posted[0] as { threadRootId?: string }).threadRootId).toBe(topic ? self : undefined);
   store = createDurableOutbox(storage); await store.activate(account);
   expect(store.getSnapshot()[0].chat?.input.attachments).toEqual(attachments);
   await delivery().run();
