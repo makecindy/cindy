@@ -8,6 +8,7 @@ import { SHARE_EXCLUDE_ATTR } from '@/lib/shareConversationImage';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
+import type { PluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
 import type { BotGroupDetail, BotGroupMemberView, BotGroupMessageView } from '../../../shared/botGroupChat';
 
 const key = (name: string) => `bots.groupChat.server.${name}`;
@@ -41,6 +42,7 @@ function useChatReaction(groupId: string | undefined, messageId: string, onChang
 }
 
 interface ChatMessageActionProps {
+  pluginUi: PluginUiMessageCandidates;
   groupId?: string; shareScope: string; message: BotGroupMessageView; align?: 'left' | 'right';
   /** Who can be named on a reaction badge, and the message's reaction version (see `messageReactionRevision`). */
   members?: readonly BotGroupMemberView[]; reactionRevision?: string | number;
@@ -76,13 +78,13 @@ export function ChatMessageReactions({ groupId, message, members, reactionRevisi
   );
 }
 
-function ChatMessageToolbar({ groupId, shareScope, message, align = 'left', onQuote, onReply, replyCountShown, copyText, menuActions, onChanged, picker, onPickerChange, compact = false }: ChatMessageActionProps & {
+function ChatMessageToolbar({ groupId, shareScope, message, align = 'left', onQuote, onReply, replyCountShown, copyText, menuActions, onChanged, picker, onPickerChange, compact = false, pluginUi }: ChatMessageActionProps & {
   picker: boolean; onPickerChange: (open: boolean) => void; compact?: boolean;
 }) {
   const { t } = useTranslation();
   const { busy, react } = useChatReaction(groupId, message.id, onChanged);
   return (
-    <MessageActionBar copyText={copyText ?? message.content} menuActions={menuActions} createdAt={message.createdAt ? new Date(message.createdAt).toISOString() : undefined}
+    <MessageActionBar pluginUi={pluginUi} copyText={copyText ?? message.content} menuActions={menuActions} createdAt={message.createdAt ? new Date(message.createdAt).toISOString() : undefined}
       align={align} hovered simplifiedBotConversation compact={compact}
       onShareAsImage={() => shareSelectionStore.enter(shareScope, message.id)}
       quoteAction={onQuote ? { onClick: onQuote, label: t(key('quoteReply')) } : undefined}

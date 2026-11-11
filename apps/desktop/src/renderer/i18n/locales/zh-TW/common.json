@@ -862,6 +862,7 @@
       "runningCount_other": "{{count}} 個任務執行中",
       "limitAria": "{{name}} 的並行上限",
       "limitOption_other": "同時 {{count}}",
+      "limitUnlimited": "不限制",
       "weightAria": "{{name}} 的權重",
       "weightOption": "權重 {{weight}}",
       "assignAria": "給 {{name}} 分配任務",
@@ -8126,7 +8127,9 @@
         "mcpUi": "可在對話中顯示互動頁面",
         "mcpUiDomains": "頁面可連線網域：{{domains}}",
         "mcpAppOnly": "僅頁面可用",
-        "uiPageAccess": "頁面：{{pages}}；網域：{{domains}}；頁面可呼叫的工具：{{tools}}"
+        "uiPageAccess": "頁面：{{pages}}；網域：{{domains}}；頁面可呼叫的工具：{{tools}}",
+        "uiHost": "在 Cindy 中提供介面與主機操作",
+        "uiHostAccess": "{{subject}}：{{access}}"
       },
       "connections": {
         "confirmTitle": "新增連線地址",
@@ -14237,6 +14240,8 @@
       "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "這是舊版分享，開啟「僅使用 Agent-Net」後暫時無法使用。關閉這個開關就能繼續，也可以換成其他模型。",
       "REMOTE_AGENT_GROUP_USAGE_LIMIT": "此模型的可用帳號已達到用量上限。可改用其他模型，或等配額重置後繼續。",
       "REMOTE_AGENT_GROUP_UNAVAILABLE": "供應商組裡的電腦現在都不能執行這個任務：可能都離線、已暫停分配、正在冷卻，或沒有這個模型。可以到這個供應商的「遠端與分享」頁查看組內電腦。",
+      "REMOTE_AGENT_GROUP_FULL": "能執行這個任務的帳號或電腦都已達到並行上限。請等正在執行的任務結束，或在供應商設定中調高上限。",
+      "SUBSCRIPTION_ACCOUNTS_FULL": "能執行這個任務的帳號或電腦都已達到並行上限。請等正在執行的任務結束，或在供應商設定中調高上限。",
       "REMOTE_AGENT_DEVICE_LIMIT": "這台裝置保留的遠端任務數已達上限。可封存暫時不用的任務，或請遠端電腦的主人在「遠端與分享」中提高上限。",
       "REMOTE_AGENT_TOTAL_LIMIT": "遠端電腦保留的任務總數已達上限。請那台電腦的主人釋放暫時不用的任務，或在「遠端與分享」中提高上限。",
       "REMOTE_AGENT_RESUME_LOST": "之前在那台電腦上的對話沒能接上，Agent 會在沒有之前上下文的情況下繼續。",
@@ -14426,6 +14431,14 @@
       "replied": "回信",
       "toggle": "展開或收合「{{title}}」的回信",
       "openTask": "開啟任務"
+    },
+    "subscriptionAccountError": {
+      "limited": "此任務使用的訂閱帳號用量已達上限。可等用量重設後重試，或選擇其他模型來源。此任務仍繫結原帳號，不會自動換號。",
+      "limitedUntil": "此任務使用的訂閱帳號用量已達上限，預計於 {{resetAt}} 重設。可等重設後重試，或選擇其他模型來源。此任務仍繫結原帳號，不會自動換號。",
+      "loginRequired": "此任務使用的訂閱帳號需要重新登入。請在執行任務的電腦上重新登入該帳號，再重試。",
+      "signingIn": "此任務使用的訂閱帳號正在登入，請完成登入後重試。",
+      "unavailable": "此任務繫結的訂閱帳號無法用於本次請求。請在執行任務的電腦上檢查模型供應商中的帳號設定，或選擇其他模型來源。",
+      "legacy": "此任務繫結的訂閱帳號暫不可用。請在執行任務的電腦上檢查該帳號的登入與用量狀態，或選擇其他模型來源。此任務不會自動換號。"
     }
   },
   "ccAgent": {
@@ -19387,6 +19400,12 @@
       "failed": "儲存失敗，請重試。",
       "restore": "恢復預設"
     }
+  },
+  "pluginUi": {
+    "display": "顯示方式",
+    "original": "原文",
+    "menu": "插件頁面與命令",
+    "actionFailed": "此插件操作未完成。請重試。"
   },
   "mcpApps": {
     "sharedTaskReadOnly": "此卡片僅任務擁有者可操作。",

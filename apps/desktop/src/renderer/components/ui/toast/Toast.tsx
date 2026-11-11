@@ -180,7 +180,7 @@ export function Toast({ item, message }: ToastProps) {
 
       {item.dismissLabel && (
         <button type="button" aria-label={item.dismissLabel} title={item.dismissLabel}
-          className="absolute right-1 top-1 flex size-8 items-center justify-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--button-secondary-hover)] focus-visible:outline focus-visible:outline-2"
+          className="absolute right-1 top-1 flex size-8 items-center justify-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--button-secondary-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
           onClick={() => toast.dismiss(item.id)}><X size={14} aria-hidden /></button>
       )}
       <div className={item.title ? 'flex w-full flex-wrap justify-end items-center gap-2' : 'contents'}>
