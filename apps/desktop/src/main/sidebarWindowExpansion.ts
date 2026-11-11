@@ -32,6 +32,16 @@ export class SidebarWindowExpansion {
     };
   }
 
+  /**
+   * A navigation-driven collapse hid the sidebar without changing the bounds.
+   * Forget the expansion so the live rect becomes the standalone base again:
+   * window-state persists it, and the next user open grows from it.
+   */
+  settle(win: BrowserWindow): void {
+    this.expanded.delete(win);
+    this.lastExpandedWidth.delete(win);
+  }
+
   update(win: BrowserWindow, requested: number, workArea: Rectangle, screenApi?: WorkAreaScreen): number {
     const previous = this.expanded.get(win);
     if (requested === 0) this.expanded.delete(win);

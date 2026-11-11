@@ -20,6 +20,20 @@ function fixture() {
 }
 
 describe('sidebar window expansion', () => {
+  // Bug: a session switch hides the sidebar without touching the window; the
+  // forgotten expansion then kept persisting the old rect and blocked the next open.
+  it('settles the live rect as the standalone base when navigation hides the sidebar', () => {
+    const { win, native, area } = fixture();
+    const controller = new SidebarWindowExpansion();
+    controller.update(native, 400, area);
+    expect(controller.persistenceView(native).getBounds().width).toBe(900);
+    controller.settle(native);
+    expect(win.getBounds().width).toBe(1300);
+    expect(controller.persistenceView(native).getBounds().width).toBe(1300);
+    expect(controller.persistenceView(native).getLiveBounds().width).toBe(1300);
+    controller.update(native, 400, area);
+    expect(win.getBounds().width).toBe(1600);
+  });
   it('grows only to the current display edge and restores on close', () => {
     const { win, native, area } = fixture();
     const controller = new SidebarWindowExpansion();

@@ -87,7 +87,8 @@ it('expands a restored-open sidebar and closes without a renderer-derived shrink
 // state; the session switch then restored the standalone window and narrowed it.
 it('keeps the window width when a session switch restores the sidebar state', async () => {
   const resize = vi.fn(async (requested: number) => (requested > 0 ? 401 : -401));
-  window.electronAPI = { windowSidebarExpansion: resize } as never;
+  const settle = vi.fn(async () => undefined);
+  window.electronAPI = { windowSidebarExpansion: resize, windowSidebarSettle: settle } as never;
   const { result, rerender } = renderHook(
     ({ collapsed, userToggle }) => useSidebarPresentation(root, collapsed, true, () => 400, userToggle),
     { initialProps: { collapsed: true, userToggle: true } },
@@ -96,12 +97,15 @@ it('keeps the window width when a session switch restores the sidebar state', as
   window.innerWidth = 1401;
   frame();
   expect(resize).toHaveBeenCalledExactlyOnceWith(400);
+  expect(settle).not.toHaveBeenCalled();
   resize.mockClear();
   await act(async () => { rerender({ collapsed: true, userToggle: false }); });
   expect(resize).not.toHaveBeenCalled();
+  expect(settle).toHaveBeenCalledOnce();
   expect(result.current).toEqual({ collapsed: true, instant: true });
   await act(async () => { rerender({ collapsed: false, userToggle: false }); });
   expect(resize).not.toHaveBeenCalled();
+  expect(settle).toHaveBeenCalledOnce();
   expect(result.current).toEqual({ collapsed: false, instant: true, expandedWidth: 800 });
 });
 

@@ -1303,6 +1303,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   appDisplayVersionDetail: appDisplayVersionInfo.detail,
   getDeviceId: (): Promise<string> => ipcRenderer.invoke('get-device-id'),
   windowSidebarExpansion: (width: number, shrink?: number, adopt?: boolean): Promise<number> => ipcRenderer.invoke('window-sidebar-expansion', width, shrink, adopt),
+  windowSidebarSettle: (): Promise<void> => ipcRenderer.invoke('window-sidebar-settle'),
   onSidebarWindowUserResize: (callback: () => void) => {
     const listener = () => callback();
     ipcRenderer.on('window-sidebar-user-resize', listener);

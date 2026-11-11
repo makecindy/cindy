@@ -46,6 +46,11 @@ export function useSidebarPresentation(
       if (!ready && wasCollapsed === false && resize) {
         void resize(0).catch(() => undefined);
       }
+      // The window keeps its width, so its live rect becomes the standalone base in main:
+      // persistence and the next user open must not use the forgotten expansion.
+      if (restored && collapsed) {
+        void window.electronAPI.windowSidebarSettle?.().catch(() => undefined);
+      }
       setPresentation({ collapsed, instant: true,
         ...(ready && !collapsed && width > 0 ? { expandedWidth: width } : {}),
       });
