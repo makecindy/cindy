@@ -12,6 +12,8 @@ import { Slider } from '@/components/ui/slider';
 import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import { useWallpaperSettings } from '@/hooks/useWallpaperSettings';
+import { useTheme } from '@/hooks/useTheme';
+import { DEFAULT_FAMILY_ID } from '@/themes/families';
 import { getBuiltinWallpaperPreview, isCdnWallpaper, isSceneWallpaper } from '@/lib/wallpaper';
 import {
   APPEARANCE_LIMITS,
@@ -25,6 +27,7 @@ import { SETTINGS_HINT, SettingsBlock, SettingsCard, SettingsRow, SettingsSectio
 
 export function WallpaperSection() {
   const { t } = useTranslation();
+  const { familyId } = useTheme();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const feedbackId = useId();
@@ -50,11 +53,16 @@ export function WallpaperSection() {
     previewBlur,
     setMotion,
     sidebarVisibility,
+    sidebarTransparency,
     setSidebarVisibility,
     previewSidebarVisibility,
     resetWallpaper,
-  } = useWallpaperSettings();
-  // A retired wallpaper stays visible (and selected) only while it is in use.
+  } = useWallpaperSettings();  // A retired wallpaper stays visible (and selected) only while it is in use.
+  // The frosted sidebar is a CINDY-theme surface, and the rule this control drives
+  // only applies while a wallpaper is active; elsewhere it would persist a value with
+  // no visible effect, so the row stays hidden there.
+  const sidebarTransparencyAvailable =
+    familyId === DEFAULT_FAMILY_ID && wallpaperId !== 'none';
   const retiredInUse = RETIRED_WALLPAPER_IDS.find((id) => id === wallpaperId);
   const pickerIds: readonly WallpaperId[] = retiredInUse
     ? [SELECTABLE_WALLPAPER_IDS[0], retiredInUse, ...SELECTABLE_WALLPAPER_IDS.slice(1)]
@@ -146,6 +154,7 @@ export function WallpaperSection() {
               wallpaperOverlay === DEFAULT_APPEARANCE_SETTINGS.wallpaperOverlay &&
               wallpaperVisibility == null &&
               wallpaperBlur == null &&
+              sidebarVisibility == null &&
               wallpaperMotion === DEFAULT_APPEARANCE_SETTINGS.wallpaperMotion)
           }
         >
@@ -441,34 +450,39 @@ export function WallpaperSection() {
             {t(wallpaperId === 'none' ? 'settings.appearance.wallpaper.desktopBlurHint' : 'settings.appearance.wallpaper.blurHint')}
           </p>
 
-          {/* 独立左侧栏透明度控制 */}
-          <div className="flex items-center gap-3">
-            <span className="shrink-0 text-12 text-[var(--settings-section-sublabel)]">
-              {t('settings.appearance.wallpaper.sidebarVisibilityLabel')}
-            </span>
-            <Slider data-setting-id={appearanceSettings.wallpaperCustomChoose.id}
-              min={APPEARANCE_LIMITS.sidebarVisibility.min}
-              max={APPEARANCE_LIMITS.sidebarVisibility.max}
-              step={APPEARANCE_LIMITS.sidebarVisibility.step}
-              value={[sidebarVisibility ?? 1]}
-              onValueChange={([value]) => {
-                if (typeof value === 'number') previewSidebarVisibility(value);
-              }}
-              onValueCommit={([value]) => {
-                if (typeof value === 'number') setSidebarVisibility(value);
-              }}
-              onPointerCancel={cancelSidebarVisibilityPreview}
-              onLostPointerCapture={cancelSidebarVisibilityPreview}
-              aria-label={t('settings.appearance.wallpaper.sidebarVisibilityLabel')}
-              aria-describedby="sidebar-visibility-hint"
-            />
-            <span className="w-10 shrink-0 text-right font-mono text-12 text-[var(--settings-section-sublabel)]">
-              {Math.round((sidebarVisibility ?? 1) * 100)}%
-            </span>
-          </div>
-          <p id="sidebar-visibility-hint" className={SETTINGS_HINT}>
-            {t('settings.appearance.wallpaper.sidebarVisibilityHint')}
-          </p>
+          {/* 独立左侧栏透明度控制：显示当前生效值（未设置时为带染色的默认透明度），
+              否则默认态显示 100% 会与实际外观不符，且滑块顶到右端后无法提交显式 100%。 */}
+          {sidebarTransparencyAvailable && (
+            <>
+              <div className="flex items-center gap-3">
+                <span className="shrink-0 text-12 text-[var(--settings-section-sublabel)]">
+                  {t('settings.appearance.wallpaper.sidebarVisibilityLabel')}
+                </span>
+                <Slider data-setting-id={appearanceSettings.wallpaperCustomChoose.id}
+                  min={APPEARANCE_LIMITS.sidebarVisibility.min}
+                  max={APPEARANCE_LIMITS.sidebarVisibility.max}
+                  step={APPEARANCE_LIMITS.sidebarVisibility.step}
+                  value={[sidebarTransparency]}
+                  onValueChange={([value]) => {
+                    if (typeof value === 'number') previewSidebarVisibility(value);
+                  }}
+                  onValueCommit={([value]) => {
+                    if (typeof value === 'number') setSidebarVisibility(value);
+                  }}
+                  onPointerCancel={cancelSidebarVisibilityPreview}
+                  onLostPointerCapture={cancelSidebarVisibilityPreview}
+                  aria-label={t('settings.appearance.wallpaper.sidebarVisibilityLabel')}
+                  aria-describedby="sidebar-visibility-hint"
+                />
+                <span className="w-10 shrink-0 text-right font-mono text-12 text-[var(--settings-section-sublabel)]">
+                  {Math.round(sidebarTransparency * 100)}%
+                </span>
+              </div>
+              <p id="sidebar-visibility-hint" className={SETTINGS_HINT}>
+                {t('settings.appearance.wallpaper.sidebarVisibilityHint')}
+              </p>
+            </>
+          )}
         </SettingsBlock>
       </SettingsCard>
     </SettingsSection>

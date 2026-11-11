@@ -20,6 +20,7 @@ import {
   normalizeCustomWallpaperUrl,
   isCustomWallpaperVideo,
   getBackgroundVisibility,
+  getSidebarTransparency,
 } from '@/../shared/appearanceSettings';
 
 import { getBuiltinWallpaperBackground } from '@/lib/wallpaper';
@@ -47,6 +48,8 @@ interface WallpaperSettingsContextValue extends WallpaperSettings {
   downloadProgress: number;
   retryDownload: () => void;
   visibility: number;
+  /** Sidebar transparency actually in effect (falls back to the tinted default). */
+  sidebarTransparency: number;
   setWallpaper: (id: WallpaperId) => void;
   setVisibility: (value: number) => void;
   previewVisibility: (value: number | null) => void;
@@ -109,6 +112,8 @@ export function WallpaperSettingsProvider({
   const isDarkRef = useRef(isDark);
   isDarkRef.current = isDark;
   const visibility = visibilityPreview ?? getBackgroundVisibility(settings, isDark);
+  const sidebarTransparency =
+    sidebarPreview ?? getSidebarTransparency(settings, isDark);
   const reducedMotion = useReducedMotion();
   const imageAsset = useWallpaperAsset(settings.wallpaperId, 'image', visibility > 0);
   const videoAsset = useWallpaperAsset(
@@ -245,7 +250,12 @@ export function WallpaperSettingsProvider({
   }, []);
   const previewSidebarVisibility = useCallback((value: number | null) => {
     const next = value === null ? null : clampAppearanceWallpaperVisibility(value);
-    setSidebarPreview(next === null ? null : next);
+    // Same ordering trap as previewVisibility: Radix commits before it reports the
+    // change, so compare against the optimistic committed value and drop the preview
+    // when it agrees — otherwise a failed save keeps showing the unsaved value.
+    setSidebarPreview(
+      next === getSidebarTransparency(settingsRef.current, isDarkRef.current) ? null : next,
+    );
   }, []);
   const setSidebarVisibility = useCallback(
     (value: number) => {
@@ -295,6 +305,7 @@ export function WallpaperSettingsProvider({
       ...settings,
       wallpaperBlur: blurPreview ?? settings.wallpaperBlur,
       visibility,
+      sidebarTransparency,
       playbackFailed: !!failedUrl && failedUrl === settings.customWallpaperUrl,
       downloadPending,
       downloadFailed,
@@ -323,6 +334,7 @@ export function WallpaperSettingsProvider({
       settings,
       failedUrl,
       visibility,
+      sidebarTransparency,
       downloadPending,
       downloadFailed,
       downloadProgress,

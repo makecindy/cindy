@@ -30,6 +30,7 @@ export const appSettingsSections: AppSettingsSection[] = [{
     windowZoom: numberIn(APPEARANCE_LIMITS.windowZoom).optional(), wallpaperId: z.enum(WALLPAPER_IDS).optional(),
     wallpaperOverlay: numberIn(APPEARANCE_LIMITS.wallpaperOverlay).optional(),
     wallpaperVisibility: numberIn(APPEARANCE_LIMITS.wallpaperVisibility).nullable().optional(),
+    sidebarVisibility: numberIn(APPEARANCE_LIMITS.sidebarVisibility).nullable().optional(),
     wallpaperBlur: numberIn(APPEARANCE_LIMITS.wallpaperBlur).nullable().optional(),
     wallpaperMotion: z.enum(['static', 'dynamic']).optional(),
     appIcon: z.enum(APP_ICONS).optional(),

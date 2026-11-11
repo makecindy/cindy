@@ -5,6 +5,7 @@ import {
   clampAppearanceWallpaperOverlay,
   getWallpaperVisibility,
   getBackgroundVisibility,
+  getSidebarTransparency,
 } from '../appearanceSettings';
 
 describe('wallpaper catalog compatibility', () => {
@@ -47,6 +48,32 @@ describe('wallpaper catalog compatibility', () => {
       );
     },
   );
+  it.each([false, true])('reports the sidebar transparency the slider shows (dark=%s)', (dark) => {
+    const base = normalizeAppearanceSettings({ wallpaperId: 'night-launch' });
+    // Explicit values win over the tinted fallback the stylesheet derives from
+    // --background-visibility, so the control never lies about the saved choice.
+    for (const value of [0, 0.37, 1])
+      expect(getSidebarTransparency({ ...base, sidebarVisibility: value }, dark)).toBe(value);
+    // Without an explicit value the sidebar keeps its 0.85 tint over the wallpaper,
+    // so the effective transparency is 1 - (1 - 0.85) / bgVisibility.
+    const background = getBackgroundVisibility(base, dark);
+    expect(getSidebarTransparency(base, dark)).toBeCloseTo(
+      1 - (1 - 0.15 / background),
+      2,
+    );
+    expect(getSidebarTransparency(base, dark)).toBeLessThan(1);
+    expect(getSidebarTransparency(base, dark)).toBeGreaterThan(0);
+  });
+  it.each([false, true])('keeps the default sidebar transparency monotonic in the wallpaper share (dark=%s)', (dark) => {
+    const previous = [
+      normalizeAppearanceSettings({ wallpaperId: 'night-launch', wallpaperVisibility: 0.2 }),
+      normalizeAppearanceSettings({ wallpaperId: 'night-launch', wallpaperVisibility: 0.6 }),
+      normalizeAppearanceSettings({ wallpaperId: 'night-launch', wallpaperVisibility: 1 }),
+    ].map((settings) => getSidebarTransparency(settings, dark));
+    expect(previous[0]).toBeGreaterThan(previous[1]);
+    expect(previous[1]).toBeGreaterThan(previous[2]);
+    expect(previous[2]).toBe(0.15);
+  });
   it('accepts a managed custom MP4 and rejects video URLs outside the wallpaper scope', () => {
     const url = `cindy-media://client-wallpaper/${'a'.repeat(64)}.mp4`;
     expect(normalizeAppearanceSettings({ customWallpaperUrl: url }).customWallpaperUrl).toBe(url);
