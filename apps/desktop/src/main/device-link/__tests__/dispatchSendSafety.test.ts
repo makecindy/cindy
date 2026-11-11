@@ -8,7 +8,7 @@
  *        (否则被控端本机 renderer 漏收事件),也不拖垮其它控制端的转发。
  * 只 mock electron(app)+ logger;subscriptions 用真实模块(注册控制端订阅)。
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   DeviceLinkError,
   DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1,
@@ -49,6 +49,7 @@ import { __testing, runInvoke, wireInboundDispatch, setRemoteTurnChangeAction } 
 import { __testing as registry } from '../invoke-registry';
 import { setRemoteBotSessionLookup } from '../remoteBotSessionBoundary';
 import { currentDbRpcAdmissionClass } from '../../localDb/client/rpcAdmission';
+import { clearCurrentDbClient, setCurrentDbClient, tryGetDbClient } from '../../localDb/client/current';
 import { getDeviceLinkInvokeContext } from '../invoke-context';
 import { HistoryViewController, type HistoryViewPage, type HistoryMessageSource } from '@cindy/maker-shared/message-window';
 import * as subscriptions from '../subscriptions';
@@ -85,6 +86,8 @@ beforeEach(() => {
     revokedControllers: [],
   };
   __testing.reset();
+  // 远端任务列表首拉会有界等待 owner 数据库；其余用例模拟的是已就绪的被控端。
+  setCurrentDbClient({} as never, 'owner');
 });
 
 // Test value: public push dispatch must deliver the new metadata invalidation to both controllers.
@@ -135,6 +138,61 @@ it('strips Desktop credential links from authorization history and live metadata
     expect(JSON.stringify(result)).not.toContain('externalLink');
   }
   expect(row.agentMeta.botAuthorization.snapshot.steps[0].action.form.fields[0].externalLink.url).toBe('https://example.com/keys');
+});
+
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：被控端 runInvoke('local-db:sessions:list')；控制端拿到的是任务列表还是
+ *   未就绪错误／远控已关闭。
+ * - Bug/规则依据：PR #8913 让主进程提前鉴权，device-link 早于 renderer 打开 owner 数据库上线；
+ *   控制端随上线首拉立刻得到 DbClient not ready，自身重试只覆盖几秒，界面慢时放弃首拉，
+ *   要等 60s 周期对账（Codex 审查 P2）。
+ * - 现有覆盖缺口：既有 dispatch 用例都在数据库已就绪或不读数据库的通道上。
+ * - 最小失败输入：数据库未就绪时发首拉、3s 后就绪 → 应返回列表；一直不就绪 → 8s 后照常返回
+ *   未就绪错误（低于控制端 12s 超时）；等待中关闭远控 → REMOTE_DISABLED，不执行 handler。
+ * - tier：unit（node，fake timers，不加载 Electron 窗口与真实数据库）。
+ */
+describe('startup sessions list waits briefly for the owner database', () => {
+  const channel = 'local-db:sessions:list';
+  function registerList() {
+    const handler = vi.fn(() => {
+      if (!tryGetDbClient()) throw new Error('DbClient not ready');
+      return { sessions: [] };
+    });
+    registry.register(channel, handler);
+    return handler;
+  }
+  beforeEach(() => clearCurrentDbClient());
+  afterEach(() => vi.useRealTimers());
+
+  it('answers with the list once the database opens within the wait', async () => {
+    vi.useFakeTimers();
+    const handler = registerList();
+    const request = runInvoke('ctrl', { channel, args: [] });
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(handler).not.toHaveBeenCalled();
+    setCurrentDbClient({} as never, 'owner');
+    await expect(request).resolves.toEqual({ ok: true, result: { sessions: [] } });
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to the ordinary not-ready error before the controller timeout', async () => {
+    vi.useFakeTimers();
+    registerList();
+    const request = runInvoke('ctrl', { channel, args: [] });
+    await vi.advanceTimersByTimeAsync(8_000);
+    await expect(request).resolves.toMatchObject({ ok: false, error: { code: 'IPC_ERROR', message: 'DbClient not ready' } });
+  });
+
+  it('rechecks remote control after waiting', async () => {
+    vi.useFakeTimers();
+    const handler = registerList();
+    const request = runInvoke('ctrl', { channel, args: [] });
+    deviceLinkSettings.value = { ...deviceLinkSettings.value, remoteControlEnabled: false };
+    setCurrentDbClient({} as never, 'owner');
+    await expect(request).resolves.toMatchObject({ ok: false, error: { code: 'REMOTE_DISABLED' } });
+    expect(handler).not.toHaveBeenCalled();
+  });
 });
 
 describe('negotiated mobile tool projection', () => {

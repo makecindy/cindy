@@ -51,6 +51,7 @@ import {
   type ActiveController,
 } from '../device-link/dispatch.desktop';
 import { __testing as registry, dispatchLocalInvoke } from '../device-link/invoke-registry';
+import { setCurrentDbClient } from '../localDb/client/current';
 import {
   deviceLinkInvokeControllerSupports,
   getDeviceLinkInvokeContext,
@@ -76,6 +77,8 @@ beforeEach(() => {
   fetchLocalMediaToOssMock.mockReset();
   transcribeRemoteVoiceInputMock.mockReset();
   adviseAndRecordVoiceInputDictionaryLearningMock.mockReset();
+  // 远端任务列表首拉会有界等待 owner 数据库(见 dispatch STARTUP_DB_WAIT_MS);这里模拟已就绪的被控端。
+  setCurrentDbClient({} as never, 'owner');
 });
 
 describe('runInvoke 双层校验', () => {
