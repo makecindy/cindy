@@ -405,6 +405,9 @@ export interface SchedulerHookScriptService {
  *    缺省, session_search tool 注册时跳过。
  */
 export interface MemoryMcpDeps {
+  /** Optional runtime providers. Undefined means no provider was selected for the caller. */
+  searchProviders?: (query: string, opts: { type?: 'user' | 'feedback' | 'project' | 'reference'; limit?: number },
+    context: LiziMcpSessionContext | undefined) => Promise<MemoryProviderHit[] | MemoryProviderSearchResult> | undefined;
   withAccountDataAccess?: import('./account-data-access.js').AccountDataAccess;
   /**
    * Host captures the source turn before storage; invoked only for a successful write.
@@ -436,6 +439,18 @@ export interface MemoryMcpDeps {
   searchSessions?: SessionSearchFn;
   logger?: LiziMcpLogger;
 }
+
+/** Inline provider content: no invented local filename and no memory_read round trip. */
+export interface MemoryProviderHit {
+  id: string;
+  title: string;
+  content: string;
+  type?: 'user' | 'feedback' | 'project' | 'reference';
+  sourcePlugin: { id: string; name: string };
+  truncated?: boolean;
+}
+
+export interface MemoryProviderSearchResult { hits: MemoryProviderHit[]; truncated?: boolean }
 
 export interface LspMcpDeps {
   workdir: string;

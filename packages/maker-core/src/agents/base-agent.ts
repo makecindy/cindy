@@ -1612,7 +1612,8 @@ export interface OneShotOptions {
   /** 输出 token 上限。默认 100 (起标题用); skillReview 这种大 prompt 应传 4096。 */
   maxTokens?: number;
   /**
-   * 模型 ID。不传时 agent 内部用各自默认 (Claude → claude-haiku-4-5, Codex → gpt-5.4-mini)。
+   * 模型 ID。不传时 agent 内部用各自默认: Claude → claude-haiku-4-5; Codex 不带 model,
+   * 由 app-server 按当前账号与配置选默认模型 (不写死型号, 型号下线后自动跟随)。
    * 仅当调用方对模型敏感时才传 (例如 skillReview 锁定 haiku 控制成本)。
    */
   model?: string;
@@ -1632,8 +1633,13 @@ export interface OneShotOptions {
    * provider dispatch. Returning false must fail closed without sending the
    * one-shot request (for example when the owning workflow was replaced while
    * the agent host was starting).
+   *
+   * `route.model` is the model the agent resolved for this dispatch, when it
+   * is known at that point. Codex reports it on the check between
+   * thread/start and turn/start, which is the only place a caller can see
+   * the server-chosen default model before the prompt is sent.
    */
-  beforeDispatch?: () => boolean | Promise<boolean>;
+  beforeDispatch?: (route?: { model?: string }) => boolean | Promise<boolean>;
 }
 
 /**
@@ -1948,7 +1954,10 @@ export interface LocalAgentClient {
   storageDirectory?: string;
 }
 
+export const TASK_SYSTEM_PROMPT = Symbol('cindy.task-system-prompt');
 export interface StartSessionOptions {
+  /** Host-owned task instructions, appended after the native fixed prompt. */
+  readonly [TASK_SYSTEM_PROMPT]?: string;
   [NATIVE_SUBSCRIPTION_ACCOUNT]?: NativeSubscriptionAccount;
   [LOCAL_AGENT_CLIENT]?: LocalAgentClient;
   /**
@@ -2202,7 +2211,29 @@ export interface MainOwnedSendContext {
  */
 export const PI_CACHE_RECOVERY_EXPECTATION = Symbol('pi-cache-recovery-expectation');
 
+/** Host-owned, call-local model request interception. Never accepted from wire options. */
+export { assembleSystemPromptSections, type SystemPromptSection } from './shared/system-prompt-sections.js';
+export const MODEL_REQUEST_CONTROL = Symbol('cindy.model-request-control');
+export interface ModelRequestRoute {
+  model: string;
+  providerId: string;
+  effort?: string;
+  fastMode?: boolean | 'ultrafast';
+}
+export interface ModelRequestInput extends ModelRequestRoute {
+  phase: 'select' | 'payload';
+  request?: Record<string, unknown>;
+  /** Host transport failed before plugin delivery; no partial request is exposed. */
+  failure?: 'request-too-large';
+}
+export type ModelRequestControl = (input: ModelRequestInput) => Promise<{
+  skip?: true;
+  route?: ModelRequestRoute;
+  request?: Record<string, unknown>;
+}>;
+
 export interface SendOptions {
+  readonly [MODEL_REQUEST_CONTROL]?: ModelRequestControl;
   readonly [PI_CACHE_RECOVERY_EXPECTATION]?: import('./pi/cache-compatibility.js').PiCacheCompatibility;
   readonly [ASYNC_QUESTION_ANSWER]?: true;
   readonly [SUPERSEDE_ASYNC_QUESTIONS]?: true;
@@ -2873,8 +2904,8 @@ export abstract class BaseAgent {
   }
 
   /** Filter only the palette projection; management discovery retains disabled sources. */
-  filterActiveSkillCommands(result: ListAgentSkillsResult, remoteHostId?: string, snapshot?: readonly string[]): ListAgentSkillsResult {
-    const disabled = remoteHostId ? [] : snapshot ?? this.deps.getDisabledSkillPaths?.() ?? [];
+  filterActiveSkillCommands(result: ListAgentSkillsResult, remoteHostId?: string, snapshot?: readonly string[], current?: readonly string[]): ListAgentSkillsResult {
+    const disabled = remoteHostId ? [] : snapshot ?? current ?? this.deps.getDisabledSkillPaths?.() ?? [];
     if (disabled.length === 0) return result;
     return { ...result, skills: result.skills.filter((skill) => !skill.path || !(snapshot
       ? disabled.includes(canonicalSkillPath(skill.path)) : isSkillDisabled(skill.path, disabled))) };
@@ -2939,7 +2970,7 @@ export abstract class BaseAgent {
    * 各 agent 选自家最便宜的可用模型实现, 鉴权 / API 路径与 startSession 同源
    * (确保 OAuth-only 用户也能用):
    *   - Claude → sdkQuery + haiku-4-5 + maxTurns:1
-   *   - Codex  → Codex SDK startThread + gpt-5.4-mini
+   *   - Codex  → app-server 临时 thread, 默认模型由 app-server 决定
    * 调用方不关心用哪个模型, 只拿一个 string。
    *
    * 子类可选实现; 不实现时调到这里, 抛 NotSupportedError。

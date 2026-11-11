@@ -102,7 +102,7 @@ vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ user: { id: 'accoun
 vi.mock('@/components/chat/MarkdownRenderer', async () => {
   const { RichAnswer } = await import('@/components/chat/RichAnswer');
   const { splitRichAnswer } = await import('@cindy/maker-shared/rich-answer');
-  return { MarkdownRenderer: ({ content, renderRichAnswers, streamFadeKey }: any) => <div data-markdown>
+  return { MarkdownRenderer: ({ content, renderRichAnswers, streamFadeKey }: { content: string; renderRichAnswers?: boolean; streamFadeKey?: string }) => <div data-markdown>
     {renderRichAnswers ? splitRichAnswer(content).map(part => part.kind === 'rich'
       ? <RichAnswer key={part.key} source={part.source} complete stateKey={`${streamFadeKey}:${part.key}`} renderMarkdown={text => <span>{text}</span>} />
       : part.source) : content}
@@ -321,6 +321,8 @@ function renderView() {
 }
 
 beforeEach(() => {
+  // jsdom has no layout observer; browser geometry is covered by the group-width UI fixture.
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
   resetCompanionCloudStoreForTests();
   mocks.remoteInvoke.mockReset();
   window.localStorage.clear();
@@ -676,6 +678,90 @@ describe('BotGroupChatView', () => {
     else expect(screen.getAllByText('Server confirmed delta')).toHaveLength(1);
   });
 
+  // #9398, unit: real timeline + message-only push before a deferred full read.
+  // Existing plan tests start with complete details and miss the transient organizer/missing bubble.
+  it.each(['talk', 'work', undefined] as const)('waits for plan details without delaying ordinary deltas (kind=%s)', async kind => {
+    const initial = detail({ serverBacked: true, historyRevision: 'live', organizerBotId: 'xiaoman',
+      messages: [msg({ id: 'u1', content: 'New discussion request' })] });
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: initial });
+    renderView(); await screen.findByText('New discussion request');
+    let finish!: (value: { ok: true; group: BotGroupDetail }) => void;
+    mocks.getBotGroup.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const cardMessage = { ...planCard, authorKind: 'user' as const, authorBotId: null, authorName: 'Human creator' };
+    const ordinary = msg({ id: 'ordinary', sequence: 11, authorKind: 'bot', authorBotId: 'xiaoman', content: 'Immediate ordinary reply' });
+    await act(async () => { mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'messages', historyRevision: 'live', messages: [cardMessage, ordinary] })); });
+    expect(screen.getByText('Immediate ordinary reply')).toBeTruthy();
+    expect(screen.queryByText('bots.groupChat.plan.missing')).toBeNull();
+    expect(screen.queryByText('bots.groupChat.organizer')).toBeNull();
+    const ready = plan({ kind, organizerBotId: 'xiaoman', organizerName: '小满' });
+    await act(async () => finish({ ok: true, group: withPlan(ready, [ordinary], { ...initial,
+      messages: [...initial.messages, cardMessage, ordinary], plans: [ready], openPlan: openSummary(ready) }) }));
+    if (kind === 'talk') {
+      expect(screen.getByTestId('bot-group-arrangement').closest('article')).toBeNull();
+      expect(screen.queryByText('bots.groupChat.organizer')).toBeNull();
+    } else {
+      const card = screen.getByTestId('bot-group-plan');
+      expect(card.closest('article')?.textContent).toContain('小满');
+      expect(within(card.closest('article')!).getByText('bots.groupChat.organizer')).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'bots.groupChat.plan.start' })).toBeTruthy();
+    }
+    expect(screen.queryByText('bots.groupChat.plan.missing')).toBeNull();
+    expect(screen.getAllByText('Immediate ordinary reply')).toHaveLength(1);
+  });
+
+  it('keeps a confirmed missing plan visible without inventing an organizer', async () => {
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ messages: [
+      { ...planCard, authorKind: 'user', authorBotId: null, authorName: 'Human creator' },
+    ], plans: [] }) });
+    renderView();
+    const missing = await screen.findByText('bots.groupChat.plan.missing');
+    expect(missing.closest('article')).toBeNull();
+    expect(screen.queryByText('bots.groupChat.organizer')).toBeNull();
+    expect(document.querySelector('[aria-busy="true"]')).toBeNull();
+  });
+
+  it('does not publish an incomplete plan when a newer delta overtakes a full read', async () => {
+    const initial = detail({ serverBacked: true, historyRevision: 'live', messages: [msg({ content: 'Before plan push' })] });
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: initial });
+    renderView(); await screen.findByText('Before plan push');
+    let oldRead!: (value: { ok: true; group: BotGroupDetail }) => void;
+    let newRead!: (value: { ok: true; group: BotGroupDetail }) => void;
+    mocks.getBotGroup.mockImplementationOnce(() => new Promise(resolve => { oldRead = resolve; }))
+      .mockImplementationOnce(() => new Promise(resolve => { newRead = resolve; }));
+    await act(async () => { mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'messages' })); });
+    const ordinary = msg({ id: 'newer-reply', sequence: 11, authorKind: 'bot', content: 'Newer delta stays visible' });
+    await act(async () => { mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'messages', historyRevision: 'live', messages: [planCard, ordinary] })); });
+    await act(async () => oldRead({ ok: true, group: initial }));
+    expect(newRead).toBeTypeOf('function');
+    expect(screen.getByText('Newer delta stays visible')).toBeTruthy();
+    expect(screen.queryByText('bots.groupChat.plan.missing')).toBeNull();
+    expect(screen.queryByText('bots.groupChat.organizer')).toBeNull();
+    await act(async () => newRead({ ok: true, group: withPlan(plan({ kind: 'talk' }), [ordinary], { historyRevision: 'live' }) }));
+    expect(screen.getByTestId('bot-group-arrangement')).toBeTruthy();
+  });
+
+  it('recovers plan details after a failed read without showing a missing-plan bubble', async () => {
+    const initial = detail({ serverBacked: true, historyRevision: 'live', messages: [msg({ content: 'Plan read will retry' })] });
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: initial });
+    renderView(); await screen.findByText('Plan read will retry');
+    vi.useFakeTimers();
+    try {
+      mocks.getBotGroup.mockResolvedValueOnce({ ok: false, errorCode: 'REQUEST_TIMEOUT', message: '' })
+        .mockResolvedValue({ ok: true, group: withPlan(plan({ kind: 'talk' }), [], { historyRevision: 'live' }) });
+      await act(async () => { mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'messages', historyRevision: 'live', messages: [planCard] })); });
+      expect(screen.queryByText('bots.groupChat.plan.missing')).toBeNull();
+      expect(screen.queryByText('bots.groupChat.organizer')).toBeNull();
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+      expect(screen.getByTestId('bot-group-arrangement')).toBeTruthy();
+      const reads = mocks.getBotGroup.mock.calls.length;
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(mocks.getBotGroup).toHaveBeenCalledTimes(reads);
+    } finally {
+      cleanup();
+      vi.useRealTimers();
+    }
+  });
+
   // Regression: returning to a group must not replay its consumed creation intent.
   it('does not reopen a created invitation or regenerate its link after leaving and returning', async () => {
     mocks.locationState = { createdGroupInvite: 'g1' };
@@ -757,7 +843,6 @@ describe('BotGroupChatView', () => {
   it.each(['200ms', '0ms'])('opens and closes with motion token %s, restoring focus and ignoring duplicate close', async duration => {
     const motion = mockThreadMotion(duration);
     try {
-      vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
       mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
       const user = userEvent.setup();
       renderView();
@@ -797,7 +882,6 @@ describe('BotGroupChatView', () => {
   it('cancels an interrupted close and does not animate or later close the newly selected thread', async () => {
     const motion = mockThreadMotion('200ms');
     try {
-      vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
       mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
       const user = userEvent.setup();
       renderView();
@@ -819,7 +903,6 @@ describe('BotGroupChatView', () => {
   it('cancels closing when Enter reopens the same thread and restores its input and draft', async () => {
     const motion = mockThreadMotion('200ms');
     try {
-      vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
       mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
       const user = userEvent.setup();
       renderView();
@@ -940,7 +1023,7 @@ describe('BotGroupChatView', () => {
       const layout = panel.parentElement!;
       available = 600;
       act(() => observed.get(layout)!([], {} as ResizeObserver));
-      expect(panel.style.width).toBe('360px');
+      expect(panel.style.width).toBe('300px');
       available = 1200;
       act(() => observed.get(layout)!([], {} as ResizeObserver));
       expect(panel.style.width).toBe('800px');
@@ -978,7 +1061,6 @@ describe('BotGroupChatView', () => {
   });
 
   it('expands a sibling thread panel, keeps the group usable, switches threads and restores the layout on close', async () => {
-    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
     mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
     const user = userEvent.setup();
     renderView();
@@ -1009,7 +1091,6 @@ describe('BotGroupChatView', () => {
   });
 
   it('focuses the reply input without trapping Tab; closes by keyboard and ignores IME Escape', async () => {
-    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
     mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
     const user = userEvent.setup();
     renderView();
@@ -1037,7 +1118,6 @@ describe('BotGroupChatView', () => {
   });
 
   it('closes the thread with Escape after clicking or tabbing into the main group, respecting IME and consumed events', async () => {
-    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
     mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
     const user = userEvent.setup();
     renderView();
@@ -1067,7 +1147,6 @@ describe('BotGroupChatView', () => {
   });
 
   it('closes with Escape after clicking message text or empty timeline space, respecting IME and consumed events', async () => {
-    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
     mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
     const user = userEvent.setup();
     renderView();
@@ -1092,7 +1171,6 @@ describe('BotGroupChatView', () => {
   });
 
   it('keeps main composer focus and both drafts when leaving thread image sharing', async () => {
-    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
     mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
     const user = userEvent.setup();
     renderView();
@@ -1114,7 +1192,6 @@ describe('BotGroupChatView', () => {
   });
 
   it.each(['main', 'thread'])('lets %s image selection consume Escape before the thread', async scope => {
-    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
     mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
     const user = userEvent.setup();
     renderView();
@@ -1137,7 +1214,6 @@ describe('BotGroupChatView', () => {
   });
 
   it('closes with Escape from the separate group header, yielding to consumed and IME events', async () => {
-    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
     mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
     const user = userEvent.setup();
     renderView();
@@ -1165,7 +1241,6 @@ describe('BotGroupChatView', () => {
   });
 
   it.each(['image', 'text-trigger', 'text-control', 'text-body'])('lets %s attachment preview close first with Escape and retains the thread draft', async kind => {
-    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
     mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true, messages: [msg({
       attachments: [{ id: 'attachment', name: kind === 'image' ? 'photo.png' : 'note.md', category: kind === 'image' ? 'image' : 'text',
         mimeType: kind === 'image' ? 'image/png' : 'text/markdown', size: 10,
@@ -1225,7 +1300,6 @@ describe('BotGroupChatView', () => {
   });
 
   it('lets the actual Mermaid preview consume Escape before the thread and preserves its draft', async () => {
-    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
     mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
     const user = userEvent.setup();
     renderView();
@@ -1250,7 +1324,6 @@ describe('BotGroupChatView', () => {
   });
 
   it('lets Escape dismiss a portalled reaction picker without closing the thread', async () => {
-    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
     mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
     const user = userEvent.setup();
     renderView();
@@ -2445,10 +2518,8 @@ describe('BotGroupChatView', () => {
       return within(row).getByRole('button', { name: 'bots.groupChat.server.quoteReply' });
     };
     beforeEach(() => {
-      vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
       mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
     });
-    afterEach(() => { vi.unstubAllGlobals(); });
 
     it('quotes into the composer without opening a 话题, and removing it keeps the text', async () => {
       const user = userEvent.setup();
@@ -3027,6 +3098,27 @@ describe('BotGroupChatView', () => {
       }
     });
 
+    // #9909: a discussion turn that answered NO_REPLY posts no group message at all. The queue must
+    // say it was skipped, not spoken, or the group looks like it lost a reply.
+    it('tells a skipped discussion turn apart from one that posted a message', async () => {
+      const base = plan().steps[0]!;
+      const queue = plan({
+        status: 'waiting', currentStep: 1, kind: 'talk', canManage: true,
+        steps: [
+          { ...base, position: 0, task: '', status: 'done', resultMessageId: null },
+          { ...base, position: 1, task: '', status: 'done', resultMessageId: '90000000-0000-4000-8000-000000000001' },
+          { ...base, position: 2, task: '', status: 'pending' },
+        ],
+      });
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: withPlan(queue) });
+      renderView();
+      const card = await screen.findByTestId('bot-group-arrangement');
+      const steps = within(card).getAllByTestId('bot-group-plan-step');
+      expect(steps[0]?.textContent).toContain('bots.groupChat.plan.stepSkipped');
+      expect(steps[0]?.textContent).not.toContain('bots.groupChat.plan.stepSpoken');
+      expect(steps[1]?.textContent).toContain('bots.groupChat.plan.stepSpoken');
+    });
+
     // A waiting talk queue supports skipping, not reassigning (Plans.action only reassigns proposed plans).
     // Unit: the real card must send the pending position and enforce the projected management permission.
     it.each([[true, 1], [false, 0]] as const)('offers skipping a waiting queue turn only to a manager (canManage=%s)', async (canManage, buttons) => {
@@ -3573,7 +3665,6 @@ describe('BotGroupChatView', () => {
 });
 
 it('keeps copy/share in each author row\'s more menu and shares only message content through the standard selection flow', async () => {
-  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
   mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ messages: [
     msg({ id: 'bot-share', authorKind: 'bot', authorName: '咪咪', content: 'Share this answer' }),
     msg({ id: 'mine-share', sequence: 2, content: 'My question' }),
@@ -3592,7 +3683,7 @@ it('keeps copy/share in each author row\'s more menu and shares only message con
     fireEvent.click(screen.getByRole('button', { name: 'chat.shareImage.cancel' }));
     expect(shareSelectionStore.getActiveSessionId()).toBeNull();
     expect(screen.queryByRole('checkbox')).toBeNull();
-  } finally { view.unmount(); vi.unstubAllGlobals(); }
+  } finally { view.unmount(); }
 });
 
  it.each(['bot', 'guest'] as const)('acknowledges visible %s replies at the tail and preserves new replies while reading above it', async (sender) => {
@@ -3609,7 +3700,7 @@ it('keeps copy/share in each author row\'s more menu and shares only message con
     await screen.findByText('First reply');
     act(() => window.dispatchEvent(new Event('focus')));
     expect(getBotLastReadAt(botGroupReadKey('g1'))).toBe(200);
-    const scroll = view.container.querySelector('.overflow-y-auto.px-5') as HTMLElement;
+    const scroll = screen.getByTestId('bot-group-timeline');
     Object.defineProperties(scroll, { scrollHeight: { configurable: true, value: 1000 }, clientHeight: { configurable: true, value: 100 } });
     scroll.scrollTop = 0; fireEvent.scroll(scroll);
     mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ messages: [msg({ id: 'new', sequence: 3, ...incoming, content: 'New reply', createdAt: 1200 })] }) });
@@ -3937,7 +4028,6 @@ describe('Telegram / Slack-grade timeline', () => {
   });
 
   it('shows a 话题 reply at once and keeps one copy when the server’s reply arrives', async () => {
-    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
     const sent = deferred<{ ok: true; messageId: string }>();
     const reply = vi.fn(() => sent.promise);
     Object.assign((window.electronAPI as unknown as { maker: { chatServer: Record<string, unknown> } }).maker.chatServer, { reply });
@@ -3971,7 +4061,6 @@ describe('thread previews and posting to the main chat', () => {
   function group(messages: BotGroupMessageView[]) {
     return detail({ serverBacked: true, messages });
   }
-  beforeEach(() => { vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} }); });
 
   async function renderProcessScroller(context: string) {
     const root = msg({ id: 'root', content: 'Root' });
@@ -4617,7 +4706,6 @@ describe('thread share follow-ups', () => {
   const share = (overrides: Partial<NonNullable<BotGroupMessageView['threadShare']>> = {}): NonNullable<BotGroupMessageView['threadShare']> => ({
     messageId: 'reply-x', threadRootId: 'u1', status: 'available', authorKind: 'bot', authorBotId: 'xiaoman', authorName: '小满',
     sharedByAuthor: false, content: '服务器上的原文', attachments: [], createdAt: 1_700_000_000_000, edited: false, ...overrides });
-  beforeEach(() => { vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} }); });
 
   it('shows a loading placeholder, never the card text, while the reply is read', async () => {
     mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true, messages: [
@@ -4793,7 +4881,6 @@ describe('thread share follow-ups', () => {
 
 describe('shares on older pages', () => {
   const t = (name: string) => `bots.groupChat.server.thread.${name}`;
-  beforeEach(() => { vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} }); });
 
   it('follows the reply after an edit or deletion without a click or reopen', async () => {
     const oldShare = msg({ id: 'old-share', sequence: 1, authorKind: 'user', isSelf: false, authorBotId: 'alice-actor', authorName: 'Alice', content: '↪ 冒充: 卡片文字',
@@ -4893,7 +4980,6 @@ describe('shares on older pages', () => {
 
 describe('more older shares than one refresh re-reads', () => {
   const t = (name: string) => `bots.groupChat.server.thread.${name}`;
-  beforeEach(() => { vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} }); });
 
   it.each(['source', 'attachment'] as const)('settles every older %s after overlapping completion pushes', { timeout: 20_000 }, async (pending) => {
     const older = Array.from({ length: 201 }, (_, i) => msg({ id: `share-${i}`, sequence: i + 1, content: 'card fallback',
@@ -4991,7 +5077,6 @@ describe('more older shares than one refresh re-reads', () => {
 
 describe('pending main-chat copies across accounts', () => {
   const t = (name: string) => `bots.groupChat.server.thread.${name}`;
-  beforeEach(() => { vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} }); });
   afterEach(() => { mocks.ownerGeneration = { dataOwnerId: 'account-a', generation: 1 }; });
 
   it('does not offer one account\'s failed copy to the next account in the same group', async () => {

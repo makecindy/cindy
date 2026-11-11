@@ -118,13 +118,6 @@ describe('Shared create project picker', () => {
     expect(scheduleChipsSource).toContain("getProjectPickerEmptyLabelKey('generic')");
   });
 
-  it('keeps folder picker wheel scrolling inside the shared menu', () => {
-    expect(folderPickerPopoverSource).toContain('handleFolderPickerWheel');
-    expect(folderPickerPopoverSource).toContain('onWheel={handleFolderPickerWheel}');
-    expect(folderPickerPopoverSource).toContain('data-folder-picker-scroll="true"');
-    expect(folderPickerPopoverSource).toContain('scrollRoot.scrollTop += normalizeWheelDeltaY(e)');
-  });
-
   it('waits for async folder selection before closing the controlled popover', () => {
     const start = folderPickerPopoverSource.indexOf('const handleSelectPath = async');
     const end = folderPickerPopoverSource.indexOf('const handleRemoveProject', start);

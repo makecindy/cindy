@@ -88,6 +88,23 @@ describe('installed Computer Use contract', () => {
     expect(adaptComputerDriverArgs('get_window_state', { pid: 1, window_id: 2, tree_format: 'markdown' }, schemas))
       .not.toHaveProperty('tree_format');
   });
+  // #9695 tool repair: preserve the screenshot point on capable drivers, and
+  // fail before input on older closed contracts rather than silently scrolling
+  // their window center. Existing coverage only exercised click arguments; unit.
+  it('preserves scroll coordinates or rejects an older driver without them', () => {
+    const point = { pid: 1, window_id: 2, x: 1055.5, y: 609, direction: 'down', delivery_mode: 'foreground' };
+    const current = new Map<string, ComputerDriverToolSchema>([['scroll', {
+      properties: { pid: {}, window_id: {}, x: {}, y: {}, direction: {}, delivery_mode: {} },
+      additionalProperties: false,
+    }]]);
+    expect(adaptComputerDriverArgs('scroll', point, current)).toEqual(point);
+    const older = new Map<string, ComputerDriverToolSchema>([['scroll', {
+      properties: { pid: {}, window_id: {}, direction: {}, delivery_mode: {} },
+      additionalProperties: false,
+    }]]);
+    expect(() => adaptComputerDriverArgs('scroll', point, older)).toThrow('does not accept x');
+  });
+
   it('rejects unavailable tools and incompatible arguments before dispatch', () => {
     expect(() => adaptComputerDriverArgs('missing', {}, schemas)).toThrow('does not advertise');
     const olderClick = new Map([['click', {

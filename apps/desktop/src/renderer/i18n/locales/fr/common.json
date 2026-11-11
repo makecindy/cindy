@@ -1,4 +1,12 @@
 {
+  "runtimePlugins": {
+    "save": "Enregistrer",
+    "promptUnsupported": "Cet emplacement d’exécution de Pi ne prend pas en charge les fragments d’instructions système.",
+    "title": "Plugins de la tâche",
+    "description": "Choisissez les plugins de cette tâche. Les changements prennent effet au prochain message.",
+    "unsupported": "Le traitement de chaque requête est disponible uniquement avec Pi en local. Le moteur de cette tâche ne le prend pas en charge.",
+    "failed": "Impossible de charger ou d’enregistrer ces réglages. Rouvrez ce panneau pour réessayer."
+  },
   "sharedTaskRecovery": {
     "title": "Impossible de reprendre sur l’ordinateur d’origine",
     "description": "Choisissez un autre ordinateur ou fournisseur pour poursuivre avec un transfert de contexte. Vos messages restent, mais l’état d’exécution complet de l’ordinateur d’origine n’est pas transféré.",
@@ -878,6 +886,7 @@
       "assignLocalAria": "Autoriser {{name}} à accepter de nouvelles tâches provenant d'autres ordinateurs",
       "moreAria": "Plus d'actions pour {{name}}",
       "remove": "Retirer du groupe",
+      "removeLocalBlocked": "L'ordinateur qui héberge le groupe ne peut pas être retiré",
       "status": {
         "checking": "Vérification…",
         "idle": "Inactif",
@@ -2328,6 +2337,7 @@
         "desktopVisibilityHint": "Laisse voir le bureau et les fenêtres derrière Cindy. Le texte et les commandes restent nets.",
         "desktopBlurLabel": "Flou du bureau",
         "desktopBlurHint": "Floute le bureau derrière la fenêtre. 0 désactive le flou ; une valeur plus élevée le renforce. Les systèmes sans réglage utilisent leur effet par défaut.",
+        "desktopBlurSwitchHint": "Floute le bureau derrière la fenêtre avec l’effet système de Windows. Nécessite Windows 11 version 22H2 ou ultérieure.",
         "blurLabel": "Flou du fond d'écran",
         "blurHint": "Floute uniquement le fond d'écran. Réglez sur 0 pour désactiver. Flouter un fond d'écran animé augmente l'utilisation du GPU.",
         "motionLabel": "Affichage",
@@ -3676,6 +3686,36 @@
           "invalid": "Aperçu indisponible ; vérifiez la configuration ou sélectionnez à nouveau le fichier",
           "skipped": "Ignoré ; sélectionnez à nouveau le fichier pour importer cette entrée",
           "authorizationPending": "Connexion ajoutée ; terminez l'autorisation dans les paramètres du fournisseur"
+        },
+        "local": {
+          "title": "Importer depuis des applications locales",
+          "note": "Lire les configurations API enregistrées sur cet ordinateur sans modifier les applications sources. Claude Code : uniquement le fichier settings.json utilisateur, y compris CLAUDE_CONFIG_DIR. Les variables du shell et les paramètres de projet ou administrés ne sont pas lus.",
+          "review": "Vérifier et importer ({{count}})",
+          "scanning": "Lecture des configurations enregistrées…",
+          "empty": "Aucune configuration API enregistrée trouvée.",
+          "failed": "Lecture incomplète. Veuillez réessayer.",
+          "edit": "Modifier",
+          "editFailed": "Vérifiez l’URL, le protocole et la clé, puis réessayez.",
+          "editNote": "Laissez la clé vide pour conserver les identifiants lus. Une nouvelle URL ou un nouveau protocole exige une nouvelle clé.",
+          "name": "Nom affiché",
+          "baseUrl": "URL de base",
+          "protocol": "Protocole API",
+          "chooseProtocol": "Choisir un protocole",
+          "apiKey": "Clé API",
+          "keepKey": "Laisser vide pour conserver la clé lue",
+          "missingUrl": "URL requise",
+          "status": {
+            "missing": "Aucune configuration trouvée",
+            "readFailed": "Lecture impossible ; vérifiez les autorisations ou réessayez",
+            "invalid": "Format non reconnu ; vérifiez ou modifiez la configuration",
+            "limit": "Limite atteinte ; cette source n’a pas été entièrement lue",
+            "unsupported": "Cette configuration ne peut pas être importée automatiquement. Les commandes et apiKeyHelper ne sont pas exécutés ; ajoutez la configuration API manuellement.",
+            "needsInput": "Configuration à compléter",
+            "changed": "La source a changé ; relancez la recherche",
+            "duplicate": "Une connexion identique existe déjà"
+          },
+          "rescan": "Relancer la recherche",
+          "sourceDisabled": "Désactivé dans l’application source"
         }
       },
       "order": {
@@ -3837,6 +3877,10 @@
           "openaiImagesHint": "Utilise l'adresse et la clé API de cette connexion pour /images/generations et /images/edits. L'activer en fait la seule connexion Images du fournisseur. Ajoutez manuellement les ID de modèles manquants, puis déclarez leur capacité de génération d'images dans les détails du modèle.",
           "xaiVideos": "Utiliser une API Videos compatible xAI",
           "xaiVideosHint": "Utilise l'adresse et la clé API de cette connexion pour soumettre et suivre les tâches vidéo. L'activer en fait la seule connexion vidéo du fournisseur. Ajoutez les ID de modèles manquants, puis déclarez leur capacité vidéo dans les détails du modèle.",
+          "minimaxVideos": "Utiliser une API Videos compatible MiniMax",
+          "minimaxVideosHint": "Utilise l'adresse et la clé API de cette connexion pour soumettre et suivre les tâches vidéo MiniMax, comme MiniMax-H3. Un fournisseur ne peut utiliser qu'une seule API vidéo. Ajoutez les ID de modèles manquants, puis déclarez leur capacité vidéo dans les détails du modèle.",
+          "openaiVideos": "Utiliser une API Videos compatible OpenAI (/v1/videos)",
+          "openaiVideosHint": "Utilise l'adresse et la clé API de cette connexion pour soumettre et suivre des tâches via POST /v1/videos, le format de la plupart des relais comme tu-zi ; des modèles comme MiniMax-H3 fonctionnent par ce biais. Un fournisseur ne peut utiliser qu'une seule API vidéo. Ajoutez les ID de modèles manquants, puis déclarez leur capacité vidéo dans les détails du modèle.",
           "runtimeSupportsImageGeneration": "Prend en charge la génération et la modification d'images",
           "runtimeSupportsImageGenerationHelpLabel": "À propos de la prise en charge de la génération et de la modification d'images",
           "runtimeSupportsImageGenerationConditionTitle": "Quand l'activer",
@@ -6730,8 +6774,27 @@
             "copied": "Code d'association copié",
             "hint": "Ou envoyez ce code au bot Cindy en message privé dans Feishu / Lark"
           },
+          "linkedAccounts": "Comptes associés : {{count}}",
+          "connectionTenant": "Entreprise : {{tenant}}",
           "setWorkingDevice": "Définir comme ordinateur de travail",
-          "workingDeviceSet": "Ordinateur de travail défini"
+          "workingDeviceSet": "Ordinateur de travail défini",
+          "appType": {
+            "self_built": "Application de l’organisation",
+            "store": "Application de la boutique"
+          },
+          "linkedBotsSummary": "Bots liés : {{bots}} · comptes : {{accounts}}",
+          "chooseBot": "Choisissez un bot à lier. Vous pouvez utiliser plusieurs bots en même temps.",
+          "connectBot": "Lier ce bot",
+          "linkAnotherAccount": "Lier un autre compte Feishu",
+          "botFallback": "Bot Cindy",
+          "bridgeTitle": "Bots Feishu / Lark",
+          "bridgeDescription": "Les bots se contentent de transmettre vos messages Feishu / Lark à Cindy. Les messages de chaque compte lié sont traités par son ordinateur de travail, et les sessions restent séparées par bot et par compte.",
+          "settingsTitle": "Répertoires de travail et modèles",
+          "settingsDescription": "Ils dépendent de votre compte Cindy sur cet ordinateur, pas d’un bot ni d’un compte Feishu / Lark : tous les bots Feishu / Lark utilisent les mêmes. La liste des répertoires est aussi partagée avec les autres canaux.",
+          "workingDeviceLabel": "Ordinateur de travail : {{name}}",
+          "workingDeviceThisComputer": "Cet ordinateur",
+          "workingDeviceUnknown": "Ordinateur de travail pas encore synchronisé",
+          "workingDeviceUnnamed": "Ordinateur sans nom"
         }
       },
       "summary": {
@@ -8157,8 +8220,18 @@
         "subscribeScheduleRunDetail": "Les automatisations pour lesquelles tu le choisis dans Vérification préalable le consultent d’abord. Il voit leur nom et leurs instructions et peut ignorer ou arrêter cette exécution, sans rien approuver à ta place.",
         "subscribeRoutineRun": "Peut vérifier les routines choisies avant leur exécution",
         "subscribeRoutineRunDetail": "Les routines pour lesquelles tu le choisis dans Vérification préalable le consultent d’abord. Il voit leurs instructions et les événements déclencheurs et peut ignorer ou arrêter cette exécution, sans rien approuver à ta place.",
+        "systemPrompt": "Peut ajouter des instructions système aux tâches sélectionnées",
+        "systemPromptDetail": "Les textes statiques ci-dessous suivent les instructions fixes de Cindy uniquement dans les tâches où ce plugin est sélectionné. Le paquet définit l’ordre et les moteurs concernés. Les changements prennent effet au prochain message ; les erreurs suivent le réglage de la tâche.",
+        "subscribeComposeContext": "Peut ajouter des références avant les réponses des tâches sélectionnées",
+        "subscribeComposeContextDetail": "Seules les tâches sélectionnées partagent leur message actuel. Les résultats sont des références ordinaires, sans instruction système ni autorisation. Les erreurs suivent le réglage de la tâche.",
+        "subscribeSearchMemory": "Peut fournir des souvenirs aux tâches sélectionnées",
+        "subscribeSearchMemoryDetail": "Ajoute des résultats complets avec le nom du plugin à memory_search. La recherche en mémoire doit être activée. Seule la requête est partagée ; en cas d’échec, les résultats de Cindy sont conservés.",
+        "subscribeStartTurn": "Peut choisir un modèle avant chaque réponse dans les sessions sélectionnées",
+        "subscribeStartTurnDetail": "Seules les sessions où vous sélectionnez ce plugin lui transmettent le message actuel. Il peut choisir un modèle connecté, l’effort de raisonnement et Fast. Les erreurs suivent le réglage de la session ; il ne peut pas approuver d’actions à votre place.",
+        "subscribeModelRequest": "Peut traiter chaque requête au modèle dans les sessions sélectionnées",
+        "subscribeModelRequestDetail": "Seules les sessions où vous sélectionnez ce plugin lui transmettent leurs requêtes au modèle. Il peut ajuster les modèles, les paramètres et le contenu. Seul Pi local est actuellement pris en charge ; les erreurs suivent le réglage de la session. Les identifiants de connexion sont exclus.",
         "subscribeStartTask": "Peut choisir le modèle des nouvelles tâches",
-        "subscribeStartTaskDetail": "Lorsqu’une nouvelle tâche utilise un modèle qu’il propose, il lit le premier message et choisit l’un de vos modèles connectés. Il choisit une seule fois ; le modèle ne change pas pendant la tâche.",
+        "subscribeStartTaskDetail": "Lorsqu’une nouvelle tâche utilise un modèle qu’il propose, il lit le premier message et choisit l’un de vos modèles connectés. Ce point intervient uniquement avant le premier message.",
         "card": "Affiche des cartes de message",
         "cardExternalLink": "Les cartes peuvent déclarer des liens externes qui ouvrent votre navigateur après confirmation",
         "cardExternalLinkDetail": "Cliquer sur un lien de carte affiche une boîte de dialogue de confirmation ; l'URL ne s'ouvre dans le navigateur du système qu'après votre approbation. Seules les adresses http/https sont autorisées.",
@@ -9436,6 +9509,9 @@
     }
   },
   "quotaCard": {
+    "codexRefreshFailed": "Impossible de mettre à jour le quota ChatGPT. Relancez la lecture ; les autres informations d’utilisation sont conservées.",
+    "retryQuota": "Relancer la Lecture du Quota",
+    "retryingQuota": "Lecture du quota…",
     "usageCritical": "Consommation élevée",
     "usageWarning": "Consommation en hausse",
     "usageTitle": "Détail de la consommation",
@@ -11895,7 +11971,7 @@
       "remove": "Retirer",
       "removeAria": "Retirer {{platform}}",
       "empty": "Ajoutez un bot que vous possédez déjà, ou connectez votre WeChat personnel ci-dessous, et {{name}} y répondra.",
-      "externalNote": "Toute personne qui écrit à ce bot parle à {{name}}. Vos propres messages s'exécutent avec les autorisations de {{name}} ; toutes les autres personnes obtiennent une tâche masquée distincte aux autorisations restreintes.",
+      "externalNote": "Après l’association, Telegram et Feishu/Lark n’acceptent les messages privés que du propriétaire. Les groupes suivent les paramètres de participation de chaque plateforme et les autorisations d’outils de {{name}}. Les tâches séparées partagent les fichiers et la mémoire.",
       "sharedMemoryNote": "{{name}} combine les informations provenant d'ici et d'autres conversations. Pour séparer les mémoires, utilisez un autre coéquipier.",
       "groups": {
         "title": "Groupes",
@@ -12767,47 +12843,47 @@
         "claude-code": {
           "ask": {
             "label": "Autorisations par défaut",
-            "description": "Autorise la lecture et l'écriture dans l'espace de travail et demande confirmation avant d'utiliser des autorisations plus élevées, l'accès réseau ou des chemins hors de l'espace de travail."
+            "description": "Vous approuvez les actions si nécessaire."
           },
           "acceptEdits": {
             "label": "Modifications acceptées",
-            "description": "Accepte automatiquement les demandes de modification de fichiers pour limiter les confirmations répétées. Les commandes ou autorisations plus risquées restent soumises à la politique d'autorisation sous-jacente."
+            "description": "Les modifications de fichiers sont directement autorisées ; vous approuvez les autres actions si nécessaire."
           },
           "auto": {
             "label": "Revue auto",
-            "description": "Autorise la lecture et l'écriture dans l'espace de travail et soumet automatiquement les demandes d'élévation à une revue ; les actions à haut risque peuvent tout de même être refusées ou nécessiter une confirmation. Cela réduit les interruptions, mais des erreurs sont possibles."
+            "description": "Un modèle d’IA approuve les actions, ce qui peut demander plus d’attente ; vous confirmez si nécessaire."
           },
           "bypassPermissions": {
             "label": "Accès complet",
-            "description": "Autorise la modification de n'importe quel fichier et l'exécution de commandes réseau sans nouvelle confirmation. Risque maximal ; à utiliser uniquement pour des tâches de confiance."
+            "description": "Les actions courantes sont directement autorisées, y compris les fichiers hors de l’espace de travail et les commandes réseau."
           }
         },
         "codex": {
           "ask": {
             "label": "Autorisations par défaut",
-            "description": "Autorise la lecture et l'écriture dans l'espace de travail et demande confirmation avant d'utiliser des autorisations plus élevées, l'accès réseau ou des chemins hors de l'espace de travail."
+            "description": "Vous approuvez les actions si nécessaire."
           },
           "auto": {
             "label": "Revue auto",
-            "description": "Exécute automatiquement les commandes dans le bac à sable protégé de l'espace de travail. Les actions qui franchissent les limites du bac à sable sont soumises à un relecteur automatique ; les actions à haut risque peuvent tout de même être refusées ou nécessiter une confirmation."
+            "description": "Un modèle d’IA approuve les actions, ce qui peut demander plus d’attente ; vous confirmez si nécessaire."
           },
           "bypassPermissions": {
             "label": "Accès complet",
-            "description": "Autorise la modification de n'importe quel fichier et l'exécution de commandes réseau sans nouvelle confirmation. Risque maximal ; à utiliser uniquement pour des tâches de confiance."
+            "description": "Les actions courantes sont directement autorisées, y compris les fichiers hors de l’espace de travail et les commandes réseau."
           }
         },
         "pi": {
           "ask": {
             "label": "Autorisations par défaut",
-            "description": "Les outils en lecture seule s'exécutent directement ; l'écriture de fichiers, l'exécution de commandes et les outils MCP demandent confirmation à chaque fois."
+            "description": "Vous approuvez les actions si nécessaire."
           },
           "auto": {
             "label": "Revue auto",
-            "description": "Les écritures dans l'espace de travail et les commandes sûres s'exécutent automatiquement ; les écritures hors de l'espace de travail, les commandes risquées et les outils MCP demandent toujours confirmation."
+            "description": "Un modèle d’IA approuve les actions, ce qui peut demander plus d’attente ; vous confirmez si nécessaire."
           },
           "bypassPermissions": {
             "label": "Accès complet",
-            "description": "Autorise la modification de n'importe quel fichier et l'exécution de commandes réseau sans nouvelle confirmation. Risque maximal ; à utiliser uniquement pour des tâches de confiance."
+            "description": "Les actions courantes sont directement autorisées, y compris les fichiers hors de l’espace de travail et les commandes réseau."
           }
         }
       }
@@ -13678,8 +13754,8 @@
       "dismissTitle": "Fermer l'avis d'échec passé"
     },
     "worktreeRestoreBanner": {
-      "text": "Le worktree de cette session a été nettoyé (répertoire manquant).",
-      "textPendingSnapshot": "Cette session contient un instantané de modifications non appliqué.",
+      "text": "Le worktree « {{name}} » de cette session a été nettoyé (répertoire manquant).",
+      "textPendingSnapshot": "Le worktree « {{name}} » de cette session contient un instantané de modifications non appliqué.",
       "restoreAction": "Restaurer le worktree",
       "applySnapshotAction": "Appliquer les modifications",
       "restoring": "Restauration…",
@@ -14273,7 +14349,7 @@
       "errors": {
         "noPriorAssistantPreview": "Veuillez revenir en arrière à partir d'une question qui suit une réponse de l'IA (celle-ci n'a aucune réponse précédente de l'assistant)",
         "sessionRunning": "La tâche ne s'est pas arrêtée à temps : réessayez le retour en arrière",
-        "noLiveQuery": "La session est inactive : envoyez d'abord un message (même juste « ok ») pour réveiller le SDK avant de revenir en arrière",
+        "noLiveQuery": "L’environnement d’exécution de la tâche n’a pas pu être restauré. Le retour en arrière n’a pas été effectué.",
         "noPriorAssistantCommit": "Veuillez revenir en arrière à partir d'une question qui suit une réponse de l'IA",
         "commitGeneric": "Échec du retour en arrière, veuillez réessayer",
         "remoteNotSupported": "Les sessions Claude Code distantes ne prennent pas encore en charge le retour en arrière"
@@ -20077,6 +20153,7 @@
   },
   "subscriptionAccounts": {
     "unassigned": "Compte non attribué",
+    "boundUnavailable": "Compte indisponible",
     "providerManagedAuth": "Le fournisseur actuel de Codex ne permet pas de consulter le compte ChatGPT. Lors de l’ajout du fournisseur, choisissez « $t(subscriptionAccounts.signIn.anotherAccount) » pour utiliser un dossier séparé.",
     "signIn": {
       "checking": "Vérification du compte local…",
@@ -20104,7 +20181,12 @@
     "openDirectory": "Ouvrir le dossier du compte",
     "openDirectoryFailed": "Impossible d’ouvrir le dossier du compte. Il a peut-être été déplacé ou supprimé.",
     "loginAgain": "Se reconnecter",
-    "login": "Se connecter"
+    "login": "Se connecter",
+    "quotaAverage": "Restant moyen {{percent}} %",
+    "quotaUpdating": "Quota en attente de mise à jour",
+    "quotaResetSoon": "Réinitialisation proche",
+    "quotaAverageHint": "Quota hebdomadaire · Poids égal par compte",
+    "quotaResetHint": "Au rythme actuel, du quota pourrait rester à la réinitialisation : jaune sous 24 heures, rouge sous 6 heures."
   },
   "sessionNotify": {
     "finished": "Cette tâche a terminé son tour. Sa réponse finale :",

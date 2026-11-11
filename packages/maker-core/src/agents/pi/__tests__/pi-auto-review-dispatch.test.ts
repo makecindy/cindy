@@ -53,6 +53,7 @@ const captured = vi.hoisted(() => ({
   failSetModel: false,
   rejectSetModel: false,
   failPrompt: false,
+  failSwitchSession: false,
   failSteer: false,
   failNextGetState: false,
   commandCatalog: null as null | Array<Record<string, unknown>>,
@@ -144,6 +145,7 @@ vi.mock('../rpc-client.js', () => ({
         return { success: true, data: { contextWindow: 200_000 } };
       }
       if (cmd.type === 'switch_session') {
+        if (captured.failSwitchSession) return { success: false, error: 'history unavailable' };
         captured.runtimeProvider = captured.launchProvider;
         captured.runtimeModel = captured.launchModel;
         return { success: true, data: {} };
@@ -3719,6 +3721,25 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     );
     expect(agent.capabilities.availableModels.map((model) => model.id)).toEqual(['m']);
     await handle.close();
+  });
+
+  // Unit regression at the real Pi startup entry. Missing/switch-failed native
+  // history previously cleared the persisted id and silently created an empty task.
+  it.each(['missing', 'switch-failed'])('strict history resume preserves the binding on %s', async (failure) => {
+    const agent = new PiAgent(buildDeps());
+    const resumeFile = path.join(agentHome, 'strict-history.jsonl');
+    if (failure === 'switch-failed') writeFileSync(resumeFile, '{}\n');
+    captured.failSwitchSession = failure === 'switch-failed';
+    const invalidResume = vi.fn(async () => true);
+    try {
+      await expect(agent.startSession({ sessionId: 'strict-history', workingDir: cwd,
+        model: 'm', providerId: 'openai', resumeSessionId: resumeFile,
+        onInvalidResumeSession: invalidResume,
+        vendorOptions: { _cindyRequireNativeResume: true },
+      })).rejects.toThrow('Native Pi history');
+      expect(invalidResume).not.toHaveBeenCalled();
+      expect(captured.closed).toBe(true);
+    } finally { captured.failSwitchSession = false; }
   });
 
   it('resume 模型同时缺少公开与 retained 描述符时不会在来源初始化前访问 resolver', async () => {

@@ -54,7 +54,8 @@ import type { LocalMcpTarget } from './router';
 import { RemoteAgentPoller, RemoteAgentRunClient, remoteAgentInvoker } from './runClient';
 import { registerPendingRemoteStart, startRemoteAgentSession, type PreparedRemoteMcp } from './startRemote';
 import { authorizeSharedTaskExecutor, authorizeSharedTaskHistory, sharedTaskLeaseDeadline,
-  trackLiveSharedTaskTarget, rememberSharedTaskAuthorization, forgetSharedTaskAuthorization } from './providerShareTaskLocation.js';
+  trackLiveSharedTaskTarget, rememberSharedTaskAuthorization, forgetSharedTaskAuthorization,
+  captureSharedTaskAuthorizationCheck } from './providerShareTaskLocation.js';
 
 export interface DeviceAgentServiceDeps {
   readImageDeliveryEpoch?(sessionId: string): Promise<number>;
@@ -157,22 +158,28 @@ async function isGitRepo(workingDir: string): Promise<boolean> {
  */
 const sharedPollers = new WeakMap<DeviceAgentServiceDeps['remoteInvoke'], Map<string, RemoteAgentPoller>>();
 
-// A live direct handle, rather than an allocation cache entry, owns the right to
-// request a group switch. The identity prevents an old handle from clearing a
-// newly opened task with the same session ID.
-const liveDirectGuestSessions = new Map<string, {
-  identity: object;
+// A live direct handle may capture its failed turn's existing authorization for
+// group recovery. Runtime drain may then close it; the original grant still fences
+// recovery. Identity prevents old cleanup from clearing a replacement handle.
+export interface DirectGuestRecovery {
+  ownerRoute: string;
+  isCurrent(): boolean;
+  requestSwitch(): Promise<string | undefined>;
+}
+
+interface DirectGuestSession {
   ownerRoute: string;
   requestSwitch(): Promise<string | undefined>;
+  captureRecovery?(): DirectGuestRecovery | null;
   probeReconnect?(isCurrent?: () => boolean): Promise<'ok' | 'offline' | 'unavailable'>;
+}
+
+const liveDirectGuestSessions = new Map<string, DirectGuestSession & {
+  identity: object;
 }>();
 const DIRECT_GRANT_ID = /^[0-9a-f-]{36}$/;
 
-export function liveDirectGuestSession(sessionId: string): Readonly<{
-  ownerRoute: string;
-  requestSwitch(): Promise<string | undefined>;
-  probeReconnect?(isCurrent?: () => boolean): Promise<'ok' | 'offline' | 'unavailable'>;
-}> | null {
+export function liveDirectGuestSession(sessionId: string): Readonly<DirectGuestSession> | null {
   return liveDirectGuestSessions.get(sessionId) ?? null;
 }
 
@@ -770,6 +777,15 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       reconnectAuthorization = (isCurrent, options) => changingModel ? Promise.resolve()
         : confirmExistingExecutor(() => !changingModel && isCurrent(), options?.force === true);
       const direct = liveDirectGuestSessions.get(sessionId);
+      if (direct?.identity === directIdentity) direct.captureRecovery = () => {
+        const isCurrent = captureSharedTaskAuthorizationCheck(input.deviceId, sessionId,
+          input.agentKind, authorizedModel, target);
+        return isCurrent ? { ownerRoute: direct.ownerRoute, isCurrent, requestSwitch: async () => {
+          if (!isCurrent()) return undefined;
+          const token = await direct.requestSwitch();
+          return isCurrent() ? token : undefined;
+        } } : null;
+      };
       if (direct?.identity === directIdentity) direct.probeReconnect = (isCurrent = () => true) => serializeAuthorization(async () => {
         try {
           await confirmExistingExecutor(isCurrent);

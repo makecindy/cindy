@@ -392,7 +392,7 @@ export const AssistantMessage = memo(function AssistantMessage({
   return (
     <div
       data-selection-quote-scope=""
-      className={cn('flex w-full flex-col items-start gap-1.5', botBubble && 'group/message')}
+      className={cn('flex w-full flex-col items-start gap-1.5', botBubble && 'group/message chat-bubble-layout')}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       onCopy={handleAssistantCopy}

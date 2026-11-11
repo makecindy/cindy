@@ -992,5 +992,8 @@
     "sumFailed_many": "{{count}} fallidas",
     "found_many": "Se encontraron {{count}} sesiones en {{device}}",
     "confirmBody_many": "Se importarán {{count}} sesiones y se ocuparán hasta {{size}} de espacio en disco. La importación continúa en segundo plano en el ordenador; puedes detenerla cuando quieras. Toca de nuevo para empezar."
+  },
+  "liveActivity": {
+    "waitingForUpdate": "Esperando actualización"
   }
 }

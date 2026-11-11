@@ -994,6 +994,8 @@ function visualMockCapabilities(): unknown {
     permissionModes: [
       { id: 'ask', displayName: 'Ask' },
       { id: 'acceptEdits', displayName: 'Accept Edits' },
+      { id: 'auto', displayName: 'Auto Approval' },
+      { id: 'bypassPermissions', displayName: 'Full Access' },
       { id: 'plan', displayName: 'Plan' },
     ],
     // 模拟电脑支持协同：+ 面板里的「协同模式」表单可以直接看，不显示「版本过旧」。

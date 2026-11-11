@@ -44,7 +44,7 @@
       "resetModules": 1
     },
     "apps/desktop/src/main/__tests__/computerUsePluginIpc.test.ts": {
-      "sourceReads": 11
+      "sourceReads": 10
     },
     "apps/desktop/src/main/__tests__/deviceLinkSettingsStore.test.ts": {
       "resetModules": 1

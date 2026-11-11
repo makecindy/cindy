@@ -12,7 +12,7 @@
 import { z } from 'zod';
 
 import { withStore } from './_shared.js';
-import type { MemoryMcpDeps } from '../types.js';
+import type { MemoryMcpDeps, MemoryProviderHit } from '../types.js';
 import type { MemoryToolRegistry } from '../cindy_memoryToolRegistry.js';
 
 export function registerMemorySearchTool(registry: MemoryToolRegistry, deps: MemoryMcpDeps): void {
@@ -43,8 +43,27 @@ export function registerMemorySearchTool(registry: MemoryToolRegistry, deps: Mem
           if (store) for (const hit of await store.search(query, opts)) all.push({ ...hit, scope });
         }
         // bm25: 越小越相关; 两份各自已排好, 合并后再取前 limit 条。
-        const hits = all.sort((a, b) => a.score - b.score).slice(0, limit ?? 10);
-        return { hits, count: hits.length };
+        const max = limit ?? 10;
+        const hits = all.sort((a, b) => a.score - b.score).slice(0, max);
+        let provided: MemoryProviderHit[];
+        let truncated = false;
+        try {
+          const pending = deps.searchProviders?.(query, opts, deps.getSessionContext?.());
+          if (!pending) return { hits, count: hits.length };
+          const result = await pending;
+          provided = Array.isArray(result) ? result : result.hits;
+          truncated = !Array.isArray(result) && result.truncated === true;
+        }
+        catch { return { hits, count: hits.length }; }
+        if (!provided.length) return { hits, count: hits.length };
+        // Preserve each source's own ordering; scores from different indexes are
+        // not comparable. Cindy and providers alternate within the caller's limit.
+        const merged: Array<(typeof hits)[number] | MemoryProviderHit> = [];
+        for (let i = 0; merged.length < max && (i < hits.length || i < provided.length); i++) {
+          if (i < hits.length) merged.push(hits[i]);
+          if (i < provided.length && merged.length < max) merged.push(provided[i]);
+        }
+        return { hits: merged, count: merged.length, ...(truncated ? { truncated: true } : {}) };
       }),
   });
 }

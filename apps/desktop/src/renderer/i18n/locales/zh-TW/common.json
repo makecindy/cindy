@@ -1,4 +1,12 @@
 {
+  "runtimePlugins": {
+    "save": "儲存",
+    "promptUnsupported": "目前 Pi 執行位置不支援系統提示詞片段。",
+    "title": "任務插件",
+    "description": "為這個任務選擇插件。修改從下一則訊息起生效。",
+    "unsupported": "每次請求前處理僅支援本機 Pi，目前任務的引擎不支援。",
+    "failed": "無法讀取或儲存設定，請重新開啟此面板再試。"
+  },
   "sharedTaskRecovery": {
     "title": "無法在原電腦上恢復任務",
     "description": "可以選擇其他電腦或供應商，透過上下文交接繼續。原訊息保留，但切換不會移轉原電腦上的完整執行狀態。",
@@ -860,6 +868,7 @@
       "assignLocalAria": "允許 {{name}} 接收外部新任務",
       "moreAria": "{{name}} 的更多操作",
       "remove": "移出組",
+      "removeLocalBlocked": "組所在的電腦無法移出組",
       "status": {
         "checking": "正在檢查…",
         "idle": "空閒",
@@ -2260,6 +2269,7 @@
         "desktopVisibilityHint": "透出 Cindy 後面的桌面與視窗，文字和控制項保持清晰。",
         "desktopBlurLabel": "桌面模糊",
         "desktopBlurHint": "模糊視窗後面的桌面，0 為關閉，數值越大越模糊。不支援強度調整的系統使用預設效果。",
+        "desktopBlurSwitchHint": "以 Windows 系統效果模糊視窗後面的桌面。需要 Windows 11 22H2 或更新版本。",
         "blurLabel": "桌布模糊",
         "blurHint": "僅模糊桌布，0 為關閉。動態桌布開啟模糊後會增加顯示卡負載。",
         "motionLabel": "展示方式",
@@ -3586,6 +3596,36 @@
           "invalid": "無法預覽此設定，請檢查設定或重新選擇檔案",
           "skipped": "已略過；再次匯入需重新選擇檔案",
           "authorizationPending": "連線已新增，請在供應商設定中完成授權"
+        },
+        "local": {
+          "title": "從本機應用程式匯入",
+          "note": "唯讀匯入這台電腦已儲存的 API 設定，不修改來源應用程式。Claude Code 僅讀取使用者層級 settings.json（含 CLAUDE_CONFIG_DIR），不讀取 shell 環境變數、專案或受管理設定。",
+          "review": "檢視並匯入（{{count}}）",
+          "scanning": "正在讀取已儲存的設定…",
+          "empty": "找不到已儲存的 API 設定。",
+          "failed": "讀取未完成，請重試。",
+          "edit": "編輯",
+          "editFailed": "請檢查網址、協定與金鑰後重試。",
+          "editNote": "金鑰留空會保留已讀取的憑證。變更網址或協定後，需填寫新金鑰。",
+          "name": "顯示名稱",
+          "baseUrl": "基礎 URL",
+          "protocol": "API 協定",
+          "chooseProtocol": "請選擇協定",
+          "apiKey": "API 金鑰",
+          "keepKey": "留空保留已讀取的金鑰",
+          "missingUrl": "需要填寫網址",
+          "status": {
+            "missing": "找不到設定",
+            "readFailed": "無法讀取，請檢查權限或重試",
+            "invalid": "無法辨識格式，請檢查或編輯設定",
+            "limit": "超過讀取上限，未完整讀取此來源",
+            "unsupported": "此設定無法自動匯入。不會執行命令或 apiKeyHelper，請手動新增 API 設定。",
+            "needsInput": "需要補齊設定",
+            "changed": "來源已變更，請重新掃描",
+            "duplicate": "已存在相同連線"
+          },
+          "rescan": "重新掃描",
+          "sourceDisabled": "在來源應用程式中已關閉"
         }
       },
       "order": {
@@ -3747,6 +3787,10 @@
           "openaiImagesHint": "使用此連線的位址和 API Key 呼叫 /images/generations 與 /images/edits。開啟後，此連線將作為供應商唯一的圖片連線。缺少的模型可手動新增 ID，再到模型詳情宣告圖片能力。",
           "xaiVideos": "使用 xAI 相容影片介面",
           "xaiVideosHint": "使用此連線的位址與 API Key 提交、查詢影片任務。開啟後，此連線將作為供應商唯一的影片連線。缺少的模型可手動新增 ID，再到模型詳情宣告影片能力。",
+          "minimaxVideos": "使用 MiniMax 相容影片介面",
+          "minimaxVideosHint": "使用此連線的位址與 API Key 提交、查詢 MiniMax 影片任務（如 MiniMax-H3）。每個供應商只能使用一種影片介面。缺少的模型可手動新增 ID，再到模型詳情宣告影片能力。",
+          "openaiVideos": "使用 OpenAI 相容影片介面（/v1/videos）",
+          "openaiVideosHint": "使用此連線的位址與 API Key，以 tu-zi 等多數中轉站採用的 POST /v1/videos 格式提交、查詢影片任務，MiniMax-H3 等模型也可透過它使用。每個供應商只能使用一種影片介面。缺少的模型可手動新增 ID，再到模型詳情宣告影片能力。",
           "runtimeSupportsImageGeneration": "支援圖片生成與編輯",
           "runtimeSupportsImageGenerationHelpLabel": "瞭解圖片生成與編輯支援",
           "runtimeSupportsImageGenerationConditionTitle": "適用條件",
@@ -6598,7 +6642,7 @@
             "unavailable": "組織未設定",
             "unavailablePersonal": "暫未開放",
             "disabled": "已停用",
-            "none": "未繫結",
+            "none": "未關聯",
             "pending": "在瀏覽器裡授權，或把關聯碼傳給飛書機器人",
             "awaiting_confirmation": "請在飛書 / Lark 裡確認更換這台電腦關聯的帳號",
             "confirmed": "{{user}} 已關聯飛書機器人",
@@ -6615,8 +6659,27 @@
             "copied": "關聯碼已複製",
             "hint": "或者在飛書裡把關聯碼私訊傳給 Cindy 機器人"
           },
+          "linkedAccounts": "已關聯帳號：{{count}}",
+          "connectionTenant": "所屬企業：{{tenant}}",
           "setWorkingDevice": "設為工作電腦",
-          "workingDeviceSet": "已設為工作電腦"
+          "workingDeviceSet": "已設為工作電腦",
+          "appType": {
+            "self_built": "組織自建應用程式",
+            "store": "商店應用程式"
+          },
+          "linkedBotsSummary": "已關聯 {{bots}} 個機器人 · {{accounts}} 個飛書帳號",
+          "chooseBot": "選擇要關聯的機器人，可以同時使用多個機器人。",
+          "connectBot": "關聯此機器人",
+          "linkAnotherAccount": "關聯其他飛書帳號",
+          "botFallback": "Cindy 機器人",
+          "bridgeTitle": "飛書機器人",
+          "bridgeDescription": "機器人只負責把飛書裡的訊息轉給 Cindy。每個飛書帳號的訊息交給它的工作電腦處理，任務按機器人和飛書帳號分開。",
+          "settingsTitle": "工作目錄與模型",
+          "settingsDescription": "屬於你的 Cindy 帳號和這臺電腦，不隨機器人或飛書帳號變化：所有飛書機器人共用同一份。工作目錄清單也與其他渠道共用。",
+          "workingDeviceLabel": "工作電腦：{{name}}",
+          "workingDeviceThisComputer": "本機",
+          "workingDeviceUnknown": "工作電腦尚未同步",
+          "workingDeviceUnnamed": "未命名電腦"
         }
       },
       "summary": {
@@ -8037,8 +8100,18 @@
         "subscribeScheduleRunDetail": "在「前置檢查」裡選了它的自動化，執行前會先詢問它。它看得到這項自動化的名稱和指令，可以讓這次跳過或停止，但不能替你核准。",
         "subscribeRoutineRun": "可在你選定的夥伴例行任務執行前做檢查",
         "subscribeRoutineRunDetail": "在「前置檢查」裡選了它的例行任務，每次觸發後會先詢問它。它看得到例行任務的指令和觸發它的事件內容，可以讓這次跳過或停止，但不能替你核准。",
+        "systemPrompt": "可為所選任務補充系統提示詞",
+        "systemPromptDetail": "下方靜態片段只會進入選了這個插件的任務，放在 Cindy 固定提示詞之後，順序與引擎範圍依套件宣告。修改從下一則訊息起生效，出錯時依任務設定處理。",
+        "subscribeComposeContext": "可在所選任務回覆前補充資料",
+        "subscribeComposeContextDetail": "只有選了它的任務會將目前訊息交給它。回傳內容作為一般參考資料，不進入系統提示詞，也不代表主人授權。出錯時依任務設定處理。",
+        "subscribeSearchMemory": "可為所選任務提供記憶",
+        "subscribeSearchMemoryDetail": "在現有 memory_search 中合併完整項目並標明來源插件。需先啟用記憶檢索；只分享所選任務的查詢，插件失敗時保留 Cindy 自己的結果。",
+        "subscribeStartTurn": "可在選定任務的每次回覆前選擇模型",
+        "subscribeStartTurnDetail": "僅在你為任務選擇此插件時，讀取本則訊息並選擇已連接的模型、推理強度及 Fast。出錯按該任務的設定處理，不能替你批准操作。",
+        "subscribeModelRequest": "可在選定任務中處理每次模型請求",
+        "subscribeModelRequestDetail": "僅在你為任務選擇此插件時，讀取並處理傳送給模型的請求內容，調整模型和參數。目前僅支援本機 Pi；出錯按任務設定處理，不包含連接憑證。",
         "subscribeStartTask": "可為新任務選模型",
-        "subscribeStartTaskDetail": "新任務選了它提供的模型時，它會看第一則訊息，從你已連接的模型裡選一個。只選一次，任務中途不會換模型。",
+        "subscribeStartTaskDetail": "新任務選了它提供的模型時，它會看第一則訊息，從你已連接的模型裡選一個。這個節點只在第一則訊息送出前執行一次。",
         "card": "渲染訊息卡片",
         "cardExternalLink": "卡片內可宣告外鏈，經你確認後開啟瀏覽器",
         "cardExternalLinkDetail": "卡片中的連結點選後會彈出確認框，你同意後才會在系統瀏覽器中開啟；僅限 http/https 地址。",
@@ -9316,6 +9389,9 @@
     }
   },
   "quotaCard": {
+    "codexRefreshFailed": "ChatGPT 配額更新失敗，請重試讀取。其他用量資訊仍會保留",
+    "retryQuota": "重試讀取配額",
+    "retryingQuota": "正在讀取配額…",
     "usageCritical": "用量較高",
     "usageWarning": "用量偏高",
     "usageTitle": "用量明細",
@@ -11746,7 +11822,7 @@
       "remove": "移除",
       "removeAria": "移除 {{platform}}",
       "empty": "新增你已有的機器人，或在下方連接個人微信，{{name}} 就會在那裡回覆。",
-      "externalNote": "傳訊息給這個機器人的人都是在和 {{name}} 對話。你自己的訊息依 {{name}} 的權限執行；其他人各有一條隱藏任務，權限受限。",
+      "externalNote": "Telegram 和飛書/Lark 繫結後只接收主人的私訊。群組依各平台的參與設定接收訊息，工具沿用 {{name}} 的權限。獨立任務共用資料與記憶。",
       "sharedMemoryNote": "{{name}} 會把這裡和其它對話裡的資訊一起使用。想隔開記憶，請換一位夥伴。",
       "groups": {
         "title": "群組",
@@ -12616,47 +12692,47 @@
         "claude-code": {
           "ask": {
             "label": "預設權限",
-            "description": "允許在工作區內讀寫；需要更高權限、聯網或訪問工作區外路徑時再詢問。"
+            "description": "操作按需由你審批。"
           },
           "acceptEdits": {
             "label": "允許編輯",
-            "description": "自動接受檔案編輯請求，減少反覆確認；涉及更高風險的命令或權限仍按底層權限策略處理。"
+            "description": "檔案編輯直接允許，其他操作按需由你審批。"
           },
           "auto": {
             "label": "自動審批",
-            "description": "允許在工作區內讀寫，並自動審批提權請求；高風險操作可能被拒絕或要求確認。能減少打斷，但存在誤判風險。"
+            "description": "操作由 AI 模型審批，可能需要額外等待；必要時由你確認。"
           },
           "bypassPermissions": {
             "label": "完全訪問",
-            "description": "允許修改任意檔案並執行聯網命令，無需再次確認。風險最高，只適合可信任務。"
+            "description": "一般操作直接允許，可存取工作區外檔案及連網執行命令。"
           }
         },
         "codex": {
           "ask": {
             "label": "預設權限",
-            "description": "允許在工作區內讀寫；需要更高權限、聯網或訪問工作區外路徑時再詢問。"
+            "description": "操作按需由你審批。"
           },
           "auto": {
             "label": "自動審批",
-            "description": "在受保護的工作區沙箱內自動執行命令；需要越過沙箱邊界的操作交給自動審查器判斷，高風險操作可能被拒絕或要求確認。"
+            "description": "操作由 AI 模型審批，可能需要額外等待；必要時由你確認。"
           },
           "bypassPermissions": {
             "label": "完全訪問",
-            "description": "允許修改任意檔案並執行聯網命令，無需再次確認。風險最高，只適合可信任務。"
+            "description": "一般操作直接允許，可存取工作區外檔案及連網執行命令。"
           }
         },
         "pi": {
           "ask": {
             "label": "預設權限",
-            "description": "只讀工具直接執行；寫檔案、跑命令和 MCP 工具每次都詢問。"
+            "description": "操作按需由你審批。"
           },
           "auto": {
             "label": "自動審批",
-            "description": "工作區內寫檔案與安全命令自動執行；越界寫、危險命令和 MCP 工具仍會詢問。"
+            "description": "操作由 AI 模型審批，可能需要額外等待；必要時由你確認。"
           },
           "bypassPermissions": {
             "label": "完全訪問",
-            "description": "允許修改任意檔案並執行聯網命令，無需再次確認。風險最高，只適合可信任務。"
+            "description": "一般操作直接允許，可存取工作區外檔案及連網執行命令。"
           }
         }
       }
@@ -13529,8 +13605,8 @@
       "dismissTitle": "關閉歷史失敗提示"
     },
     "worktreeRestoreBanner": {
-      "text": "該任務的 worktree 已被回收（目錄不存在）。",
-      "textPendingSnapshot": "該任務有一份未應用的更改快照。",
+      "text": "該任務的 worktree「{{name}}」已被回收（目錄不存在）。",
+      "textPendingSnapshot": "該任務的 worktree「{{name}}」有一份未應用的更改快照。",
       "restoreAction": "恢復 worktree",
       "applySnapshotAction": "恢復更改",
       "restoring": "恢復中…",
@@ -14122,7 +14198,7 @@
       "errors": {
         "noPriorAssistantPreview": "請在 AI 回覆之後的提問上 rewind（這條之前沒有 assistant 回覆）",
         "sessionRunning": "等待任務停止超時，請重新回退",
-        "noLiveQuery": "Agent 會話未啟用——請先傳送任意一條訊息（哪怕一句\"ok\"）讓 SDK 起來再 rewind",
+        "noLiveQuery": "未能恢復任務執行環境，回退未完成。",
         "noPriorAssistantCommit": "請在 AI 回覆之後的提問上 rewind",
         "commitGeneric": "rewind 失敗，請重試",
         "remoteNotSupported": "遠端 Claude Code 會話暫不支援 rewind"
@@ -19813,6 +19889,7 @@
   },
   "subscriptionAccounts": {
     "unassigned": "帳號待分配",
+    "boundUnavailable": "帳號已無法使用",
     "providerManagedAuth": "Codex 目前的供應商未提供 ChatGPT 帳號資訊。請在新增供應商時選擇「$t(subscriptionAccounts.signIn.anotherAccount)」，使用獨立目錄",
     "signIn": {
       "checking": "正在偵測本機帳號…",
@@ -19840,7 +19917,12 @@
     "openDirectory": "開啟帳號目錄",
     "openDirectoryFailed": "無法開啟帳號目錄，它可能已被移動或刪除。",
     "loginAgain": "重新登入",
-    "login": "登入"
+    "login": "登入",
+    "quotaAverage": "平均餘額 {{percent}}%",
+    "quotaUpdating": "餘額待更新",
+    "quotaResetSoon": "即將重設",
+    "quotaAverageHint": "每週限額 · 各帳號等權平均",
+    "quotaResetHint": "依目前使用速度，重設時可能仍有餘量：24 小時內為黃色，6 小時內為紅色。"
   },
   "sessionNotify": {
     "finished": "這個任務這一輪做完了，最終答覆如下：",

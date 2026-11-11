@@ -10,6 +10,7 @@ import type {
 } from './collabSendOutcome.js';
 import { AcceptedCallbackDispatchCancelled } from './acceptedCallbackRunner.js';
 import { rebuildQueuedOrcaLeadMessage } from './orcaInterAgentDispatcher.js';
+import { isOrcaCollaborationMessage } from './orcaQueueNote.js';
 import {
   createSessionQueueControlService,
   type QueuedSteerFallbackReason,
@@ -70,6 +71,8 @@ export type SendToWorkerResult =
       queuedMessageId?: string;
       /** 请求插话却进了队列时的原因。 */
       steerFallbackReason?: OrcaSteerFallbackReason;
+      /** 这次派发取代的、Lead 还没读到的该 Worker 异常终止回报；已从 Lead 队列撤下。 */
+      supersededFailureNotices?: WithdrawnFailureNotice[];
     }
   | {
       ok: false;
@@ -87,6 +90,8 @@ export type InterruptWorkerResult =
       queuedMessageId: string;
       stopOutcome: WorkerInterruptStopOutcome;
       queuePaused: boolean;
+      /** 同 SendToWorkerResult.supersededFailureNotices。 */
+      supersededFailureNotices?: WithdrawnFailureNotice[];
     }
   | { ok: false; errorCode: SendToWorkerFailureCode; message: string };
 
@@ -152,7 +157,34 @@ export type DispatchWorkerTaskResult =
 
 /** 简单生命周期操作的 domain result，供 IPC 与 MCP adapter 各自翻译。 */
 export type OrcaOkResult =
-  { ok: true; workerId?: string } | { ok: false; errorCode: string; message: string };
+  | { ok: true; workerId?: string; /** 归档时一并撤下的、Lead 还没读到的异常终止回报条数。 */ withdrawnFailureNotices?: number }
+  | { ok: false; errorCode: string; message: string };
+
+/** Worker 异常终止自动回报的固定开头；撤下过期回报时按它识别。 */
+export const ORCA_AUTO_BRIDGE_FAILURE_HEADER = '[Auto-bridged: worker 异常终止]';
+
+/** 回执里带回的异常终止回报正文上限；完整内容仍在 Worker 自己的任务里。 */
+const MAX_WITHDRAWN_FAILURE_NOTICE_TEXT = 1200;
+
+/** Lead 队列里一条因 Lead 已对该 Worker 采取行动而撤下的异常终止回报。 */
+export interface WithdrawnFailureNotice {
+  queuedMessageId: string;
+  text: string;
+}
+
+/**
+ * 附在异常终止回报末尾的宿主说明：Worker 出错后原样保留，可以原地继续或先换模型。
+ * 2026-11-10 现场：五个 Worker 撞上用量上限后被全部归档重建，丢了上下文，还撞上名字冲突。
+ */
+export function buildWorkerFailureRecoveryNote(workerSessionId: string): string {
+  return (
+    '(Host note: this Worker is kept as it is: its conversation, working directory and uncommitted changes ' +
+    `are intact, and its status is now error. To retry or continue, send_to_worker to the same worker (session_id: ${workerSessionId}). ` +
+    'If the cause is a usage limit or an unavailable model, first move it to another model with the cindy_helper tools ' +
+    'get_session_runtime and set_session_runtime on that session_id (not available for a Worker running on another computer), ' +
+    'then send_to_worker. Archiving it and creating a replacement starts over without this context.)'
+  );
+}
 
 /** update_worker 的 domain result：worker 展示角色名与 team 内唯一 label。 */
 export type UpdateWorkerResult =
@@ -850,13 +882,13 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     }
     const finalText = turn.finalText.trim() || state.capturedText.trim()
       || turn.diagnostic?.trim() || '(no output captured)';
-    const header = turn.status === 'error'
-      ? '[Auto-bridged: worker 异常终止]'
-      : '[Auto-bridged: worker 已完成，系统自动回传结果]';
+    const report = turn.status === 'error'
+      ? `${ORCA_AUTO_BRIDGE_FAILURE_HEADER}\n\n${finalText}\n\n${buildWorkerFailureRecoveryNote(sessionId)}`
+      : `[Auto-bridged: worker 已完成，系统自动回传结果]\n\n${finalText}`;
     let accepted = false;
     try {
       accepted = (await deps.sendAutoBridgeToLead(
-        state.leadSessionId, `${header}\n\n${finalText}`, state.workerId,
+        state.leadSessionId, report, state.workerId,
       )).accepted;
     } catch (err) {
       deps.log.warn('orca auto-bridge failed', {
@@ -873,6 +905,59 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       state.retryAfterRejectedDelivery = true;
       return 'rejected';
     });
+  }
+
+  /**
+   * 该 Worker 排在 Lead 队列里、Lead 还没读到的异常终止自动回报。只认宿主生成的固定开头，
+   * Worker 自己写的回报（成果、提问）不在此列；正在投递的不动。
+   */
+  async function listQueuedFailureNotices(
+    leadSessionId: string,
+    workerSessionId: string,
+  ): Promise<AgentInputQueuedMessage[]> {
+    const snapshot = await deps.getSessionQueueSnapshot(leadSessionId);
+    const busy = new Set([...snapshot.consumingClientIds, ...snapshot.steeringClientIds]);
+    return snapshot.pendingQueue.filter((item) =>
+      !busy.has(item.clientId)
+      && isOrcaCollaborationMessage(item)
+      && item.origin.senderSessionId === workerSessionId
+      && (item.origin.displayText ?? '').startsWith(ORCA_AUTO_BRIDGE_FAILURE_HEADER));
+  }
+
+  /**
+   * Lead 已经对这个 Worker 采取了行动（归档，或重新派活），它此前那次异常终止的回报就过期了：
+   * 留在队列里只会在之后单独唤醒 Lead 一轮，让它再确认一次「这条已处理」。撤下走 coordinator
+   * 的 remove（与 Stop 清队列同一条结清路径），正文由调用方写进本次操作的回执，Lead 不丢信息。
+   * 读队列或撤下失败只记日志：这是清理，不能让已经成立的归档或派发变成失败。
+   */
+  async function withdrawQueuedFailureNotices(
+    leadSessionId: string,
+    workerSessionId: string,
+    only?: readonly AgentInputQueuedMessage[],
+  ): Promise<WithdrawnFailureNotice[]> {
+    try {
+      const candidates = only ?? await listQueuedFailureNotices(leadSessionId, workerSessionId);
+      const withdrawn: WithdrawnFailureNotice[] = [];
+      for (const item of candidates) {
+        if (!deps.removeQueuedMessage(leadSessionId, item.clientId, item)) continue;
+        withdrawn.push({
+          queuedMessageId: item.clientId,
+          text: ((item.origin?.kind === 'orca' ? item.origin.displayText : undefined) ?? item.text)
+            .slice(0, MAX_WITHDRAWN_FAILURE_NOTICE_TEXT),
+        });
+      }
+      if (withdrawn.length > 0) {
+        deps.log.info('orca withdrew superseded worker failure notices', {
+          leadSessionId, workerSessionId, count: withdrawn.length,
+        });
+      }
+      return withdrawn;
+    } catch (err) {
+      deps.log.warn('orca failed to withdraw superseded worker failure notices', {
+        leadSessionId, workerSessionId, err: err instanceof Error ? err.message : String(err),
+      });
+      return [];
+    }
   }
 
   function captureWorkerTerminalTurn(sessionId: string): WorkerTerminalTurnCapture {
@@ -1018,6 +1103,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
           case 'REHYDRATE_FAILED':
           case 'HOST_NOT_READY':
           case 'SEND_FAILED':
+          case 'PLUGIN_TURN_SKIPPED':
+          case 'PLUGIN_TURN_BLOCKED':
             return 'AGENT_NOT_READY';
         }
       })();
@@ -1406,6 +1493,17 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
             : resolved.message,
       };
     }
+    // 派发前记下已有的异常终止回报：只撤这些。派发之后才进队列的属于新一轮，必须照常送达。
+    const staleFailureNotices = resolved.worker.status === 'error'
+      ? await listQueuedFailureNotices(params.callerLeadSessionId, resolved.worker.sessionId).catch(() => [])
+      : [];
+    const supersededNotices = async (): Promise<{ supersededFailureNotices?: WithdrawnFailureNotice[] }> => {
+      if (staleFailureNotices.length === 0) return {};
+      const withdrawn = await withdrawQueuedFailureNotices(
+        params.callerLeadSessionId, resolved.worker.sessionId, staleFailureNotices,
+      );
+      return withdrawn.length > 0 ? { supersededFailureNotices: withdrawn } : {};
+    };
     const execution = await dispatchResolvedWorker({
       resolved,
       message: params.message,
@@ -1434,6 +1532,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         queuePaused:
           execution.stopResult?.queuePaused ??
           deps.getWorkerQueuePaused(resolved.worker.sessionId),
+        ...(await supersededNotices()),
       };
     }
     const dispatchResult = mapNormalDispatchResult(resolved.worker, execution);
@@ -1455,6 +1554,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
               : {}),
           }
         : {}),
+      ...(await supersededNotices()),
     };
   }
 
@@ -1623,7 +1723,12 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     await params.beforeArchive?.();
     await deps.updateWorkerStatus(worker.id, 'done');
     deps.broadcastOrcaWorkerChanged(link.leadSessionId);
-    return { ok: true, workerId: worker.id };
+    const withdrawn = await withdrawQueuedFailureNotices(link.leadSessionId, worker.sessionId);
+    return {
+      ok: true,
+      workerId: worker.id,
+      ...(withdrawn.length > 0 ? { withdrawnFailureNotices: withdrawn.length } : {}),
+    };
     };
     // Never wait for a send while holding the Worker transition: send acceptance
     // also needs this transition. Check and reserve synchronously (no await).
