@@ -12296,7 +12296,949 @@
       "createOwnApp": "Criar a minha aplicação ↗"
     },
     "outboundAttachmentsIncomplete": "⚠️ Entrega de anexos incompleta: {{count}} não enviados ({{names}}).",
-    "unnamedAttachment": "Anexo sem título"
+    "unnamedAttachment": "Anexo sem título",
+    "text": {
+      "discord": {
+        "expiredCardNotice": "Este cartão expirou",
+        "slash": {
+          "new": "🌱 Novo começo — a conversa anterior foi limpa. Vamos recomeçar do zero.",
+          "help": "🤖 Eis o que posso fazer:\n\n/new         Recomeçar (limpa o contexto da conversa atual)\n/model       Mudar de modelo\n/permission  Ajustar o modo de permissões (auto / bypass / ask, etc.)\n/ctr         Controlar remotamente um espaço de trabalho no computador (enviar de novo durante o controlo para mudar de sessão)\n/exctr       Terminar o controlo remoto e voltar às nossas mensagens diretas no Discord\n/help        Ver o que posso fazer\n\nHá algo em execução que pretende parar? Basta enviar `!stop` — interrompo de imediato a execução atual e descarto também as mensagens em fila. A sessão mantém-se e pode ser retomada mais tarde.\n\nDe resto, basta enviar uma mensagem. Estou a ouvir.",
+          "unknownCommand": "Não reconheço o comando `{{cmd}}` 🤔\nComandos que entendo: /new, /model, /permission, /ctr, /exctr, /help",
+          "localTaskAccessUnavailable": "🔒 `{{cmd}}` não está disponível em canais de servidor — exporia publicamente as sessões / projetos privados do seu computador. Para o utilizar, envie-o numa mensagem direta para mim.",
+          "detachedBySlash": "🚪 Controlo remoto terminado — voltámos às nossas mensagens diretas no Discord. Para controlar o computador novamente, envie /ctr.",
+          "detachedByRevoke": "⚠️ O controlo foi retomado no computador, por isso as mensagens seguintes voltam às nossas mensagens diretas no Discord.",
+          "notAttached": "🤷 Neste momento não está a controlar nenhuma sessão, por isso /exctr não tem nada para fazer.",
+          "companionManagedCommand": "🧭 Este bot foi entregue a um colega — o modelo, as permissões e o diretório de trabalho seguem as definições do colega. Para os alterar, aceda às definições do colega no Cindy."
+        },
+        "agent": {
+          "completedNoText": "✅ Concluído (o Agent não disse nada neste turno)",
+          "runtimeError": "⚠️ O Agent encontrou um problema: {{error}}",
+          "sendInternalError": "❌ Erro interno: {{error}}",
+          "apiKeyMissing": "⚠️ A Cindy AI Key ainda não está configurada.\nLigue o Cindy AI em Definições → Fornecedores no computador e volte a contactar-me.",
+          "controlInProgress": "🎮 A seleção do /ctr ainda está a decorrer — termine primeiro o cartão acima (ou clique em 🚪 Sair) antes de enviar outra coisa.",
+          "credentialBusy": "⏳ O Agent local está a executar outro turno, por isso não é possível mudar o modo de credenciais agora. Envie novamente quando esse turno terminar.",
+          "queuedNoticeNext": "⏳ O turno anterior ainda está em execução, por isso esta mensagem fica em fila e segue automaticamente quando terminar. Para parar já, envie `!stop`.",
+          "queuedNoticePosition": "⏳ O turno anterior ainda está em execução. Esta mensagem está na posição {{position}} da fila e será enviada ao Agent por ordem. Para parar já, envie `!stop`.",
+          "stopDoneDropped_one": "⏹ A execução atual foi parada e a mensagem em fila também foi descartada. A sessão mantém-se — envie uma nova instrução quando quiser continuar.",
+          "stopDoneDropped_other": "⏹ A execução atual foi parada e as {{count}} mensagens em fila também foram descartadas. A sessão mantém-se — envie uma nova instrução quando quiser continuar.",
+          "stopDoneDropped_many": "⏹ A execução atual foi parada e as {{count}} mensagens em fila também foram descartadas. A sessão mantém-se — envie uma nova instrução quando quiser continuar.",
+          "stopDone": "⏹ A execução atual foi parada. A sessão mantém-se — envie uma nova instrução quando quiser continuar.",
+          "stopIdle": "🤷 De momento não há nada em execução, por isso o `!stop` não tinha nada para parar. Chame-me quando houver algo para interromper.",
+          "scheduledTaskHeader": "🤖 Automatização",
+          "scheduledTaskHeaderNamed": "🤖 Automatização «{{name}}»",
+          "unsupportedOnly": "🙏 Não consigo processar esta mensagem:\n{{items}}\n\nO que consigo processar: texto, imagens (jpg/png/gif/webp), PDF e ficheiros de texto, como código e configuração.",
+          "unsupportedNotice": "ℹ️ Não consigo processar o seguinte, por isso deixei-o de lado:\n{{items}}\n\nO resto foi recebido e já está a ser processado.",
+          "authMissing": {
+            "defaultProvider": "Fornecedor atual",
+            "gatewayKey": "⚠️ Esta conversa do Discord usa o fornecedor «{{provider}}» ({{model}}), que precisa primeiro de uma Cindy AI Key.",
+            "providerKey": "⚠️ Esta conversa do Discord usa o fornecedor «{{provider}}» ({{model}}), mas ainda não foi configurada uma API Key para este fornecedor.",
+            "providerDisconnected": "⚠️ Esta conversa do Discord usa o fornecedor «{{provider}}» ({{model}}), mas não está ligado ou a ligação expirou.",
+            "agentLogin": "⚠️ Esta conversa do Discord usa o fornecedor «{{provider}}» ({{model}}), que requer primeiro iniciar sessão com as credenciais do {{agentKind}}.",
+            "fixAttached": "Corrija a autenticação em Definições → Fornecedores no computador e continue a enviar mensagens.",
+            "fixDetached": "Altere a «Configuração de novas conversas» e continue a enviar mensagens. Se esta conversa tiver um modelo escolhido à parte, envie `/model` para voltar a escolher."
+          }
+        },
+        "cards": {
+          "permission": {
+            "title": "🔧 Chamada de ferramenta: {{toolName}}",
+            "paramsLabel": "**Pré-visualização dos parâmetros**",
+            "btnAllowOnce": "✅ Permitir uma vez",
+            "btnAllowAlways": "✅ Permitir sempre",
+            "btnDeny": "❌ Negar",
+            "resolvedAllowOnce": "✅ Permitido (apenas desta vez)",
+            "resolvedAllowAlways": "✅ Permitido (esta ferramenta passa a ser sempre permitida)",
+            "resolvedDeny": "❌ Negado"
+          },
+          "ask": {
+            "noOptionsHint": "_(Esta pergunta não tem opções predefinidas — responda simplesmente por texto.)_",
+            "resolved": "✅ Selecionado: {{option}}"
+          },
+          "plan": {
+            "title": "📋 Eis o meu plano",
+            "btnApprove": "✅ Avançar",
+            "btnReject": "❌ Aguardar",
+            "resolvedApproved": "✅ Aprovado, a começar",
+            "resolvedRejected": "❌ Em pausa"
+          },
+          "model": {
+            "title": "🤖 Mudar de modelo",
+            "currentLine": "**Atual**: {{label}}\n_{{description}}_",
+            "currentLineWithEffort": "**Atual**: {{label}} · esforço de raciocínio `{{effort}}`\n_{{description}}_",
+            "hint": "Escolha abaixo para mudar. O modelo escolhido é executado automaticamente com o esforço de raciocínio máximo.",
+            "resolved": "✅ Mudado para {{label}}",
+            "resolvedWithEffort": "✅ Mudado para {{label}} (esforço de raciocínio: {{effort}})",
+            "failed": "❌ Não foi possível mudar de modelo: {{reason}}"
+          },
+          "permissionMode": {
+            "title": "🛡️ Ajustar o modo de permissões",
+            "currentLine": "**Atual**: {{label}}\n_{{description}}_",
+            "hint": "Escolha abaixo para mudar. auto = ações habituais permitidas, as sensíveis pedem confirmação num cartão; bypass = tudo permitido; ask/default/plan/acceptEdits = aprovação por cartão",
+            "resolved": "✅ Modo de permissões mudado para {{label}}",
+            "failed": "❌ Não foi possível mudar o modo de permissões: {{reason}}",
+            "fullAccessConfirmTitle": "⚠️ Ativar o acesso total?",
+            "fullAccessConfirmBody": "O acesso total desativa a sandbox do espaço de trabalho e ignora as aprovações habituais. O Cindy pode modificar ficheiros fora do espaço de trabalho e executar comandos com acesso à rede sem perguntar; as operações de alto risco integradas continuam a pedir confirmação.",
+            "btnConfirmFullAccess": "Ativar acesso total",
+            "btnCancelFullAccess": "Manter permissões atuais",
+            "fullAccessCancelled": "Cancelado — as permissões atuais mantêm-se"
+          },
+          "control": {
+            "title": "🎮 Escolha um espaço de trabalho",
+            "emptyBody": "_Ainda não há espaços de trabalho para controlar. Abra ou crie uma sessão no computador e volte depois._",
+            "hint": "Escolha um espaço de trabalho para continuar; 🚪 Sair cancela.",
+            "attachedSwitchHint": "🎮 A controlar: **{{sessionTitle}}**\nEscolha outra sessão para mudar diretamente; 🚪 Sair mantém tudo como está.",
+            "btnExit": "🚪 Sair",
+            "resolvedExit": "🚪 Saiu. Para voltar a controlar remotamente, envie /ctr.",
+            "sessionPickerTitle": "🎮 Sessões em {{displayName}}",
+            "sessionPickerHint": "Escolha uma sessão para continuar · ➕ Nova cria outra · ↩️ Voltar muda de espaço de trabalho · 🚪 Sair cancela",
+            "sessionPickerEmptyBody": "_Ainda não há sessões ativas no espaço de trabalho **{{displayName}}**. Que tal criar uma com ➕ Nova?_",
+            "btnNew": "➕ Nova",
+            "btnBack": "↩️ Voltar",
+            "resolvedSessionPick": "🎯 Ligado: **{{sessionTitle}}** ({{workspaceName}})\nAs mensagens seguintes vão diretamente para esta sessão. Para sair, envie `/exctr` a qualquer momento.",
+            "resolvedNewSession": "✨ Nova sessão criada e sob o seu controlo (em **{{workspaceName}}**)\nEnvie uma instrução para começar; `/exctr` para sair.",
+            "attachFailed": "❌ Não foi possível assumir o controlo: {{reason}}",
+            "sessionBusyOldCardPlaceholder": "⏳ Essa sessão ainda está em execução — há um cartão novo abaixo, escolha novamente.",
+            "sessionBusyPrompt1": "⏳ **{{sessionTitle}}** está a meio de uma luta com o boss.\nO Agent ainda está a pensar e a programar — aguarde que esta ronda termine e entre com `/ctr`.",
+            "sessionBusyPrompt2": "🚧 Ainda não dá para entrar — **{{sessionTitle}}** tem uma ronda por terminar.\nBeba um copo de água e aguarde uns segundos; assim que o Agent acabar, é a sua vez.",
+            "sessionBusyPrompt3": "🤖 **{{sessionTitle}}** está ocupada — o Agent ainda anda a voar pelo teclado e interrompê-lo agora iria distraí-lo.\nAguarde uns segundos e tente `/ctr` novamente.",
+            "sessionBusyPrompt4": "☕ Calma, calma — **{{sessionTitle}}** ainda não terminou esta partida.\nAssim que o Agent acabar o que tem em mãos, o controlo passa para si.",
+            "takeoverLoadingPrompt1": "⏳ A passar-lhe o controlo de **{{sessionTitle}}**…\n_📦 A carregar os metadados_  ·  _🔌 A ligar ao Agent_  ·  _🧠 A rever a última ronda_\n_São só uns segundos, não precisa de beber o café de um trago_",
+            "takeoverLoadingPrompt2": "🎮 A entrar em **{{sessionTitle}}**…\n_Nas primeiras versões, os jogadores impacientes clicavam sem parar no ícone do Discord. Nunca adiantou nada._",
+            "takeoverLoadingPrompt3": "⌛ A carregar **{{sessionTitle}}**…  99%\n_Esta barra de progresso é verdadeira — estou a rever o que se falou na última ronda_",
+            "takeoverLoadingPrompt4": "🛰️ A estabelecer ligação com **{{sessionTitle}}**…\n_(O WiFi parece um pouco fraco… ah, não, estou só a pensar em como fazer o resumo)_",
+            "newSessionWelcomePrompt1": "🎯 Controlo assumido e nova sessão iniciada de uma só vez — **{{workspaceName}}** está pronto e o Agent aguarda instruções.\nEnvie a primeira instrução para começar; `/exctr` para sair a qualquer momento.",
+            "newSessionWelcomePrompt2": "✨ Nova sessão criada — o diretório de trabalho **{{workspaceName}}** está pronto e o Agent aguarda instruções.\nA primeira mensagem dá início; `/exctr` para sair a qualquer momento.",
+            "newSessionWelcomePrompt3": "🎮 Tudo pronto — foi aberta uma sessão novinha em **{{workspaceName}}**.\nDiga o que precisa; o Agent está online.  `/exctr` para terminar.",
+            "newSessionWelcomePrompt4": "🆕 Novo começo — o diretório de trabalho **{{workspaceName}}** está pronto.\nA primeira instrução dá o arranque; para parar, `/exctr`."
+          }
+        }
+      },
+      "transport": {
+        "feishu": {
+          "lifecycle": {
+            "online": "🟢 Estou online. Já pode escrever-me!",
+            "offline": "🔴 O Cindy está offline. Por agora, não é possível continuar a conversa através desta aplicação de mensagens.",
+            "offlineNotice": "🔔 Estive offline durante algum tempo, por isso as mensagens enviadas entretanto podem não me ter chegado."
+          },
+          "ownerBinding": {
+            "welcome": "🎉 Este bot está agora associado à sua conta.\nA partir de agora, só a sua conta pode conversar comigo. Para mudar de proprietário, limpe as credenciais do bot nas Definições do Cindy Desktop e guarde-as novamente."
+          },
+          "group": {
+            "threadOrphanNotice": "Houve um pequeno problema ao abrir o tópico e não foi possível tratar esta mensagem. Mencione-me novamente com @."
+          },
+          "streaming": {
+            "thinking": {
+              "brain": "🧠 A pôr os neurónios a trabalhar…",
+              "letMeThink": "🤔 Deixe-me pensar~",
+              "inspiration": "✨ A inspiração vem a caminho…",
+              "tea": "🍵 Um chá rápido e já volto~",
+              "cat": "🐱 Um gato a pensar em cima do teclado…",
+              "engine": "🚀 A aquecer os motores…",
+              "thoughts": "🌀 A organizar as ideias…",
+              "spell": "🪄 A lançar um feitiço…",
+              "draft": "📝 A fazer um rascunho…",
+              "puzzle": "🧩 A encaixar as peças…",
+              "coffee": "☕ Mais um café e já volto~",
+              "target": "🎯 A apontar à resposta…"
+            },
+            "preparingImage": "🎨 A revelar a imagem, um momento~",
+            "preparingFile": "📦 A embalar o ficheiro, já segue~",
+            "fileSentOne": "🎉 Ficheiro entregue, já o pode consultar!",
+            "filesSent_other": "🎉 Os {{count}} ficheiros foram todos entregues~",
+            "filesSent_one": "🎉 {{count}} ficheiro entregue~",
+            "filesSent_many": "🎉 Os {{count}} ficheiros foram todos entregues~",
+            "emptyReply": "_(resposta vazia)_",
+            "replyContinues": "\n\n---\n⏳ A resposta é longa. Quando estiver concluída, será enviada na íntegra em várias mensagens.",
+            "partNoteMore": "{{index}}/{{total}} · continua na mensagem seguinte",
+            "partNoteLast": "{{index}}/{{total}} · fim",
+            "continuationFailed": "⚠️ Não foi possível enviar o resto. A resposta completa está disponível no Cindy Desktop.",
+            "deliveryFailed": "⚠️ Esta resposta é demasiado longa ou contém conteúdo que o Feishu ainda não suporta. Consulte a resposta completa no Cindy Desktop."
+          },
+          "card": {
+            "imageLoadFailed": "_[Não foi possível carregar a imagem: {{target}}]_",
+            "choiceReceived": "Escolha recebida"
+          },
+          "connection": {
+            "conflict": "Esta App já está a ser utilizada noutro dispositivo (exceed_conn_limit)",
+            "unreachable": "Falha na ligação: não é possível aceder ao serviço de IM. Verifique a rede.",
+            "authFailedDetail": "App ID ou App Secret incorreto (auth_failed)",
+            "authFailed": "O App ID ou o App Secret está incorreto (auth_failed)"
+          }
+        },
+        "streaming": {
+          "imageFallbackName": "Imagem",
+          "imageUploading": "[🖼️ {{name}} · A carregar…]",
+          "filePreparing": "[📎 {{name}} · A preparar o envio…]"
+        },
+        "dingtalk": {
+          "uploadedImageAlt": "Imagem"
+        },
+        "common": {
+          "cardExpired": "Este cartão expirou",
+          "secretWriteFailed": "Não foi possível guardar as credenciais em segurança (o armazenamento seguro do sistema não está disponível)"
+        },
+        "telegram": {
+          "groupJoined": "👥 {{actor}} adicionou-me ao grupo «{{title}}» (chat_id: {{chatId}}).",
+          "groupLeft": "👥 {{actor}} removeu-me do grupo «{{title}}» (chat_id: {{chatId}})."
+        },
+        "wecom": {
+          "secretWriteFailed": "Não foi possível guardar as credenciais do bot WeCom no armazenamento seguro do sistema",
+          "credentialsRequired": "O Bot ID e o Secret são obrigatórios",
+          "authFailedHint": "Falha na autenticação do WeCom. Verifique o Bot ID, o Secret e o modo de ligação persistente.",
+          "authFailedDetail": "Falha na autenticação do WeCom: {{detail}}",
+          "attachmentsBelow": "📎 Seguem os anexos",
+          "attachmentsOmitted_other": "⚠️ Ficaram por enviar mais {{count}} anexos (o WeCom envia no máximo {{max}} de cada vez).",
+          "attachmentsOmitted_one": "⚠️ Ficou por enviar mais {{count}} anexo (o WeCom envia no máximo {{max}} de cada vez).",
+          "attachmentsOmitted_many": "⚠️ Ficaram por enviar mais {{count}} anexos (o WeCom envia no máximo {{max}} de cada vez).",
+          "filesRejected_other": "⚠️ Ficaram por enviar {{count}} ficheiros anexos (estão fora do diretório de trabalho atual ou não foi possível verificá-los).",
+          "filesRejected_one": "⚠️ Ficou por enviar {{count}} ficheiro anexo (está fora do diretório de trabalho atual ou não foi possível verificá-lo).",
+          "filesRejected_many": "⚠️ Ficaram por enviar {{count}} ficheiros anexos (estão fora do diretório de trabalho atual ou não foi possível verificá-los).",
+          "imagesUnresolved_other": "⚠️ Ficaram por enviar {{count}} imagens (já não existem ou não foi possível lê-las).",
+          "imagesUnresolved_one": "⚠️ Ficou por enviar {{count}} imagem (já não existe ou não foi possível lê-la).",
+          "imagesUnresolved_many": "⚠️ Ficaram por enviar {{count}} imagens (já não existem ou não foi possível lê-las).",
+          "attachmentsFailed_other": "⚠️ Não foi possível enviar {{count}} anexos. Tente novamente mais tarde.",
+          "attachmentsFailed_one": "⚠️ Não foi possível enviar {{count}} anexo. Tente novamente mais tarde.",
+          "attachmentsFailed_many": "⚠️ Não foi possível enviar {{count}} anexos. Tente novamente mais tarde."
+        }
+      },
+      "telegram": {
+        "expiredCardNotice": "Este cartão expirou",
+        "slash": {
+          "start": "👋 Olá, sou o seu assistente pessoal do Cindy!\n\nNuma conversa privada, basta enviar-me uma mensagem. Nos grupos, só respondo quando me menciona com @ ou responde a uma das minhas mensagens. Envie /help para ver todos os comandos.",
+          "new": "🌱 Nova sessão criada — já aparece na lista de sessões. Vamos começar do zero!",
+          "help": "🤖 Eis o que posso fazer:\n\n/new         Criar uma nova sessão (as antigas são mantidas; nos grupos, é criada para o tópico atual do grupo)\n/project     Trabalhar numa pasta de projeto (corre aqui no bot, sem assumir o computador)\n/session     Listar as sessões recentes do computador; toque numa para a assumir e continuar a conversa\n/model       Pôr outro modelo em campo\n/permission  Ajustar o modo de permissões (auto / bypass / ask, etc.)\n/settings    Ver o projeto, o Agent, o modelo, o esforço de raciocínio e as permissões atuais\n/ctr         Assumir remotamente um espaço de trabalho no computador (envie de novo durante o controlo para mudar de sessão)\n/exctr       Terminar o controlo e voltar à conversa do Telegram\n/help        Ver o que sei fazer\n\nHá algo a correr que pretende parar? Envie /stop (ou `!stop`) — interrompo de imediato a execução atual e retiro também as mensagens em fila. A sessão é mantida para poder continuar.\n\nNuma conversa privada, basta enviar-me uma mensagem. Nos grupos, só respondo quando me menciona com @ ou responde a uma das minhas mensagens — e também guardo as mensagens recentes do grupo como contexto.",
+          "unknownCommand": "Não reconheço o comando `{{cmd}}` 🤔\nComandos que entendo: /new, /session, /project, /model, /permission, /settings, /ctr, /exctr, /stop, /help",
+          "settings": "⚙️ Definições atuais\n\nProjeto: {{workspace}}\nAgent: {{agent}}\nModelo: {{model}}\nEsforço de raciocínio: {{effort}}\nPermissões: {{permission}}\n\nPara alterar, envie /project, /model ou /permission.",
+          "settingsCompanion": "⚙️ Definições atuais (colega)\n\nProjeto: {{workspace}}\nAgent: {{agent}}\nModelo: {{model}}\nEsforço de raciocínio: {{effort}}\nPermissões: {{permission}}\n\nO modelo, as permissões e o diretório de trabalho seguem as definições do colega. Altere-os nas definições do colega no Cindy.",
+          "detachedBySlash": "🚪 Controlo terminado — voltámos à conversa do Telegram. Da próxima vez que quiser controlar o computador remotamente, envie /ctr",
+          "detachedByRevoke": "⚠️ O controlo foi retomado no computador. As mensagens seguintes voltam à conversa do Telegram.",
+          "notAttached": "🤷 Não está a controlar nenhuma sessão neste momento, por isso o /exctr não tem nada para fazer.",
+          "companionDmNew": "🧭 Esta é a conversa principal do seu colega: continua sempre e não abre novas sessões. Para mudar de assunto, basta dizê-lo; para trabalho à parte, o colega abre tarefas em segundo plano por iniciativa própria.",
+          "companionLaneNew": "🌱 Foi iniciada uma nova conversa para este grupo. O contexto anterior foi arrumado — vamos começar do zero!",
+          "companionManagedCommand": "🧭 Esta ligação foi entregue a um colega, por isso o modelo, as permissões e o diretório de trabalho seguem as definições dele. Altere-os nas definições do colega no Cindy."
+        },
+        "agent": {
+          "completedNoText": "✅ Concluído (o Agent não disse nada neste turno)",
+          "runtimeError": "⚠️ O Agent teve um problema: {{error}}",
+          "sendInternalError": "❌ Erro interno: {{error}}",
+          "apiKeyMissing": "⚠️ A Cindy AI Key ainda não está configurada.\nLigue o Cindy AI no computador em Definições → Fornecedores e depois volte a chamar-me",
+          "controlInProgress": "🎮 A escolha do /ctr ainda está a decorrer — termine primeiro o cartão acima (ou toque em 🚪 Sair) antes de enviar outra coisa.",
+          "credentialBusy": "⏳ O Agent local está a executar outro turno, por isso não é possível mudar o modo de credenciais agora. Envie de novo quando esse turno terminar.",
+          "queuedNoticeFirst": "⏳ O turno anterior ainda está a correr, por isso esta mensagem ficou em fila — segue automaticamente quando ele terminar. Para parar já, envie `!stop`",
+          "queuedNotice": "⏳ O turno anterior ainda está a correr. Esta mensagem é a {{position}}.ª da fila e será enviada ao Agent pela ordem. Para parar já, envie `!stop`",
+          "stopDone": "⏹ A execução atual foi interrompida. A sessão continua disponível — envie uma nova instrução quando quiser continuar.",
+          "stopDoneDropped_many": "⏹ A execução atual foi interrompida e as {{count}} mensagens em fila também foram retiradas. A sessão continua disponível — envie uma nova instrução quando quiser continuar.",
+          "stopDoneDropped_one": "⏹ A execução atual foi interrompida e a mensagem em fila também foi retirada. A sessão continua disponível — envie uma nova instrução quando quiser continuar.",
+          "stopDoneDropped_other": "⏹ A execução atual foi interrompida e as {{count}} mensagens em fila também foram retiradas. A sessão continua disponível — envie uma nova instrução quando quiser continuar.",
+          "stopIdle": "🤷 Não há nada a correr agora, por isso o `!stop` não teve nada para parar. Chame-me quando houver algo para interromper.",
+          "scheduledTaskHeader": "🤖 Automatização",
+          "scheduledTaskHeaderNamed": "🤖 Automatização «{{name}}»",
+          "unsupportedOnly": "🙏 Não consigo processar esta mensagem:\n{{list}}\n\nO que consigo processar: texto, imagens (jpg/png/gif/webp), PDF e ficheiros de texto de código ou configuração.",
+          "unsupportedNotice": "ℹ️ Não consigo processar o seguinte, por isso pus de lado:\n{{list}}\n\nO resto foi recebido e já está a ser processado.",
+          "companionUnavailable": "⏸ O seu colega não pode receber mensagens agora: {{reason}}",
+          "authMissing": {
+            "currentProvider": "fornecedor atual",
+            "reasonGatewayKey": "é necessário configurar primeiro uma Cindy AI Key",
+            "reasonProviderKey": "ainda não há uma API Key configurada para este fornecedor",
+            "reasonProviderDisconnected": "não está ligado ou a ligação expirou",
+            "reasonAgentLogin": "é necessário iniciar sessão primeiro com as credenciais do {{agentKind}}",
+            "message": "⚠️ Esta conversa do Telegram usa o fornecedor «{{provider}}» ({{model}}), mas {{reason}}.",
+            "attachedHint": "Corrija a autenticação no computador em Definições → Fornecedores e depois basta continuar a enviar mensagens.",
+            "detachedHint": "Altere a «Configuração de novas conversas» e depois basta continuar a enviar mensagens. Se esta sessão tiver um modelo escolhido à parte, envie `/model` para o escolher de novo."
+          }
+        },
+        "error": {
+          "agentUnsupported": "🤔 O Agent atual não consegue concluir as confirmações de permissões necessárias nos grupos do Telegram. Mude para outro Agent e tente novamente.",
+          "permissionModeUnsupportedFullAccess": "Esta mensagem do grupo ainda não foi executada: a sessão atual está em «Acesso total», mas os pedidos de outros membros do grupo continuam a precisar de aprovação, e desta vez não foi possível mudar para a revisão automática. O utilizador associado a este bot tem de mudar a sessão para «Revisão automática» no Cindy, ou alterá-la com /permission, e depois reenviar a mensagem.",
+          "permissionModeUnsupported": "Esta mensagem do grupo ainda não foi executada: o modo de permissões atual não consegue fornecer as aprovações de ações de que as mensagens de grupo precisam. O utilizador associado a este bot tem de mudar a sessão para «Revisão automática» no Cindy, ou alterá-la com /permission, e depois reenviar a mensagem."
+        },
+        "cards": {
+          "permission": {
+            "title": "🔧 Chamada de ferramenta: {{tool}}",
+            "paramsLabel": "**Pré-visualização dos parâmetros**",
+            "btnAllowOnce": "✅ Permitir uma vez",
+            "btnAllowAlways": "✅ Permitir sempre",
+            "btnDeny": "❌ Recusar",
+            "resolvedAllowOnce": "✅ Permitido (só desta vez)",
+            "resolvedAllowAlways": "✅ Permitido (esta ferramenta passa a ser sempre permitida)",
+            "resolvedDeny": "❌ Recusado"
+          },
+          "ask": {
+            "noOptionsHint": "_(Esta pergunta não tem opções predefinidas — basta responder com texto.)_",
+            "resolved": "✅ Escolhido: {{option}}"
+          },
+          "plan": {
+            "title": "📋 Eis o que tenciono fazer",
+            "btnApprove": "✅ Avançar",
+            "btnReject": "❌ Esperar",
+            "resolvedApproved": "✅ Aprovado, mãos à obra",
+            "resolvedRejected": "❌ Em pausa"
+          },
+          "model": {
+            "title": "🤖 Mudar de modelo",
+            "currentLineWithEffort": "**Atual**: {{label}} · esforço `{{effort}}`\n_{{description}}_",
+            "currentLine": "**Atual**: {{label}}\n_{{description}}_",
+            "hint": "Toque abaixo para mudar. O modelo escolhido corre automaticamente com o esforço de raciocínio máximo",
+            "resolvedWithEffort": "✅ Mudado para {{label}} (esforço: {{effort}})",
+            "resolved": "✅ Mudado para {{label}}",
+            "failed": "❌ Não foi possível mudar o modelo: {{reason}}"
+          },
+          "permissionMode": {
+            "title": "🛡️ Ajustar o modo de permissões",
+            "currentLine": "**Atual**: {{label}}\n_{{description}}_",
+            "hint": "Toque abaixo para mudar. auto = as ações de rotina passam e as sensíveis abrem um cartão; bypass = tudo passa; ask/default/plan/acceptEdits = aprovação por cartão",
+            "resolved": "✅ Modo de permissões mudado para {{label}}",
+            "failed": "❌ Não foi possível mudar o modo de permissões: {{reason}}",
+            "fullAccessConfirmTitle": "⚠️ Ativar o acesso total?",
+            "fullAccessConfirmBody": "O acesso total desativa o ambiente isolado do espaço de trabalho e dispensa as aprovações habituais. Cindy pode modificar ficheiros fora do espaço de trabalho e executar comandos de rede sem perguntar; as operações integradas de alto risco continuarão a exigir confirmação.",
+            "btnConfirmFullAccess": "Ativar acesso total",
+            "btnCancelFullAccess": "Manter permissões",
+            "fullAccessCancelled": "Cancelado, as permissões atuais foram mantidas"
+          },
+          "project": {
+            "title": "📂 Mudar a pasta do projeto",
+            "hint": "**Atual**: {{name}}\nEscolha um projeto e as próximas mensagens passam a trabalhar nessa pasta (o contexto recomeça; as definições de modelo e permissões são mantidas)",
+            "emptyBody": "_Ainda não há espaços de trabalho de projeto ativos no computador. Abra primeiro um projeto no computador e depois volte._",
+            "btnDialogue": "💬 Voltar à conversa",
+            "btnCancel": "🚪 Deixar estar",
+            "resolvedPick": "📂 Mudado para **{{name}}** — o novo contexto está pronto, envie uma instrução para começar. Para voltar à conversa normal, envie /project e escolha «Voltar à conversa»",
+            "resolvedDialogue": "💬 De volta à pasta da conversa, o contexto recomeça.",
+            "resolvedCancel": "🚪 Sem mudanças, fica tudo como estava",
+            "switchFailed": "❌ Não foi possível mudar: {{reason}} (a pasta pode ter sido movida ou eliminada)",
+            "attachedUnsupported": "🎮 Está a controlar uma sessão do computador através do /ctr — durante o controlo, as mensagens vão diretamente para essa sessão, por isso o /project não é necessário. Para mudar de projeto, termine primeiro o controlo com `/exctr`",
+            "dialogueName": "Conversa (pasta gerida)"
+          },
+          "control": {
+            "title": "🎮 Escolha um espaço de trabalho",
+            "emptyBody": "_Ainda não há espaços de trabalho para assumir. Abra ou crie uma sessão no computador e depois volte._",
+            "hint": "Toque num espaço de trabalho para avançar; toque em 🚪 Sair para cancelar",
+            "attachedSwitchHint": "🎮 Sob controlo agora: **{{title}}**\nEscolha outra sessão para mudar diretamente; toque em 🚪 Sair para deixar como está",
+            "btnExit": "🚪 Sair",
+            "resolvedExit": "🚪 Saí. Da próxima vez que quiser controlo remoto, envie /ctr",
+            "sessionPickerTitle": "🎮 Sessões em {{name}}",
+            "sessionPickerHint": "Escolha uma sessão para continuar · ➕ Nova para uma nova sessão · ↩️ Voltar para mudar de espaço de trabalho · 🚪 Sair para cancelar",
+            "sessionPickerEmptyBody": "_O espaço de trabalho **{{name}}** ainda não tem sessões ativas. Que tal tocar em ➕ Nova para abrir uma?_",
+            "btnNew": "➕ Nova",
+            "btnBack": "↩️ Voltar",
+            "resolvedSessionPick": "🎯 Ligado a: **{{title}}** ({{workspace}})\nAs suas mensagens vão agora diretamente para esta sessão; para sair, envie `/exctr` a qualquer momento",
+            "resolvedNewSession": "✨ Nova sessão criada e sob o seu controlo (em **{{workspace}}**)\nEnvie uma instrução para começar; para sair, `/exctr`",
+            "attachFailed": "❌ Não foi possível assumir: {{reason}}",
+            "sessionBusyOldCardPlaceholder": "⏳ Essa sessão ainda está a correr — há um cartão novo abaixo, escolha de novo",
+            "recentSessions": {
+              "title": "🕑 Sessões recentes",
+              "hint": "Toque numa para a assumir e continuar a conversa (ordenadas por data em todos os espaços de trabalho) · Para escolher por espaço de trabalho, use /ctr · 🚪 Sair para cancelar",
+              "emptyBody": "_Ainda não há sessões ativas no computador. Comece primeiro uma lá e depois volte._"
+            },
+            "sessionBusyPrompts": {
+              "variant1": "⏳ **{{title}}** está ocupada neste momento.\nO Agent ainda está a pensar ou a programar — volte com `/ctr` quando este turno terminar",
+              "variant2": "🚧 Não foi possível entrar — **{{title}}** ainda tem um turno por fechar.\nBeba um gole de água e aguarde uns segundos; o Agent avisa quando terminar",
+              "variant3": "🤖 **{{title}}** está muito ocupada — os dedos do Agent ainda voam pelo teclado, e interromper agora iria distraí-lo.\nAguarde uns segundos e tente `/ctr` de novo",
+              "variant4": "☕ Sem pressa — **{{title}}** ainda não terminou este turno.\nAssim que o Agent concluir o que tem em mãos, o comando passa para si"
+            },
+            "takeoverLoadingPrompts": {
+              "variant1": "⏳ A passar **{{title}}** para si…\n_📦 A carregar os metadados da sessão_  ·  _🔌 A ligar ao canal do Agent_  ·  _🧠 A rever o último turno_\n_Só dois ou três segundos_",
+              "variant2": "🎮 A ligar a **{{title}}**…\n_A trazer o contexto, quase pronto_",
+              "variant3": "⌛ A carregar **{{title}}**…  99%\n_Esta barra de progresso é verdadeira — estou a rever o que foi conversado no último turno_",
+              "variant4": "🛰️ A estabelecer ligação com **{{title}}**…\n_(a pensar em como fazer o ponto da situação)_"
+            },
+            "newSessionWelcomePrompts": {
+              "variant1": "🎯 Criada e assumida de uma só vez — **{{workspace}}** está pronto e o Agent a postos.\nEnvie a primeira instrução para começar; para sair, `/exctr` a qualquer momento",
+              "variant2": "✨ Nova sessão criada — o diretório de trabalho **{{workspace}}** está preparado e o Agent aguarda instruções.\nComece com a primeira mensagem; `/exctr` para sair a qualquer momento",
+              "variant3": "🎮 Tudo pronto — foi aberta uma sessão novinha em **{{workspace}}**.\nDiga o que pretende, o Agent está online.  `/exctr` para terminar",
+              "variant4": "🆕 Começar do zero — o diretório de trabalho **{{workspace}}** está pronto.\nEnvie a primeira instrução para começar; se não quiser continuar, `/exctr`"
+            }
+          }
+        }
+      },
+      "shared": {
+        "retry": {
+          "autoReviewUnavailable": "A revisão automática não conseguiu chegar a uma decisão, pelo que as ações que exigem revisão precisam agora da sua confirmação. Mude esta tarefa para Acesso total se preferir não ser interrompido. Esse modo apresenta um risco mais elevado.",
+          "autoReviewUnavailableWechat": "A revisão automática não conseguiu chegar a uma decisão, pelo que as ações que exigem revisão precisam agora da sua confirmação. O WeChat pessoal não pode utilizar Acesso total. Confirme esta ação diretamente.",
+          "autoReviewConfirmUndelivered": "A revisão automática não terminou e a confirmação não foi entregue ou não obteve resposta. Esta recusa não foi feita por si.",
+          "rateLimitRetrying": "Pedido limitado por taxa. A tentar novamente de forma automática ({{attempt}}/{{maxAttempts}})…",
+          "overloadRetrying": "O serviço do modelo está ocupado. A tentar novamente de forma automática ({{attempt}}/{{maxAttempts}})…",
+          "overloadRetryingNoCount": "O serviço do modelo está ocupado. A tentar novamente de forma automática…",
+          "overloadFailed": "⚠️ O serviço do modelo está ocupado — o serviço a montante não tem capacidade neste momento. Reenvie esta mensagem aqui para tentar novamente ou mude para outro modelo no Cindy. (Clicar em \"Tentar novamente\" na aplicação de computador também continua a tarefa, mas o resultado não volta a esta mensagem.)"
+        },
+        "toolLoop": {
+          "generic": "O modelo chamou ferramentas repetidamente demasiadas vezes, pelo que o Cindy parou este turno para evitar um ciclo infinito. Envie uma nova mensagem para continuar.",
+          "consecutive": "O modelo chamou a mesma ferramenta {{n}} vezes seguidas, pelo que o Cindy parou este turno para evitar um ciclo infinito. Envie uma nova mensagem para continuar.",
+          "pingpong": "O modelo andou para trás e para a frente entre várias chamadas de ferramentas. O Cindy parou este turno após detetar {{n}} chamadas. Envie uma nova mensagem para continuar.",
+          "rotation": "O modelo continuou a chamar várias ferramentas à vez. O Cindy parou este turno após detetar {{n}} chamadas. Envie uma nova mensagem para continuar.",
+          "contract": "O modelo fez chamadas de ferramentas inválidas repetidamente. O Cindy parou este turno após {{n}} falhas para evitar um ciclo infinito. Envie uma nova mensagem para continuar."
+        },
+        "quota": {
+          "prefix": "⚠️ Limite do fornecedor atingido",
+          "currentProvider": "fornecedor atual",
+          "namedProvider": "«{{name}}»",
+          "headlineSpendCap": "{{prefix}} ({{who}}): foi atingido o limite de gastos definido pelo proprietário da área de trabalho. Esta tarefa não pode continuar por agora.",
+          "headlineUsageLimit": "{{prefix}} ({{who}}): a conta atingiu o limite de utilização. Esta tarefa não pode continuar por agora.",
+          "headlineBalance": "{{prefix}} ({{who}}): a conta não tem saldo ou quota suficientes. Esta tarefa não pode continuar por agora.",
+          "source": "Origem: {{bot}}",
+          "sourceWithModel": "Origem: {{bot}} · Modelo: {{model}}",
+          "task": "Tarefa: {{task}}",
+          "officialBot": "bot oficial",
+          "personalBot": "bot pessoal",
+          "spendCapHint": "Peça a um administrador da área de trabalho para ajustar o limite de gastos ou mude de fornecedor.",
+          "recoveryModelCommand": "Envie /model para mudar o fornecedor ou o modelo desta tarefa e, depois, reenvie esta mensagem.",
+          "recoveryOpenTask": "Abra esta tarefa no Cindy, mude o fornecedor ou o modelo e, depois, volte aqui para reenviar esta mensagem.",
+          "taskLabel": "{{title}} ({{id}})",
+          "untitledTask": "Tarefa"
+        },
+        "outputLimit": {
+          "usage": "Este pedido ao modelo produziu {{outputTokens}} tokens.",
+          "usageWithReasoning": "Este pedido ao modelo produziu {{outputTokens}} tokens, dos quais {{reasoningTokens}} para raciocínio.",
+          "reasoningDominated": "O raciocínio consumiu a maior parte do orçamento de saída, pelo que a resposta pode estar incompleta. Reduza o esforço de raciocínio ou compacte primeiro a conversa e, depois, continue.",
+          "generic": "O modelo atingiu o limite de comprimento de saída, pelo que esta resposta pode estar incompleta. Envie uma nova mensagem para continuar. Se voltar a acontecer, reduza o esforço de raciocínio ou compacte primeiro a conversa.",
+          "join": "{{usage}} {{guidance}}",
+          "silentStopExhausted": "O modelo devolveu respostas vazias várias vezes seguidas, pelo que a continuação automática está em pausa."
+        },
+        "permission": {
+          "autoReviewUnavailable": "A revisão automática não terminou. Confirme se pretende permitir esta ação.",
+          "autoReviewReason": "A revisão automática precisa da sua decisão: {{reason}}",
+          "previewUnserializable": "<não é possível serializar>",
+          "previewTruncated": "…(truncado)",
+          "choiceReceived": "A sua escolha foi recebida.",
+          "allowedSession": "✅ Permitido (esta tarefa)",
+          "allowedOnce": "✅ Permitido (apenas desta vez)",
+          "expired": "⌛ Esta confirmação expirou",
+          "denied": "❌ Recusado",
+          "outcomeWithTool": "{{status}}: {{tool}}"
+        },
+        "card": {
+          "askContinue": "Continuar",
+          "truncated": "…(truncado)",
+          "askResolvedContinue": "✅ Selecionado: Continuar"
+        },
+        "takeover": {
+          "summaryFailedThread": "_(Não foi possível carregar o resumo. Basta enviar uma mensagem neste tópico para continuar.)_",
+          "summaryFailed": "_(Não foi possível carregar o resumo. Basta enviar uma mensagem para continuar.)_",
+          "lastMessage": "Última mensagem processada: {{text}}"
+        },
+        "source": {
+          "origin": "Origem: {{channel}} · {{chat}}",
+          "thread": "Tópico: {{thread}}",
+          "sender": "De: {{sender}}",
+          "messageProtected": "Mensagem original: conteúdo protegido",
+          "message": "Mensagem original: {{text}}",
+          "noText": "(sem texto)",
+          "viewMessage": "Ver mensagem original: {{url}}"
+        },
+        "session": {
+          "accountChanged": "A conta mudou. Crie uma nova tarefa."
+        },
+        "slash": {
+          "detachFailed": "❌ Não foi possível terminar a tomada de controlo: {{error}}",
+          "companionManaged": "🧭 Esta ligação foi entregue a um colega, pelo que o modelo, as permissões e o diretório de trabalho seguem as definições do colega. Altere-os nas definições do colega no Cindy."
+        },
+        "turn": {
+          "groupApprovalOwnerDm": "🔐 Uma tarefa num chat de grupo precisa da sua autorização. O cartão de autorização não é publicado no grupo: confirme aqui.",
+          "agentStartFailed": "❌ Não foi possível iniciar o Agent: {{reason}}",
+          "personalBotLabel": "bot pessoal do {{channel}}",
+          "error": "❌ Erro: {{message}}"
+        },
+        "activity": {
+          "working": "⚙️ A trabalhar · {{elapsed}}{{rate}}",
+          "workingSteps_one": "⚙️ A trabalhar · {{count}} passo · {{elapsed}}{{rate}}",
+          "workingSteps_other": "⚙️ A trabalhar · {{count}} passos · {{elapsed}}{{rate}}",
+          "workingSteps_many": "⚙️ A trabalhar · {{count}} passos · {{elapsed}}{{rate}}",
+          "earlierSteps_one": "… {{count}} passo anterior não apresentado",
+          "earlierSteps_other": "… {{count}} passos anteriores não apresentados",
+          "earlierSteps_many": "… {{count}} passos anteriores não apresentados",
+          "recordTitle_one": "Registo de atividade · {{count}} passo · {{elapsed}}",
+          "recordTitle_other": "Registo de atividade · {{count}} passos · {{elapsed}}",
+          "recordTitle_many": "Registo de atividade · {{count}} passos · {{elapsed}}"
+        },
+        "images": {
+          "notSent_one": "Não foi possível enviar {{count}} imagem como anexo.",
+          "notSent_other": "Não foi possível enviar {{count}} imagens como anexos.",
+          "notSent_many": "Não foi possível enviar {{count}} imagens como anexos."
+        },
+        "desktopConfirm": {
+          "notice": "🔔 {{what}} aguarda a sua confirmação na Cindy Desktop. Se o tempo esgotar, o pedido será cancelado automaticamente; para continuar, aceda à Cindy Desktop.",
+          "inputHandoff": "🔐 É necessária a sua introdução de dados: {{taskTitle}} · Abrir na Cindy",
+          "subject": {
+            "githubIssue": "O cartão de confirmação «Submeter Issue do GitHub»",
+            "renameSessions": "O cartão de confirmação «Mudar o nome de tarefas em lote»",
+            "pluginFileGrant": "O cartão de confirmação «Autorização de ficheiros do plugin»"
+          }
+        },
+        "replyWords": {
+          "allow": "permitir",
+          "deny": "recusar",
+          "approve": "aprovar"
+        }
+      },
+      "hook": {
+        "interaction": {
+          "askTimeout": "Esgotou-se o tempo de espera pela resposta. A tarefa continuou como «sem resposta».",
+          "planTitle": "📋 Plano a aguardar revisão",
+          "planApprove": "Aprovar e executar",
+          "planReject": "Devolver",
+          "planTimeout": "Esgotou-se o tempo de espera pela revisão. O plano não foi aprovado.",
+          "permissionTool": "Ferramenta: `{{tool}}`",
+          "permissionTitle": "🔐 Pedido de permissão: {{title}}",
+          "allowOnce": "Permitir uma vez",
+          "alwaysAllowForSession": "Permitir sempre nesta sessão",
+          "deny": "Recusar",
+          "permissionTimeout": "Esgotou-se o tempo de espera pela autorização. O pedido de permissão foi recusado."
+        },
+        "run": {
+          "routeReselectHint": ". Volte a escolher um modelo para o diretório de trabalho deste canal em Definições → Bots de mensagens instantâneas.",
+          "awaitingPermission": "A aguardar autorização · precisa da sua confirmação",
+          "awaitingAnswer": "A aguardar resposta · precisa da sua escolha",
+          "awaitingPlan": "A aguardar revisão · precisa de confirmar o plano",
+          "awaitingFallback": "A aguardar a sua confirmação",
+          "cancelledBeforeRun": "A tarefa foi interrompida pelo utilizador, pelo que esta mensagem não foi executada.",
+          "liveSessionDirUnmapped": "Esta tarefa está a ser executada num diretório que já não está nos mapeamentos de diretórios de trabalho, pelo que esta mensagem não foi executada. Adicione esse diretório em Definições → Ligação remota → Mapeamentos de diretórios de trabalho, ou feche esta tarefa na aplicação de computador e reenvie.",
+          "interactionExpired": "A tarefa terminou, pelo que esta interação já não é válida.",
+          "telegramOfficialBot": "bot oficial do Telegram"
+        },
+        "dispatch": {
+          "dirUnmapped": "O diretório desta tarefa já não está nos mapeamentos de diretórios de trabalho, pelo que esta mensagem não foi executada. Adicione o diretório em Definições → Ligação remota → Mapeamentos de diretórios de trabalho e, depois, envie-a novamente."
+        }
+      },
+      "wecom": {
+        "slash": {
+          "new": "🌱 Nova tarefa iniciada. O contexto anterior foi limpo.",
+          "help": "🤖 Comandos disponíveis:\n\n/new         Iniciar uma nova tarefa\n/stop        Parar a tarefa atual\n/exctr       Terminar o controlo remoto\n/help        Ver a ajuda\n\nDurante a execução de uma tarefa, envie `!stop` para a parar e limpar as mensagens em fila.",
+          "unknownCommand": "Comando `{{cmd}}` não reconhecido. Comandos disponíveis: /new, /stop, /exctr, /help",
+          "detachedBySlash": "🚪 Controlo remoto terminado. As mensagens seguintes voltam para a conversa do WeCom.",
+          "detachedByRevoke": "⚠️ O controlo remoto foi revogado na Cindy Desktop. As mensagens seguintes voltam para a conversa do WeCom.",
+          "notAttached": "De momento, não está a controlar nenhuma tarefa.",
+          "companionManagedCommand": "🧭 Esta ligação foi entregue a um colega: o modelo, as permissões e o diretório de trabalho seguem as definições do colega. Altere-os nas definições do colega na Cindy."
+        },
+        "agent": {
+          "completedNoText": "✅ Tarefa concluída (sem saída de texto neste turno)",
+          "runtimeError": "⚠️ A execução do Agent falhou: {{error}}",
+          "sendInternalError": "❌ Não foi possível enviar a mensagem: {{error}}",
+          "apiKeyMissing": "⚠️ O modelo atual ainda não está autenticado. Ligue um fornecedor de modelos nas definições da Cindy Desktop e tente novamente.",
+          "controlInProgress": "🎮 A seleção do controlo remoto ainda não terminou. Trate primeiro da mensagem interativa anterior.",
+          "credentialBusy": "⏳ O Agent local está em execução, pelo que não é possível mudar o modo de credenciais agora. Tente novamente mais tarde.",
+          "queuedNoticeNext": "⏳ O turno anterior ainda está em execução, pelo que esta mensagem ficou em fila. Envie `!stop` para parar.",
+          "queuedNoticePosition": "⏳ O turno anterior ainda está em execução. Esta mensagem está na posição {{position}} da fila. Envie `!stop` para parar.",
+          "stopDone": "⏹ A tarefa atual foi parada.",
+          "stopDoneDropped_other": "⏹ A tarefa atual foi parada e {{count}} mensagens em fila foram removidas.",
+          "stopDoneDropped_one": "⏹ A tarefa atual foi parada e {{count}} mensagem em fila foi removida.",
+          "stopDoneDropped_many": "⏹ A tarefa atual foi parada e {{count}} mensagens em fila foram removidas.",
+          "stopIdle": "Não há nenhuma tarefa em execução nem em fila.",
+          "scheduledTaskHeaderNamed": "🤖 Tarefa automática «{{name}}»",
+          "scheduledTaskHeader": "🤖 Tarefa automática",
+          "unsupportedOnly": "🙏 De momento, não é possível processar esta mensagem:\n{{items}}",
+          "unsupportedNotice": "ℹ️ Não foi possível processar o seguinte:\n{{items}}\n\nO restante conteúdo continuará a ser processado.",
+          "authMissing": {
+            "providerFallback": "Fornecedor atual",
+            "reasonGatewayKey": "configure primeiro uma chave Cindy AI",
+            "reasonProviderKey": "a chave de API deste fornecedor ainda não foi configurada",
+            "reasonProviderDisconnected": "a ligação foi perdida ou expirou",
+            "reasonLogin": "inicie primeiro sessão em {{agentKind}}",
+            "message": "⚠️ Esta conversa do WeCom usa «{{provider}}» ({{model}}): {{reason}}.",
+            "attachedHint": "Corrija a autenticação na Cindy Desktop e continue a enviar mensagens.",
+            "newChatHint": "Altere a «Configuração de novas conversas» e continue a enviar mensagens. Se esta conversa tiver um modelo escolhido à parte, envie `/new` para iniciar uma nova tarefa."
+          }
+        },
+        "cards": {
+          "permission": {
+            "title": "🔧 Chamada de ferramenta: {{toolName}}",
+            "paramsLabel": "**Pré-visualização dos parâmetros**",
+            "btnAllowOnce": "✅ Permitir uma vez",
+            "btnAllowAlways": "✅ Permitir sempre",
+            "btnDeny": "❌ Recusar",
+            "resolvedAllowOnce": "✅ Permitido (apenas desta vez)",
+            "resolvedAllowAlways": "✅ Permitido (sempre, a partir de agora)",
+            "resolvedDeny": "❌ Recusado"
+          },
+          "ask": {
+            "noOptionsHint": "_Responda diretamente com texto._",
+            "resolved": "✅ Selecionado: {{option}}"
+          },
+          "plan": {
+            "title": "📋 Plano de execução",
+            "btnApprove": "✅ Aprovar",
+            "btnReject": "❌ Rejeitar",
+            "resolvedApproved": "✅ Aprovado",
+            "resolvedRejected": "❌ Rejeitado"
+          },
+          "model": {
+            "title": "🤖 Mudar de modelo",
+            "currentLineWithEffort": "**Atual**: {{label}} · effort `{{effort}}`\n_{{description}}_",
+            "currentLine": "**Atual**: {{label}}\n_{{description}}_",
+            "hint": "Escolha o modelo a utilizar.",
+            "resolved": "✅ Mudou para {{label}}",
+            "resolvedWithEffort": "✅ Mudou para {{label}} (effort: {{effort}})",
+            "failed": "❌ Não foi possível mudar de modelo: {{reason}}"
+          },
+          "permissionMode": {
+            "title": "🛡️ Alterar modo de permissões",
+            "currentLine": "**Atual**: {{label}}\n_{{description}}_",
+            "hint": "Escolha um modo de permissões.",
+            "resolved": "✅ Modo de permissões alterado para {{label}}",
+            "failed": "❌ Não foi possível alterar o modo de permissões: {{reason}}",
+            "fullAccessConfirmTitle": "⚠️ Ativar o acesso total?",
+            "fullAccessConfirmBody": "O acesso total desativa a sandbox do espaço de trabalho e ignora as aprovações habituais. A Cindy poderá modificar ficheiros fora do espaço de trabalho e executar comandos com acesso à rede; as ações integradas de alto risco continuam a pedir confirmação.",
+            "btnConfirmFullAccess": "Ativar acesso total",
+            "btnCancelFullAccess": "Manter permissões",
+            "fullAccessCancelled": "Cancelado. As permissões atuais foram mantidas"
+          },
+          "control": {
+            "title": "🎮 Escolher espaço de trabalho",
+            "emptyBody": "_Ainda não há espaços de trabalho para controlar. Crie primeiro uma tarefa na Cindy Desktop._",
+            "hint": "Escolha um espaço de trabalho para continuar ou saia.",
+            "attachedSwitchHint": "A controlar agora: **{{sessionTitle}}**",
+            "btnExit": "🚪 Sair",
+            "resolvedExit": "🚪 Saiu do controlo remoto",
+            "sessionPickerTitle": "🎮 Tarefas em {{workspaceName}}",
+            "sessionPickerHint": "Escolha uma tarefa, crie uma nova ou volte atrás.",
+            "sessionPickerEmptyBody": "_Ainda não há tarefas disponíveis em {{workspaceName}}._",
+            "btnNew": "➕ Nova",
+            "btnBack": "↩️ Voltar",
+            "resolvedSessionPick": "🎯 Passou a controlar **{{sessionTitle}}** ({{workspaceName}})",
+            "resolvedNewSession": "✨ Foi criada uma nova tarefa em **{{workspaceName}}** e passou a controlá-la",
+            "attachFailed": "❌ Não foi possível assumir o controlo: {{reason}}",
+            "sessionBusyOldCardPlaceholder": "⏳ Essa tarefa ainda está em execução. Tente novamente mais tarde.",
+            "sessionBusyPrompt": "⏳ **{{sessionTitle}}** está em execução. Aguarde até o turno atual terminar.",
+            "takeoverLoadingPrompt": "⏳ A assumir o controlo de **{{sessionTitle}}**…",
+            "newSessionWelcomePrompt": "✨ Foi criada uma nova tarefa em **{{workspaceName}}**. Envie a primeira instrução."
+          }
+        },
+        "interaction": {
+          "invalidReply": "Formato de resposta inválido. Responda conforme indicado na mensagem anterior; a confirmação de permissões só aceita «{{allow}}» ou «{{deny}}».",
+          "permissionTitle": "É necessário confirmar a ferramenta «{{toolName}}».",
+          "operationLabel": "Ação:",
+          "permissionFooter": "Responda «{{allow}}» para executar uma vez ou «{{deny}}» para cancelar. O WeCom não suporta autorizações permanentes.",
+          "planIntro": "O Agent apresentou um plano de execução:",
+          "planFooter": "Responda «{{approve}}» para continuar ou «{{deny}}» para cancelar.",
+          "askNoQuestion": "O Agent está à espera da sua resposta, mas não há nenhuma pergunta para mostrar. Responda «continuar».",
+          "askIntro": "O Agent precisa da sua resposta:",
+          "askFooter": "Responda com o número de uma opção ou escreva diretamente a sua resposta."
+        }
+      },
+      "dingtalk": {
+        "channelName": "DingTalk",
+        "error": {
+          "permissionModeUnsupported": "Esta mensagem de grupo ainda não foi executada: o nível de permissões da tarefa atual não permite as aprovações de ações de que as mensagens de grupo precisam. O utilizador associado a este bot tem de mudar a tarefa atual para «Revisão automática» na Cindy e voltar a enviar a mensagem."
+        },
+        "slash": {
+          "help": "🤖 Eis o que posso fazer:\n\n/new   Iniciar uma nova conversa (limpa o contexto atual)\n/stop  Parar a execução atual e retirar as mensagens em fila\n/help  Ver os comandos disponíveis\n\nO modelo, as permissões e o controlo remoto ajustam-se na Cindy Desktop.",
+          "unknownCommand": "Não reconheço o comando `{{cmd}}` 🤔\nComandos que entendo: /new, /stop, /help",
+          "interactiveCommandUnsupported": "O DingTalk ainda não suporta a seleção interativa de {{cmd}}. Conclua esta definição na Cindy Desktop."
+        },
+        "interaction": {
+          "permissionTitle": "Confirmação necessária: {{toolName}}",
+          "operationLine": "Ação: {{operation}}",
+          "permissionFooter": "Responda «{{allow}}» para continuar ou «{{deny}}» para cancelar.",
+          "planReady": "O plano está pronto.",
+          "planFooter": "Responda «{{approve}}» para continuar ou «{{deny}}» para cancelar.",
+          "questionsIntro": "É necessário completar as seguintes informações:",
+          "questionsFooter": "Responda diretamente com o número de uma opção ou com a sua resposta.",
+          "questionTitle": "São necessárias mais informações ({{index}}/{{total}}): {{question}}",
+          "questionFooter": "Responda com o número de uma opção ou com a sua resposta."
+        }
+      },
+      "imessage": {
+        "slash": {
+          "help": "🤖 Eis o que posso fazer:\n\n/new   Iniciar uma nova conversa (limpa o contexto atual)\n/stop  Parar a execução atual e retirar as mensagens em fila\n/help  Ver os comandos disponíveis\n\nO modelo, as permissões e o controlo remoto ajustam-se na Cindy Desktop.",
+          "unknownCommand": "Não reconheço o comando `{{cmd}}` 🤔\nComandos que entendo: /new, /stop, /help",
+          "interactiveCommandUnsupported": "O iMessage ainda não suporta a seleção interativa de {{cmd}}. Conclua esta definição na Cindy Desktop."
+        }
+      },
+      "feishu": {
+        "slash": {
+          "new": "🌱 Novo começo — a conversa anterior foi apagada. Vamos recomeçar!",
+          "help": "🤖 Eis o que posso fazer:\n\n/new         Recomeçar (limpa o contexto da conversa atual)\n/model       Mudar de modelo\n/permission  Ajustar o modo de permissões (auto / bypass / ask, etc.)\n/ctr         Controlar remotamente um espaço de trabalho da aplicação para computador (enviar de novo durante o controlo muda de sessão)\n/exctr       Terminar o controlo remoto e voltar à conversa privada\n/help        Ver o que posso fazer\n\nPara parar algo em execução, basta enviar `!stop`: a execução atual é interrompida de imediato e as mensagens em fila são descartadas. A sessão é mantida e pode ser retomada.\n\nDe resto, basta enviar uma mensagem — estou a ouvir~",
+          "unknownCommand": "Não reconheço o comando `{{cmd}}` 🤔\nComandos disponíveis: /new, /model, /permission, /ctr, /exctr, /help",
+          "detachedBySlash": "🚪 Controlo remoto terminado — de volta à conversa privada. Para controlar novamente a aplicação para computador, basta enviar /ctr",
+          "detachedByRevoke": "⚠️ O controlo remoto foi terminado na aplicação para computador. As próximas mensagens voltam para a conversa privada.",
+          "notAttached": "🤷 Não há nenhuma sessão sob controlo remoto neste momento, por isso /exctr não tem nada a fazer.",
+          "companionDmNew": "🧭 Esta é a conversa principal do colega: continua sempre e não abre uma nova sessão. Para mudar de assunto, basta dizê-lo; para trabalho à parte, o colega abre por si uma sessão em segundo plano.",
+          "companionLaneNew": "🌱 Foi iniciada uma nova conversa para este grupo e o contexto anterior foi posto de parte. Vamos recomeçar!",
+          "companionManagedCommand": "🧭 Esta ligação foi entregue a um colega, por isso o modelo, as permissões e o diretório de trabalho seguem as definições do colega. As alterações devem ser feitas nas definições do colega no Cindy."
+        },
+        "agent": {
+          "completedNoText": "✅ Concluído (o Agent não disse nada neste turno)",
+          "runtimeError": "⚠️ O Agent encontrou um problema: {{error}}",
+          "sendInternalError": "❌ Erro interno: {{error}}",
+          "apiKeyMissing": "⚠️ A Cindy AI Key ainda não está configurada~\nBasta ligar o Cindy AI na aplicação para computador, em Definições → Fornecedores, e depois enviar uma nova mensagem",
+          "controlInProgress": "🎮 A seleção de /ctr ainda está em curso — é preciso concluir primeiro o cartão acima (ou tocar em 🚪 Sair) antes de enviar outra coisa~",
+          "credentialBusy": "⏳ O Agent local está ocupado com outro turno, por isso não é possível mudar o modo de credenciais agora. Basta enviar de novo quando esse turno terminar.",
+          "queuedNoticeFirst": "⏳ O turno anterior ainda está em execução, por isso esta mensagem fica em fila e segue automaticamente a seguir. Para parar já, basta enviar `!stop`",
+          "queuedNotice": "⏳ O turno anterior ainda está em execução. Esta mensagem está na posição {{position}} da fila e chega ao Agent por ordem. Para parar já, basta enviar `!stop`",
+          "stopDone": "⏹ A execução atual foi interrompida. A sessão continua disponível — basta enviar uma nova instrução para continuar~",
+          "stopDoneWithQueued_one": "⏹ A execução atual foi interrompida e {{count}} mensagem em fila foi descartada. A sessão continua disponível — basta enviar uma nova instrução para continuar~",
+          "stopDoneWithQueued_other": "⏹ A execução atual foi interrompida e {{count}} mensagens em fila foram descartadas. A sessão continua disponível — basta enviar uma nova instrução para continuar~",
+          "stopDoneWithQueued_many": "⏹ A execução atual foi interrompida e {{count}} mensagens em fila foram descartadas. A sessão continua disponível — basta enviar uma nova instrução para continuar~",
+          "stopIdle": "🤷 Não há nada em execução neste momento, por isso `!stop` não teve nada para parar. Quando houver algo para parar, é só chamar~",
+          "scheduledTaskHeader": "🤖 Automatização",
+          "scheduledTaskHeaderNamed": "🤖 Automatização “{{name}}”",
+          "unsupportedOnly": "🙏 Não é possível processar esta mensagem:\n{{items}}\n\nFormatos suportados: texto, imagens (jpg/png/gif/webp), PDF e ficheiros de texto de código ou configuração.",
+          "unsupportedNotice": "ℹ️ Não é possível processar o seguinte, por isso ficou de parte:\n{{items}}\n\nO resto foi recebido e já está a ser tratado~",
+          "companionUnavailable": "⏸ O colega não pode receber mensagens neste momento: {{reason}}",
+          "authMissing": {
+            "defaultProvider": "fornecedor atual",
+            "message": "⚠️ Esta conversa usa o fornecedor “{{provider}}” ({{model}}): {{reason}}.",
+            "reasonGatewayKey": "é necessário configurar primeiro a Cindy AI Key",
+            "reasonProviderKey": "a API Key deste fornecedor ainda não foi configurada",
+            "reasonProviderDisconnected": "não está ligado ou a ligação expirou",
+            "reasonAgentLogin": "é necessário iniciar sessão primeiro com as credenciais de {{agentKind}}",
+            "attachedHint": "Depois de corrigir a autenticação na aplicação para computador, em Definições → Fornecedores, basta continuar a enviar mensagens.",
+            "detachedHint": "Depois de alterar a “Configuração de novas conversas”, basta continuar a enviar mensagens. Se esta conversa tiver um modelo escolhido à parte, basta enviar `/model` para escolher novamente."
+          }
+        },
+        "error": {
+          "agentUnsupported": "🤔 Este canal exige a confirmação de cada permissão, algo que o Agent selecionado ainda não suporta. Basta mudar para outro Agent e tentar de novo~"
+        },
+        "cards": {
+          "permission": {
+            "title": "🔧 Chamada de ferramenta: {{tool}}",
+            "paramsLabel": "**Pré-visualização dos parâmetros**",
+            "btnAllowOnce": "✅ Permitir uma vez",
+            "btnAllowAlways": "✅ Permitir sempre",
+            "btnDeny": "❌ Recusar",
+            "dmRoutedNotice": "🔐 `{{tool}}` precisa de confirmação — o cartão de autorização foi enviado para a conversa privada. Basta tocar nele lá para continuar~",
+            "resolvedAllowOnce": "✅ Permitido (apenas desta vez)",
+            "resolvedAllowAlways": "✅ Permitido (esta ferramenta passa a ser sempre permitida)",
+            "resolvedDeny": "❌ Recusado"
+          },
+          "ask": {
+            "noOptionsHint": "_(Esta pergunta não tem opções predefinidas — basta responder com texto)_",
+            "resolved": "✅ Selecionado: {{option}}",
+            "multi": {
+              "title": "❓ Algumas questões para confirmar",
+              "multiSelectHint": " (escolha múltipla)",
+              "submitLabel": "Enviar respostas"
+            }
+          },
+          "plan": {
+            "title": "📋 O plano é este",
+            "btnApprove": "✅ Avançar",
+            "btnReject": "❌ Esperar",
+            "resolvedApproved": "✅ Aprovado, mãos à obra",
+            "resolvedRejected": "❌ Em pausa"
+          },
+          "model": {
+            "title": "🤖 Mudar de modelo",
+            "currentLine": "**Atual**: {{label}}\n_{{description}}_",
+            "currentLineWithEffort": "**Atual**: {{label}} · esforço de raciocínio `{{effort}}`\n_{{description}}_",
+            "hint": "Para mudar, basta tocar abaixo. O modelo escolhido é executado automaticamente com o esforço de raciocínio máximo",
+            "resolved": "✅ Mudado para {{label}}",
+            "resolvedWithEffort": "✅ Mudado para {{label}} (esforço de raciocínio: {{effort}})",
+            "failed": "❌ Não foi possível mudar de modelo: {{reason}}"
+          },
+          "permissionMode": {
+            "title": "🛡️ Ajustar o modo de permissões",
+            "currentLine": "**Atual**: {{label}}\n_{{description}}_",
+            "hint": "Para mudar, basta tocar abaixo. auto = ações habituais permitidas e cartão para as sensíveis; bypass = tudo permitido; ask/default/plan/acceptEdits = aprovação por cartão",
+            "resolved": "✅ Modo de permissões mudado para {{label}}",
+            "failed": "❌ Não foi possível mudar o modo de permissões: {{reason}}",
+            "fullAccessConfirmTitle": "⚠️ Ativar o Acesso total?",
+            "fullAccessConfirmBody": "O Acesso total desativa a sandbox do espaço de trabalho e ignora as aprovações habituais. O Cindy pode modificar ficheiros fora do espaço de trabalho e executar comandos com acesso à rede sem perguntar; as ações de alto risco integradas continuam a pedir confirmação.",
+            "btnConfirmFullAccess": "Ativar Acesso total",
+            "btnCancelFullAccess": "Manter permissões atuais",
+            "fullAccessCancelled": "Cancelado — as permissões atuais foram mantidas"
+          },
+          "permissionModeFix": {
+            "title": "🛡️ Repor a sessão do grupo em “Revisão automática”",
+            "body": "A mensagem enviada há pouco no grupo/tópico não pôde ser executada: **{{title}}** usa o nível de permissão “Acesso total”, mas o contexto do grupo inclui conteúdo controlável pelos membros, por isso a confirmação de ações tem de se manter.\n\nBasta tocar no botão abaixo para mudar para “Revisão automática” (auto) e depois voltar ao grupo para continuar a enviar mensagens.",
+            "btnFix": "✅ Mudar para Revisão automática",
+            "resolved": "✅ Mudado para “Revisão automática” — basta voltar ao grupo e continuar~",
+            "failed": "❌ Não foi possível mudar: {{reason}}. Para mudar manualmente, basta enviar /permission auto"
+          },
+          "control": {
+            "title": "🎮 Escolher um espaço de trabalho",
+            "emptyBody": "_Ainda não há espaços de trabalho para controlar~ Basta abrir ou criar uma sessão na aplicação para computador e voltar_",
+            "hint": "Tocar num espaço de trabalho para continuar; 🚪 Sair para cancelar",
+            "attachedSwitchHint": "🎮 Em controlo: **{{title}}**\nEscolher outra sessão muda diretamente; 🚪 Sair mantém tudo como está",
+            "btnExit": "🚪 Sair",
+            "resolvedExit": "🚪 Saída concluída. Para voltar a controlar remotamente, basta enviar /ctr",
+            "sessionPickerTitle": "🎮 Sessões em {{workspace}}",
+            "sessionPickerHint": "Escolher uma sessão para continuar · ➕ Nova para criar outra · ↩️ Voltar para mudar de espaço de trabalho · 🚪 Sair para cancelar",
+            "sessionPickerEmptyBody": "_Ainda não há sessões ativas em **{{workspace}}**~ Que tal tocar em ➕ Nova para criar uma?_",
+            "btnNew": "➕ Nova",
+            "btnBack": "↩️ Voltar",
+            "resolvedSessionPick": "🎯 Ligado: **{{title}}** ({{workspace}})\nAs próximas mensagens vão diretamente para esta sessão; para sair, basta enviar `/exctr`",
+            "resolvedNewSession": "✨ Nova sessão criada e ligada (em **{{workspace}}**)\nBasta enviar uma instrução para começar; `/exctr` para sair",
+            "attachFailed": "❌ Não foi possível ligar: {{reason}}",
+            "staleGroupCard": "❌ Não foi possível ligar: este cartão foi enviado antes de a aplicação reiniciar e já não é possível saber a que tópico pertence.\nBasta enviar `/ctr` novamente no tópico a controlar (a associação fica nesse tópico e não passa para outros)",
+            "sessionBusyOldCardPlaceholder": "⏳ Essa sessão ainda está em execução — há um cartão novo abaixo para escolher de novo",
+            "sessionBusyPrompts": {
+              "prompt1": "⏳ **{{title}}** está a meio de uma batalha com o boss~\nO Agent ainda está a pensar/programar; quando terminar esta ronda, basta usar `/ctr` de novo",
+              "prompt2": "🚧 Não é possível entrar — **{{title}}** ainda tem uma ronda por fechar.\nUm gole de água e uns segundos de espera; assim que o Agent terminar o que tem em mãos, é a sua vez",
+              "prompt3": "🤖 **{{title}}** está ocupado — o Agent ainda está a voar pelo teclado e interromper agora iria distraí-lo.\nBasta esperar uns segundos e tentar `/ctr` de novo",
+              "prompt4": "☕ Calma, calma — **{{title}}** ainda não terminou esta partida.\nAssim que o Agent acabar o que está a fazer, o comando é todo seu"
+            },
+            "takeoverLoadingPrompts": {
+              "prompt1": "⏳ A passar o controlo de **{{title}}**…\n_📦 A carregar os metadados da sessão_  ·  _🔌 A ligar ao Agent_  ·  _🧠 A rever a ronda anterior_\n_São só uns segundos — não é preciso beber o café de um trago_",
+              "prompt2": "🎮 A entrar em **{{title}}**…\n_Nas primeiras versões, os jogadores impacientes carregavam sem parar no ícone da app de mensagens, mas não adiantava nada_",
+              "prompt3": "⌛ A carregar **{{title}}**…  99%\n_Esta barra de progresso é a sério — o Haiku está a rever o que se falou na ronda anterior_",
+              "prompt4": "🛰️ A estabelecer ligação com **{{title}}**…\n_(O sinal de WiFi parece um pouco fraco… ah não, é o Haiku a pensar em como fazer o resumo)_"
+            },
+            "newSessionWelcomePrompts": {
+              "prompt1": "🎯 Ligação e nova sessão de uma só vez — **{{workspace}}** está pronto e o Agent aguarda instruções.\nBasta enviar a primeira instrução para começar; `/exctr` para sair a qualquer momento",
+              "prompt2": "✨ Nova sessão criada — o diretório de trabalho **{{workspace}}** está pronto e o Agent aguarda.\nA primeira mensagem dá início; `/exctr` para sair a qualquer momento",
+              "prompt3": "🎮 Tudo pronto — foi aberta uma sessão nova em **{{workspace}}**.\nÉ só dizer o que é preciso; o Agent está online~  `/exctr` para terminar",
+              "prompt4": "🆕 Novo começo — o diretório de trabalho **{{workspace}}** está pronto.\nA primeira instrução dá início; `/exctr` para terminar"
+            }
+          }
+        },
+        "notice": {
+          "platformFeishu": "Feishu",
+          "contextFetchFailedGroup": "⚠️ Não foi possível obter o histórico de mensagens do grupo, por isso a @menção recebida há pouco no grupo só pôde ser respondida com base na própria mensagem, sem o contexto da conversa.",
+          "contextFetchFailedThread": "⚠️ Não foi possível obter o histórico de mensagens do tópico, por isso a @menção recebida há pouco no tópico só pôde ser respondida com base na própria mensagem, sem o contexto da conversa.",
+          "contextFetchFailedHowTo": "Como ativar: {{platform}} Open Platform → Developer Console → selecionar esta aplicação → Permissões → pesquisar e ativar (im:message.group_msg) e (im:message.group_msg.include_bot:read) → criar uma versão e publicá-la (as aplicações personalizadas exigem revisão do administrador).",
+          "contextFetchFailedDetail": "Detalhes do erro: {{error}}",
+          "contextFetchFailedLink": "[Abrir a consola]({{link}})"
+        },
+        "notificationReply": {
+          "unavailable": "De momento, não é possível continuar a sessão desta notificação. É necessário confirmar no Cindy que a sessão continua disponível e tentar novamente.",
+          "commands": "Este tópico serve para continuar a sessão da notificação. Para parar, basta usar !stop; os restantes comandos devem ser usados na conversa principal."
+        }
+      },
+      "wechat": {
+        "slash": {
+          "new": "🌱 Novo começo — a conversa anterior foi limpa. Vamos recomeçar~",
+          "help": "🤖 Eis o que posso fazer:\n\n/new         Começar de novo (limpa o contexto da conversa atual)\n/model       Mudar de modelo\n/permission  Ajustar o modo de permissões (auto / bypass / ask, etc.)\n/ctr         Controlar remotamente um espaço de trabalho na app para computador (envie novamente durante o controlo para mudar de sessão)\n/exctr       Terminar o controlo e voltar à nossa conversa privada no WeChat\n/help        Ver o que sei fazer\n\nHá algo em execução que quer parar? Envie `!stop`: a execução atual é interrompida de imediato e as mensagens em fila são descartadas. A sessão mantém-se, por isso pode continuar.\n\nDe resto, basta enviar mensagens. Estou à escuta~",
+          "unknownCommand": "Não reconheço o comando `{{cmd}}` 🤔\nComandos disponíveis: /new, /model, /permission, /ctr, /exctr, /help",
+          "detachedBySlash": "🚪 Controlo remoto terminado — de volta à nossa conversa privada no WeChat. Para voltar a controlar remotamente a app para computador, envie /ctr",
+          "detachedByRevoke": "⚠️ Retomou o controlo na app para computador. As próximas mensagens voltam para a nossa conversa privada no WeChat.",
+          "notAttached": "🤷 Não está a controlar nenhuma sessão de momento, por isso o /exctr não tem nada para fazer."
+        },
+        "agent": {
+          "completedNoText": "✅ Concluído (o Agent não disse nada neste turno)",
+          "runtimeError": "⚠️ O Agent teve um problema: {{error}}",
+          "sendInternalError": "❌ Erro interno: {{error}}",
+          "apiKeyMissing": "⚠️ A Cindy AI Key ainda não está configurada~\nLigue o Cindy AI na app para computador, em Definições → Fornecedores, e volte a falar comigo",
+          "controlInProgress": "🎮 Ainda está a meio da seleção do /ctr — conclua primeiro o cartão acima (ou toque em 🚪 Sair) antes de enviar outra coisa~",
+          "credentialBusy": "⏳ O Agent local está ocupado com outro turno, por isso ainda não é possível mudar o modo de credenciais. Envie novamente quando esse turno terminar.",
+          "queuedNext": "⏳ O turno anterior ainda está a decorrer, por isso esta mensagem fica em fila e avança automaticamente quando terminar. Envie `!stop` para parar já",
+          "queuedPosition": "⏳ O turno anterior ainda está a decorrer. Esta mensagem é a n.º {{position}} na fila e será enviada ao Agent por ordem. Envie `!stop` para parar já",
+          "stopDone": "⏹ A execução atual foi parada. A sessão continua disponível — envie uma nova instrução quando quiser continuar~",
+          "stopDoneWithQueued_one": "⏹ A execução atual foi parada e {{count}} mensagem em fila foi descartada. A sessão continua disponível — envie uma nova instrução quando quiser continuar~",
+          "stopDoneWithQueued_other": "⏹ A execução atual foi parada e {{count}} mensagens em fila foram descartadas. A sessão continua disponível — envie uma nova instrução quando quiser continuar~",
+          "stopDoneWithQueued_many": "⏹ A execução atual foi parada e {{count}} mensagens em fila foram descartadas. A sessão continua disponível — envie uma nova instrução quando quiser continuar~",
+          "stopIdle": "🤷 Neste momento não há nada a decorrer, por isso o `!stop` não tinha nada para parar. Chame-me quando houver algo para interromper~",
+          "scheduledTaskHeader": "🤖 Automatização",
+          "scheduledTaskHeaderNamed": "🤖 Automatização “{{name}}”",
+          "unsupportedOnly": "🙏 Não consigo processar esta mensagem:\n{{items}}\n\nConsigo processar: texto, imagens (jpg/png/gif/webp), PDF e ficheiros de texto de código ou configuração.",
+          "unsupportedNotice": "ℹ️ Não consigo processar o seguinte, por isso pus de parte:\n{{items}}\n\nO resto foi recebido e já está a ser processado~",
+          "authMissing": {
+            "currentProvider": "fornecedor atual",
+            "reasonGatewayKey": "é necessário configurar primeiro a Cindy AI Key",
+            "reasonProviderKey": "ainda não foi configurada a API Key deste fornecedor",
+            "reasonProviderDisconnected": "não está ligado ou a ligação expirou",
+            "reasonAgentLogin": "é necessário iniciar sessão primeiro com as credenciais de {{agentKind}}",
+            "message": "⚠️ Esta conversa do WeChat usa o fornecedor “{{provider}}” ({{model}}): {{reason}}.",
+            "attachedHint": "Corrija a autenticação na app para computador, em Definições → Fornecedores, e depois continue a enviar mensagens.",
+            "detachedHint": "Altere a “Configuração de novas conversas” e continue a enviar mensagens. Se esta conversa tiver um modelo escolhido à parte, envie `/model` para o escolher novamente."
+          }
+        },
+        "error": {
+          "agentUnsupported": "⚠️ O Agent atual não suporta a confirmação de permissões mensagem a mensagem no WeChat pessoal, por isso a mensagem não pode ser iniciada.\nNas definições da app para computador, mude o Agent do canal WeChat para Claude Code ou Codex, envie /new no WeChat e tente novamente.",
+          "agentSwitchAlsoCheckPermissionMode": "Se o novo Agent continuar a indicar um problema com o modo de permissões, envie /permission no WeChat para ajustar o modo de permissões e tente novamente.",
+          "permissionModeUnsupported": "Esta mensagem ainda não foi executada: o modo de permissões da sessão atual não consegue fornecer as aprovações de ações de que o WeChat pessoal precisa.\nNo Cindy, mude a sessão atual para “Revisão automática” ou envie /permission no WeChat para ajustar e volte a enviar."
+        },
+        "cards": {
+          "permission": {
+            "title": "🔧 Chamada de ferramenta: {{toolName}}",
+            "paramsLabel": "**Pré-visualização dos parâmetros**",
+            "btnAllowOnce": "✅ Permitir uma vez",
+            "btnAllowAlways": "✅ Permitir sempre",
+            "btnDeny": "❌ Recusar",
+            "resolvedAllowOnce": "✅ Permitido (apenas desta vez)",
+            "resolvedAllowAlways": "✅ Permitido (esta ferramenta passa a ser sempre permitida)",
+            "resolvedDeny": "❌ Recusado"
+          },
+          "ask": {
+            "noOptionsHint": "_(Esta pergunta não tem opções predefinidas — responda com texto)_",
+            "resolved": "✅ Selecionado: {{option}}"
+          },
+          "plan": {
+            "title": "📋 O meu plano",
+            "btnApprove": "✅ Avançar",
+            "btnReject": "❌ Aguardar",
+            "resolvedApproved": "✅ Aprovado, a começar",
+            "resolvedRejected": "❌ Em pausa"
+          },
+          "model": {
+            "title": "🤖 Mudar de modelo",
+            "currentLine": "**Atual**: {{label}}\n_{{description}}_",
+            "currentLineWithEffort": "**Atual**: {{label}} · esforço de raciocínio `{{effort}}`\n_{{description}}_",
+            "hint": "Toque abaixo para mudar. O modelo escolhido será executado automaticamente com o esforço de raciocínio máximo",
+            "resolved": "✅ Mudado para {{label}}",
+            "resolvedWithEffort": "✅ Mudado para {{label}} (esforço de raciocínio: {{effort}})",
+            "failed": "❌ Não foi possível mudar de modelo: {{reason}}"
+          },
+          "permissionMode": {
+            "title": "🛡️ Ajustar modo de permissões",
+            "currentLine": "**Atual**: {{label}}\n_{{description}}_",
+            "hint": "Toque abaixo para mudar. auto = ações habituais permitidas, ações sensíveis pedem confirmação por cartão; bypass = permitir tudo; ask/default/plan/acceptEdits = aprovação por cartão",
+            "resolved": "✅ Modo de permissões mudado para {{label}}",
+            "failed": "❌ Não foi possível mudar o modo de permissões: {{reason}}",
+            "fullAccessConfirmTitle": "⚠️ Ativar o Acesso total?",
+            "fullAccessConfirmBody": "O Acesso total desativa a sandbox do espaço de trabalho e ignora as aprovações habituais. Cindy pode alterar ficheiros fora do espaço de trabalho e executar comandos com acesso à rede sem perguntar; as ações integradas de alto risco continuam a pedir confirmação.",
+            "btnConfirmFullAccess": "Ativar Acesso total",
+            "btnCancelFullAccess": "Manter permissões atuais",
+            "fullAccessCancelled": "Cancelado. As permissões atuais foram mantidas"
+          },
+          "control": {
+            "title": "🎮 Escolha um espaço de trabalho",
+            "emptyBody": "_Ainda não há espaços de trabalho para controlar~ Abra ou crie uma sessão na app para computador e volte depois_",
+            "hint": "Toque num espaço de trabalho para continuar; toque em 🚪 Sair para cancelar",
+            "attachedSwitchHint": "🎮 A controlar: **{{sessionTitle}}**\nEscolha uma nova sessão para mudar; toque em 🚪 Sair para manter tudo como está",
+            "btnExit": "🚪 Sair",
+            "resolvedExit": "🚪 Terminado. Envie /ctr quando quiser voltar a controlar remotamente",
+            "sessionPickerTitle": "🎮 Sessões em {{displayName}}",
+            "sessionPickerHint": "Escolha uma sessão para continuar · ➕ Nova para começar outra · ↩️ Voltar para mudar de espaço de trabalho · 🚪 Sair para cancelar",
+            "sessionPickerEmptyBody": "_Ainda não há sessões ativas em **{{displayName}}**~ Que tal tocar em ➕ Nova para criar uma?_",
+            "btnNew": "➕ Nova",
+            "btnBack": "↩️ Voltar",
+            "resolvedSessionPick": "🎯 Ligado: **{{sessionTitle}}** ({{workspaceName}})\nAs suas mensagens passam a ir diretamente para esta sessão; envie `/exctr` a qualquer momento para sair",
+            "resolvedNewSession": "✨ Nova sessão criada e sob o seu controlo (em **{{workspaceName}}**)\nEnvie uma instrução para começar; `/exctr` para sair",
+            "attachFailed": "❌ Não foi possível assumir o controlo: {{reason}}",
+            "sessionBusyOldCardPlaceholder": "⏳ Essa sessão ainda está ocupada — há um novo cartão abaixo, escolha novamente",
+            "sessionBusyPrompt1": "⏳ **{{sessionTitle}}** está a meio de uma luta com o chefe~\nO Agent ainda está a pensar ou a programar; espere que este turno acabe e entre com `/ctr`",
+            "sessionBusyPrompt2": "🚧 Ainda não dá para entrar — **{{sessionTitle}}** tem um turno por terminar.\nBeba um copo de água e aguarde uns segundos; o Agent avisa quando acabar",
+            "sessionBusyPrompt3": "🤖 **{{sessionTitle}}** está ocupada — o Agent ainda está a teclar a toda a velocidade e interromper iria distraí-lo.\nAguarde uns segundos e tente `/ctr` novamente",
+            "sessionBusyPrompt4": "☕ Calma, calma — **{{sessionTitle}}** ainda não terminou este turno.\nAssim que o Agent acabar o que está a fazer, o controlo passa para si",
+            "takeoverLoadingPrompt1": "⏳ A passar-lhe o controlo de **{{sessionTitle}}**…\n_📦 A carregar os metadados da sessão_  ·  _🔌 A ligar o canal do Agent_  ·  _🧠 A rever o turno anterior_\n_São só dois ou três segundos — não precisa de beber o café de um trago_",
+            "takeoverLoadingPrompt2": "🎮 A entrar em **{{sessionTitle}}**…\n_Nas primeiras versões, os jogadores impacientes carregavam sem parar no ícone do WeChat. Nunca adiantou nada_",
+            "takeoverLoadingPrompt3": "⌛ A carregar **{{sessionTitle}}**…  99%\n_Esta barra de progresso é real — estou a rever o que foi dito no turno anterior_",
+            "takeoverLoadingPrompt4": "🛰️ A estabelecer ligação a **{{sessionTitle}}**…\n_(O Wi-Fi parece um pouco fraco… ah, não, estou só a pensar em como fazer o resumo)_",
+            "newSessionWelcomePrompt1": "🎯 Controlo assumido e nova sessão criada de uma só vez — **{{workspaceName}}** está pronto e o Agent aguarda instruções.\nEnvie a primeira instrução para começar; `/exctr` a qualquer momento para sair",
+            "newSessionWelcomePrompt2": "✨ Nova sessão criada — o diretório de trabalho **{{workspaceName}}** está pronto e o Agent aguarda instruções.\nA primeira mensagem dá o arranque; `/exctr` para sair a qualquer momento",
+            "newSessionWelcomePrompt3": "🎮 Tudo pronto — foi criada uma sessão novinha em **{{workspaceName}}**.\nDiga o que precisa; o Agent está online~  `/exctr` para terminar",
+            "newSessionWelcomePrompt4": "🆕 Novo começo — o diretório de trabalho **{{workspaceName}}** está pronto.\nEnvie a primeira instrução para começar; para sair, `/exctr`"
+          }
+        },
+        "reply": {
+          "unsupportedMedia": "Esta versão ainda não suporta este tipo de conteúdo multimédia do WeChat.",
+          "stillProcessing": "Ainda em processamento…",
+          "ownerOnlyCommands": "Só o proprietário pode usar os comandos do bot.",
+          "companionManagedCommand": "Abra este colega no Cindy: o modelo muda-se nas definições do colega e as permissões por baixo da caixa de entrada da conversa.",
+          "help": "Comandos disponíveis: /new nova conversa; /stop parar a execução atual; /stop all parar todas as execuções; /status ver o estado; /help ver a ajuda.",
+          "status_one": "A ligação do Cindy ao WeChat está a funcionar. {{count}} mensagem em fila.",
+          "status_other": "A ligação do Cindy ao WeChat está a funcionar. {{count}} mensagens em fila.",
+          "status_many": "A ligação do Cindy ao WeChat está a funcionar. {{count}} mensagens em fila.",
+          "stopped": "Tarefa interrompida.",
+          "companionDmNew": "Aqui partilha a mesma sessão de longa duração com o colega, por isso o histórico e a memória são mantidos. Para organizar o contexto, reinicie o colega no Cindy.",
+          "newConversation": "Nova conversa iniciada.",
+          "unknownCommand": "Comando desconhecido. Envie /help para ver os comandos disponíveis.",
+          "overloaded": "Há demasiadas tarefas do WeChat neste momento. Tente novamente mais tarde."
+        },
+        "preDispatch": {
+          "companionPermissionUnsupported": "Esta mensagem precisa de confirmação de permissões a cada ação, mas o modelo ou o modo de permissões atual do colega não o suporta, por isso a mensagem não pode ser iniciada.\nO proprietário deve abrir este colega no Cindy, verificar o modelo nas definições do colega e escolher “Permissões predefinidas” ou “Revisão automática” por baixo da caixa de entrada da conversa.",
+          "missingAuth": "O Agent atual ainda não está autorizado. Ligue primeiro um serviço de modelos no Cindy.",
+          "generic": "Esta mensagem não pode ser iniciada agora. Tente novamente mais tarde."
+        },
+        "interaction": {
+          "invalidReply": "Formato de resposta inválido. Responda conforme indicado na mensagem anterior; a confirmação de permissões só aceita “{{allow}}” ou “{{deny}}”.",
+          "permissionTitle": "A ferramenta “{{tool}}” precisa de confirmação.",
+          "operationPreview": "Ação:\n{{preview}}",
+          "permissionReplyHint": "Responda “{{allow}}” para executar uma vez ou “{{deny}}” para cancelar esta ação. O WeChat não suporta autorizações permanentes.",
+          "planReview": "O Agent submeteu um plano de execução:\n\n{{plan}}\n\nResponda “{{approve}}” para continuar ou “{{deny}}” para cancelar.",
+          "askNoQuestion": "O Agent está à espera da sua resposta, mas não há nenhuma pergunta para mostrar. Responda “continuar”.",
+          "askQuestion": "O Agent precisa da sua resposta:\n{{question}}\n{{options}}\nResponda com o número de uma opção ou escreva diretamente a sua resposta."
+        }
+      }
+    }
   },
   "markdown": {},
   "diffPanel": {

@@ -1,9 +1,14 @@
 import type { InteractionRequest } from '@cindy/maker-core';
 import type { IMMessageEvent, IMStatus, WecomIM } from '@cindy/im';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { formatWecomInteractionPrompt, WecomTextInteractions } from '../textInteractions';
 import { createSharedPermission } from '../../../maker-ipc/sharedPermission';
+import { setMainLocale } from '../../../i18n.desktop';
+
+// 断言中文控制文案:显式锁定界面语言,结束后还原默认。
+beforeEach(() => setMainLocale('zh-CN'));
+afterEach(() => setMainLocale('en'));
 
 function permissionRequest(
   input: Record<string, unknown>,

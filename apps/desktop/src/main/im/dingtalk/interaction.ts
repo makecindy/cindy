@@ -3,7 +3,12 @@ import type { DingTalkIM } from '@cindy/im';
 
 import { autoReviewUnavailablePromptLine, permissionOperationPreview, permissionPromptDescription } from '../shared/autoReviewUnavailablePrompt';
 import type { SharedPermission } from '../../maker-ipc/sharedPermission';
+import { imText } from '../shared/imText';
+import { localizedReplyWords, matchesReplyWord } from '../shared/replyWords';
 import { permissionOutcomeText } from '../shared/permissionPresentation';
+
+// 钉钉与 iMessage 共用这套纯文本交互(iMessage 直接复用本文件)。
+const K = 'imBot.text.dingtalk.interaction';
 
 export function handleDingTalkTextInteraction(
   im: Pick<DingTalkIM, 'requestTextReply' | 'sendText'>,
@@ -50,25 +55,31 @@ async function answerQuestions(
 function formatInteractionPrompt(request: InteractionRequest): string {
   if (request.kind === 'permission') {
     const unavailable = autoReviewUnavailablePromptLine(request);
+    const words = localizedReplyWords();
+    const operation = permissionOperationPreview(request);
     return [
-      `需要确认操作：${request.toolName}`,
+      imText(`${K}.permissionTitle`, { toolName: request.toolName }),
       ...(permissionPromptDescription(request) ? [permissionPromptDescription(request)!] : []),
       ...(unavailable ? [unavailable] : []),
-      ...(permissionOperationPreview(request) ? [`操作：${permissionOperationPreview(request)}`] : []),
-      '回复“允许”继续，或回复“拒绝”取消。',
+      ...(operation ? [imText(`${K}.operationLine`, { operation })] : []),
+      imText(`${K}.permissionFooter`, { allow: words.allow, deny: words.deny }),
     ].join('\n');
   }
   if (request.kind === 'plan_review') {
-    return ['计划已准备好。', '回复“批准”继续，或回复“拒绝”取消。'].join('\n');
+    const words = localizedReplyWords();
+    return [
+      imText(`${K}.planReady`),
+      imText(`${K}.planFooter`, { approve: words.approve, deny: words.deny }),
+    ].join('\n');
   }
-  const lines: string[] = ['需要你补充以下信息：'];
+  const lines: string[] = [imText(`${K}.questionsIntro`)];
   request.questions.forEach((question, questionIndex) => {
     lines.push(`${questionIndex + 1}. ${question.question}`);
     question.options?.forEach((option, optionIndex) => {
       lines.push(`   ${optionIndex + 1}) ${option.label}`);
     });
   });
-  lines.push('请直接回复选项序号或你的答案。');
+  lines.push(imText(`${K}.questionsFooter`));
   return lines.join('\n');
 }
 
@@ -77,11 +88,13 @@ function formatQuestionPrompt(
   index: number,
   total: number,
 ): string {
-  const lines = [`需要你补充信息（${index + 1}/${total}）：${question.question}`];
+  const lines = [
+    imText(`${K}.questionTitle`, { index: index + 1, total, question: question.question }),
+  ];
   question.options?.forEach((option, optionIndex) => {
     lines.push(`${optionIndex + 1}) ${option.label}`);
   });
-  lines.push('请回复选项序号或你的答案。');
+  lines.push(imText(`${K}.questionFooter`));
   return lines.join('\n');
 }
 
@@ -103,20 +116,22 @@ function parseInteractionReply(
   const text = rawText.trim();
   if (!text) return null;
   const normalized = text.toLowerCase();
+  const words = localizedReplyWords();
+  const is = (fixed: string[], localized: string) => matchesReplyWord(normalized, fixed, localized);
   if (request.kind === 'permission') {
-    if (['允许', '同意', '确认', '继续', 'allow', 'yes', 'y'].includes(normalized)) {
+    if (is(['允许', '同意', '确认', '继续', 'allow', 'yes', 'y'], words.allow)) {
       return { kind: 'permission', behavior: 'allow' };
     }
-    if (['拒绝', '取消', 'deny', 'no', 'n'].includes(normalized)) {
+    if (is(['拒绝', '取消', 'deny', 'no', 'n'], words.deny)) {
       return { kind: 'permission', behavior: 'deny', reason: 'dingtalk_user_denied' };
     }
     return null;
   }
   if (request.kind === 'plan_review') {
-    if (['批准', '同意', '确认', '继续', 'approve', 'yes', 'y'].includes(normalized)) {
+    if (is(['批准', '同意', '确认', '继续', 'approve', 'yes', 'y'], words.approve)) {
       return { kind: 'plan_review', behavior: 'allow' };
     }
-    if (['拒绝', '取消', 'deny', 'no', 'n'].includes(normalized)) {
+    if (is(['拒绝', '取消', 'deny', 'no', 'n'], words.deny)) {
       return { kind: 'plan_review', behavior: 'deny', reason: 'dingtalk_user_denied' };
     }
     return null;

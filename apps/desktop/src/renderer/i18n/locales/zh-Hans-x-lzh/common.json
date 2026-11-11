@@ -12150,7 +12150,926 @@
       "createOwnApp": "建吾之 App ↗"
     },
     "outboundAttachmentsIncomplete": "⚠️ 有 {{count}} 件附件未能遣：{{names}}",
-    "unnamedAttachment": "无名附件"
+    "unnamedAttachment": "无名附件",
+    "text": {
+      "discord": {
+        "expiredCardNotice": "此卡已逾期",
+        "slash": {
+          "new": "🌱 新局已开，前番言谈尽扫，从头叙来~",
+          "help": "🤖 吾所能者如下：\n\n/new         新开一局（清去当前言谈之脉络）\n/model       易模型\n/permission  调权柄之式（auto / bypass / ask 等）\n/ctr         远程接掌 desktop 上某工作区（接掌之中再遣，可径易差事）\n/exctr       罢接掌，归于你我之 Discord 私讯\n/help        观吾所能\n\n有事方行而欲止之？径遣 `!stop`，吾即止当前之行，并撤排队之讯；差事仍存，可续。\n\n平日径遣讯即可，吾在此静听~",
+          "unknownCommand": "`{{cmd}}` 此令，吾不识也 🤔\n吾所识之令：/new、/model、/permission、/ctr、/exctr、/help",
+          "localTaskAccessUnavailable": "🔒 `{{cmd}}` 不可用于服务器频道——此令将使君桌面上之私人差事 / 案曝于公众。欲用之，请于与吾之私讯中遣之。",
+          "detachedBySlash": "🚪 接掌已罢，归于 Discord 私讯。他日欲远程操持 desktop，再遣 /ctr",
+          "detachedByRevoke": "⚠️ 君已于 desktop 收回接掌，此后之讯归于你我之 Discord 私讯。",
+          "notAttached": "🤷 君今未接掌何差事，/exctr 闲而无所事。",
+          "companionManagedCommand": "🧭 此 bot 已托付同僚 — 模型、权柄与工作目录皆从同僚之设，欲改，请至 Cindy 同僚之设中调之~"
+        },
+        "agent": {
+          "completedNoText": "✅ 毕矣（此轮 Agent 未发一言）",
+          "runtimeError": "⚠️ Agent 失手了：{{error}}",
+          "sendInternalError": "❌ 内部谬误：{{error}}",
+          "apiKeyMissing": "⚠️ Cindy AI Key 尚未设置~\n请于 desktop 之「规制 → 模型供方」连接 Cindy AI，再来唤吾",
+          "controlInProgress": "🎮 君之 /ctr 尚在择选 — 先毕上方之卡（或点 🚪 撤矣），再遣他讯~",
+          "credentialBusy": "⏳ 本机 Agent 方行另一轮，暂不可易凭证之式。待前轮毕，再遣一回即可。",
+          "queuedNoticeNext": "⏳ 前轮方行，此讯暂且排队——毕则自续。欲即止之，遣 `!stop`",
+          "queuedNoticePosition": "⏳ 前轮方行，此讯列第 {{position}}——将依次递予 Agent。欲即止之，遣 `!stop`",
+          "stopDoneDropped_other": "⏹ 已止当前之行，队中 {{count}} 讯亦并撤之。差事仍在——欲续，随时遣新令~",
+          "stopDone": "⏹ 已止当前之行。差事仍在——欲续，随时遣新令~",
+          "stopIdle": "🤷 今无方行之差事，`!stop` 落空矣。待有事须止，再唤吾~",
+          "scheduledTaskHeader": "🤖 自运",
+          "scheduledTaskHeaderNamed": "🤖 自运「{{name}}」",
+          "unsupportedOnly": "🙏 此讯吾消受不得：\n{{items}}\n\n吾所能纳者：文字、图（jpg/png/gif/webp）、PDF、代码与设置类文字卷。",
+          "unsupportedNotice": "ℹ️ 下列之物吾消受不得，暂置一旁：\n{{items}}\n\n余者已收，方理之~",
+          "authMissing": {
+            "defaultProvider": "当前供方",
+            "gatewayKey": "⚠️ 此 Discord 言谈所用供方为「{{provider}}」（{{model}}），须先设置 Cindy AI Key。",
+            "providerKey": "⚠️ 此 Discord 言谈所用供方为「{{provider}}」（{{model}}），该供方之 API Key 尚未设置。",
+            "providerDisconnected": "⚠️ 此 Discord 言谈所用供方为「{{provider}}」（{{model}}），未连接或连接已失效。",
+            "agentLogin": "⚠️ 此 Discord 言谈所用供方为「{{provider}}」（{{model}}），须先以 {{agentKind}} 凭证登录。",
+            "fixAttached": "请于 desktop 之「规制 → 模型供方」修复验证，再径续遣讯。",
+            "fixDetached": "改「新言谈配置」后，径续遣讯即可；若此言谈曾另择模型，请遣 `/model` 重择。"
+          }
+        },
+        "cards": {
+          "permission": {
+            "title": "🔧 调用工具：{{toolName}}",
+            "paramsLabel": "**参数先览**",
+            "btnAllowOnce": "✅ 仅此次准许",
+            "btnAllowAlways": "✅ 一律准许",
+            "btnDeny": "❌ 拒之",
+            "resolvedAllowOnce": "✅ 已准许（仅此次）",
+            "resolvedAllowAlways": "✅ 已准许（此工具此后一律放行）",
+            "resolvedDeny": "❌ 已拒之"
+          },
+          "ask": {
+            "noOptionsHint": "_（此问无预设之选，径以文字答吾可也）_",
+            "resolved": "✅ 已择：{{option}}"
+          },
+          "plan": {
+            "title": "📋 吾欲如此行之",
+            "btnApprove": "✅ 行之",
+            "btnReject": "❌ 且慢",
+            "resolvedApproved": "✅ 已准，即行",
+            "resolvedRejected": "❌ 暂止"
+          },
+          "model": {
+            "title": "🤖 易模型",
+            "currentLine": "**当前**：{{label}}\n_{{description}}_",
+            "currentLineWithEffort": "**当前**：{{label}} · 思之深浅 `{{effort}}`\n_{{description}}_",
+            "hint": "点下方以易之。所择模型，吾自以至深之思运之",
+            "resolved": "✅ 已易为 {{label}}",
+            "resolvedWithEffort": "✅ 已易为 {{label}}（思之深浅：{{effort}}）",
+            "failed": "❌ 模型未能易：{{reason}}"
+          },
+          "permissionMode": {
+            "title": "🛡️ 调权柄之式",
+            "currentLine": "**当前**：{{label}}\n_{{description}}_",
+            "hint": "点下方以易之。auto = 寻常操作放行，敏感操作以卡请示；bypass = 一律放行；ask/default/plan/acceptEdits = 皆经卡片审批",
+            "resolved": "✅ 权柄之式已易为 {{label}}",
+            "failed": "❌ 权柄之式未能易：{{reason}}",
+            "fullAccessConfirmTitle": "⚠️ 确欲开启 Full access？",
+            "fullAccessConfirmBody": "Full access 将关闭工作区沙箱，并略过常规审批。Cindy 可改工作区外之文件、执行联网命令而不再询问；内置之高风险操作仍须确认。",
+            "btnConfirmFullAccess": "开启 Full access",
+            "btnCancelFullAccess": "仍守当前权柄",
+            "fullAccessCancelled": "已罢，仍守当前权柄"
+          },
+          "control": {
+            "title": "🎮 择一工作区登场",
+            "emptyBody": "_尚无可接掌之工作区~ 先于 desktop 端开启或新立一差事，再来_",
+            "hint": "点工作区以进；点 🚪 撤矣 以罢此回",
+            "attachedSwitchHint": "🎮 方接掌：**{{sessionTitle}}**\n择一新差事即可转乘；点 🚪 撤矣 则仍其旧",
+            "btnExit": "🚪 撤矣",
+            "resolvedExit": "🚪 去也，他日欲远程操持，再遣 /ctr",
+            "sessionPickerTitle": "🎮 {{displayName}} 中之差事",
+            "sessionPickerHint": "择一差事续行 · ➕ 新开 立新局 · ↩️ 退 易工作区 · 🚪 撤矣 罢之",
+            "sessionPickerEmptyBody": "_工作区 **{{displayName}}** 尚无活跃之差事~ 何不点 ➕ 新开 立一个？_",
+            "btnNew": "➕ 新开",
+            "btnBack": "↩️ 退",
+            "resolvedSessionPick": "🎯 已登场：**{{sessionTitle}}**（{{workspaceName}}）\n此后君所遣之讯，径入此差事；欲撤，随时 `/exctr`",
+            "resolvedNewSession": "✨ 新局已立，接掌已毕（于 **{{workspaceName}}**）\n径遣令以启言谈；欲退则 `/exctr`",
+            "attachFailed": "❌ 未能接掌：{{reason}}",
+            "sessionBusyOldCardPlaceholder": "⏳ 彼差事方行——已于下方新呈一卡，请重择",
+            "sessionBusyPrompt1": "⏳ **{{sessionTitle}}** 正鏖战方酣~\nAgent 尚在思索、挥毫写码，待此局罢，再以 `/ctr` 登场",
+            "sessionBusyPrompt2": "🚧 一时挤不进——**{{sessionTitle}}** 尚有一回合未了。\n且饮口水，稍候数息，Agent 了却手头之事，便来唤君",
+            "sessionBusyPrompt3": "🤖 **{{sessionTitle}}** 方忙——Agent 正十指翻飞，强入恐乱其心。\n稍候数息，再以 `/ctr` 试之",
+            "sessionBusyPrompt4": "☕ 莫急莫急——**{{sessionTitle}}** 此局未终。\nAgent 了却手头之事，即以号令之权相授",
+            "takeoverLoadingPrompt1": "⏳ 方使君接掌 **{{sessionTitle}}**…\n_📦 载存档之要目_  ·  _🔌 通 Agent 之路_  ·  _🧠 复盘前回战况_\n_须臾即好，咖啡莫一口饮尽_",
+            "takeoverLoadingPrompt2": "🎮 方登 **{{sessionTitle}}**…\n_昔者初版，性急之人狂点 Discord 之图，实则无用_",
+            "takeoverLoadingPrompt3": "⌛ **{{sessionTitle}}** 方载…  99%\n_此进度条非虚——方翻阅前回所谈_",
+            "takeoverLoadingPrompt4": "🛰️ 方与 **{{sessionTitle}}** 相通…\n_(WiFi 似有些弱…非也，吾正思如何向君禀报)_",
+            "newSessionWelcomePrompt1": "🎯 接掌与开局一气呵成——**{{workspaceName}}** 已就位，Agent 候命。\n遣首令以启言谈；欲撤，随时 `/exctr`",
+            "newSessionWelcomePrompt2": "✨ 新局已立——工作目录 **{{workspaceName}}** 已备，Agent 候君发令。\n首讯即开局；`/exctr` 随时可退",
+            "newSessionWelcomePrompt3": "🎮 诸事齐备——已于 **{{workspaceName}}** 为君新开一局。\n所欲何为，告吾便是，Agent 在此~  `/exctr` 收手",
+            "newSessionWelcomePrompt4": "🆕 全新开局——**{{workspaceName}}** 工作目录已备。\n首令即启言谈；兴尽则 `/exctr`"
+          }
+        }
+      },
+      "transport": {
+        "feishu": {
+          "lifecycle": {
+            "online": "🟢 吾已上线，可与言谈矣~",
+            "offline": "🔴 Cindy 已离线，暂不能于此 IM 续言谈。",
+            "offlineNotice": "🔔 吾前曾离线片时，其间之讯或未收到~"
+          },
+          "ownerBinding": {
+            "welcome": "🎉 君已立为此 bot 之主~\n自今唯君可与吾言谈。若欲易主，请至 Cindy 桌面端「规制」页清除 bot 凭证，再行保存。"
+          },
+          "group": {
+            "threadOrphanNotice": "开话题时小有差池，此讯未能处置，烦君再 @ 吾一次~"
+          },
+          "streaming": {
+            "thinking": {
+              "brain": "🧠 容吾思之…",
+              "letMeThink": "🤔 且容吾一思~",
+              "inspiration": "✨ 灵思方至…",
+              "tea": "🍵 烹茶一盏，少顷即至~",
+              "cat": "🐱 狸奴抚键沉吟中…",
+              "engine": "🚀 引擎方热…",
+              "thoughts": "🌀 理其思绪…",
+              "spell": "🪄 诵咒一通…",
+              "draft": "📝 方起草…",
+              "puzzle": "🧩 合其片段…",
+              "coffee": "☕ 再续一盏，旋即归~",
+              "target": "🎯 方瞄其答…"
+            },
+            "preparingImage": "🎨 方冲其图，少待~",
+            "preparingFile": "📦 方封其卷，旋即送达~",
+            "fileSentOne": "🎉 卷已送达，请查收！",
+            "filesSent_other": "🎉 {{count}} 卷皆已送达~",
+            "emptyReply": "_(未有所答)_",
+            "replyContinues": "\n\n---\n⏳ 文长，书毕当分数讯全数遣上。",
+            "partNoteMore": "{{index}}/{{total}} · 未完，续见次讯",
+            "partNoteLast": "{{index}}/{{total}} · 毕",
+            "continuationFailed": "⚠️ 后文未能遣出，全文可于 Cindy 桌面端览之。",
+            "deliveryFailed": "⚠️ 此复过长，或含飞书未支持之物，请于 Cindy 桌面端览其全文。"
+          },
+          "card": {
+            "imageLoadFailed": "_[图未能载入：{{target}}]_",
+            "choiceReceived": "已悉君择"
+          },
+          "connection": {
+            "conflict": "此 App 已为他机所占 (exceed_conn_limit)",
+            "unreachable": "连之未成：IM 服务不可达，请察网络",
+            "authFailedDetail": "App ID / App Secret 有误（auth_failed）",
+            "authFailed": "App ID 或 App Secret 有误（auth_failed）"
+          }
+        },
+        "streaming": {
+          "imageFallbackName": "图",
+          "imageUploading": "[🖼️ {{name}} · 方上呈…]",
+          "filePreparing": "[📎 {{name}} · 方备遣…]"
+        },
+        "dingtalk": {
+          "uploadedImageAlt": "图"
+        },
+        "common": {
+          "cardExpired": "此卡已逾期",
+          "secretWriteFailed": "无从安存凭证（系统安全存储不可用）"
+        },
+        "telegram": {
+          "groupJoined": "👥 吾为「{{actor}}」引入群议「{{title}}」（chat_id：{{chatId}}）。",
+          "groupLeft": "👥 吾为「{{actor}}」移出群议「{{title}}」（chat_id：{{chatId}}）。"
+        },
+        "wecom": {
+          "secretWriteFailed": "无从以系统安全存储保存企业微信机器人凭证",
+          "credentialsRequired": "Bot ID 与 Secret 不可为空",
+          "authFailedHint": "企业微信验证未成，请察 Bot ID、Secret 与长连接模式",
+          "authFailedDetail": "企业微信验证未成：{{detail}}",
+          "attachmentsBelow": "📎 附件如次",
+          "attachmentsOmitted_other": "⚠️ 尚有 {{count}} 件附件未遣（企业微信每次至多遣 {{max}} 件）。",
+          "filesRejected_other": "⚠️ 有 {{count}} 卷附件未遣（不在当前工作目录内，或无从核验）。",
+          "imagesUnresolved_other": "⚠️ 有 {{count}} 幅图未遣（图已不存，或不可读）。",
+          "attachmentsFailed_other": "⚠️ 有 {{count}} 件附件遣送未成，请稍后再试。"
+        }
+      },
+      "telegram": {
+        "expiredCardNotice": "此卡已逾期",
+        "slash": {
+          "start": "👋 幸会，吾乃君之私属 Cindy 助手~\n\n私讯径遣讯即可；群中须 @ 吾或回复吾之讯，吾方应之。遣 /help 可览诸令。",
+          "new": "🌱 新差事已立 — 已列于差事录，自头始之~",
+          "help": "🤖 吾所能为者如下：\n\n/new         立新差事（旧者仍存；群中依当前群话题而立）\n/project     移至某案之目录行事（于 bot 此端运行，不接掌桌面端）\n/session     列桌面端近日差事，择其一即接掌续谈\n/model       换一模型登场\n/permission  调权柄之式（auto / bypass / ask 等）\n/settings    览今之案、Agent、模型、思之深浅、权柄\n/ctr         远程接掌桌面端之某工作区（接掌中再遣，可径换差事）\n/exctr       罢接掌，归 Telegram 言谈\n/help        览吾所能\n\n有事方行而欲止之？遣 /stop（或 `!stop`），吾即止当前所行，并撤排队之讯；差事仍存，可续为之。\n\n私讯径遣讯即可；群中须 @ 吾或回复吾之讯，吾方应之。群中近日之讯，吾亦记之以为上下文~",
+          "unknownCommand": "`{{cmd}}` 此令，吾未识也 🤔\n吾所能解者：/new、/session、/project、/model、/permission、/settings、/ctr、/exctr、/stop、/help",
+          "settings": "⚙️ 今之所设\n\n案：{{workspace}}\nAgent：{{agent}}\n模型：{{model}}\n思之深浅：{{effort}}\n权柄：{{permission}}\n\n欲改则遣 /project、/model、/permission～",
+          "settingsCompanion": "⚙️ 今之所设（同僚）\n\n案：{{workspace}}\nAgent：{{agent}}\n模型：{{model}}\n思之深浅：{{effort}}\n权柄：{{permission}}\n\n模型、权柄与工作目录皆从同僚之设，请于 Cindy 之同僚规制中修之。",
+          "detachedBySlash": "🚪 接掌已罢，吾等归 Telegram 言谈。他日欲远程操持桌面端，再遣 /ctr",
+          "detachedByRevoke": "⚠️ 君已于桌面端收回接掌，其后之讯归 Telegram 言谈。",
+          "notAttached": "🤷 君今未接掌任何差事，/exctr 闲而无事可为。",
+          "companionDmNew": "🧭 此乃同僚之主言谈，绵延不绝，不另开新差事。欲易话题，径言之可也；须另行之事，同僚自开背景差事。",
+          "companionLaneNew": "🌱 已为此群开新言谈，前之上下文已收，自头始之~",
+          "companionManagedCommand": "🧭 此连接已付同僚，模型、权柄与工作目录皆从同僚之设。请于 Cindy 之同僚规制中修之。"
+        },
+        "agent": {
+          "completedNoText": "✅ 毕矣（此轮 Agent 未发一言）",
+          "runtimeError": "⚠️ Agent 生谬误：{{error}}",
+          "sendInternalError": "❌ 内部生谬误：{{error}}",
+          "apiKeyMissing": "⚠️ Cindy AI Key 尚未设也。\n请往桌面端 规制 → 模型供方 连 Cindy AI，再来唤吾",
+          "controlInProgress": "🎮 君之 /ctr 尚在择中 — 先毕上方之卡（或点 🚪 退出），再遣他讯~",
+          "credentialBusy": "⏳ 本机 Agent 方行他轮，暂不能换凭证之式。待前轮毕，再遣一次即可。",
+          "queuedNoticeFirst": "⏳ 前轮方行，此讯暂候——前轮毕则自续。欲径止之，遣 `!stop`",
+          "queuedNotice": "⏳ 前轮方行，此讯列第 {{position}} 位——将依序付 Agent。欲径止之，遣 `!stop`",
+          "stopDone": "⏹ 当前所行已止。差事仍在——欲续，随时遣新令~",
+          "stopDoneDropped_other": "⏹ 当前所行已止，排队之 {{count}} 讯亦并撤之。差事仍在——欲续，随时遣新令~",
+          "stopIdle": "🤷 今无方行之差事，`!stop` 落空矣。待有事须止，再唤吾~",
+          "scheduledTaskHeader": "🤖 自运",
+          "scheduledTaskHeaderNamed": "🤖 自运「{{name}}」",
+          "unsupportedOnly": "🙏 此讯吾不能纳：\n{{list}}\n\n吾所能纳者：文字、图（jpg/png/gif/webp）、PDF、代码与设置类文字卷。",
+          "unsupportedNotice": "ℹ️ 下列之物吾不能纳，暂置一旁：\n{{list}}\n\n余者已收，方理之~",
+          "companionUnavailable": "⏸ 同僚今不能受讯：{{reason}}",
+          "authMissing": {
+            "currentProvider": "当前供方",
+            "reasonGatewayKey": "须先设 Cindy AI Key",
+            "reasonProviderKey": "此供方之 API Key 尚未设",
+            "reasonProviderDisconnected": "未连接，或连接已失效",
+            "reasonAgentLogin": "须先以 {{agentKind}} 凭证登录",
+            "message": "⚠️ 今 Telegram 言谈用供方「{{provider}}」（{{model}}），然{{reason}}。",
+            "attachedHint": "请于桌面端 规制 → 模型供方 修复认证，然后径续遣讯。",
+            "detachedHint": "改「新言谈配置」后径续遣讯即可；若当前差事曾另择模型，请遣 `/model` 重择之。"
+          }
+        },
+        "error": {
+          "agentUnsupported": "🤔 当前 Agent 不能于 Telegram 群中完成所需之权柄确认，请换一 Agent 再试。",
+          "permissionModeUnsupportedFullAccess": "此群讯尚未执行：当前差事设为「完全访问」，然他群员之请求仍须审批，此番未能转为自审。请机器人所绑之用户于 Cindy 中将当前差事改为「自审」，或遣 /permission 修之，然后重遣。",
+          "permissionModeUnsupported": "此群讯尚未执行：当前权柄档位不能提供群讯所需之操作审批。请机器人所绑之用户于 Cindy 中将当前差事改为「自审」，或遣 /permission 修之，然后重遣。"
+        },
+        "cards": {
+          "permission": {
+            "title": "🔧 调用工具：{{tool}}",
+            "paramsLabel": "**参数先览**",
+            "btnAllowOnce": "✅ 仅此一次",
+            "btnAllowAlways": "✅ 恒许之",
+            "btnDeny": "❌ 拒之",
+            "resolvedAllowOnce": "✅ 已许（仅此一次）",
+            "resolvedAllowAlways": "✅ 已许（此工具自今恒许）",
+            "resolvedDeny": "❌ 已拒"
+          },
+          "ask": {
+            "noOptionsHint": "_（此问无预设之选，径以文字答吾可也）_",
+            "resolved": "✅ 已择：{{option}}"
+          },
+          "plan": {
+            "title": "📋 吾拟如此行之",
+            "btnApprove": "✅ 行之",
+            "btnReject": "❌ 且慢",
+            "resolvedApproved": "✅ 已准，即行",
+            "resolvedRejected": "❌ 已暂止"
+          },
+          "model": {
+            "title": "🤖 换一模型",
+            "currentLineWithEffort": "**当前**：{{label}} · 思力 `{{effort}}`\n_{{description}}_",
+            "currentLine": "**当前**：{{label}}\n_{{description}}_",
+            "hint": "点下方以切换。吾自令所择模型以至深之思力行之",
+            "resolvedWithEffort": "✅ 已切至 {{label}}（思力：{{effort}}）",
+            "resolved": "✅ 已切至 {{label}}",
+            "failed": "❌ 模型未能切换：{{reason}}"
+          },
+          "permissionMode": {
+            "title": "🛡️ 调权柄之式",
+            "currentLine": "**当前**：{{label}}\n_{{description}}_",
+            "hint": "点下方以切换。auto = 常事放行，要事弹卡；bypass = 尽放行；ask/default/plan/acceptEdits = 皆以卡审批",
+            "resolved": "✅ 权柄之式已切至 {{label}}",
+            "failed": "❌ 权柄之式未能切换：{{reason}}",
+            "fullAccessConfirmTitle": "⚠️ 确开 Full access 乎？",
+            "fullAccessConfirmBody": "Full access 将阖工作区沙箱并略过常规审批。Cindy 可修改工作区外之卷、运行联网命令而不再询问；内置高风险之举仍须确认。",
+            "btnConfirmFullAccess": "开 Full access",
+            "btnCancelFullAccess": "仍守今之权柄",
+            "fullAccessCancelled": "已罢，仍守今之权柄"
+          },
+          "project": {
+            "title": "📂 移案之目录",
+            "hint": "**当前**：{{name}}\n择一案，其后之讯即于彼目录行事（上下文重开，模型与权柄之设仍存）",
+            "emptyBody": "_桌面端尚无活跃之案工作区~ 请先于桌面端启一案再来_",
+            "btnDialogue": "💬 归言谈",
+            "btnCancel": "🚪 罢",
+            "resolvedPick": "📂 已移至 **{{name}}** —— 新上下文已备，径遣令即行。欲归寻常言谈，遣 /project 择「归言谈」",
+            "resolvedDialogue": "💬 已归言谈目录，上下文重始~",
+            "resolvedCancel": "🚪 未移，一仍其旧",
+            "switchFailed": "❌ 未能移：{{reason}}（目录或已迁移或删除）",
+            "attachedUnsupported": "🎮 君方以 /ctr 接掌桌面端之差事——接掌之际，讯径入彼差事，无须 /project。欲移案，先以 `/exctr` 罢接掌",
+            "dialogueName": "言谈（托管目录）"
+          },
+          "control": {
+            "title": "🎮 择一工作区登场",
+            "emptyBody": "_暂无可接掌之工作区~ 请于桌面端启或立一差事再来_",
+            "hint": "点工作区以进；点 🚪 退出 以罢此番",
+            "attachedSwitchHint": "🎮 方接掌：**{{title}}**\n择一新差事即可转乘；点 🚪 退出则一仍其旧",
+            "btnExit": "🚪 退出",
+            "resolvedExit": "🚪 去矣，他日欲远程操持再遣 /ctr",
+            "sessionPickerTitle": "🎮 {{name}} 中之差事",
+            "sessionPickerHint": "择一差事以续 · ➕ 新立 开新差事 · ↩️ 返 换工作区 · 🚪 退出 以罢",
+            "sessionPickerEmptyBody": "_工作区 **{{name}}** 尚无活跃之差事~ 何不点 ➕ 新立 开其一？_",
+            "btnNew": "➕ 新立",
+            "btnBack": "↩️ 返",
+            "resolvedSessionPick": "🎯 已登场：**{{title}}**（{{workspace}}）\n此后君所遣之讯，吾径送入此差事；欲退，随时 `/exctr`",
+            "resolvedNewSession": "✨ 新差事已立，接掌已毕（于 **{{workspace}}** 中）\n径遣令开谈；欲退则 `/exctr`",
+            "attachFailed": "❌ 未能接掌：{{reason}}",
+            "sessionBusyOldCardPlaceholder": "⏳ 彼差事尚在行——下方已为君换新卡，请重择之",
+            "recentSessions": {
+              "title": "🕑 近日差事",
+              "hint": "点其一即接掌续谈（诸工作区依时序列）· 欲依工作区择之用 /ctr · 🚪 退出以罢",
+              "emptyBody": "_桌面端尚无活跃之差事~ 请先于桌面端开其一再来_"
+            },
+            "sessionBusyPrompts": {
+              "variant1": "⏳ **{{title}}** 此刻正忙~\nAgent 尚在思索、撰码，待此轮毕再以 `/ctr` 登场",
+              "variant2": "🚧 不得其门而入——**{{title}}** 尚有一轮未竟。\n且饮口水，稍候数息，Agent 手头事毕即来相告",
+              "variant3": "🤖 **{{title}}** 正忙——Agent 指犹飞于键上，强入则乱其心。\n稍候数息再试 `/ctr`",
+              "variant4": "☕ 莫急莫急——**{{title}}** 此轮未竟。\nAgent 手头事毕，指挥之权即付于君"
+            },
+            "takeoverLoadingPrompts": {
+              "variant1": "⏳ 方令君接掌 **{{title}}**…\n_📦 方载差事之元数据_  ·  _🔌 方通 Agent 之道_  ·  _🧠 方覆前轮之进展_\n_须臾即毕_",
+              "variant2": "🎮 方接入 **{{title}}**…\n_方移上下文而来，顷刻即好_",
+              "variant3": "⌛ **{{title}}** 方载…  99%\n_此进度条乃真——方翻前轮所谈_",
+              "variant4": "🛰️ 方与 **{{title}}** 相通…\n_(方思如何为君略陈)_"
+            },
+            "newSessionWelcomePrompts": {
+              "variant1": "🎯 接掌与新立，一气呵成——**{{workspace}}** 已就位，Agent 候命。\n遣首令开谈；欲退，随时 `/exctr`",
+              "variant2": "✨ 新差事已立——工作目录 **{{workspace}}** 已备，Agent 候君发话。\n首讯开谈；`/exctr` 随时可退",
+              "variant3": "🎮 万事俱备——已于 **{{workspace}}** 为君开一新差事。\n所欲何为，告吾可也，Agent 在此~  `/exctr` 收手",
+              "variant4": "🆕 新局初开——**{{workspace}}** 工作目录已备。\n遣首令开谈；不欲续则 `/exctr`"
+            }
+          }
+        }
+      },
+      "shared": {
+        "retry": {
+          "autoReviewUnavailable": "自动审批暂不能断，须审批之操作已改由君确认。欲少受扰，可将差事切至「完全访问」，然风险更高。",
+          "autoReviewUnavailableWechat": "自动审批暂不能断，须审批之操作已改由君确认。个人微信不可用「完全访问」，请径确认此举。",
+          "autoReviewConfirmUndelivered": "自动审批未竟，确认或未送达，或无人点选。此番之拒，非君所点。",
+          "rateLimitRetrying": "请求受限流，方自动再试（{{attempt}}/{{maxAttempts}}）…",
+          "overloadRetrying": "模型之服繁忙，方自动再试（{{attempt}}/{{maxAttempts}}）…",
+          "overloadRetryingNoCount": "模型之服繁忙，方自动再试…",
+          "overloadFailed": "⚠️ 模型之服繁忙：上游暂无余力。可于此重发此讯再试，或于 Cindy 易一模型。（于桌面端点「再试」亦可续其差事，然其果不返此讯。）"
+        },
+        "toolLoop": {
+          "generic": "模型屡呼工具过甚，Cindy 已止此轮，以免无穷循环。可遣新讯以续。",
+          "consecutive": "模型连呼同一工具 {{n}} 次，Cindy 已止此轮，以免无穷循环。可遣新讯以续。",
+          "pingpong": "模型于数工具之呼间往复循环，Cindy 察此轮已呼 {{n}} 次，遂止此轮。可遣新讯以续。",
+          "rotation": "模型轮番呼数工具不止，Cindy 察此轮已呼 {{n}} 次，遂止此轮。可遣新讯以续。",
+          "contract": "模型连发无效之工具呼叫，Cindy 于 {{n}} 次失败后已止此轮，以免无穷循环。可遣新讯以续。"
+        },
+        "quota": {
+          "prefix": "⚠️ 供方限额不足",
+          "currentProvider": "当前供方",
+          "namedProvider": "「{{name}}」",
+          "headlineSpendCap": "{{prefix}}：{{who}}已达工作区主人所设之花费上限，此差事暂不能续。",
+          "headlineUsageLimit": "{{prefix}}：{{who}}账号耗用已达上限，此差事暂不能续。",
+          "headlineBalance": "{{prefix}}：{{who}}账号余资或限额不足，此差事暂不能续。",
+          "source": "来处：{{bot}}",
+          "sourceWithModel": "来处：{{bot}} · 模型：{{model}}",
+          "task": "差事：{{task}}",
+          "officialBot": "官方 bot",
+          "personalBot": "个人 bot",
+          "spendCapHint": "请告工作区管理者调其花费上限，或易供方。",
+          "recoveryModelCommand": "遣 /model 为此差事易供方或模型，再重发此讯。",
+          "recoveryOpenTask": "于 Cindy 启此差事，易供方或模型，再归此处重发此讯。",
+          "taskLabel": "{{title}}（{{id}}）",
+          "untitledTask": "差事"
+        },
+        "outputLimit": {
+          "usage": "此番模型请求已出 {{outputTokens}} tokens。",
+          "usageWithReasoning": "此番模型请求已出 {{outputTokens}} tokens，其中 {{reasoningTokens}} tokens 用于思。",
+          "reasoningDominated": "思已耗此番所出之大半，覆或不全。宜减思之深浅，或先压缩言谈录，再续。",
+          "generic": "模型所出已达长度上限，此轮之覆或不全。可遣新讯以续；若屡见之，请减思之深浅，或先压缩言谈录。",
+          "join": "{{usage}}{{guidance}}",
+          "silentStopExhausted": "模型屡返空应，自动续行已暂止。"
+        },
+        "permission": {
+          "autoReviewUnavailable": "自动审批未竟，请确认是否许此操作。",
+          "autoReviewReason": "自动审批待君决之：{{reason}}",
+          "previewUnserializable": "<不可序列化>",
+          "previewTruncated": "…（已截）",
+          "choiceReceived": "君之所择，已收悉。",
+          "allowedSession": "✅ 已许（此差事）",
+          "allowedOnce": "✅ 已许（仅此一次）",
+          "expired": "⌛ 此番确认已失效",
+          "denied": "❌ 已拒",
+          "outcomeWithTool": "{{status}}：{{tool}}"
+        },
+        "card": {
+          "askContinue": "续",
+          "truncated": "…(已截)",
+          "askResolvedContinue": "✅ 已择：续"
+        },
+        "takeover": {
+          "summaryFailedThread": "_(回顾未成，于此 thread 径遣讯即可续谈)_",
+          "summaryFailed": "_(回顾未成，径遣讯即可续谈)_",
+          "lastMessage": "末所理之讯：{{text}}"
+        },
+        "source": {
+          "origin": "来处：{{channel}} · {{chat}}",
+          "thread": "话题：{{thread}}",
+          "sender": "发起者：{{sender}}",
+          "messageProtected": "原讯：受护之文",
+          "message": "原讯：{{text}}",
+          "noText": "（无文字）",
+          "viewMessage": "观原讯：{{url}}"
+        },
+        "session": {
+          "accountChanged": "账号已易，请新开差事"
+        },
+        "slash": {
+          "detachFailed": "❌ 结束接管未成：{{error}}",
+          "companionManaged": "🧭 此连接已付同僚，模型、权限与工作目录皆从同僚之规制。请于 Cindy 同僚规制中更之。"
+        },
+        "turn": {
+          "groupApprovalOwnerDm": "🔐 群议中之差事待君授权。授权之卡不发于群，于此确认即可。",
+          "agentStartFailed": "❌ 启 Agent 未成：{{reason}}",
+          "personalBotLabel": "{{channel}} 个人 bot",
+          "error": "❌ 谬误：{{message}}"
+        },
+        "activity": {
+          "working": "⚙️ 方作 · {{elapsed}}{{rate}}",
+          "workingSteps_one": "⚙️ 方作 · {{count}} 项 · {{elapsed}}{{rate}}",
+          "workingSteps_other": "⚙️ 方作 · {{count}} 项 · {{elapsed}}{{rate}}",
+          "earlierSteps_one": "… 前此 {{count}} 项未列",
+          "earlierSteps_other": "… 前此 {{count}} 项未列",
+          "recordTitle_one": "行迹 · {{count}} 项 · {{elapsed}}",
+          "recordTitle_other": "行迹 · {{count}} 项 · {{elapsed}}"
+        },
+        "images": {
+          "notSent_one": "有 {{count}} 图未能附而遣之。",
+          "notSent_other": "有 {{count}} 图未能附而遣之。"
+        },
+        "desktopConfirm": {
+          "notice": "🔔 {{what}}方于桌面端 Cindy 候君确认；逾时则自罢，欲续请至桌面端行之。",
+          "inputHandoff": "🔐 请君代书：{{taskTitle}} · 于 Cindy 中启之",
+          "subject": {
+            "githubIssue": "「呈 GitHub Issue」之确认卡",
+            "renameSessions": "「批次易差事之名」之确认卡",
+            "pluginFileGrant": "「法器卷帙授权」之确认卡"
+          }
+        },
+        "replyWords": {
+          "allow": "允许",
+          "deny": "拒绝",
+          "approve": "批准"
+        }
+      },
+      "hook": {
+        "interaction": {
+          "askTimeout": "候答逾时，差事已以「未答」续行",
+          "planTitle": "📋 谋待审",
+          "planApprove": "准而行之",
+          "planReject": "驳回",
+          "planTimeout": "候审逾时，谋未获准",
+          "permissionTool": "工具：`{{tool}}`",
+          "permissionTitle": "🔐 请权：{{title}}",
+          "allowOnce": "许一次",
+          "alwaysAllowForSession": "此差事恒许",
+          "deny": "拒",
+          "permissionTimeout": "候授权逾时，已拒此权限之请"
+        },
+        "run": {
+          "routeReselectHint": "。请于 规制 → IM 机器人 为此渠道之工作目录重择模型。",
+          "awaitingPermission": "候授权 · 待君确认",
+          "awaitingAnswer": "候答 · 待君择之",
+          "awaitingPlan": "候审 · 待君确认其谋",
+          "awaitingFallback": "候君确认",
+          "cancelledBeforeRun": "差事已为用者喝止，此讯未行。",
+          "liveSessionDirUnmapped": "此差事方行于一已不在工作目录对照之目录，此讯未行。请将该目录加入 规制 → 远程连接 → 工作目录对照，或于桌面端阖此差事后重发。",
+          "interactionExpired": "差事已毕，此番交互已失效",
+          "telegramOfficialBot": "Telegram 官方 bot"
+        },
+        "dispatch": {
+          "dirUnmapped": "此差事所在之目录已不在工作目录对照中，此讯未行。请将其目录加入 规制 → 远程连接 → 工作目录对照，再遣一次。"
+        }
+      },
+      "wecom": {
+        "slash": {
+          "new": "🌱 新差事已启，前文已清。",
+          "help": "🤖 可用之令：\n\n/new         新开差事\n/stop        止今之差事\n/exctr       罢接管\n/help        览说明\n\n差事方行时，遣 `!stop` 可止之，并清待发之讯。",
+          "unknownCommand": "未识之令 `{{cmd}}`。可用之令：/new、/stop、/exctr、/help",
+          "detachedBySlash": "🚪 接管已罢，后讯归企业微信言谈。",
+          "detachedByRevoke": "⚠️ 桌面端已收回接管，后讯归企业微信言谈。",
+          "notAttached": "今无接管之差事。",
+          "companionManagedCommand": "🧭 此连线已付同僚，模型、权柄与工作目录皆从同僚之设。请于 Cindy 同僚之设中改之。"
+        },
+        "agent": {
+          "completedNoText": "✅ 差事已毕（此轮无文字）",
+          "runtimeError": "⚠️ Agent 行之未成：{{error}}",
+          "sendInternalError": "❌ 遣讯未成：{{error}}",
+          "apiKeyMissing": "⚠️ 今之模型尚未验证。请于 desktop 规制中连模型供方，再试之。",
+          "controlInProgress": "🎮 接管之择未毕，请先理前一互动之讯。",
+          "credentialBusy": "⏳ 此机 Agent 方行，暂不可易凭证之式，请稍后再试。",
+          "queuedNoticeNext": "⏳ 前轮方行，此讯已入列。欲止之，遣 `!stop`。",
+          "queuedNoticePosition": "⏳ 前轮方行，此讯列第 {{position}}。欲止之，遣 `!stop`。",
+          "stopDone": "⏹ 今之差事已止。",
+          "stopDoneDropped_other": "⏹ 今之差事已止，并撤待发之讯 {{count}} 则。",
+          "stopIdle": "今无方行或待发之差事。",
+          "scheduledTaskHeaderNamed": "🤖 自运差事「{{name}}」",
+          "scheduledTaskHeader": "🤖 自运差事",
+          "unsupportedOnly": "🙏 此讯暂不能理：\n{{items}}",
+          "unsupportedNotice": "ℹ️ 下列未能理：\n{{items}}\n\n余者仍续理之。",
+          "authMissing": {
+            "providerFallback": "今之供方",
+            "reasonGatewayKey": "须先设 Cindy AI Key",
+            "reasonProviderKey": "尚未设此供方之 API Key",
+            "reasonProviderDisconnected": "连线已断或已失效",
+            "reasonLogin": "须先登入 {{agentKind}}",
+            "message": "⚠️ 今企业微信言谈用「{{provider}}」（{{model}}），{{reason}}。",
+            "attachedHint": "请于 desktop 修验证，再续遣讯。",
+            "newChatHint": "改「新言谈配置」后，径续遣讯即可；若此言谈另择模型，请遣 `/new` 新开差事。"
+          }
+        },
+        "cards": {
+          "permission": {
+            "title": "🔧 召用工具：{{toolName}}",
+            "paramsLabel": "**参数先览**",
+            "btnAllowOnce": "✅ 仅许此次",
+            "btnAllowAlways": "✅ 恒许",
+            "btnDeny": "❌ 拒",
+            "resolvedAllowOnce": "✅ 已许（仅此次）",
+            "resolvedAllowAlways": "✅ 已许（自今恒许）",
+            "resolvedDeny": "❌ 已拒"
+          },
+          "ask": {
+            "noOptionsHint": "_请径以文字覆之。_",
+            "resolved": "✅ 已择：{{option}}"
+          },
+          "plan": {
+            "title": "📋 行事之计",
+            "btnApprove": "✅ 准",
+            "btnReject": "❌ 拒",
+            "resolvedApproved": "✅ 已准",
+            "resolvedRejected": "❌ 已拒"
+          },
+          "model": {
+            "title": "🤖 易模型",
+            "currentLineWithEffort": "**今**：{{label}} · effort `{{effort}}`\n_{{description}}_",
+            "currentLine": "**今**：{{label}}\n_{{description}}_",
+            "hint": "请择所用之模型。",
+            "resolved": "✅ 已易为 {{label}}",
+            "resolvedWithEffort": "✅ 已易为 {{label}}（effort：{{effort}}）",
+            "failed": "❌ 易模型未成：{{reason}}"
+          },
+          "permissionMode": {
+            "title": "🛡️ 调权柄之式",
+            "currentLine": "**今**：{{label}}\n_{{description}}_",
+            "hint": "请择权柄之式。",
+            "resolved": "✅ 权柄之式已易为 {{label}}",
+            "failed": "❌ 易权柄之式未成：{{reason}}",
+            "fullAccessConfirmTitle": "⚠️ 确欲启 Full access 乎？",
+            "fullAccessConfirmBody": "Full access 将闭工作区之沙箱，并略常规审批。Cindy 可改工作区外之文件、行连网之命令；内建高风险之举仍须确认。",
+            "btnConfirmFullAccess": "启 Full access",
+            "btnCancelFullAccess": "仍旧权柄",
+            "fullAccessCancelled": "已罢，仍旧权柄"
+          },
+          "control": {
+            "title": "🎮 择工作区",
+            "emptyBody": "_今无可接管之工作区，请先于 desktop 立差事。_",
+            "hint": "择工作区以续，或罢此举。",
+            "attachedSwitchHint": "今方接管：**{{sessionTitle}}**",
+            "btnExit": "🚪 退",
+            "resolvedExit": "🚪 已退接管",
+            "sessionPickerTitle": "🎮 {{workspaceName}} 之差事",
+            "sessionPickerHint": "择差事、新开差事，或归前步。",
+            "sessionPickerEmptyBody": "_{{workspaceName}} 中暂无可用之差事。_",
+            "btnNew": "➕ 新开",
+            "btnBack": "↩️ 归",
+            "resolvedSessionPick": "🎯 已接管 **{{sessionTitle}}**（{{workspaceName}}）",
+            "resolvedNewSession": "✨ 已于 **{{workspaceName}}** 新开差事并接管之",
+            "attachFailed": "❌ 接管未成：{{reason}}",
+            "sessionBusyOldCardPlaceholder": "⏳ 此差事方行，请稍后再试。",
+            "sessionBusyPrompt": "⏳ **{{sessionTitle}}** 方行，请待此轮毕。",
+            "takeoverLoadingPrompt": "⏳ 方接管 **{{sessionTitle}}**…",
+            "newSessionWelcomePrompt": "✨ 已于 **{{workspaceName}}** 新开差事，可遣首令。"
+          }
+        },
+        "interaction": {
+          "invalidReply": "覆辞不合式。请依前讯所示覆之；权柄之确认唯受「{{allow}}」或「{{deny}}」。",
+          "permissionTitle": "须确认工具「{{toolName}}」。",
+          "operationLabel": "操作：",
+          "permissionFooter": "覆「{{allow}}」则行此一次，覆「{{deny}}」则罢之。企业微信内不支持永久授权。",
+          "planIntro": "Agent 呈行事之计：",
+          "planFooter": "覆「{{approve}}」则续，覆「{{deny}}」则罢。",
+          "askNoQuestion": "Agent 待君之答，然无可示之问。请覆「继续」。",
+          "askIntro": "Agent 待君之答：",
+          "askFooter": "请覆选项之序号，或径书君之答。"
+        }
+      },
+      "dingtalk": {
+        "channelName": "钉钉",
+        "error": {
+          "permissionModeUnsupported": "此群议之讯尚未行：今差事之权柄档位，不能供群讯所需之操作审批。请机器人所绑之用户于 Cindy 中，将今差事改为「自审」，然后重遣。"
+        },
+        "slash": {
+          "help": "🤖 吾能为君者如下：\n\n/new   新开言谈（清今之上下文）\n/stop  止今之所行，并撤待发之讯\n/help  览可用之令\n\n模型、权柄与远端接管，请于 Cindy 桌面端调之。",
+          "unknownCommand": "`{{cmd}}` 之令，吾未识也 🤔\n吾所能解者：/new、/stop、/help",
+          "interactiveCommandUnsupported": "钉钉暂不支持 {{cmd}} 之互动选择，请于 Cindy 桌面端设之。"
+        },
+        "interaction": {
+          "permissionTitle": "须确认之举：{{toolName}}",
+          "operationLine": "操作：{{operation}}",
+          "permissionFooter": "覆「{{allow}}」则续，覆「{{deny}}」则罢。",
+          "planReady": "计已备。",
+          "planFooter": "覆「{{approve}}」则续，覆「{{deny}}」则罢。",
+          "questionsIntro": "请补以下诸事：",
+          "questionsFooter": "请径覆选项之序号或君之答。",
+          "questionTitle": "请补其详（{{index}}/{{total}}）：{{question}}",
+          "questionFooter": "请覆选项之序号或君之答。"
+        }
+      },
+      "imessage": {
+        "slash": {
+          "help": "🤖 吾能为君者如下：\n\n/new   新开言谈（清今之上下文）\n/stop  止今之所行，并撤待发之讯\n/help  览可用之令\n\n模型、权柄与远端接管，请于 Cindy 桌面端调之。",
+          "unknownCommand": "`{{cmd}}` 之令，吾未识也 🤔\n吾所能解者：/new、/stop、/help",
+          "interactiveCommandUnsupported": "iMessage 暂不支持 {{cmd}} 之互动选择，请于 Cindy 桌面端设之。"
+        }
+      },
+      "feishu": {
+        "slash": {
+          "new": "🌱 另开新局，前番言谈已拭，重头说来~",
+          "help": "🤖 吾能为君效劳者如下：\n\n/new         另开新局（清今言谈之上下文）\n/model       易模型出阵\n/permission  调权柄之式（auto / bypass / ask 等）\n/ctr         远程接掌桌面端之某工作区（接掌中再发，可径换差事）\n/exctr       罢接掌，归于私聊\n/help        览吾所能\n\n有事方行而欲止之？径发 `!stop`，吾即止今之所行，并撤待列之讯；差事仍存，可续。\n\n平日径发讯即可，吾在此恭听~",
+          "unknownCommand": "`{{cmd}}` 之令，吾未识也 🤔\n吾所识者：/new、/model、/permission、/ctr、/exctr、/help",
+          "detachedBySlash": "🚪 接掌已罢，归于私聊。他日欲远程操持桌面端，再发 /ctr 可也",
+          "detachedByRevoke": "⚠️ 君已于桌面端收回接掌，此后之讯归于私聊。",
+          "notAttached": "🤷 君今未接掌何差事，/exctr 闲而无所事。",
+          "companionDmNew": "🧭 此乃同僚之主言谈，一以贯之，不另开差事。欲易话头，径言即可；需别办之事，同僚自开幕后差事。",
+          "companionLaneNew": "🌱 已为此群另启言谈，前文收之，从头来过~",
+          "companionManagedCommand": "🧭 此连接已付同僚，模型、权柄与工作目录皆从同僚之设。请于 Cindy 同僚之设中修改。"
+        },
+        "agent": {
+          "completedNoText": "✅ 毕矣（此轮 Agent 未发一言）",
+          "runtimeError": "⚠️ Agent 失手：{{error}}",
+          "sendInternalError": "❌ 内里生谬：{{error}}",
+          "apiKeyMissing": "⚠️ Cindy AI Key 尚未设~\n请至桌面端「规制 → 模型供方」连接 Cindy AI，再来唤吾",
+          "controlInProgress": "🎮 君之 /ctr 尚在择中 — 先毕上方之卡（或点 🚪 退），再发他言~",
+          "credentialBusy": "⏳ 本机 Agent 方行他轮，暂不可切换凭证之式。待前轮毕，再发一次即可。",
+          "queuedNoticeFirst": "⏳ 前轮方行，此讯暂列候——毕则自续。欲即止之，发 `!stop`",
+          "queuedNotice": "⏳ 前轮方行，此讯列第 {{position}}——将依序交 Agent。欲即止之，发 `!stop`",
+          "stopDone": "⏹ 今之所行已止。差事犹存——欲续，随时发新令~",
+          "stopDoneWithQueued_one": "⏹ 今之所行已止，待列之 {{count}} 则讯亦一并撤之。差事犹存——欲续，随时发新令~",
+          "stopDoneWithQueued_other": "⏹ 今之所行已止，待列之 {{count}} 则讯亦一并撤之。差事犹存——欲续，随时发新令~",
+          "stopIdle": "🤷 今无方行之事，`!stop` 落空矣。待有事须止，再唤吾~",
+          "scheduledTaskHeader": "🤖 自运",
+          "scheduledTaskHeaderNamed": "🤖 自运「{{name}}」",
+          "unsupportedOnly": "🙏 此讯吾不能纳：\n{{items}}\n\n吾所能纳者：文字、图（jpg/png/gif/webp）、PDF、代码与设置类文本文件。",
+          "unsupportedNotice": "ℹ️ 下列诸物吾不能纳，暂置之：\n{{items}}\n\n余者已收，方理之~",
+          "companionUnavailable": "⏸ 同僚今不能受讯：{{reason}}",
+          "authMissing": {
+            "defaultProvider": "当前供方",
+            "message": "⚠️ 今言谈用供方「{{provider}}」（{{model}}），{{reason}}。",
+            "reasonGatewayKey": "须先设 Cindy AI Key",
+            "reasonProviderKey": "此供方之 API Key 尚未设",
+            "reasonProviderDisconnected": "未连或连接已失效",
+            "reasonAgentLogin": "须先以 {{agentKind}} 凭证登入",
+            "attachedHint": "请于桌面端「规制 → 模型供方」修复认证，后径续遣讯。",
+            "detachedHint": "改「新言谈配置」后径续遣讯即可；若今言谈曾另择模型，请发 `/model` 重择。"
+          }
+        },
+        "error": {
+          "agentUnsupported": "🤔 此渠道须逐则确认权柄，所择之 Agent 暂不能任，易一 Agent 再试~"
+        },
+        "cards": {
+          "permission": {
+            "title": "🔧 调用器具：{{tool}}",
+            "paramsLabel": "**参数先览**",
+            "btnAllowOnce": "✅ 唯此次准",
+            "btnAllowAlways": "✅ 恒准",
+            "btnDeny": "❌ 拒",
+            "dmRoutedNotice": "🔐 `{{tool}}` 此举须君确认 — 授权之卡已递至君之私聊，往彼一点即续~",
+            "resolvedAllowOnce": "✅ 已准（唯此次）",
+            "resolvedAllowAlways": "✅ 已准（此器具此后皆放行）",
+            "resolvedDeny": "❌ 已拒"
+          },
+          "ask": {
+            "noOptionsHint": "_（此问无预设之选，径以文字答吾）_",
+            "resolved": "✅ 已择：{{option}}",
+            "multi": {
+              "title": "❓ 数事待君确认",
+              "multiSelectHint": "（可多择）",
+              "submitLabel": "呈答"
+            }
+          },
+          "plan": {
+            "title": "📋 吾意如此",
+            "btnApprove": "✅ 行之",
+            "btnReject": "❌ 且慢",
+            "resolvedApproved": "✅ 已准，即行",
+            "resolvedRejected": "❌ 已暂止"
+          },
+          "model": {
+            "title": "🤖 易模型",
+            "currentLine": "**今用**：{{label}}\n_{{description}}_",
+            "currentLineWithEffort": "**今用**：{{label}} · 思之深浅 `{{effort}}`\n_{{description}}_",
+            "hint": "点下方以切换。吾自以最深之思驱所择模型",
+            "resolved": "✅ 已切至 {{label}}",
+            "resolvedWithEffort": "✅ 已切至 {{label}}（思之深浅：{{effort}}）",
+            "failed": "❌ 模型未能切换：{{reason}}"
+          },
+          "permissionMode": {
+            "title": "🛡️ 调权柄之式",
+            "currentLine": "**今用**：{{label}}\n_{{description}}_",
+            "hint": "点下方以切换。auto = 常事放行，要事弹卡；bypass = 尽放行；ask/default/plan/acceptEdits = 皆以卡审之",
+            "resolved": "✅ 权柄之式已切至 {{label}}",
+            "failed": "❌ 权柄之式未能切换：{{reason}}",
+            "fullAccessConfirmTitle": "⚠️ 确欲启 Full access 乎？",
+            "fullAccessConfirmBody": "Full access 将闭工作区之沙箱，并略常规之审。Cindy 可改工作区外之文件、行连网之命令，不复相询；内建高危之举仍须确认。",
+            "btnConfirmFullAccess": "启 Full access",
+            "btnCancelFullAccess": "守今之权柄",
+            "fullAccessCancelled": "已罢，守今之权柄"
+          },
+          "permissionModeFix": {
+            "title": "🛡️ 复群中差事为「自审」",
+            "body": "方才群中／话题之讯未能起行：**{{title}}** 用「完全存取」之权柄，然群之上下文含群员可控之内容，必留操作之确认。\n\n点下方之钮切至「自审」（auto），毕则归群续发讯即可。",
+            "btnFix": "✅ 切至自审",
+            "resolved": "✅ 已切至「自审」— 归群续发讯可也~",
+            "failed": "❌ 未能切换：{{reason}}。可发 /permission auto 自行切换"
+          },
+          "control": {
+            "title": "🎮 择一工作区登场",
+            "emptyBody": "_尚无可接掌之工作区~ 请先于桌面端开或立一差事，再来_",
+            "hint": "点工作区以续；点 🚪 退 则罢",
+            "attachedSwitchHint": "🎮 今接掌：**{{title}}**\n择新差事即换；点 🚪 退 则仍旧",
+            "btnExit": "🚪 退",
+            "resolvedExit": "🚪 去矣，他日欲远程操持，再发 /ctr",
+            "sessionPickerTitle": "🎮 {{workspace}} 之差事",
+            "sessionPickerHint": "择一差事续行 · ➕ 新立 开新局 · ↩️ 归 换工作区 · 🚪 退 罢之",
+            "sessionPickerEmptyBody": "_工作区 **{{workspace}}** 尚无活跃之差事~ 何不点 ➕ 新立 开一局？_",
+            "btnNew": "➕ 新立",
+            "btnBack": "↩️ 归",
+            "resolvedSessionPick": "🎯 已登场：**{{title}}**（{{workspace}}）\n此后君之讯径入此差事；欲退，随时 `/exctr`",
+            "resolvedNewSession": "✨ 新局已立，接掌已成（于 **{{workspace}}**）\n径发令以始；欲退则 `/exctr`",
+            "attachFailed": "❌ 未能接掌：{{reason}}",
+            "staleGroupCard": "❌ 未能接掌：此卡发于应用重启之前，已不辨属何话题。\n请于欲接掌之话题中重发 `/ctr`（绑定唯随话题，不旁及他处）",
+            "sessionBusyOldCardPlaceholder": "⏳ 彼差事犹方行——下方已为君另刷一卡，请重择",
+            "sessionBusyPrompts": {
+              "prompt1": "⏳ **{{title}}** 方与强敌鏖战~\nAgent 犹在思索／撰码，待此局毕，再以 `/ctr` 登场",
+              "prompt2": "🚧 不得入——**{{title}}** 尚有一回合未竟。\n饮水少待数息，Agent 毕手头之局即让君",
+              "prompt3": "🤖 **{{title}}** 正忙——Agent 犹于键上翻飞，强入恐乱其神。\n稍待数息，再以 `/ctr` 一试",
+              "prompt4": "☕ 莫急莫急——**{{title}}** 此局未终。\nAgent 事毕，号令即付君手"
+            },
+            "takeoverLoadingPrompts": {
+              "prompt1": "⏳ 方将 **{{title}}** 付君接掌…\n_📦 载存档之元数据_  ·  _🔌 通 Agent 之路_  ·  _🧠 复盘前回之战况_\n_须臾即好，咖啡莫一口饮尽_",
+              "prompt2": "🎮 方登 **{{title}}**…\n_昔时旧版，性急之客狂点 IM 之图，实则无益_",
+              "prompt3": "⌛ **{{title}}** 方载…  99%\n_此进度条非虚——Haiku 方翻阅前回所谈_",
+              "prompt4": "🛰️ 方与 **{{title}}** 通连…\n_(WiFi 信号似弱…非也，乃 Haiku 思所以为君陈其要)_"
+            },
+            "newSessionWelcomePrompts": {
+              "prompt1": "🎯 接掌、开局一气呵成——**{{workspace}}** 已就位，Agent 候命。\n发首令以始；欲退随时 `/exctr`",
+              "prompt2": "✨ 新局已立——工作目录 **{{workspace}}** 已备，Agent 候君发话。\n首讯即开局；`/exctr` 随时可退",
+              "prompt3": "🎮 诸事俱备——已于 **{{workspace}}** 为君另开新局。\n欲为何事，告吾即可，Agent 在此~  `/exctr` 收手",
+              "prompt4": "🆕 新局伊始——**{{workspace}}** 工作目录已备。\n首令即开谈；倦则 `/exctr`"
+            }
+          }
+        },
+        "notice": {
+          "platformFeishu": "飞书",
+          "contextFetchFailedGroup": "⚠️ 取群中讯录未成，方才群中之 @ 唯能据讯本身作答，不见群中上下文。",
+          "contextFetchFailedThread": "⚠️ 取话题讯录未成，方才话题中之 @ 唯能据讯本身作答，不见话题中上下文。",
+          "contextFetchFailedHowTo": "开启之法：{{platform}}开放平台 → 开发者后台 → 择本应用 → 权限管理 → 搜索并开通 (im:message.group_msg) 与 (im:message.group_msg.include_bot:read) → 立版本而发布（自建应用须管理员审核）。",
+          "contextFetchFailedDetail": "谬误详情：{{error}}",
+          "contextFetchFailedLink": "[点此前往]({{link}})"
+        },
+        "notificationReply": {
+          "unavailable": "今暂不能续此告所系之差事，请于 Cindy 中确认差事尚可用，再试。",
+          "commands": "此话题用以续此告所系之差事。欲止则用 !stop；他令请于主言谈中行之。"
+        }
+      },
+      "wechat": {
+        "slash": {
+          "new": "🌱 新档已开 — 前番言谈尽清，自头再叙~",
+          "help": "🤖 吾所能为者如下：\n\n/new         新开一档（清当前言谈之上下文）\n/model       易模型\n/permission  调权柄之式（auto / bypass / ask 等）\n/ctr         远程接管 desktop 上之某工作区（接管中再发，可径换差事）\n/exctr       罢接管，复归微信私聊\n/help        观吾所能\n\n有事方行而欲止之？径发 `!stop`，吾即止当前之行，并撤候列之讯；差事仍存，可续。\n\n平日径发讯即可，吾在听~",
+          "unknownCommand": "`{{cmd}}` 此令，吾未识也 🤔\n吾所能解者：/new、/model、/permission、/ctr、/exctr、/help",
+          "detachedBySlash": "🚪 接管已毕，复归微信私聊。他日欲远程操持 desktop，再发 /ctr",
+          "detachedByRevoke": "⚠️ 君已于 desktop 收回接管，此后之讯复归微信私聊。",
+          "notAttached": "🤷 君今未接管何差事，/exctr 闲置无所为。"
+        },
+        "agent": {
+          "completedNoText": "✅ 事毕（此轮 Agent 未发一语）",
+          "runtimeError": "⚠️ Agent 出错：{{error}}",
+          "sendInternalError": "❌ 内部出错：{{error}}",
+          "apiKeyMissing": "⚠️ Cindy AI Key 尚未设也~\n请往 desktop 之 规制 → 模型供方 连接 Cindy AI，再来唤吾",
+          "controlInProgress": "🎮 君之 /ctr 尚在择中 — 且先毕上方之卡（或点 🚪 退），再发他言~",
+          "credentialBusy": "⏳ 本机 Agent 方行他轮，凭证之式暂不可易。俟前轮毕，再发一次即可。",
+          "queuedNext": "⏳ 前轮尚行，此讯暂且候列——毕则自续。欲即止之，发 `!stop`",
+          "queuedPosition": "⏳ 前轮尚行，此讯列第 {{position}}——依次递予 Agent。欲即止之，发 `!stop`",
+          "stopDone": "⏹ 当前之行已止。差事犹存——欲续，随时遣新令~",
+          "stopDoneWithQueued_one": "⏹ 当前之行已止，候列之 {{count}} 讯亦并撤之。差事犹存——欲续，随时遣新令~",
+          "stopDoneWithQueued_other": "⏹ 当前之行已止，候列之 {{count}} 讯亦并撤之。差事犹存——欲续，随时遣新令~",
+          "stopIdle": "🤷 今无方行之事，`!stop` 落空矣。待有事须止，再唤吾~",
+          "scheduledTaskHeader": "🤖 自运",
+          "scheduledTaskHeaderNamed": "🤖 自运「{{name}}」",
+          "unsupportedOnly": "🙏 此讯吾难下咽：\n{{items}}\n\n吾所能化者：文字、图（jpg/png/gif/webp）、PDF、代码与设置类文字卷。",
+          "unsupportedNotice": "ℹ️ 下列之物吾不能化，姑置一旁：\n{{items}}\n\n余者已收，方理之~",
+          "authMissing": {
+            "currentProvider": "当前供方",
+            "reasonGatewayKey": "须先设 Cindy AI Key",
+            "reasonProviderKey": "此供方之 API Key 尚未设",
+            "reasonProviderDisconnected": "未连接或连接已失效",
+            "reasonAgentLogin": "须先以 {{agentKind}} 凭证登入",
+            "message": "⚠️ 此微信言谈所用供方为「{{provider}}」（{{model}}），{{reason}}。",
+            "attachedHint": "请于 desktop 之 规制 → 模型供方 修复认证，再续遣讯即可。",
+            "detachedHint": "改「新言谈配置」后，续遣讯即可；若此言谈另择过模型，请发 `/model` 重择。"
+          }
+        },
+        "error": {
+          "agentUnsupported": "⚠️ 当前 Agent 不支持个人微信之逐则权柄确认，讯不能启。\n请于 desktop 规制中，将微信渠道之 Agent 易为 Claude Code 或 Codex，再于微信发 /new，然后重试。",
+          "agentSwitchAlsoCheckPermissionMode": "若新 Agent 仍示权柄之式有碍，请于微信发 /permission 调权柄之式，然后重试。",
+          "permissionModeUnsupported": "此讯尚未行：当前差事之权柄之式，不能供个人微信所需之操作审批。\n请于 Cindy 将当前差事改为「自审」，或于微信发 /permission 调之，然后重发。"
+        },
+        "cards": {
+          "permission": {
+            "title": "🔧 器具调用：{{toolName}}",
+            "paramsLabel": "**参数先览**",
+            "btnAllowOnce": "✅ 唯此番许",
+            "btnAllowAlways": "✅ 恒许之",
+            "btnDeny": "❌ 拒",
+            "resolvedAllowOnce": "✅ 已许（唯此番）",
+            "resolvedAllowAlways": "✅ 已许（此器自今皆放行）",
+            "resolvedDeny": "❌ 已拒"
+          },
+          "ask": {
+            "noOptionsHint": "_（此问无预设之选，径以文字复吾可也）_",
+            "resolved": "✅ 已择：{{option}}"
+          },
+          "plan": {
+            "title": "📋 吾欲如是为之",
+            "btnApprove": "✅ 为之",
+            "btnReject": "❌ 且慢",
+            "resolvedApproved": "✅ 已准，即行",
+            "resolvedRejected": "❌ 已暂止"
+          },
+          "model": {
+            "title": "🤖 易模型",
+            "currentLine": "**当前**：{{label}}\n_{{description}}_",
+            "currentLineWithEffort": "**当前**：{{label}} · 思之深浅 `{{effort}}`\n_{{description}}_",
+            "hint": "点下以易之。所择之模型，吾自以最深之思行之",
+            "resolved": "✅ 已易为 {{label}}",
+            "resolvedWithEffort": "✅ 已易为 {{label}}（思之深浅：{{effort}}）",
+            "failed": "❌ 模型未能易：{{reason}}"
+          },
+          "permissionMode": {
+            "title": "🛡️ 调权柄之式",
+            "currentLine": "**当前**：{{label}}\n_{{description}}_",
+            "hint": "点下以易之。auto = 常务放行，敏感之操作以卡请示；bypass = 尽放行；ask/default/plan/acceptEdits = 以卡审批",
+            "resolved": "✅ 权柄之式已易为 {{label}}",
+            "failed": "❌ 权柄之式未能易：{{reason}}",
+            "fullAccessConfirmTitle": "⚠️ 确欲启完全存取乎？",
+            "fullAccessConfirmBody": "完全存取将闭工作区之沙箱，并略常规之审批。Cindy 可改工作区外之文件、行连网之令而不复问；内建高险之操作仍须确认。",
+            "btnConfirmFullAccess": "启完全存取",
+            "btnCancelFullAccess": "仍守旧权",
+            "fullAccessCancelled": "已罢，仍守旧权"
+          },
+          "control": {
+            "title": "🎮 择一工作区上阵",
+            "emptyBody": "_暂无可接管之工作区~ 且于 desktop 开／立一差事再来_",
+            "hint": "点工作区以进；点 🚪 退 则罢此番",
+            "attachedSwitchHint": "🎮 方接管：**{{sessionTitle}}**\n择新差事即可换乘；点 🚪 退 则一仍其旧",
+            "btnExit": "🚪 退",
+            "resolvedExit": "🚪 去矣，他日欲远程操持，再 /ctr",
+            "sessionPickerTitle": "🎮 {{displayName}} 之存档",
+            "sessionPickerHint": "择一差事续之 · ➕ 新开 立新档 · ↩️ 归 易工作区 · 🚪 退 罢之",
+            "sessionPickerEmptyBody": "_工作区 **{{displayName}}** 尚无活跃差事~ 何不点 ➕ 新开 立其一？_",
+            "btnNew": "➕ 新开",
+            "btnBack": "↩️ 归",
+            "resolvedSessionPick": "🎯 已上阵：**{{sessionTitle}}**（{{workspaceName}}）\n此后君之讯，径入此差事；欲退，随时 `/exctr`",
+            "resolvedNewSession": "✨ 新档已立，接管已毕（于 **{{workspaceName}}**）\n径发令以开谈；欲退则 `/exctr`",
+            "attachFailed": "❌ 未能接管：{{reason}}",
+            "sessionBusyOldCardPlaceholder": "⏳ 彼差事尚行——下方已换新卡，请重择",
+            "sessionBusyPrompt1": "⏳ **{{sessionTitle}}** 方与强敌鏖战~\nAgent 尚在思索／撰码，俟此局毕，再 `/ctr` 上阵",
+            "sessionBusyPrompt2": "🚧 未得其门——**{{sessionTitle}}** 尚有一合未竟。\n且饮水稍候，Agent 毕其手中之事，即来相唤",
+            "sessionBusyPrompt3": "🤖 **{{sessionTitle}}** 方忙——Agent 指飞于键上，强入则乱其神。\n稍候数息，再试 `/ctr`",
+            "sessionBusyPrompt4": "☕ 莫急莫急——**{{sessionTitle}}** 此局未终。\nAgent 毕其手中之事，即以号令相授",
+            "takeoverLoadingPrompt1": "⏳ 方授君以 **{{sessionTitle}}**…\n_📦 载存档之诠_  ·  _🔌 通 Agent 之道_  ·  _🧠 复前合之战况_\n_须臾即毕，咖啡勿一饮而尽_",
+            "takeoverLoadingPrompt2": "🎮 方入 **{{sessionTitle}}**…\n_昔时旧版，性急之客狂点微信之图，然实无益也_",
+            "takeoverLoadingPrompt3": "⌛ **{{sessionTitle}}** 方载…  99%\n_此进度条非虚——方览前合所谈_",
+            "takeoverLoadingPrompt4": "🛰️ 方与 **{{sessionTitle}}** 通连…\n_(WiFi 似微弱…噫非也，乃思何以为君陈其要)_",
+            "newSessionWelcomePrompt1": "🎯 接管、开档，一气呵成——**{{workspaceName}}** 已就位，Agent 候命。\n发首令以开谈；欲退随时 `/exctr`",
+            "newSessionWelcomePrompt2": "✨ 新档已立——工作目录 **{{workspaceName}}** 已备，Agent 待君发话。\n首讯即开局；`/exctr` 随时可退",
+            "newSessionWelcomePrompt3": "🎮 诸事齐备——已于 **{{workspaceName}}** 为君新开一档。\n欲为何事，告吾即可，Agent 在此~  `/exctr` 收手",
+            "newSessionWelcomePrompt4": "🆕 全新开局——**{{workspaceName}}** 工作目录已备。\n首令即开谈；不欲再戏，则 `/exctr`"
+          }
+        },
+        "reply": {
+          "unsupportedMedia": "今版尚不能理此类微信之媒。",
+          "stillProcessing": "差事犹在理中…",
+          "ownerOnlyCommands": "唯主人可用此机之令。",
+          "companionManagedCommand": "请于 Cindy 开此同僚：模型于同僚之设中调之，权柄于言谈输入框下易之。",
+          "help": "可用之令：/new 新开言谈；/stop 止当前之行；/stop all 尽止诸行；/status 观其状；/help 观说明。",
+          "status_one": "Cindy 微信连接无恙，今候列 {{count}} 则。",
+          "status_other": "Cindy 微信连接无恙，今候列 {{count}} 则。",
+          "stopped": "差事已止。",
+          "companionDmNew": "此处与同僚共一长久差事，记录与记忆皆存。欲理上下文，请于 Cindy 重启同僚。",
+          "newConversation": "已开新言谈。",
+          "unknownCommand": "未识之令。发 /help 以观可用之令。",
+          "overloaded": "今微信差事甚繁，请稍后再试。"
+        },
+        "preDispatch": {
+          "companionPermissionUnsupported": "此讯须逐次确认权柄，然同僚当前之模型或权柄之式不支持，讯不能启。\n请主人于 Cindy 开此同僚，察同僚之设中之模型，并于言谈输入框下择「预设权柄」或「自审」。",
+          "missingAuth": "当前 Agent 尚未授权，请先于 Cindy 连接模型之服。",
+          "generic": "此讯暂不能启，请稍后重试。"
+        },
+        "interaction": {
+          "invalidReply": "复辞之式不合。请依前讯所示作复；权柄之确认唯受「{{allow}}」或「{{deny}}」。",
+          "permissionTitle": "器具「{{tool}}」待君确认。",
+          "operationPreview": "所为：\n{{preview}}",
+          "permissionReplyHint": "复「{{allow}}」则行此一次，复「{{deny}}」则罢此番操作。微信之内不支持永久授权。",
+          "planReview": "Agent 呈一行事之策：\n\n{{plan}}\n\n复「{{approve}}」则续，复「{{deny}}」则罢。",
+          "askNoQuestion": "Agent 待君之答，然无问可示。请复「续」。",
+          "askQuestion": "Agent 待君作答：\n{{question}}\n{{options}}\n请复选项之序，或径书君之答。"
+        }
+      }
+    }
   },
   "markdown": {},
   "diffPanel": {

@@ -1,8 +1,13 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DingTalkIM } from '@cindy/im';
 
 import { __testing, handleDingTalkTextInteraction } from '../interaction';
 import { createSharedPermission } from '../../../maker-ipc/sharedPermission';
+import { setMainLocale } from '../../../i18n.desktop';
+
+// 断言中文控制文案:显式锁定界面语言,结束后还原默认。
+beforeEach(() => setMainLocale('zh-CN'));
+afterEach(() => setMainLocale('en'));
 
 describe('dingtalk text interactions', () => {
   it('settles the shared permission when the text reply times out', async () => {
@@ -109,5 +114,31 @@ describe('dingtalk text interactions', () => {
       answers: { 方向: 'B', 备注: 'custom' },
     });
     expect(requestTextReply).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('dingtalk text interactions in other interface languages', () => {
+  const request = {
+    kind: 'permission' as const,
+    requestId: 'request-en',
+    toolName: 'shell_command',
+    input: {},
+  };
+
+  it('writes the prompt in English and fills the tool name', () => {
+    setMainLocale('en');
+    expect(__testing.formatInteractionPrompt(request)).toBe(
+      'Confirmation needed: shell_command\nReply “allow” to continue, or “deny” to cancel.',
+    );
+    expect(__testing.formatQuestionPrompt({ question: 'Which branch?' }, 0, 2))
+      .toBe('I need more information (1/2): Which branch?\nReply with an option number or your answer.');
+  });
+
+  it('accepts the reply word shown in the current language alongside the fixed words', () => {
+    setMainLocale('de');
+    expect(__testing.formatInteractionPrompt(request)).toContain('„erlauben“');
+    expect(__testing.parseInteractionReply(request, 'Erlauben')).toEqual({ kind: 'permission', behavior: 'allow' });
+    expect(__testing.parseInteractionReply(request, 'ablehnen')).toMatchObject({ behavior: 'deny' });
+    expect(__testing.parseInteractionReply(request, '允许')).toEqual({ kind: 'permission', behavior: 'allow' });
   });
 });

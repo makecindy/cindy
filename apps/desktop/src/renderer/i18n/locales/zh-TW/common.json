@@ -12150,7 +12150,926 @@
       "createOwnApp": "建立我的 App ↗"
     },
     "outboundAttachmentsIncomplete": "⚠️ 有 {{count}} 個附件未能傳送：{{names}}",
-    "unnamedAttachment": "未命名附件"
+    "unnamedAttachment": "未命名附件",
+    "text": {
+      "discord": {
+        "expiredCardNotice": "卡片已過期",
+        "slash": {
+          "new": "🌱 新存檔已開 — 之前的對話清掉了，從頭聊~",
+          "help": "🤖 我能幫你做這些：\n\n/new         開個新存檔（清掉目前的對話脈絡）\n/model       換個模型上場\n/permission  調整權限模式（auto / bypass / ask 等）\n/ctr         遠端接管 desktop 上的某個工作區（接管中再傳可直接換任務）\n/exctr       結束接管，回到我們倆的 Discord 私訊\n/help        看看我會什麼\n\n有事情在跑想讓它停？直接傳 `!stop`，我會立刻中止目前的執行、把排隊的訊息也撤掉，任務保留可繼續。\n\n平時直接傳訊息就行，我在聽~",
+          "unknownCommand": "沒認出 `{{cmd}}` 這個指令 🤔\n我聽得懂的：/new、/model、/permission、/ctr、/exctr、/help",
+          "localTaskAccessUnavailable": "🔒 `{{cmd}}` 在伺服器頻道裡無法使用——它會把你桌面上的私人任務 / 專案攤在公開場合。想用的話，請在和我的私訊裡傳送。",
+          "detachedBySlash": "🚪 接管結束，我們回到 Discord 私訊。下次想遠端操控 desktop 再 /ctr",
+          "detachedByRevoke": "⚠️ 你在 desktop 那邊把接管收回了，之後的訊息回到我們倆的 Discord 私訊。",
+          "notAttached": "🤷 你現在沒有接管任何任務，/exctr 閒著也沒事可做。",
+          "companionManagedCommand": "🧭 這個 bot 已經交給夥伴啦 — 模型、權限和工作目錄都依照夥伴設定，想改的話到 Cindy 的夥伴設定裡調整~"
+        },
+        "agent": {
+          "completedNoText": "✅ 跑完啦（這一輪 Agent 沒說話）",
+          "runtimeError": "⚠️ Agent 出狀況了：{{error}}",
+          "sendInternalError": "❌ 內部出 bug 了：{{error}}",
+          "apiKeyMissing": "⚠️ Cindy AI Key 還沒設定喔~\n到 desktop 的「設定 → 模型供應商」連接 Cindy AI，再來 ping 我",
+          "controlInProgress": "🎮 你的 /ctr 還在選擇中喔 — 先把上面那張卡片操作完（或點 🚪 退出），再來傳別的~",
+          "credentialBusy": "⏳ 本機 Agent 正在跑另一輪，暫時無法切換憑證模式。等上一輪結束後再傳一次就行。",
+          "queuedNoticeNext": "⏳ 上一輪還在跑，這則先排隊——跑完自動接上。想直接叫停就傳 `!stop`",
+          "queuedNoticePosition": "⏳ 上一輪還在跑，這則排在第 {{position}} 位——會依序傳給 Agent。想直接叫停就傳 `!stop`",
+          "stopDoneDropped_other": "⏹ 已叫停目前的執行，排隊中的 {{count}} 則訊息也一併撤了。任務還在——想繼續隨時傳新指令~",
+          "stopDone": "⏹ 已叫停目前的執行。任務還在——想繼續隨時傳新指令~",
+          "stopIdle": "🤷 現在沒有正在跑的任務，`!stop` 撲了個空。等有事要停的時候再叫我~",
+          "scheduledTaskHeader": "🤖 自動化",
+          "scheduledTaskHeaderNamed": "🤖 自動化「{{name}}」",
+          "unsupportedOnly": "🙏 這則訊息我吞不下：\n{{items}}\n\n我能處理的：文字、圖片（jpg/png/gif/webp）、PDF、程式碼與設定類文字檔案。",
+          "unsupportedNotice": "ℹ️ 以下內容我處理不了，先放一邊了：\n{{items}}\n\n其他部分收到啦，正在處理~",
+          "authMissing": {
+            "defaultProvider": "目前的供應商",
+            "gatewayKey": "⚠️ 目前 Discord 對話使用供應商「{{provider}}」（{{model}}），需要先設定 Cindy AI Key。",
+            "providerKey": "⚠️ 目前 Discord 對話使用供應商「{{provider}}」（{{model}}），尚未設定該供應商的 API Key。",
+            "providerDisconnected": "⚠️ 目前 Discord 對話使用供應商「{{provider}}」（{{model}}），未連線或連線已失效。",
+            "agentLogin": "⚠️ 目前 Discord 對話使用供應商「{{provider}}」（{{model}}），需要先登入 {{agentKind}} 憑證。",
+            "fixAttached": "請在 desktop 的「設定 → 模型供應商」中修復驗證後，直接繼續傳送訊息。",
+            "fixDetached": "修改「新對話配置」後直接繼續傳送訊息即可；若目前對話曾單獨選過模型，請傳送 `/model` 重新選擇。"
+          }
+        },
+        "cards": {
+          "permission": {
+            "title": "🔧 工具呼叫：{{toolName}}",
+            "paramsLabel": "**參數預覽**",
+            "btnAllowOnce": "✅ 僅限本次允許",
+            "btnAllowAlways": "✅ 一律允許",
+            "btnDeny": "❌ 拒絕",
+            "resolvedAllowOnce": "✅ 已允許（僅限本次）",
+            "resolvedAllowAlways": "✅ 已允許（這個工具之後一律放行）",
+            "resolvedDeny": "❌ 已拒絕"
+          },
+          "ask": {
+            "noOptionsHint": "_（這個問題沒有預設選項，直接傳文字回覆我吧）_",
+            "resolved": "✅ 已選：{{option}}"
+          },
+          "plan": {
+            "title": "📋 我打算這麼做",
+            "btnApprove": "✅ 做吧",
+            "btnReject": "❌ 等等",
+            "resolvedApproved": "✅ 已核准，開工",
+            "resolvedRejected": "❌ 已暫停"
+          },
+          "model": {
+            "title": "🤖 換個模型",
+            "currentLine": "**目前**：{{label}}\n_{{description}}_",
+            "currentLineWithEffort": "**目前**：{{label}} · 推理強度 `{{effort}}`\n_{{description}}_",
+            "hint": "點下方切換。我會自動讓所選模型以最高推理強度執行",
+            "resolved": "✅ 已切換到 {{label}}",
+            "resolvedWithEffort": "✅ 已切換到 {{label}}（推理強度：{{effort}}）",
+            "failed": "❌ 模型未能切換：{{reason}}"
+          },
+          "permissionMode": {
+            "title": "🛡️ 調整權限模式",
+            "currentLine": "**目前**：{{label}}\n_{{description}}_",
+            "hint": "點下方切換。auto = 一般操作放行＋敏感操作跳出卡片；bypass = 全部放行；ask/default/plan/acceptEdits = 走卡片審批",
+            "resolved": "✅ 權限模式已切換為 {{label}}",
+            "failed": "❌ 權限模式未能切換：{{reason}}",
+            "fullAccessConfirmTitle": "⚠️ 確認開啟 Full access？",
+            "fullAccessConfirmBody": "Full access 會關閉工作區沙箱並略過一般審批。Cindy 可以修改工作區外的檔案、執行連網指令且不再詢問；內建的高風險操作仍會要求確認。",
+            "btnConfirmFullAccess": "開啟 Full access",
+            "btnCancelFullAccess": "保留目前權限",
+            "fullAccessCancelled": "已取消，保留目前權限"
+          },
+          "control": {
+            "title": "🎮 挑個工作區上線",
+            "emptyBody": "_暫時還沒有可接管的工作區~ 在 desktop 端開啟/建立一個任務再來_",
+            "hint": "點工作區繼續；點 🚪 退出 取消這次",
+            "attachedSwitchHint": "🎮 目前接管中：**{{sessionTitle}}**\n選個新任務直接換過去；點 🚪 退出則維持現狀",
+            "btnExit": "🚪 退出",
+            "resolvedExit": "🚪 先走了，下次想遠端操控再 /ctr",
+            "sessionPickerTitle": "🎮 {{displayName}} 裡的存檔",
+            "sessionPickerHint": "挑個任務繼續打 · ➕ 新建 開新存檔 · ↩️ 後退 換工作區 · 🚪 退出 取消",
+            "sessionPickerEmptyBody": "_工作區 **{{displayName}}** 這邊還沒有活躍的任務~ 不如點 ➕ 新建 開一個？_",
+            "btnNew": "➕ 新建",
+            "btnBack": "↩️ 後退",
+            "resolvedSessionPick": "🎯 上線了：**{{sessionTitle}}**（{{workspaceName}}）\n接下來你傳的訊息會直接進這個任務；想撤隨時 `/exctr`",
+            "resolvedNewSession": "✨ 新存檔已建 + 接管完成（在 **{{workspaceName}}** 裡）\n直接傳指令開聊；想退就 `/exctr`",
+            "attachFailed": "❌ 沒接上：{{reason}}",
+            "sessionBusyOldCardPlaceholder": "⏳ 那個任務還在跑——下方幫你刷了張新卡片，重選一下吧",
+            "sessionBusyPrompt1": "⏳ **{{sessionTitle}}** 這會兒正在打 BOSS~\nAgent 還在思考/寫程式，等它這把打完再 `/ctr` 上線",
+            "sessionBusyPrompt2": "🚧 擠不進去——**{{sessionTitle}}** 還有一回合沒收尾。\n喝口水等幾秒，Agent 把手上這把跑完就來叫你",
+            "sessionBusyPrompt3": "🤖 **{{sessionTitle}}** 正忙著呢——Agent 還在鍵盤上飛舞，硬插進去會讓它分心。\n稍等幾秒再 `/ctr` 試一下",
+            "sessionBusyPrompt4": "☕ 別急別急——**{{sessionTitle}}** 這一局還沒打完。\nAgent 做完手上的事，指揮權馬上交給你",
+            "takeoverLoadingPrompt1": "⏳ 正在讓你接管 **{{sessionTitle}}**…\n_📦 載入存檔中繼資料_  ·  _🔌 接通 Agent 通道_  ·  _🧠 回顧上回合戰況_\n_兩三秒就好，咖啡別一口灌完_",
+            "takeoverLoadingPrompt2": "🎮 登入 **{{sessionTitle}}** 中…\n_早期版本裡，等不及的玩家會狂點 Discord 圖示，但其實並沒有用_",
+            "takeoverLoadingPrompt3": "⌛ **{{sessionTitle}}** 載入中…  99%\n_這條進度條是真的——正在翻你們上回合聊了什麼_",
+            "takeoverLoadingPrompt4": "🛰️ 正在與 **{{sessionTitle}}** 建立連線…\n_(WiFi 訊號好像有點弱…喔不，是在想該怎麼跟你 brief)_",
+            "newSessionWelcomePrompt1": "🎯 接管 + 開檔 一氣呵成——**{{workspaceName}}** 已就位，Agent 待命中。\n傳第一則指令開聊；想撤隨時 `/exctr`",
+            "newSessionWelcomePrompt2": "✨ 新存檔已建——工作目錄 **{{workspaceName}}** 已經備妥，Agent 等你發話。\n第一則訊息開打；`/exctr` 隨時退出",
+            "newSessionWelcomePrompt3": "🎮 準備就緒——在 **{{workspaceName}}** 幫你開了個全新存檔。\n要做什麼告訴我，Agent 在線~  `/exctr` 收手",
+            "newSessionWelcomePrompt4": "🆕 全新開局——**{{workspaceName}}** 工作目錄已經 ready。\n第一則指令開聊；不想玩了就 `/exctr`"
+          }
+        }
+      },
+      "transport": {
+        "feishu": {
+          "lifecycle": {
+            "online": "🟢 已上線，可以開聊囉~",
+            "offline": "🔴 Cindy 已離線，暫時無法透過目前的 IM 繼續對話。",
+            "offlineNotice": "🔔 我之前離線了一段時間，這段期間的訊息可能沒有收到喔~"
+          },
+          "ownerBinding": {
+            "welcome": "🎉 已將你綁定為這個 bot 的 owner~\n之後只有你能跟我對話。如需更換 owner，請到 Cindy 桌面版的「設定」頁清除 bot 憑證後重新儲存。"
+          },
+          "group": {
+            "threadOrphanNotice": "開話題時出了點小問題，這則沒能處理，麻煩再 @ 我一次~"
+          },
+          "streaming": {
+            "thinking": {
+              "brain": "🧠 腦袋轉轉中…",
+              "letMeThink": "🤔 讓我想想喔~",
+              "inspiration": "✨ 靈感正在路上…",
+              "tea": "🍵 泡杯茶，馬上來~",
+              "cat": "🐱 貓咪撓鍵盤思考中…",
+              "engine": "🚀 引擎預熱中…",
+              "thoughts": "🌀 思緒整理中…",
+              "spell": "🪄 唸個咒語…",
+              "draft": "📝 正在打草稿…",
+              "puzzle": "🧩 拼圖組裝中…",
+              "coffee": "☕ 續杯，馬上回~",
+              "target": "🎯 瞄準答案中…"
+            },
+            "preparingImage": "🎨 圖片沖洗中，稍等一下 ~",
+            "preparingFile": "📦 檔案打包中，馬上送達 ~",
+            "fileSentOne": "🎉 檔案已送達，請查收！",
+            "filesSent_other": "🎉 {{count}} 個檔案已全部送達 ~",
+            "emptyReply": "_(空回覆)_",
+            "replyContinues": "\n\n---\n⏳ 內容較長，寫完後會分成多則完整傳送。",
+            "partNoteMore": "{{index}}/{{total}} · 未完，接下一則",
+            "partNoteLast": "{{index}}/{{total}} · 完",
+            "continuationFailed": "⚠️ 後續內容沒能送出，完整回覆可在 Cindy 桌面版查看。",
+            "deliveryFailed": "⚠️ 這則回覆過長或包含飛書暫不支援的內容，請在 Cindy 桌面版查看完整回覆。"
+          },
+          "card": {
+            "imageLoadFailed": "_[圖片載入失敗：{{target}}]_",
+            "choiceReceived": "已收到您的選擇"
+          },
+          "connection": {
+            "conflict": "此 App 已被另一台裝置佔用 (exceed_conn_limit)",
+            "unreachable": "連線失敗：無法存取 IM 服務，請檢查網路",
+            "authFailedDetail": "App ID / App Secret 不正確（auth_failed）",
+            "authFailed": "App ID 或 App Secret 不正確（auth_failed）"
+          }
+        },
+        "streaming": {
+          "imageFallbackName": "圖片",
+          "imageUploading": "[🖼️ {{name}} · 上傳中…]",
+          "filePreparing": "[📎 {{name}} · 準備傳送…]"
+        },
+        "dingtalk": {
+          "uploadedImageAlt": "圖片"
+        },
+        "common": {
+          "cardExpired": "卡片已過期",
+          "secretWriteFailed": "無法安全儲存憑證（系統安全儲存空間無法使用）"
+        },
+        "telegram": {
+          "groupJoined": "👥 我被「{{actor}}」加進了群組「{{title}}」（chat_id：{{chatId}}）。",
+          "groupLeft": "👥 我被「{{actor}}」移出了群組「{{title}}」（chat_id：{{chatId}}）。"
+        },
+        "wecom": {
+          "secretWriteFailed": "無法使用系統安全儲存空間儲存企業微信機器人憑證",
+          "credentialsRequired": "Bot ID 和 Secret 不能為空",
+          "authFailedHint": "企業微信驗證失敗，請檢查 Bot ID、Secret 和長連線模式",
+          "authFailedDetail": "企業微信驗證失敗：{{detail}}",
+          "attachmentsBelow": "📎 附件如下",
+          "attachmentsOmitted_other": "⚠️ 另有 {{count}} 個附件未傳送（企業微信單次最多傳送 {{max}} 個）。",
+          "filesRejected_other": "⚠️ 有 {{count}} 個檔案附件未傳送（不在目前的工作目錄內或無法驗證）。",
+          "imagesUnresolved_other": "⚠️ 有 {{count}} 張圖片未傳送（圖片已不存在或無法讀取）。",
+          "attachmentsFailed_other": "⚠️ 有 {{count}} 個附件傳送失敗，請稍後再試。"
+        }
+      },
+      "telegram": {
+        "expiredCardNotice": "卡片已過期",
+        "slash": {
+          "start": "👋 你好，我是你的個人 Cindy 助理~\n\n私訊直接傳訊息就行；群組裡 @ 我或回覆我的訊息才會觸發。傳 /help 看全部指令。",
+          "new": "🌱 新任務已建立 — 已在任務列表顯示，從頭開始吧~",
+          "help": "🤖 我能幫你做這些：\n\n/new         建立新任務（舊任務保留；群組裡按目前群組話題建立）\n/project     切到某個專案目錄做事（在 bot 這邊跑，不接管 desktop）\n/session     列出最近的 desktop 任務，點一個直接接管續聊\n/model       換個模型上場\n/permission  調一下權限模式（auto / bypass / ask 等）\n/settings    看看目前專案、Agent、模型、推理強度、權限\n/ctr         遠端接管 desktop 上的某個工作區（接管中再傳可直接換任務）\n/exctr       結束接管，回到 Telegram 對話\n/help        看看我會什麼\n\n有工作在跑想讓它停？傳 /stop（或 `!stop`），我會立刻中止目前執行、把排隊的訊息也撤掉，任務保留可繼續。\n\n私訊直接傳訊息就行；群組裡 @ 我或回覆我的訊息才會觸發，我也會記住群組裡最近的訊息當作上下文~",
+          "unknownCommand": "沒認出 `{{cmd}}` 這個指令 🤔\n我能聽懂的：/new、/session、/project、/model、/permission、/settings、/ctr、/exctr、/stop、/help",
+          "settings": "⚙️ 目前設定\n\n專案：{{workspace}}\nAgent：{{agent}}\n模型：{{model}}\n推理強度：{{effort}}\n權限：{{permission}}\n\n想改就傳 /project、/model、/permission～",
+          "settingsCompanion": "⚙️ 目前設定（夥伴）\n\n專案：{{workspace}}\nAgent：{{agent}}\n模型：{{model}}\n推理強度：{{effort}}\n權限：{{permission}}\n\n模型、權限和工作目錄跟隨夥伴設定，請在 Cindy 的夥伴設定裡修改。",
+          "detachedBySlash": "🚪 接管結束，我們回到 Telegram 對話。下次想遠端操控 desktop 再 /ctr",
+          "detachedByRevoke": "⚠️ 你在 desktop 那邊把接管收回去了，後續訊息回到 Telegram 對話。",
+          "notAttached": "🤷 你現在沒在接管任何任務，/exctr 閒著也沒事可做。",
+          "companionDmNew": "🧭 這裡是夥伴的主對話，會一直接著聊，不會另開新任務。想換個話題直接說就好；需要單獨做的事，夥伴會自己開背景任務。",
+          "companionLaneNew": "🌱 已為這個群組開始一段新對話，之前的上下文收起來了，從頭開始吧~",
+          "companionManagedCommand": "🧭 這個連線已交給夥伴，模型、權限和工作目錄跟隨夥伴設定。請在 Cindy 的夥伴設定裡修改。"
+        },
+        "agent": {
+          "completedNoText": "✅ 跑完啦（這一輪 Agent 沒說話）",
+          "runtimeError": "⚠️ Agent 出狀況了：{{error}}",
+          "sendInternalError": "❌ 內部出 bug 了：{{error}}",
+          "apiKeyMissing": "⚠️ Cindy AI Key 還沒設定喔~\n去 desktop 的 設定 → 模型供應商 裡連接 Cindy AI，再來 ping 我",
+          "controlInProgress": "🎮 你的 /ctr 還在選擇中喔 — 先把上面那張卡片操作完（或點 🚪 退出），再來傳別的~",
+          "credentialBusy": "⏳ 本機 Agent 正在跑另一輪，暫時不能切換憑證模式。等上一輪結束後再傳一次就行。",
+          "queuedNoticeFirst": "⏳ 上一輪還在跑，這則先排隊——跑完自動接上。想直接叫停就傳 `!stop`",
+          "queuedNotice": "⏳ 上一輪還在跑，這則排在第 {{position}} 位——會按順序傳給 Agent。想直接叫停就傳 `!stop`",
+          "stopDone": "⏹ 已叫停目前執行。任務還在——想繼續隨時傳新指令~",
+          "stopDoneDropped_other": "⏹ 已叫停目前執行，排隊中的 {{count}} 則訊息也一併撤了。任務還在——想繼續隨時傳新指令~",
+          "stopIdle": "🤷 現在沒有正在跑的任務，`!stop` 落了個空。等有工作要停的時候再叫我~",
+          "scheduledTaskHeader": "🤖 自動化",
+          "scheduledTaskHeaderNamed": "🤖 自動化「{{name}}」",
+          "unsupportedOnly": "🙏 這則訊息我吞不下：\n{{list}}\n\n我能處理的：文字、圖片（jpg/png/gif/webp）、PDF、程式碼與設定類文字檔案。",
+          "unsupportedNotice": "ℹ️ 以下內容我處理不了，先放一邊了：\n{{list}}\n\n其他部分收到啦，正在處理~",
+          "companionUnavailable": "⏸ 夥伴現在接不了訊息：{{reason}}",
+          "authMissing": {
+            "currentProvider": "目前供應商",
+            "reasonGatewayKey": "需要先設定 Cindy AI Key",
+            "reasonProviderKey": "還沒有設定該供應商的 API Key",
+            "reasonProviderDisconnected": "未連線或連線已失效",
+            "reasonAgentLogin": "需要先登入 {{agentKind}} 憑證",
+            "message": "⚠️ 目前 Telegram 對話使用供應商「{{provider}}」（{{model}}），{{reason}}。",
+            "attachedHint": "請在 desktop 的 設定 → 模型供應商 中修復驗證後，直接繼續傳送訊息。",
+            "detachedHint": "修改「新對話配置」後直接繼續傳送訊息即可；若目前任務單獨選過模型，請傳送 `/model` 重新選擇。"
+          }
+        },
+        "error": {
+          "agentUnsupported": "🤔 目前 Agent 無法在 Telegram 群組裡完成所需的權限確認，請換一個 Agent 再試。",
+          "permissionModeUnsupportedFullAccess": "這則群組訊息尚未執行：目前任務設為「完全訪問」，但其他群組成員的請求仍需經過審批，本次未能切換到自動審批。請機器人綁定的使用者在 Cindy 中把目前任務改為「自動審批」，或傳送 /permission 修改後重傳。",
+          "permissionModeUnsupported": "這則群組訊息尚未執行：目前權限檔位無法提供群組訊息所需的操作審批。請機器人綁定的使用者在 Cindy 中把目前任務改為「自動審批」，或傳送 /permission 修改後重傳。"
+        },
+        "cards": {
+          "permission": {
+            "title": "🔧 工具呼叫：{{tool}}",
+            "paramsLabel": "**參數預覽**",
+            "btnAllowOnce": "✅ 僅本次允許",
+            "btnAllowAlways": "✅ 總是允許",
+            "btnDeny": "❌ 拒絕",
+            "resolvedAllowOnce": "✅ 已允許（僅本次）",
+            "resolvedAllowAlways": "✅ 已允許（這個工具以後都放行）",
+            "resolvedDeny": "❌ 已拒絕"
+          },
+          "ask": {
+            "noOptionsHint": "_（這個問題沒有預設選項，直接傳文字回我吧）_",
+            "resolved": "✅ 已選：{{option}}"
+          },
+          "plan": {
+            "title": "📋 我打算這麼做",
+            "btnApprove": "✅ 做吧",
+            "btnReject": "❌ 等等",
+            "resolvedApproved": "✅ 已批准，開工",
+            "resolvedRejected": "❌ 已暫停"
+          },
+          "model": {
+            "title": "🤖 換個模型",
+            "currentLineWithEffort": "**目前**：{{label}} · effort `{{effort}}`\n_{{description}}_",
+            "currentLine": "**目前**：{{label}}\n_{{description}}_",
+            "hint": "點下面切換。我會自動讓所選模型用最高 effort 跑",
+            "resolvedWithEffort": "✅ 已切到 {{label}}（effort：{{effort}}）",
+            "resolved": "✅ 已切到 {{label}}",
+            "failed": "❌ 模型沒切過去：{{reason}}"
+          },
+          "permissionMode": {
+            "title": "🛡️ 調一下權限模式",
+            "currentLine": "**目前**：{{label}}\n_{{description}}_",
+            "hint": "點下面切換。auto = 常規放行＋敏感操作跳卡片；bypass = 全放行；ask/default/plan/acceptEdits = 走卡片審批",
+            "resolved": "✅ 權限模式切到 {{label}} 了",
+            "failed": "❌ 權限模式沒切過去：{{reason}}",
+            "fullAccessConfirmTitle": "⚠️ 確認開啟 Full access？",
+            "fullAccessConfirmBody": "Full access 會關閉工作區沙箱並跳過常規審批。Cindy 可以修改工作區外的檔案、執行聯網命令且不再詢問；內建高風險操作仍會要求確認。",
+            "btnConfirmFullAccess": "開啟 Full access",
+            "btnCancelFullAccess": "保留目前權限",
+            "fullAccessCancelled": "已取消，保留目前權限"
+          },
+          "project": {
+            "title": "📂 切個專案目錄",
+            "hint": "**目前**：{{name}}\n選一個專案，接下來的訊息就在那個目錄裡做事（會重開上下文，模型和權限設定保留）",
+            "emptyBody": "_desktop 端還沒有活躍的專案工作區~ 先在 desktop 裡開啟一個專案再來_",
+            "btnDialogue": "💬 回到對話",
+            "btnCancel": "🚪 算了",
+            "resolvedPick": "📂 已切到 **{{name}}** —— 新上下文已就位，直接傳指令開工。想回一般對話就傳 /project 選「回到對話」",
+            "resolvedDialogue": "💬 已回到對話目錄，上下文重新開始~",
+            "resolvedCancel": "🚪 沒切，維持現狀",
+            "switchFailed": "❌ 沒切過去：{{reason}}（目錄可能已被移動或刪除）",
+            "attachedUnsupported": "🎮 你正在用 /ctr 接管一個 desktop 任務——接管期間訊息直接進那個任務，不需要 /project。想切專案先 `/exctr` 退出接管",
+            "dialogueName": "對話（託管目錄）"
+          },
+          "control": {
+            "title": "🎮 挑個工作區上線",
+            "emptyBody": "_暫時還沒有可接管的工作區~ 在 desktop 端開啟／建立一個任務再來_",
+            "hint": "點工作區往下走；點 🚪 退出 取消這次",
+            "attachedSwitchHint": "🎮 目前接管中：**{{title}}**\n選個新任務直接換乘；點 🚪 退出則維持現狀",
+            "btnExit": "🚪 退出",
+            "resolvedExit": "🚪 走了，下次想遠端操控再 /ctr",
+            "sessionPickerTitle": "🎮 {{name}} 裡的任務",
+            "sessionPickerHint": "挑個任務繼續 · ➕ 新建 開新任務 · ↩️ 返回 換工作區 · 🚪 退出 取消",
+            "sessionPickerEmptyBody": "_工作區 **{{name}}** 這邊還沒有 active 任務~ 不如點 ➕ 新建 開一個？_",
+            "btnNew": "➕ 新建",
+            "btnBack": "↩️ 返回",
+            "resolvedSessionPick": "🎯 上線了：**{{title}}**（{{workspace}}）\n接下來你傳訊息我就直接進這個任務；想撤隨時 `/exctr`",
+            "resolvedNewSession": "✨ 新任務已建 + 接管完成（在 **{{workspace}}** 裡）\n直接傳指令開聊；想退就 `/exctr`",
+            "attachFailed": "❌ 沒接上：{{reason}}",
+            "sessionBusyOldCardPlaceholder": "⏳ 那個任務還在跑——下方幫你刷了張新卡片，重選一下吧",
+            "recentSessions": {
+              "title": "🕑 最近的任務",
+              "hint": "點一個直接接管續聊（跨工作區按時間排）· 想按工作區挑用 /ctr · 🚪 退出取消",
+              "emptyBody": "_desktop 端還沒有活躍任務~ 先在 desktop 裡開一個再來_"
+            },
+            "sessionBusyPrompts": {
+              "variant1": "⏳ **{{title}}** 這會兒正忙~\nAgent 還在思考／寫程式，等它這輪跑完再 `/ctr` 上線",
+              "variant2": "🚧 擠不進去——**{{title}}** 還有一輪沒收尾。\n喝口水等幾秒，Agent 把手邊的事跑完就來叫你",
+              "variant3": "🤖 **{{title}}** 正忙著呢——Agent 還在鍵盤上飛舞，硬插進去會讓它分心。\n稍等幾秒再 `/ctr` 試一下",
+              "variant4": "☕ 別急別急——**{{title}}** 這一輪還沒跑完。\nAgent 做完手邊的事，指揮權立刻交給你"
+            },
+            "takeoverLoadingPrompts": {
+              "variant1": "⏳ 正在讓你接管 **{{title}}**…\n_📦 載入任務中繼資料_  ·  _🔌 接通 Agent 通道_  ·  _🧠 回顧上一輪進度_\n_兩三秒就好_",
+              "variant2": "🎮 接入 **{{title}}** 中…\n_正在把上下文搬過來，馬上就好_",
+              "variant3": "⌛ **{{title}}** 載入中…  99%\n_這條進度條是真的——正在翻你們上一輪聊了什麼_",
+              "variant4": "🛰️ 正在與 **{{title}}** 建立連線…\n_（在想該怎麼跟你 brief）_"
+            },
+            "newSessionWelcomePrompts": {
+              "variant1": "🎯 接管 + 新建 一氣呵成——**{{workspace}}** 已就位，Agent 待命中。\n傳第一條指令開聊；想撤隨時 `/exctr`",
+              "variant2": "✨ 新任務已建——工作目錄 **{{workspace}}** 已經備好，Agent 等你發話。\n第一則訊息開聊；`/exctr` 隨時退出",
+              "variant3": "🎮 準備就緒——在 **{{workspace}}** 幫你開了個全新任務。\n要做什麼告訴我，Agent 在線~  `/exctr` 收手",
+              "variant4": "🆕 全新開局——**{{workspace}}** 工作目錄已經 ready。\n第一條指令開聊；不想繼續就 `/exctr`"
+            }
+          }
+        }
+      },
+      "shared": {
+        "retry": {
+          "autoReviewUnavailable": "自動審批暫時無法給出判斷，需要審批的操作已改為由你確認。想少被打斷，可以把任務切到「完全訪問」，但風險更高。",
+          "autoReviewUnavailableWechat": "自動審批暫時無法給出判斷，需要審批的操作已改為由你確認。個人微信不能使用「完全訪問」，請直接確認這次操作。",
+          "autoReviewConfirmUndelivered": "自動審批沒完成，確認也沒有送到或沒有被點。這次拒絕不是你點的。",
+          "rateLimitRetrying": "請求受到限流，正在自動重試（{{attempt}}/{{maxAttempts}}）…",
+          "overloadRetrying": "模型服務繁忙，正在自動重試（{{attempt}}/{{maxAttempts}}）…",
+          "overloadRetryingNoCount": "模型服務繁忙，正在自動重試…",
+          "overloadFailed": "⚠️ 模型服務繁忙：上游暫時沒有可用容量。請直接在這裡重發這則訊息重試，或在 Cindy 裡換一個模型。（在桌面端點「重試」也能繼續任務，但結果不會回到這則訊息裡。）"
+        },
+        "toolLoop": {
+          "generic": "模型重複呼叫工具次數過多，Cindy 已停止本輪以避免無限迴圈。可以傳送新訊息繼續。",
+          "consecutive": "模型重複呼叫同一個工具 {{n}} 次，Cindy 已停止本輪以避免無限迴圈。可以傳送新訊息繼續。",
+          "pingpong": "模型在多個工具呼叫之間來回循環，Cindy 偵測到本輪已有 {{n}} 次呼叫後停止了本輪。可以傳送新訊息繼續。",
+          "rotation": "模型持續輪轉呼叫多個工具，Cindy 偵測到本輪已有 {{n}} 次呼叫後停止了本輪。可以傳送新訊息繼續。",
+          "contract": "模型連續觸發了無效的工具呼叫，Cindy 已在 {{n}} 次失敗後停止本輪，以避免無限迴圈。可以傳送新訊息繼續。"
+        },
+        "quota": {
+          "prefix": "⚠️ 供應商額度不足",
+          "currentProvider": "目前的供應商",
+          "namedProvider": "「{{name}}」",
+          "headlineSpendCap": "{{prefix}}：{{who}}已達到工作區擁有者設定的花費上限，這個任務暫時無法繼續。",
+          "headlineUsageLimit": "{{prefix}}：{{who}}帳號用量已達上限，這個任務暫時無法繼續。",
+          "headlineBalance": "{{prefix}}：{{who}}帳號餘額或配額不足，這個任務暫時無法繼續。",
+          "source": "來源：{{bot}}",
+          "sourceWithModel": "來源：{{bot}} · 模型：{{model}}",
+          "task": "任務：{{task}}",
+          "officialBot": "官方 bot",
+          "personalBot": "個人 bot",
+          "spendCapHint": "請聯絡工作區管理員調整花費上限，或更換供應商。",
+          "recoveryModelCommand": "傳送 /model 為目前任務更換供應商或模型，再重發這則訊息。",
+          "recoveryOpenTask": "在 Cindy 裡開啟這個任務，更換供應商或模型，再回到這裡重發這則訊息。",
+          "taskLabel": "{{title}}（{{id}}）",
+          "untitledTask": "任務"
+        },
+        "outputLimit": {
+          "usage": "本次模型請求已輸出 {{outputTokens}} tokens。",
+          "usageWithReasoning": "本次模型請求已輸出 {{outputTokens}} tokens，其中 {{reasoningTokens}} tokens 用於思考。",
+          "reasoningDominated": "思考已消耗本次輸出的大部分預算，回覆可能不完整。建議降低推理強度，或先壓縮對話記錄，再繼續。",
+          "generic": "模型已達到輸出長度上限，本輪回覆可能不完整。可以傳送新訊息繼續；若反覆觸發，請降低推理強度或先壓縮對話記錄。",
+          "join": "{{usage}}{{guidance}}",
+          "silentStopExhausted": "模型連續多次回傳空回應，自動續跑已暫停。"
+        },
+        "permission": {
+          "autoReviewUnavailable": "自動審批沒完成，請確認要不要允許這次操作。",
+          "autoReviewReason": "自動審批需要你決定：{{reason}}",
+          "previewUnserializable": "<無法序列化>",
+          "previewTruncated": "…（已截斷）",
+          "choiceReceived": "已收到你的選擇。",
+          "allowedSession": "✅ 已允許（本任務）",
+          "allowedOnce": "✅ 已允許（僅本次）",
+          "expired": "⌛ 本次確認已失效",
+          "denied": "❌ 已拒絕",
+          "outcomeWithTool": "{{status}}：{{tool}}"
+        },
+        "card": {
+          "askContinue": "繼續",
+          "truncated": "…(已截斷)",
+          "askResolvedContinue": "✅ 已選擇：繼續"
+        },
+        "takeover": {
+          "summaryFailedThread": "_(回顧失敗了，在這個 thread 裡直接傳訊息接著聊就行)_",
+          "summaryFailed": "_(回顧失敗了，直接傳訊息接著聊就行)_",
+          "lastMessage": "最後一則處理的訊息為：{{text}}"
+        },
+        "source": {
+          "origin": "來源：{{channel}} · {{chat}}",
+          "thread": "話題：{{thread}}",
+          "sender": "發起人：{{sender}}",
+          "messageProtected": "原訊息：受保護內容",
+          "message": "原訊息：{{text}}",
+          "noText": "（無文字內容）",
+          "viewMessage": "查看原訊息：{{url}}"
+        },
+        "session": {
+          "accountChanged": "帳號已變更，請重新新建任務"
+        },
+        "slash": {
+          "detachFailed": "❌ 結束接管失敗：{{error}}",
+          "companionManaged": "🧭 這個連線已交給伙伴，模型、權限和工作目錄跟隨伙伴設定。請在 Cindy 的伙伴設定裡修改。"
+        },
+        "turn": {
+          "groupApprovalOwnerDm": "🔐 群聊裡的任務需要你授權。授權卡不會發到群裡，在這裡確認即可。",
+          "agentStartFailed": "❌ 啟動 Agent 失敗：{{reason}}",
+          "personalBotLabel": "{{channel}} 個人 bot",
+          "error": "❌ 錯誤：{{message}}"
+        },
+        "activity": {
+          "working": "⚙️ 工作中 · {{elapsed}}{{rate}}",
+          "workingSteps_one": "⚙️ 工作中 · {{count}} 項 · {{elapsed}}{{rate}}",
+          "workingSteps_other": "⚙️ 工作中 · {{count}} 項 · {{elapsed}}{{rate}}",
+          "earlierSteps_one": "… 更早的 {{count}} 項未列出",
+          "earlierSteps_other": "… 更早的 {{count}} 項未列出",
+          "recordTitle_one": "過程記錄 · {{count}} 項 · {{elapsed}}",
+          "recordTitle_other": "過程記錄 · {{count}} 項 · {{elapsed}}"
+        },
+        "images": {
+          "notSent_one": "有 {{count}} 張圖片未能作為附件傳送。",
+          "notSent_other": "有 {{count}} 張圖片未能作為附件傳送。"
+        },
+        "desktopConfirm": {
+          "notice": "🔔 {{what}}正在桌面端 Cindy 等待你的確認；逾時將自動取消，如需繼續請到桌面端操作。",
+          "inputHandoff": "🔐 需要你幫忙輸入：{{taskTitle}} · 在 Cindy 中開啟",
+          "subject": {
+            "githubIssue": "「提交 GitHub Issue」的確認卡",
+            "renameSessions": "「批次重新命名任務」的確認卡",
+            "pluginFileGrant": "「插件檔案授權」的確認卡"
+          }
+        },
+        "replyWords": {
+          "allow": "允許",
+          "deny": "拒絕",
+          "approve": "批准"
+        }
+      },
+      "hook": {
+        "interaction": {
+          "askTimeout": "等待回答逾時，任務已按「未回答」繼續",
+          "planTitle": "📋 計劃待審閱",
+          "planApprove": "批准執行",
+          "planReject": "退回",
+          "planTimeout": "等待審閱逾時，計劃未獲批准",
+          "permissionTool": "工具：`{{tool}}`",
+          "permissionTitle": "🔐 權限請求：{{title}}",
+          "allowOnce": "允許一次",
+          "alwaysAllowForSession": "本任務總是允許",
+          "deny": "拒絕",
+          "permissionTimeout": "等待授權逾時，已拒絕該權限請求"
+        },
+        "run": {
+          "routeReselectHint": "。請在 設定 → IM 機器人 中為這個渠道的工作目錄重新選擇模型。",
+          "awaitingPermission": "等待授權 · 需要你確認",
+          "awaitingAnswer": "等待回答 · 需要你選擇",
+          "awaitingPlan": "等待審閱 · 需要你確認計劃",
+          "awaitingFallback": "等待你的確認",
+          "cancelledBeforeRun": "任務已被使用者喊停，本則訊息沒有執行。",
+          "liveSessionDirUnmapped": "這個任務正在一個已不在工作目錄對映裡的目錄中執行，本則訊息沒有執行。把該目錄加進 設定 → 遠端連線 → 工作目錄對映，或在桌面端關掉這個任務後重發。",
+          "interactionExpired": "任務已結束，此互動已失效",
+          "telegramOfficialBot": "Telegram 官方 bot"
+        },
+        "dispatch": {
+          "dirUnmapped": "這個任務所在的目錄已不在工作目錄對映裡，本則訊息沒有執行。把它所在的目錄加進 設定 → 遠端連線 → 工作目錄對映 後再傳一次。"
+        }
+      },
+      "wecom": {
+        "slash": {
+          "new": "🌱 新任務已開始，之前的上下文已清空。",
+          "help": "🤖 可用指令：\n\n/new         開始新任務\n/stop        中止目前任務\n/exctr       結束現有接管\n/help        查看說明\n\n任務執行中可傳送 `!stop` 中止目前任務並清空排隊訊息。",
+          "unknownCommand": "無法辨識指令 `{{cmd}}`。可用指令：/new、/stop、/exctr、/help",
+          "detachedBySlash": "🚪 已結束接管，後續訊息回到企業微信對話。",
+          "detachedByRevoke": "⚠️ desktop 端已收回接管，後續訊息回到企業微信對話。",
+          "notAttached": "目前沒有正在接管的任務。",
+          "companionManagedCommand": "🧭 這個連線已交給夥伴，模型、權限和工作目錄跟隨夥伴設定。請在 Cindy 的夥伴設定裡修改。"
+        },
+        "agent": {
+          "completedNoText": "✅ 任務已完成（本輪沒有文字輸出）",
+          "runtimeError": "⚠️ Agent 執行失敗：{{error}}",
+          "sendInternalError": "❌ 訊息傳送失敗：{{error}}",
+          "apiKeyMissing": "⚠️ 目前模型尚未完成驗證。請在 desktop 的設定中連線模型供應商後重試。",
+          "controlInProgress": "🎮 接管選擇尚未完成，請先處理上一則互動訊息。",
+          "credentialBusy": "⏳ 本機 Agent 正在執行，暫時無法切換憑證模式，請稍後再試。",
+          "queuedNoticeNext": "⏳ 上一輪仍在執行，這則訊息已排隊。需要中止可傳送 `!stop`。",
+          "queuedNoticePosition": "⏳ 上一輪仍在執行，這則訊息排在第 {{position}} 位。需要中止可傳送 `!stop`。",
+          "stopDone": "⏹ 已中止目前任務。",
+          "stopDoneDropped_other": "⏹ 已中止目前任務，並移除 {{count}} 則排隊訊息。",
+          "stopIdle": "目前沒有正在執行或排隊的任務。",
+          "scheduledTaskHeaderNamed": "🤖 自動任務「{{name}}」",
+          "scheduledTaskHeader": "🤖 自動任務",
+          "unsupportedOnly": "🙏 暫時無法處理這則訊息：\n{{items}}",
+          "unsupportedNotice": "ℹ️ 以下內容未能處理：\n{{items}}\n\n其他內容將繼續處理。",
+          "authMissing": {
+            "providerFallback": "目前供應商",
+            "reasonGatewayKey": "需要先配置 Cindy AI Key",
+            "reasonProviderKey": "尚未配置該供應商的 API Key",
+            "reasonProviderDisconnected": "連線已中斷或失效",
+            "reasonLogin": "需要先登入 {{agentKind}}",
+            "message": "⚠️ 目前企業微信對話使用「{{provider}}」（{{model}}），{{reason}}。",
+            "attachedHint": "請在 desktop 修復驗證後繼續傳送訊息。",
+            "newChatHint": "修改「新對話配置」後直接繼續傳送訊息即可；若目前對話單獨選過模型，請傳送 `/new` 開始新任務。"
+          }
+        },
+        "cards": {
+          "permission": {
+            "title": "🔧 工具呼叫：{{toolName}}",
+            "paramsLabel": "**參數預覽**",
+            "btnAllowOnce": "✅ 僅本次允許",
+            "btnAllowAlways": "✅ 一律允許",
+            "btnDeny": "❌ 拒絕",
+            "resolvedAllowOnce": "✅ 已允許（僅本次）",
+            "resolvedAllowAlways": "✅ 已允許（之後一律允許）",
+            "resolvedDeny": "❌ 已拒絕"
+          },
+          "ask": {
+            "noOptionsHint": "_請直接回覆文字。_",
+            "resolved": "✅ 已選擇：{{option}}"
+          },
+          "plan": {
+            "title": "📋 執行計畫",
+            "btnApprove": "✅ 批准",
+            "btnReject": "❌ 拒絕",
+            "resolvedApproved": "✅ 已批准",
+            "resolvedRejected": "❌ 已拒絕"
+          },
+          "model": {
+            "title": "🤖 切換模型",
+            "currentLineWithEffort": "**目前**：{{label}} · effort `{{effort}}`\n_{{description}}_",
+            "currentLine": "**目前**：{{label}}\n_{{description}}_",
+            "hint": "請選擇要使用的模型。",
+            "resolved": "✅ 已切換到 {{label}}",
+            "resolvedWithEffort": "✅ 已切換到 {{label}}（effort：{{effort}}）",
+            "failed": "❌ 模型切換失敗：{{reason}}"
+          },
+          "permissionMode": {
+            "title": "🛡️ 調整權限模式",
+            "currentLine": "**目前**：{{label}}\n_{{description}}_",
+            "hint": "請選擇權限模式。",
+            "resolved": "✅ 權限模式已切換到 {{label}}",
+            "failed": "❌ 權限模式切換失敗：{{reason}}",
+            "fullAccessConfirmTitle": "⚠️ 確認開啟 Full access？",
+            "fullAccessConfirmBody": "Full access 會關閉工作區沙箱並略過一般審批。Cindy 可以修改工作區外的檔案並執行連網指令；內建高風險操作仍會要求確認。",
+            "btnConfirmFullAccess": "開啟 Full access",
+            "btnCancelFullAccess": "保留目前權限",
+            "fullAccessCancelled": "已取消，保留目前權限"
+          },
+          "control": {
+            "title": "🎮 選擇工作區",
+            "emptyBody": "_暫時沒有可接管的工作區，請先在 desktop 建立任務。_",
+            "hint": "選擇工作區繼續，或退出本次操作。",
+            "attachedSwitchHint": "目前正在接管：**{{sessionTitle}}**",
+            "btnExit": "🚪 退出",
+            "resolvedExit": "🚪 已退出接管",
+            "sessionPickerTitle": "🎮 {{workspaceName}} 中的任務",
+            "sessionPickerHint": "選擇任務、建立新任務或返回上一步。",
+            "sessionPickerEmptyBody": "_{{workspaceName}} 中暫時沒有可用任務。_",
+            "btnNew": "➕ 新增",
+            "btnBack": "↩️ 返回",
+            "resolvedSessionPick": "🎯 已接管 **{{sessionTitle}}**（{{workspaceName}}）",
+            "resolvedNewSession": "✨ 已在 **{{workspaceName}}** 新增並接管任務",
+            "attachFailed": "❌ 接管失敗：{{reason}}",
+            "sessionBusyOldCardPlaceholder": "⏳ 該任務仍在執行，請稍後再試。",
+            "sessionBusyPrompt": "⏳ **{{sessionTitle}}** 正在執行，請等待目前回合結束。",
+            "takeoverLoadingPrompt": "⏳ 正在接管 **{{sessionTitle}}**…",
+            "newSessionWelcomePrompt": "✨ 已在 **{{workspaceName}}** 建立新任務，可以傳送第一則指令。"
+          }
+        },
+        "interaction": {
+          "invalidReply": "回覆格式不正確。請依上一則訊息的提示回覆；權限確認只支援「{{allow}}」或「{{deny}}」。",
+          "permissionTitle": "需要確認工具「{{toolName}}」。",
+          "operationLabel": "操作：",
+          "permissionFooter": "回覆「{{allow}}」執行一次，或回覆「{{deny}}」取消本次操作。企業微信內不支援永久授權。",
+          "planIntro": "Agent 提交了一份執行計畫：",
+          "planFooter": "回覆「{{approve}}」繼續，或回覆「{{deny}}」取消。",
+          "askNoQuestion": "Agent 正在等待你的回答，但沒有可顯示的問題。請回覆「繼續」。",
+          "askIntro": "Agent 需要你的回答：",
+          "askFooter": "請回覆選項編號，或直接輸入你的回答。"
+        }
+      },
+      "dingtalk": {
+        "channelName": "釘釘",
+        "error": {
+          "permissionModeUnsupported": "這則群組訊息尚未執行：目前任務的權限檔位無法提供群組訊息所需的操作審批。請機器人綁定的使用者在 Cindy 中把目前任務改為「自動審批」後重新傳送。"
+        },
+        "slash": {
+          "help": "🤖 我能幫你做這些：\n\n/new   開個新對話（清掉目前上下文）\n/stop  中止目前執行，並撤掉排隊訊息\n/help  查看可用指令\n\n模型、權限和遠端接管請在 Cindy 桌面端調整。",
+          "unknownCommand": "沒認出 `{{cmd}}` 這個指令 🤔\n我聽得懂的：/new、/stop、/help",
+          "interactiveCommandUnsupported": "釘釘暫不支援 {{cmd}} 的互動選擇，請在 Cindy 桌面端完成對應設定。"
+        },
+        "interaction": {
+          "permissionTitle": "需要確認操作：{{toolName}}",
+          "operationLine": "操作：{{operation}}",
+          "permissionFooter": "回覆「{{allow}}」繼續，或回覆「{{deny}}」取消。",
+          "planReady": "計畫已準備好。",
+          "planFooter": "回覆「{{approve}}」繼續，或回覆「{{deny}}」取消。",
+          "questionsIntro": "需要你補充以下資訊：",
+          "questionsFooter": "請直接回覆選項編號或你的答案。",
+          "questionTitle": "需要你補充資訊（{{index}}/{{total}}）：{{question}}",
+          "questionFooter": "請回覆選項編號或你的答案。"
+        }
+      },
+      "imessage": {
+        "slash": {
+          "help": "🤖 我能幫你做這些：\n\n/new   開個新對話（清掉目前上下文）\n/stop  中止目前執行，並撤掉排隊訊息\n/help  查看可用指令\n\n模型、權限和遠端接管請在 Cindy 桌面端調整。",
+          "unknownCommand": "沒認出 `{{cmd}}` 這個指令 🤔\n我聽得懂的：/new、/stop、/help",
+          "interactiveCommandUnsupported": "iMessage 暫不支援 {{cmd}} 的互動選擇，請在 Cindy 桌面端完成對應設定。"
+        }
+      },
+      "feishu": {
+        "slash": {
+          "new": "🌱 新存檔已開 — 之前的對話清掉了，從頭聊~",
+          "help": "🤖 我能幫你做這些：\n\n/new         開個新存檔（清掉目前對話上下文）\n/model       換個模型上場\n/permission  調一下權限模式（auto / bypass / ask 等）\n/ctr         遠端接管桌面端上的某個工作區（接管中再發可直接換任務）\n/exctr       結束接管，回到我們倆的私訊\n/help        看看我會什麼\n\n有工作在跑想讓它停？直接發 `!stop`，我會立刻中止目前執行、把排隊的訊息也撤掉，任務保留可繼續。\n\n平時直接發訊息就好，我在聽~",
+          "unknownCommand": "沒認出 `{{cmd}}` 這個命令 🤔\n我聽得懂的：/new、/model、/permission、/ctr、/exctr、/help",
+          "detachedBySlash": "🚪 接管結束，我們回到私訊頻道。下次想遠端操控桌面端再 /ctr",
+          "detachedByRevoke": "⚠️ 你在桌面端收回了接管，後續訊息會回到我們倆的私訊。",
+          "notAttached": "🤷 你現在沒有接管任何任務，/exctr 閒著也沒事可做。",
+          "companionDmNew": "🧭 這裡是夥伴的主對話，會一直接著聊，不會另開新任務。想換個話題直接說就好；需要單獨處理的事，夥伴會自己開背景任務。",
+          "companionLaneNew": "🌱 已為這個群組開始一段新對話，之前的上下文收起來了，從頭開始吧~",
+          "companionManagedCommand": "🧭 這個連線已交給夥伴，模型、權限和工作目錄跟隨夥伴設定。請在 Cindy 的夥伴設定裡修改。"
+        },
+        "agent": {
+          "completedNoText": "✅ 跑完囉（這一輪 Agent 沒說話）",
+          "runtimeError": "⚠️ Agent 翻車了：{{error}}",
+          "sendInternalError": "❌ 內部出 bug 了：{{error}}",
+          "apiKeyMissing": "⚠️ Cindy AI Key 還沒設定喔~\n到桌面端的「設定 → 模型供應商」連接 Cindy AI，再來 ping 我",
+          "controlInProgress": "🎮 你的 /ctr 還在選擇中喔 — 先把上面那張卡片操作完（或點 🚪 退出），再來發別的~",
+          "credentialBusy": "⏳ 本機 Agent 正在跑另一輪，暫時不能切換憑證模式。等上一輪結束後再發一次就好。",
+          "queuedNoticeFirst": "⏳ 上一輪還在跑，這則先排隊——跑完自動接上。想直接叫停就發 `!stop`",
+          "queuedNotice": "⏳ 上一輪還在跑，這則排在第 {{position}} 位——會按順序交給 Agent。想直接叫停就發 `!stop`",
+          "stopDone": "⏹ 已叫停目前的執行。任務還在——想繼續隨時發新指令~",
+          "stopDoneWithQueued_one": "⏹ 已叫停目前的執行，排隊中的 {{count}} 則訊息也一併撤了。任務還在——想繼續隨時發新指令~",
+          "stopDoneWithQueued_other": "⏹ 已叫停目前的執行，排隊中的 {{count}} 則訊息也一併撤了。任務還在——想繼續隨時發新指令~",
+          "stopIdle": "🤷 現在沒有正在跑的任務，`!stop` 撲了個空。等有工作要停的時候再叫我~",
+          "scheduledTaskHeader": "🤖 自動化",
+          "scheduledTaskHeaderNamed": "🤖 自動化「{{name}}」",
+          "unsupportedOnly": "🙏 這則訊息我吞不下：\n{{items}}\n\n我能消化的：文字、圖片（jpg/png/gif/webp）、PDF、程式碼與設定類文字檔案。",
+          "unsupportedNotice": "ℹ️ 以下內容我消化不了，先放一邊了：\n{{items}}\n\n其他部分收到囉，正在處理~",
+          "companionUnavailable": "⏸ 夥伴現在無法接收訊息：{{reason}}",
+          "authMissing": {
+            "defaultProvider": "目前的供應商",
+            "message": "⚠️ 目前對話使用供應商「{{provider}}」（{{model}}），{{reason}}。",
+            "reasonGatewayKey": "需要先設定 Cindy AI Key",
+            "reasonProviderKey": "還沒有設定該供應商的 API Key",
+            "reasonProviderDisconnected": "未連線或連線已失效",
+            "reasonAgentLogin": "需要先登入 {{agentKind}} 憑證",
+            "attachedHint": "請在桌面端的「設定 → 模型供應商」修復認證後，直接繼續傳送訊息。",
+            "detachedHint": "修改「新對話配置」後直接繼續傳送訊息即可；若目前對話單獨選過模型，請傳送 `/model` 重新選擇。"
+          }
+        },
+        "error": {
+          "agentUnsupported": "🤔 目前選擇的 Agent 在這個渠道需要逐則權限確認，暫時上不了場，換一個 Agent 再試~"
+        },
+        "cards": {
+          "permission": {
+            "title": "🔧 工具呼叫：{{tool}}",
+            "paramsLabel": "**參數預覽**",
+            "btnAllowOnce": "✅ 僅本次允許",
+            "btnAllowAlways": "✅ 總是允許",
+            "btnDeny": "❌ 拒絕",
+            "dmRoutedNotice": "🔐 `{{tool}}` 這個操作需要你確認 — 授權卡片已經發到你的私訊，去那裡點一下繼續~",
+            "resolvedAllowOnce": "✅ 已允許（僅本次）",
+            "resolvedAllowAlways": "✅ 已允許（這個工具之後都放行）",
+            "resolvedDeny": "❌ 已拒絕"
+          },
+          "ask": {
+            "noOptionsHint": "_（這個問題沒有預設選項，直接傳文字回我吧）_",
+            "resolved": "✅ 已選：{{option}}",
+            "multi": {
+              "title": "❓ 需要你確認幾件事",
+              "multiSelectHint": "（可複選）",
+              "submitLabel": "送出答案"
+            }
+          },
+          "plan": {
+            "title": "📋 我打算這麼做",
+            "btnApprove": "✅ 做吧",
+            "btnReject": "❌ 等等",
+            "resolvedApproved": "✅ 已核准，開工",
+            "resolvedRejected": "❌ 已暫停"
+          },
+          "model": {
+            "title": "🤖 換個模型",
+            "currentLine": "**目前**：{{label}}\n_{{description}}_",
+            "currentLineWithEffort": "**目前**：{{label}} · 推理強度 `{{effort}}`\n_{{description}}_",
+            "hint": "點下方切換。我會自動讓所選模型以最高推理強度執行",
+            "resolved": "✅ 已切換到 {{label}}",
+            "resolvedWithEffort": "✅ 已切換到 {{label}}（推理強度：{{effort}}）",
+            "failed": "❌ 模型沒切換成功：{{reason}}"
+          },
+          "permissionMode": {
+            "title": "🛡️ 調整權限模式",
+            "currentLine": "**目前**：{{label}}\n_{{description}}_",
+            "hint": "點下方切換。auto = 一般操作放行＋敏感操作彈出卡片；bypass = 全部放行；ask/default/plan/acceptEdits = 透過卡片審批",
+            "resolved": "✅ 權限模式已切換到 {{label}}",
+            "failed": "❌ 權限模式沒切換成功：{{reason}}",
+            "fullAccessConfirmTitle": "⚠️ 確認開啟 Full access？",
+            "fullAccessConfirmBody": "Full access 會關閉工作區沙盒並略過一般審批。Cindy 可以修改工作區外的檔案、執行連網命令且不再詢問；內建的高風險操作仍會要求確認。",
+            "btnConfirmFullAccess": "開啟 Full access",
+            "btnCancelFullAccess": "保留目前權限",
+            "fullAccessCancelled": "已取消，保留目前權限"
+          },
+          "permissionModeFix": {
+            "title": "🛡️ 把群組任務切回「自動審批」",
+            "body": "剛才在群組／話題裡的訊息沒能開始執行：**{{title}}** 用的是「完全訪問」權限檔，但群組上下文裡有成員可控制的內容，必須保留操作確認。\n\n點下方按鈕把它切換到「自動審批」（auto），切換完回群組繼續發訊息就好。",
+            "btnFix": "✅ 切換到自動審批",
+            "resolved": "✅ 已切換到「自動審批」— 回群組繼續發訊息吧~",
+            "failed": "❌ 沒切換成功：{{reason}}。可以發 /permission auto 手動切換"
+          },
+          "control": {
+            "title": "🎮 挑個工作區上線",
+            "emptyBody": "_暫時還沒有可接管的工作區~ 在桌面端開啟／建立一個任務再來_",
+            "hint": "點工作區繼續；點 🚪 退出 取消這次",
+            "attachedSwitchHint": "🎮 目前接管中：**{{title}}**\n選個新任務直接換過去；點 🚪 退出則維持現狀",
+            "btnExit": "🚪 退出",
+            "resolvedExit": "🚪 先走囉，下次想遠端操控再 /ctr",
+            "sessionPickerTitle": "🎮 {{workspace}} 裡的存檔",
+            "sessionPickerHint": "挑個任務繼續打 · ➕ 新建 開新存檔 · ↩️ 後退 換工作區 · 🚪 退出 取消",
+            "sessionPickerEmptyBody": "_工作區 **{{workspace}}** 這邊還沒有進行中的任務~ 不如點 ➕ 新建 開一個？_",
+            "btnNew": "➕ 新建",
+            "btnBack": "↩️ 後退",
+            "resolvedSessionPick": "🎯 上線了：**{{title}}**（{{workspace}}）\n接下來你發訊息我就直接送進這個任務；想撤隨時 `/exctr`",
+            "resolvedNewSession": "✨ 新存檔已建立 + 接管完成（在 **{{workspace}}** 裡）\n直接發指令開始；想退就 `/exctr`",
+            "attachFailed": "❌ 沒接上：{{reason}}",
+            "staleGroupCard": "❌ 沒接上：這張卡片是應用程式重新啟動前發的，已經認不出它屬於哪個話題了。\n請在你想接管的那個話題裡重新發一次 `/ctr`（綁定只跟著話題走，不會串到別處）",
+            "sessionBusyOldCardPlaceholder": "⏳ 那個任務還在跑——下方幫你刷了張新卡片，重選一下吧",
+            "sessionBusyPrompts": {
+              "prompt1": "⏳ **{{title}}** 這會兒正在打 BOSS~\nAgent 還在思考／敲程式碼，等它這局打完再 `/ctr` 上線",
+              "prompt2": "🚧 擠不進去——**{{title}}** 還有一回合沒收尾。\n喝口水等幾秒，Agent 把手上這局跑完就換你上",
+              "prompt3": "🤖 **{{title}}** 正忙著呢——Agent 還在鍵盤上飛舞，硬插進來會讓它分心。\n稍等幾秒再 `/ctr` 試一下",
+              "prompt4": "☕ 別急別急——**{{title}}** 這一局還沒打完。\nAgent 做完手上的事，指揮權立刻交給你"
+            },
+            "takeoverLoadingPrompts": {
+              "prompt1": "⏳ 正在讓你接管 **{{title}}**…\n_📦 載入存檔中繼資料_  ·  _🔌 接通 Agent 通道_  ·  _🧠 複盤上回合戰況_\n_兩三秒就好，咖啡別一口灌完_",
+              "prompt2": "🎮 登入 **{{title}}** 中…\n_早期版本裡，等不及的玩家會狂點 IM 圖示，但其實並沒有用_",
+              "prompt3": "⌛ **{{title}}** 載入中…  99%\n_這條進度條是真的——Haiku 正在翻你們上回合聊了什麼_",
+              "prompt4": "🛰️ 正在與 **{{title}}** 建立連線…\n_(WiFi 訊號好像有點弱…喔不，是 Haiku 在想該怎麼跟你 brief)_"
+            },
+            "newSessionWelcomePrompts": {
+              "prompt1": "🎯 接管 + 開檔 一氣呵成——**{{workspace}}** 已就位，Agent 待命中。\n發第一則指令開始；想撤隨時 `/exctr`",
+              "prompt2": "✨ 新存檔已建立——工作目錄 **{{workspace}}** 已經備好，Agent 等你發話。\n第一則訊息開打；`/exctr` 隨時退出",
+              "prompt3": "🎮 準備就緒——在 **{{workspace}}** 幫你開了個全新存檔。\n要做什麼告訴我，Agent 在線~  `/exctr` 收手",
+              "prompt4": "🆕 全新開局——**{{workspace}}** 工作目錄已經 ready。\n第一則指令開始；不想玩了就 `/exctr`"
+            }
+          }
+        },
+        "notice": {
+          "platformFeishu": "飛書",
+          "contextFetchFailedGroup": "⚠️ 讀取群組訊息記錄失敗，剛才在群組裡的 @ 只能根據訊息本身回答，看不到群組裡的上下文。",
+          "contextFetchFailedThread": "⚠️ 讀取話題訊息記錄失敗，剛才在話題裡的 @ 只能根據訊息本身回答，看不到話題裡的上下文。",
+          "contextFetchFailedHowTo": "開啟方式：{{platform}}開放平台 → 開發者後台 → 選擇本應用 → 權限管理 → 搜尋並開通 (im:message.group_msg) 與 (im:message.group_msg.include_bot:read) → 建立版本並發布（自建應用需管理員審核）。",
+          "contextFetchFailedDetail": "錯誤詳情：{{error}}",
+          "contextFetchFailedLink": "[點擊前往]({{link}})"
+        },
+        "notificationReply": {
+          "unavailable": "暫時無法繼續這則通知對應的任務，請在 Cindy 中確認任務仍可用後再試。",
+          "commands": "本話題用於繼續通知對應的任務。停止請用 !stop；其他命令請在主對話中操作。"
+        }
+      },
+      "wechat": {
+        "slash": {
+          "new": "🌱 新存檔已開 — 之前的對話清掉了，從頭聊~",
+          "help": "🤖 我能幫你做這些：\n\n/new         開個新存檔（清掉目前的對話上下文）\n/model       換個模型上場\n/permission  調整權限模式（auto / bypass / ask 等）\n/ctr         遠端接管 desktop 上的某個工作區（接管中再傳一次可直接換任務）\n/exctr       結束接管，回到我們倆的微信私聊\n/help        看看我會什麼\n\n有工作在跑想讓它停？直接傳 `!stop`，我會立刻中止目前的執行、把排隊的訊息也撤掉，任務保留可繼續。\n\n平時直接傳訊息就行，我在聽~",
+          "unknownCommand": "沒認出 `{{cmd}}` 這個指令 🤔\n我聽得懂的：/new、/model、/permission、/ctr、/exctr、/help",
+          "detachedBySlash": "🚪 接管結束，我們回到微信私聊。下次想遠端操控 desktop 再 /ctr",
+          "detachedByRevoke": "⚠️ 你在 desktop 那邊把接管收回去了，之後的訊息會回到我們倆的微信私聊。",
+          "notAttached": "🤷 你現在沒有接管任何任務，/exctr 閒著也沒事可做。"
+        },
+        "agent": {
+          "completedNoText": "✅ 跑完囉（這一輪 Agent 沒說話）",
+          "runtimeError": "⚠️ Agent 翻車了：{{error}}",
+          "sendInternalError": "❌ 內部出 bug 了：{{error}}",
+          "apiKeyMissing": "⚠️ Cindy AI Key 還沒設定喔~\n到 desktop 的 設定 → 模型供應商 連接 Cindy AI，再來 ping 我",
+          "controlInProgress": "🎮 你的 /ctr 還在選擇中喔 — 先把上面那張卡片操作完（或點 🚪 退出），再來傳別的~",
+          "credentialBusy": "⏳ 本機 Agent 正在跑另一輪，暫時無法切換憑證模式。等上一輪結束後再傳一次就行。",
+          "queuedNext": "⏳ 上一輪還在跑，這則先排隊——跑完會自動接上。想直接叫停就傳 `!stop`",
+          "queuedPosition": "⏳ 上一輪還在跑，這則排在第 {{position}} 位——會依序傳給 Agent。想直接叫停就傳 `!stop`",
+          "stopDone": "⏹ 已叫停目前的執行。任務還在——想繼續隨時傳新指令~",
+          "stopDoneWithQueued_one": "⏹ 已叫停目前的執行，排隊中的 {{count}} 則訊息也一併撤了。任務還在——想繼續隨時傳新指令~",
+          "stopDoneWithQueued_other": "⏹ 已叫停目前的執行，排隊中的 {{count}} 則訊息也一併撤了。任務還在——想繼續隨時傳新指令~",
+          "stopIdle": "🤷 現在沒有正在跑的任務，`!stop` 撲了個空。等有工作要停的時候再叫我~",
+          "scheduledTaskHeader": "🤖 自動化",
+          "scheduledTaskHeaderNamed": "🤖 自動化「{{name}}」",
+          "unsupportedOnly": "🙏 這則訊息我吞不下：\n{{items}}\n\n我能處理的：文字、圖片（jpg/png/gif/webp）、PDF、程式碼與設定類文字檔案。",
+          "unsupportedNotice": "ℹ️ 以下內容我處理不了，先放一邊了：\n{{items}}\n\n其他部分收到了，正在處理~",
+          "authMissing": {
+            "currentProvider": "目前的供應商",
+            "reasonGatewayKey": "需要先設定 Cindy AI Key",
+            "reasonProviderKey": "還沒有設定該供應商的 API Key",
+            "reasonProviderDisconnected": "未連線或連線已失效",
+            "reasonAgentLogin": "需要先登入 {{agentKind}} 憑證",
+            "message": "⚠️ 目前的微信對話使用供應商「{{provider}}」（{{model}}），{{reason}}。",
+            "attachedHint": "請在 desktop 的 設定 → 模型供應商 中修復認證後，直接繼續傳送訊息。",
+            "detachedHint": "修改「新對話配置」後直接繼續傳送訊息即可；若目前對話單獨選過模型，請傳送 `/model` 重新選擇。"
+          }
+        },
+        "error": {
+          "agentUnsupported": "⚠️ 目前的 Agent 不支援個人微信的逐則權限確認，訊息無法啟動。\n請在 desktop 設定裡把微信頻道的 Agent 換成 Claude Code 或 Codex，再在微信傳送 /new，然後重試。",
+          "agentSwitchAlsoCheckPermissionMode": "若新的 Agent 仍提示權限模式問題，請在微信傳送 /permission 調整權限模式後重試。",
+          "permissionModeUnsupported": "這則訊息尚未執行：目前任務的權限模式無法提供個人微信所需的操作審批。\n請在 Cindy 中把目前任務改為「自動審批」，或在微信傳送 /permission 調整後重傳。"
+        },
+        "cards": {
+          "permission": {
+            "title": "🔧 工具呼叫：{{toolName}}",
+            "paramsLabel": "**參數預覽**",
+            "btnAllowOnce": "✅ 僅本次允許",
+            "btnAllowAlways": "✅ 一律允許",
+            "btnDeny": "❌ 拒絕",
+            "resolvedAllowOnce": "✅ 已允許（僅本次）",
+            "resolvedAllowAlways": "✅ 已允許（這個工具之後都放行）",
+            "resolvedDeny": "❌ 已拒絕"
+          },
+          "ask": {
+            "noOptionsHint": "_（這個問題沒有預設選項，直接傳文字回覆我吧）_",
+            "resolved": "✅ 已選：{{option}}"
+          },
+          "plan": {
+            "title": "📋 我打算這樣做",
+            "btnApprove": "✅ 做吧",
+            "btnReject": "❌ 等等",
+            "resolvedApproved": "✅ 已批准，開工",
+            "resolvedRejected": "❌ 已暫停"
+          },
+          "model": {
+            "title": "🤖 換個模型",
+            "currentLine": "**目前**：{{label}}\n_{{description}}_",
+            "currentLineWithEffort": "**目前**：{{label}} · 推理強度 `{{effort}}`\n_{{description}}_",
+            "hint": "點下面切換。我會自動讓所選模型用最高推理強度執行",
+            "resolved": "✅ 已切換到 {{label}}",
+            "resolvedWithEffort": "✅ 已切換到 {{label}}（推理強度：{{effort}}）",
+            "failed": "❌ 模型沒切換過去：{{reason}}"
+          },
+          "permissionMode": {
+            "title": "🛡️ 調整權限模式",
+            "currentLine": "**目前**：{{label}}\n_{{description}}_",
+            "hint": "點下面切換。auto = 一般操作放行、敏感操作跳出卡片；bypass = 全部放行；ask/default/plan/acceptEdits = 走卡片審批",
+            "resolved": "✅ 權限模式已切換到 {{label}}",
+            "failed": "❌ 權限模式沒切換過去：{{reason}}",
+            "fullAccessConfirmTitle": "⚠️ 確認開啟 Full access？",
+            "fullAccessConfirmBody": "Full access 會關閉工作區沙箱並略過一般審批。Cindy 可以修改工作區外的檔案、執行連網指令且不再詢問；內建高風險操作仍會要求確認。",
+            "btnConfirmFullAccess": "開啟 Full access",
+            "btnCancelFullAccess": "保留目前權限",
+            "fullAccessCancelled": "已取消，保留目前權限"
+          },
+          "control": {
+            "title": "🎮 挑個工作區上線",
+            "emptyBody": "_暫時還沒有可接管的工作區~ 在 desktop 端開啟／建立一個任務再來_",
+            "hint": "點工作區繼續；點 🚪 退出 取消這次",
+            "attachedSwitchHint": "🎮 目前接管中：**{{sessionTitle}}**\n選個新任務直接換過去；點 🚪 退出則維持現狀",
+            "btnExit": "🚪 退出",
+            "resolvedExit": "🚪 先走了，下次想遠端操控再 /ctr",
+            "sessionPickerTitle": "🎮 {{displayName}} 裡的存檔",
+            "sessionPickerHint": "挑個任務繼續 · ➕ 新建 開新存檔 · ↩️ 返回 換工作區 · 🚪 退出 取消",
+            "sessionPickerEmptyBody": "_工作區 **{{displayName}}** 這邊還沒有活躍的任務~ 不如點 ➕ 新建 開一個？_",
+            "btnNew": "➕ 新建",
+            "btnBack": "↩️ 返回",
+            "resolvedSessionPick": "🎯 接上了：**{{sessionTitle}}**（{{workspaceName}}）\n接下來你傳的訊息會直接進這個任務；想撤隨時 `/exctr`",
+            "resolvedNewSession": "✨ 新存檔已建立 + 接管完成（在 **{{workspaceName}}** 裡）\n直接傳指令開始；想退就 `/exctr`",
+            "attachFailed": "❌ 沒接上：{{reason}}",
+            "sessionBusyOldCardPlaceholder": "⏳ 那個任務還在跑——下方幫你刷新了一張卡片，重新選一下吧",
+            "sessionBusyPrompt1": "⏳ **{{sessionTitle}}** 這會兒正在打 BOSS~\nAgent 還在思考／寫程式，等它這局打完再 `/ctr` 上線",
+            "sessionBusyPrompt2": "🚧 擠不進去——**{{sessionTitle}}** 還有一回合沒收尾。\n喝口水等幾秒，Agent 把手上這局跑完就來叫你",
+            "sessionBusyPrompt3": "🤖 **{{sessionTitle}}** 正忙著呢——Agent 還在鍵盤上飛舞，硬插進去會讓它分心。\n稍等幾秒再 `/ctr` 試一下",
+            "sessionBusyPrompt4": "☕ 別急別急——**{{sessionTitle}}** 這一局還沒打完。\nAgent 做完手上的事，指揮權馬上交給你",
+            "takeoverLoadingPrompt1": "⏳ 正在讓你接管 **{{sessionTitle}}**…\n_📦 載入存檔中繼資料_  ·  _🔌 接通 Agent 通道_  ·  _🧠 復盤上回合戰況_\n_兩三秒就好，咖啡別一口喝完_",
+            "takeoverLoadingPrompt2": "🎮 登入 **{{sessionTitle}}** 中…\n_早期版本裡，等不及的玩家會狂點微信圖示，但其實並沒有用_",
+            "takeoverLoadingPrompt3": "⌛ **{{sessionTitle}}** 載入中…  99%\n_這條進度條是真的——正在翻你們上回合聊了什麼_",
+            "takeoverLoadingPrompt4": "🛰️ 正在與 **{{sessionTitle}}** 建立連線…\n_(WiFi 訊號好像有點弱…喔不，是在想該怎麼跟你 brief)_",
+            "newSessionWelcomePrompt1": "🎯 接管 + 開檔 一氣呵成——**{{workspaceName}}** 已就位，Agent 待命中。\n傳第一則指令開始；想撤隨時 `/exctr`",
+            "newSessionWelcomePrompt2": "✨ 新存檔已建立——工作目錄 **{{workspaceName}}** 已經備妥，Agent 等你發話。\n第一則訊息開打；`/exctr` 隨時退出",
+            "newSessionWelcomePrompt3": "🎮 準備就緒——在 **{{workspaceName}}** 幫你開了個全新存檔。\n要做什麼告訴我，Agent 在線~  `/exctr` 收手",
+            "newSessionWelcomePrompt4": "🆕 全新開局——**{{workspaceName}}** 工作目錄已經 ready。\n第一則指令開始；不想玩了就 `/exctr`"
+          }
+        },
+        "reply": {
+          "unsupportedMedia": "目前版本暫不支援處理這類微信媒體。",
+          "stillProcessing": "任務仍在處理中…",
+          "ownerOnlyCommands": "只有主人可以使用機器人指令。",
+          "companionManagedCommand": "請在 Cindy 中開啟這位夥伴：模型在夥伴設定中調整，權限在對話輸入框下方切換。",
+          "help": "可用指令：/new 新對話；/stop 中止目前執行；/stop all 中止全部執行；/status 查看狀態；/help 查看說明。",
+          "status_one": "Cindy 微信連線正常，目前佇列 {{count}} 則。",
+          "status_other": "Cindy 微信連線正常，目前佇列 {{count}} 則。",
+          "stopped": "已停止任務。",
+          "companionDmNew": "這裡與夥伴共用同一個長期任務，記錄和記憶會保留。需要整理上下文時，請在 Cindy 中重新啟動夥伴。",
+          "newConversation": "已開始一段新對話。",
+          "unknownCommand": "未知指令。傳送 /help 查看可用指令。",
+          "overloaded": "目前微信任務較多，請稍後再試。"
+        },
+        "preDispatch": {
+          "companionPermissionUnsupported": "這則訊息需要逐次權限確認，但夥伴目前的模型或權限模式不支援，訊息無法啟動。\n請主人在 Cindy 中開啟這位夥伴，檢查夥伴設定中的模型，並在對話輸入框下方選擇預設權限或自動審批。",
+          "missingAuth": "目前的 Agent 尚未完成授權，請先在 Cindy 中連接模型服務。",
+          "generic": "這則訊息暫時無法啟動，請稍後重試。"
+        },
+        "interaction": {
+          "invalidReply": "回覆格式不正確。請依上一則訊息的提示回覆；權限確認只接受「{{allow}}」或「{{deny}}」。",
+          "permissionTitle": "需要確認工具「{{tool}}」。",
+          "operationPreview": "操作：\n{{preview}}",
+          "permissionReplyHint": "回覆「{{allow}}」執行一次，或回覆「{{deny}}」取消這次操作。微信內不支援永久授權。",
+          "planReview": "Agent 提交了一份執行計畫：\n\n{{plan}}\n\n回覆「{{approve}}」繼續，或回覆「{{deny}}」取消。",
+          "askNoQuestion": "Agent 正在等你的回答，但沒有可顯示的問題。請回覆「繼續」。",
+          "askQuestion": "Agent 需要你的回答：\n{{question}}\n{{options}}\n請回覆選項編號，或直接輸入你的回答。"
+        }
+      }
+    }
   },
   "markdown": {},
   "diffPanel": {
