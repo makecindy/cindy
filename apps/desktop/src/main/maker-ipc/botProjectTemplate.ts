@@ -13,7 +13,7 @@ import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
-export const TEAMMATE_TEMPLATE_VERSION = 3;
+export const TEAMMATE_TEMPLATE_VERSION = 4;
 /** What the project started from and which template files it still has untouched. */
 export const TEAMMATE_TEMPLATE_RECORD = path.join('.cindy', 'template.json');
 const PENDING_DIR = path.join('.cindy', 'template');
@@ -68,7 +68,8 @@ export function teammateTemplateFiles(displayName: string): Record<string, strin
       '',
       '## While it runs',
       '',
-      '- Do not ask a task to send its result back: the owner is notified when it finishes and reads it there. Ask for a send-back (with this conversation\'s session id from `get_current_session_id`) only when the owner wants you to take the result further, such as combining it or continuing from it.',
+      '- Do not ask a task to send its result back: the owner is notified when it finishes and reads it there. Only when the owner wants you to take the result further, such as combining it or continuing from it, say so explicitly in the brief or a follow-up: ask the task to send its result back with `send_to_session` to this conversation\'s session id (from `get_current_session_id`).',
+      '- To check whether a message you sent was delivered or answered, call `get_message_status` once with the `queued_message_id` from the `send_to_session` receipt (a `deviceId::session_id` target works the same). It is a point-in-time lookup: call it when you need an answer, never poll it in a loop.',
       '- When asked how things are going, read `get_task_digest` for each task; open the full history only when needed. Do not wait in a loop.',
       '- When a result does come back, read it against what was asked. If something is missing or wrong, ask that task to fix it; do not redo the work yourself.',
       '',

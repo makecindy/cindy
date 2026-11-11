@@ -114,6 +114,17 @@ describe('capabilities data source', () => {
     // jump 撞忙已改为入队,旧的「本工具不排队」说法会误导 skill 自己 retry/backoff。
     expect(entry!.detail).not.toContain('本工具不排队');
     expect(entry!.detail).toContain('wake_kind=queued');
+    // issue #9924: 送达回执的 queued_message_id 可用于按需状态查询,且明确不轮询。
+    expect(entry!.detail).toContain('queued_message_id');
+    expect(entry!.detail).toContain('get_message_status');
+    expect(entry!.detail).toContain('不要循环轮询');
+  });
+
+  it('chat-history-query 把 get_message_status 列入 history 工具面', () => {
+    const entry = findCapability('chat-history-query');
+    expect(entry).toBeDefined();
+    expect(entry!.detail).toContain('get_message_status');
+    expect(entry!.detail).toContain('queued_message_id');
   });
 
   it('collab-mode 明确 Pi 可作本地 Lead 和 Worker，且不扩大到 SSH 远程 Pi', () => {

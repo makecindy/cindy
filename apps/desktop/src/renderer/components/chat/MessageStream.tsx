@@ -1896,7 +1896,7 @@ export function buildRenderItems(
 
     const slice = originalTurnSlice(lo, hi);
     if (opts?.botSessionId) {
-      const startedTasks = collectBotStartedTasks(slice);
+      const startedTasks = collectBotStartedTasks(slice, allMessages);
       if (startedTasks.length > 0) {
         items.push({ type: 'bot_started_tasks', key: `started-tasks-${messages[lo].clientId}`, tasks: startedTasks });
       }
@@ -3379,7 +3379,7 @@ export function MessageStream({
     );
     return appendPendingQueueItems(
       simplifiedBotConversation
-        ? attachBotStartedTasks(botProcessItems(grouped, isSessionStreaming, botTailReplyIds))
+        ? attachBotStartedTasks(botProcessItems(grouped, isSessionStreaming, botTailReplyIds), messages)
         : grouped,
       pendingMessages ?? [],
       messages,

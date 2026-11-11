@@ -863,6 +863,39 @@ describe('buildRenderItems — key stability', () => {
       .filter((item) => item.type === 'bot_started_tasks')).toHaveLength(1);
   });
 
+  it('enriches started tasks with status from get_message_status queries', () => {
+    const receipt = (id: string, wake: string, title: string, qId?: string) =>
+      JSON.stringify({ ok: true, target_session_id: id, wake_kind: wake, target_title: title, ...(qId ? { queued_message_id: qId } : {}) });
+    const statusResult = (msgId: string, status: string, sessId?: string) =>
+      JSON.stringify({ ok: true, message_id: msgId, status, ...(sessId ? { session_id: sessId } : {}) });
+
+    const messages = [
+      mkUser('u1'),
+      mkTool('send-1', 'mcp__cindy_helper__call_tool', { name: 'send_to_session', args: { title: 'Fix bug' } }),
+      mkResult('send-1-r', 'tu-send-1', receipt('s-1', 'queued', 'Fix bug', 'q-msg-1')),
+      mkTool('status-1', 'mcp__cindy_helper__call_tool', { name: 'get_message_status', args: { message_id: 'q-msg-1' } }),
+      mkResult('status-1-r', 'tu-status-1', statusResult('q-msg-1', 'processing')),
+      mkUser('u2'),
+    ];
+
+    const started = buildRenderItems(messages, undefined, undefined, { botSessionId: 'bot-chat' })
+      .items.filter((item) => item.type === 'bot_started_tasks');
+    expect(started).toEqual([{
+      type: 'bot_started_tasks',
+      key: 'started-tasks-u1',
+      tasks: [
+        { sessionId: 's-1', title: 'Fix bug', created: false, queuedMessageId: 'q-msg-1', status: 'processing' },
+      ],
+    }]);
+
+    const withReply = [...messages.slice(0, -1), mkAssistant('reply', 'Done.'), mkUser('u2')];
+    const attached = attachBotStartedTasks(buildRenderItems(withReply, undefined, undefined, { botSessionId: 'bot-chat' }).items, withReply);
+    const reply = attached.find((item) => item.type === 'message' && item.message.clientId === 'reply');
+    expect(reply?.type === 'message' ? reply.message.botStartedTasks : null).toEqual([
+      { sessionId: 's-1', title: 'Fix bug', created: false, queuedMessageId: 'q-msg-1', status: 'processing' },
+    ]);
+  });
+
   describe('bot sessions hand the turn over to deliverables', () => {
     const messages = [
       mkUser('u1'),

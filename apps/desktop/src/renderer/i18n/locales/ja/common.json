@@ -14422,12 +14422,19 @@
       "open": "タスク「{{title}}」を開く",
       "untitled": "名称未設定のタスク",
       "startedOne": "開始したタスク",
-      "handedToOne": "引き継ぎ先"
+      "handedToOne": "引き継ぎ先",
+      "status": {
+        "queued": "queued",
+        "processing": "処理中",
+        "consumed": "返信あり",
+        "failed": "失敗"
+      }
     },
     "botTaskLetter": {
       "replied": "からの返信",
       "toggle": "「{{title}}」からの返信を開閉",
-      "openTask": "タスクを開く"
+      "openTask": "タスクを開く",
+      "replyFromPrefix": "返信元："
     }
   },
   "ccAgent": {

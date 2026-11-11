@@ -14623,12 +14623,19 @@
       "open": "Abrir a tarefa «{{title}}»",
       "untitled": "Tarefa sem título",
       "startedOne": "Iniciada",
-      "handedToOne": "Entregue a"
+      "handedToOne": "Entregue a",
+      "status": {
+        "queued": "queued",
+        "processing": "A processar",
+        "consumed": "Respondido",
+        "failed": "Com falha"
+      }
     },
     "botTaskLetter": {
       "replied": "respondeu",
       "toggle": "Mostrar ou ocultar a resposta de «{{title}}»",
-      "openTask": "Abrir tarefa"
+      "openTask": "Abrir tarefa",
+      "replyFromPrefix": "Resposta de"
     }
   },
   "ccAgent": {

@@ -41,6 +41,8 @@ export type SessionHandoffSendResult =
       wakeKind: 'resumed' | 'already-active' | 'created' | 'queued';
       targetTitle: string | null;
       targetLastUserSendAt: string | null;
+      /** 目标侧输入队列 clientId；发送方可用它做 get_message_status 送达查询。 */
+      queuedMessageId?: string;
     } & Partial<Omit<RemoteSessionCreated, 'agentKind'>>)
   | { ok: false; errorCode: string; message: string };
 
@@ -115,9 +117,10 @@ export function createSessionHandoffHandler(deps: {
       }
       created = opened;
     }
+    const deliveryClientId = `remote-task-action:${receiptId}`;
     const result = await deps.send({
       autoReviewUserText: { kind: 'agent-request', request: requestSource ?? { userText: null } },
-      clientId: `remote-task-action:${receiptId}`,
+      clientId: deliveryClientId,
       forceQueue: true,
       taskActionDeliveryGuard,
       targetSessionId,
@@ -142,6 +145,7 @@ export function createSessionHandoffHandler(deps: {
       wakeKind: created ? 'created' : result.wakeKind,
       targetTitle: result.targetTitle,
       targetLastUserSendAt: result.targetLastUserSendAt,
+      queuedMessageId: deliveryClientId,
     };
   };
 }

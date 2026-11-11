@@ -35,6 +35,8 @@ export type RemoteSessionHandoffResult =
       wakeKind: 'resumed' | 'already-active' | 'queued' | 'created';
       targetTitle: string | null;
       targetLastUserSendAt: string | null;
+      /** 目标侧 clientId；新建路径可能缺省（created 不经输入队列回执）。 */
+      queuedMessageId?: string;
     } & Partial<RemoteSessionCreated>)
   | { ok: false; errorCode: RemoteSessionHandoffErrorCode; message: string };
 
@@ -287,6 +289,9 @@ export function createRemoteSessionHandoff(deps: {
       targetTitle: typeof result.targetTitle === 'string' ? result.targetTitle : null,
       targetLastUserSendAt:
         typeof result.targetLastUserSendAt === 'string' ? result.targetLastUserSendAt : null,
+      ...(typeof result.queuedMessageId === 'string' && result.queuedMessageId
+        ? { queuedMessageId: result.queuedMessageId.slice(0, 256) }
+        : {}),
     };
   };
 }

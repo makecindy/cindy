@@ -603,6 +603,97 @@ describe("cindy_helper MCP server", () => {
     }
   });
 
+  it("discovers and calls get_message_status through the history category", async () => {
+    const getMessageStatus = vi.fn(async () => ({
+      ok: true as const,
+      status: "dispatched" as const,
+      detail: "消息已受理并落库，尚未见到 assistant 回复。",
+    }));
+    const server = createXdtHelperMcpServer(
+      { messageStatus: { getMessageStatus } },
+      {
+        agentKind: "codex",
+        workingDir: "/repo",
+        sessionId: "dispatcher-session",
+      },
+    );
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({
+      name: "cindy-helper-message-status-test",
+      version: "0.0.0",
+    });
+
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      const discovered = parsePayload(
+        await client.callTool({
+          name: "list_tools",
+          arguments: { category: "history" },
+        }),
+      );
+      expect((discovered.tools as Array<{ name: string }>).map((tool) => tool.name)).toContain(
+        "get_message_status",
+      );
+
+      const result = await client.callTool({
+        name: "call_tool",
+        arguments: {
+          name: "get_message_status",
+          args: {
+            session_id: "device-a::session-1",
+            message_id: "queued-1",
+          },
+        },
+      });
+
+      expect(parsePayload(result)).toMatchObject({
+        ok: true,
+        session_id: "device-a::session-1",
+        message_id: "queued-1",
+        status: "dispatched",
+      });
+      expect(getMessageStatus).toHaveBeenCalledWith({
+        sessionId: "device-a::session-1",
+        messageId: "queued-1",
+      });
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("does not register get_message_status when the host dep is absent", async () => {
+    const server = createXdtHelperMcpServer(
+      {},
+      {
+        agentKind: "codex",
+        workingDir: "/repo",
+        sessionId: "dispatcher-session",
+      },
+    );
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({
+      name: "cindy-helper-message-status-absent-test",
+      version: "0.0.0",
+    });
+
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      const discovered = parsePayload(
+        await client.callTool({
+          name: "list_tools",
+          arguments: { category: "history" },
+        }),
+      );
+      expect(
+        (discovered.tools as Array<{ name: string }>).map((tool) => tool.name),
+      ).not.toContain("get_message_status");
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
   it("discovers the complete session control surface through the control category", async () => {
     const server = createXdtHelperMcpServer(
       {

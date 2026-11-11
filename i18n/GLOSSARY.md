@@ -658,6 +658,10 @@ GitHub PR / GitLab MR 的合并冲突。数据行标签为 Merge / 合并，状�
 
 群聊里「别的成员已经看过这条消息」的状态（消息气泡下的双勾、「N 人已读」）。与「Read」作动词（读取文件）无关；只用于消息读取状态。
 
+### Replied
+
+已投递消息的送达状态之一（chat.botStartedTasks.status.consumed / get_message_status 的 consumed）：对方任务在该消息之后出现了回复。刻意不用「已读 / Read」，那是群聊已读回执专用；文言版取「已覆」，与 botTaskLetter.replied 的「覆书」同源。
+
 ### Migration Assistant
 
 新电脑从同账号的其他电脑复制插件、技能与设置的功能名（设置 → 通用），用户 2026-10-20 定名「迁移助理」。ja / ko 参照系统同类功能的常见叫法；登记为 proposed，待术语评审。

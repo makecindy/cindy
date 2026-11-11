@@ -119,7 +119,7 @@ import { ghostCommandTokenLength, parseGhostCommandToken, splitGhostDirective } 
 import { splitHostCapabilityDirective } from '@/cindy-brain/hostCapabilityInvocation';
 import { GhostSummonCard } from './GhostSummonCard';
 import { MessageSourceLabels } from './MessageSourceLabels';
-import { BotTaskLetterOpen, BotTaskLetterPill } from './BotStartedTasks';
+import { BotTaskLetterOpen, BotTaskLetterPill, parseMessageSourceNote } from './BotStartedTasks';
 import { UserMessageUrlLink } from './UserMessageUrlLink';
 import { InlineReferenceChip } from './InlineReferenceChip';
 import { QuoteChip } from './QuoteChip';
@@ -1265,8 +1265,16 @@ export function UserMessage({
   const botLetter =
     simplifiedBotConversation && !editing && !orcaCommunication && !hookSource
     && automationOrigin?.kind === 'session' && !automationOrigin.orca;
+  const parsedLetterSource = botLetter
+    ? parseMessageSourceNote(displayContent) || parseMessageSourceNote(content)
+    : null;
+  const letterSenderTitle = parsedLetterSource?.title
+    ?? (automationOrigin?.kind === 'session' ? automationOrigin.senderSessionTitle ?? null : null);
+  const letterSenderSessionId = parsedLetterSource?.sessionId
+    ?? (automationOrigin?.kind === 'session' ? automationOrigin.senderSessionId : undefined);
+  const letterBody = (parsedLetterSource?.cleanBody || displayContent).trimStart();
   const letterPreview = botLetter
-    ? (displayContent.split('\n').find((line) => line.trim()) ?? '').trim()
+    ? (letterBody.split('\n').find((line) => line.trim()) ?? '').trim()
     : '';
   const attachmentsInBubble =
     simplifiedBotConversation && !editing && !orcaCommunication && !hookSource && !botLetter && (hasImages || hasFiles);
@@ -1450,8 +1458,8 @@ export function UserMessage({
         ) : botLetter ? (
           <>
             <BotTaskLetterPill
-              senderSessionId={automationOrigin?.kind === 'session' ? automationOrigin.senderSessionId : undefined}
-              senderTitle={automationOrigin?.kind === 'session' ? automationOrigin.senderSessionTitle ?? null : null}
+              senderSessionId={letterSenderSessionId}
+              senderTitle={letterSenderTitle}
               hostSessionId={sessionId}
               preview={letterPreview}
               expanded={letterExpanded}
@@ -1460,10 +1468,10 @@ export function UserMessage({
             {letterExpanded && (
               <div className="flex w-full flex-col items-start gap-1.5 border-l-2 border-[var(--border-default)] pl-3">
                 <div className="w-full select-text whitespace-pre-wrap text-13 leading-5 text-[var(--text-secondary)] [overflow-wrap:anywhere]">
-                  {displayContent}
+                  {letterBody}
                 </div>
                 <BotTaskLetterOpen
-                  senderSessionId={automationOrigin?.kind === 'session' ? automationOrigin.senderSessionId : undefined}
+                  senderSessionId={letterSenderSessionId}
                   hostSessionId={sessionId}
                 />
               </div>

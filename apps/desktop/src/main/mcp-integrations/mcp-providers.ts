@@ -136,6 +136,8 @@ import {
   readChatHistoryMessages,
   type ChatHistoryReaderDeps,
 } from './remoteChatHistory.js';
+import { readRemoteMessageStatus } from './messageStatusRemote.js';
+import { parseQualifiedSessionId } from '@cindy/mcps';
 import { botSessionLinks, sessions } from '../localDb/schema.js';
 import { createSchedulerRemoteDeps } from './schedulerDevices.js';
 import { createRemoteSessionHandoff } from './sessionHandoffRemote.js';
@@ -920,6 +922,28 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         listSessionQueue: wrap((service, sessionId: string) => service.listSessionQueue(sessionId)),
         listSessionQueuedCounts: wrap((service, sessionIds: string[]) =>
           service.listSessionQueuedCounts(sessionIds)),
+      },
+      messageStatus: {
+        getMessageStatus: async ({ sessionId, messageId }) => {
+          // deviceId::sessionId → 目标电脑的只读状态通道；'local' 前缀与本机 id 同义。
+          const qualified = parseQualifiedSessionId(sessionId);
+          if (qualified && qualified.deviceId !== 'local') {
+            if (!deps.historyRemote) {
+              return {
+                ok: false as const,
+                errorCode: 'REMOTE_UNSUPPORTED' as const,
+                message: '当前宿主不支持跨电脑消息状态查询。',
+              };
+            }
+            return readRemoteMessageStatus(
+              { deviceId: qualified.deviceId, sessionId: qualified.sessionId, messageId },
+              { invoke: deps.invokeRemote },
+            );
+          }
+          return wrap((service, sid: string, mid: string) =>
+            service.getMessageStatus({ sessionId: sid, messageId: mid }),
+          )(qualified?.sessionId ?? sessionId, messageId);
+        },
       },
       sessionControl: {
         updateQueuedMessage: wrap((service, params) => service.updateSessionQueuedMessage(params)),

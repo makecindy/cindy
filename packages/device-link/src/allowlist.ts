@@ -215,6 +215,9 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // —— 输入队列(input queue 全集,无本机副作用)——
   DL_SESSION_REFERENCE_CAPABILITY_CHANNEL,
   'maker:input:get-projection',
+  // 只读：单条已投递消息的送达状态（cindy_helper get_message_status 的跨电脑查询）。
+  // 老被控端无 handler → CHANNEL_NOT_ALLOWED → 控制端报 REMOTE_UNSUPPORTED。
+  'maker:input:message-status',
   'maker:input:enqueue',
   'maker:input:compact',
   // 手动压缩(pi 原生 compact,capability-aware):上下文环 / 会话菜单对远程 pi 会话

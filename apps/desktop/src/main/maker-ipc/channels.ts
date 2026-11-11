@@ -55,6 +55,8 @@ export const MAKER_INVOKE = {
   STEER: 'maker:steer',
   GET_CONTEXT_USAGE: 'maker:get-context-usage',
   INPUT_GET_PROJECTION: 'maker:input:get-projection',
+  /** 只读：单条已投递消息的送达状态（device-link 远程查询 get_message_status 用）。 */
+  INPUT_MESSAGE_STATUS: 'maker:input:message-status',
   INPUT_ENQUEUE: 'maker:input:enqueue',
   INPUT_COMPACT: 'maker:input:compact',
   INPUT_STEER: 'maker:input:steer',

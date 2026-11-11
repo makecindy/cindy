@@ -14422,12 +14422,19 @@
       "open": "打开任务「{{title}}」",
       "untitled": "未命名任务",
       "startedOne": "开了任务",
-      "handedToOne": "交给任务"
+      "handedToOne": "交给任务",
+      "status": {
+        "queued": "queued",
+        "processing": "处理中",
+        "consumed": "已回复",
+        "failed": "失败"
+      }
     },
     "botTaskLetter": {
       "replied": "回信",
       "toggle": "展开或收起「{{title}}」的回信",
-      "openTask": "打开任务"
+      "openTask": "打开任务",
+      "replyFromPrefix": "回复自"
     }
   },
   "ccAgent": {

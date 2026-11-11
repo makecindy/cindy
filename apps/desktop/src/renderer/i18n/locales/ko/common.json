@@ -14422,12 +14422,19 @@
       "open": "작업 “{{title}}” 열기",
       "untitled": "이름 없는 작업",
       "startedOne": "시작한 작업",
-      "handedToOne": "넘긴 작업"
+      "handedToOne": "넘긴 작업",
+      "status": {
+        "queued": "queued",
+        "processing": "처리 중",
+        "consumed": "회신 있음",
+        "failed": "실패"
+      }
     },
     "botTaskLetter": {
       "replied": "의 회신",
       "toggle": "“{{title}}” 회신 펼치기/접기",
-      "openTask": "작업 열기"
+      "openTask": "작업 열기",
+      "replyFromPrefix": "답장 출처:"
     }
   },
   "ccAgent": {

@@ -74,6 +74,7 @@ import {
   registerHistoryDevicesTool,
   registerListSessionsTool,
   registerListSessionQueueTool,
+  registerGetMessageStatusTool,
   registerUpdateSessionQueuedMessageTool,
   registerSteerSessionQueuedMessageTool,
   registerMoveSessionQueuedMessageTool,
@@ -120,6 +121,7 @@ import {
 import { registerTeammateSkillReader } from './xdt-helper/teammate_skills.js';
 import type { XdtHelperHistoryDeps } from './xdt-helper/_history_types.js';
 import type { SessionQueueDeps } from './xdt-helper/list_session_queue.js';
+import type { MessageStatusDeps } from './xdt-helper/get_message_status.js';
 import type { SessionControlDeps } from './xdt-helper/session_control.js';
 import type { ControlResult, LiziMcpLogger } from './types.js';
 import { resolveLiziMcpSessionContext } from './session-context.js';
@@ -493,6 +495,11 @@ export interface XdtHelperMcpDeps {
    * 并让 list_sessions 为每条 session 附带 queuedCount。
    */
   sessionQueue?: SessionQueueDeps;
+  /**
+   * 单条已投递消息的送达状态只读查询（本机 id 或 deviceId::sessionId）。
+   * host 注入后注册 get_message_status；不注入则该工具不出现。
+   */
+  messageStatus?: MessageStatusDeps;
   /** 本机 session 的统一控制面；host 注入后注册队列编辑/撤回、插话、停止与运行探针。 */
   sessionControl?: Omit<SessionControlDeps, 'getSessionContext'>;
   /**
@@ -724,6 +731,9 @@ export function createXdtHelperMcpServer(
   }
   if (deps.sessionQueue) {
     registerListSessionQueueTool(registry, deps.sessionQueue);
+  }
+  if (deps.messageStatus) {
+    registerGetMessageStatusTool(registry, deps.messageStatus);
   }
   if (deps.sessionControl) {
     const controlDeps: SessionControlDeps = {

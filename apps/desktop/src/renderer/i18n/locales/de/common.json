@@ -14488,12 +14488,19 @@
       "open": "Aufgabe „{{title}}“ öffnen",
       "untitled": "Unbenannte Aufgabe",
       "startedOne": "Gestartet",
-      "handedToOne": "Übergeben an"
+      "handedToOne": "Übergeben an",
+      "status": {
+        "queued": "queued",
+        "processing": "In Bearbeitung",
+        "consumed": "Beantwortet",
+        "failed": "Fehlgeschlagen"
+      }
     },
     "botTaskLetter": {
       "replied": "hat geantwortet",
       "toggle": "Antwort von „{{title}}“ ein- oder ausblenden",
-      "openTask": "Aufgabe öffnen"
+      "openTask": "Aufgabe öffnen",
+      "replyFromPrefix": "Antwort von"
     }
   },
   "ccAgent": {

@@ -96,6 +96,7 @@ Cindy 应用更新（2026-11-11）：`list_tools({query:"更新 Cindy"})`（含�
 | 任务     | 改名、移动、标签                                            | 有   | 无               |
 | 任务     | 给当前任务新建 Cindy 托管 worktree（默认最新远端默认分支，可指定基线分支 `base_ref`；绑定当前任务，随归档回收；不搬任务、不重启） | 有（`create_task_worktree`，2026-10-31；基线分支 2026-11-10） | 无 |
 | 任务     | 看输入队列；编辑 / 撤回 / 调序自己发的排队消息；插话；停止 | 有   | 无               |
+| 任务     | 查单条已投递消息的送达状态（`get_message_status`：queued 含位置 / processing / dispatched / consumed / failed；按 `send_to_session` 回执的 `queued_message_id` 查询，按需调用不轮询） | 有（2026-11-11） | 有（`deviceId::sessionId` 经 device-link 只读通道 `maker:input:message-status`，复用本机同一判定；目标离线 / 未开远控 / 旧版本返回 `REMOTE_*` 并明示结果不完整） |
 | 任务     | 模型、推理强度、Fast                                       | 有   | 无               |
 | 任务     | 删除、Fork、Rewind、切换权限档、代用户确认权限或回答提问   | 无   | 无               |
 | 协同 / Worker | 单个 / 批量创建、指定已有目录、查询实际目录与自有 worktree | 有 | 有（运行设备；新建 worktree 仅本机） |
@@ -167,6 +168,11 @@ Worker 工具省略 working_dir 时保持继承 Lead 任务记录目录，不跟
   长回复保留首尾片段，总预算进一步收紧时仍保留首尾，避免丢掉末尾结果或阻塞说明。
   不用内部回报替代用户要求，也不只取助手回复最后一行。`finished` 只表示所查任务本轮结束，
   不证明委派工作或用户目标完成；不参与输入放行判定，下一条消息仍按实时运行状态和队列派发。
+- 单条消息送达状态（`get_message_status`，issue #9924）：`packages/lizi-mcps/src/xdt-helper/get_message_status.ts`；
+  本机判定 `apps/desktop/src/main/maker-ipc/messageStatus.ts` + `register.ts` 的 `readSessionMessageStatus`
+  （队列快照 → active turn → messages 行与首个回复行）；跨电脑经 device-link 只读通道
+  `maker:input:message-status`（`apps/desktop/src/main/mcp-integrations/messageStatusRemote.ts`），
+  只查不改、不轮询，回复回流机制不变。
 - 「由这位伙伴开的」记录见 `apps/desktop/src/main/maker-ipc/botTaskCreation.ts`。V1 伙伴跟进（`botWorkbenchAccess.ts`）已移除。
 - 协议与兼容见 [`../dev-rules/protocol-compatibility.md`](../dev-rules/protocol-compatibility.md)
   「Agent 跨电脑管理定时任务与发消息」。
