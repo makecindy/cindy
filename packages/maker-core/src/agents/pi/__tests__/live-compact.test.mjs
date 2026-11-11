@@ -12,7 +12,7 @@ vi.mock('@earendil-works/pi-coding-agent', () => ({
 
 const extensionModule = await import('../../../../extensions/live-compact/index.ts');
 const registerLiveCompact = extensionModule.default;
-const { selectNewestChunk, balanceIndexes, buildCard, attachBackupHint, isToolFailure, rotateShadow, pruneShadowSessions, spineRoot, keptToolRounds, chooseKeptSpan, reservedCutEnd, toolEvidenceLine, pointerFor, captureToolResult, planRawEntry, commitRawEntry, verifiedRaw, resolveEngine, resolveSpineEngine, selectCutIndexes, pointerSpanAllowed, pointerOnlyText, spineEntries, longReadResults, writeOwner, orderedDrainDrafts, withBackupHint, withoutFullBackupClaim, backupHint, discardRawSnapshots, saveShadow, lastCompactionEntry, inCooldown, resolveCooldownMs, providerURLFromPatch, resolveProviderBaseURL, spanHidesCallArgs, callArgsHidden, rawName } = extensionModule;
+const { selectNewestChunk, balanceIndexes, buildCard, attachBackupHint, isToolFailure, rotateShadow, failureKeptLines, toolExcerpt, pruneShadowSessions, spineRoot, keptToolRounds, chooseKeptSpan, reservedCutEnd, toolEvidenceLine, pointerFor, captureToolResult, planRawEntry, commitRawEntry, verifiedRaw, resolveEngine, resolveSpineEngine, selectCutIndexes, pointerSpanAllowed, pointerOnlyText, spineEntries, longReadResults, writeOwner, orderedDrainDrafts, withBackupHint, withoutFullBackupClaim, backupHint, discardRawSnapshots, saveShadow, lastCompactionEntry, inCooldown, resolveCooldownMs, providerURLFromPatch, resolveProviderBaseURL, spanHidesCallArgs, callArgsHidden, rawName } = extensionModule;
 
 let seq = 0;
 function entry(role, text, extra = {}) {
@@ -260,7 +260,8 @@ describe('live compact card roles and tool excerpts (1.0.3-1.0.5)', () => {
     ];
     const card = buildCard('', '', 8000, spans);
     expect(card.text).toContain('这是当时的报错原文');
-    expect(card.text).not.toContain('│ output line 15');
+    // 1.1.5(#33): 预算内的失败结果整段保留,不再只留首尾几行。
+    expect(card.text).toContain('│ output line 15');
     expect(card.needsBackup).toBe(true);
     const hinted = attachBackupHint(card, '/tmp/shadow/cut-1.txt');
     expect(hinted.text).toContain('/tmp/shadow/cut-1.txt');
@@ -1256,5 +1257,123 @@ describe('live compact 1.1.x: 收尾多刀与指针兜底', () => {
       else process.env.SPINE_SHADOW_DIR = previousRoot;
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe('live compact 1.1.5: failure diagnostics completeness, checkpoint floor for kept rounds', () => {
+  it('a failed diagnostic line keeps its suffix when the complete body fits the budget', () => {
+    // 上游 failed-diagnostics #33:预算内的失败诊断整段保留,不再按首尾截行。
+    const line = `Error: ${'x'.repeat(300)} END_OF_LINE_DIAGNOSTIC`;
+    const text = [line, ...Array.from({ length: 13 }, (_, i) => `context ${i}`)].join('\n');
+    expect(failureKeptLines(text)).toContain(line);
+    const card = buildCard('', '', 8000, [{ role: 'tool', text, isError: true }]);
+    expect(card.ok).toBe(true);
+    expect(card.failureDiagnosticsComplete).toBe(true);
+    expect(card.text).toContain(line);
+  });
+
+  it('framing cannot silently clip a diagnostic that fit the line budget', () => {
+    const text = `Error: ${'x'.repeat(2340)} END_MARKER`;
+    expect(failureKeptLines(text).join('\n')).toBe(text);
+    const card = buildCard('', '', 8000, [{ role: 'tool', text, isError: true, command: 'command '.repeat(20) }]);
+    expect(card.ok).toBe(false);
+    expect(card.failureDiagnosticsComplete).toBe(false);
+    expect(card.missing.some((line) => line.includes('failed-tool-diagnostics-not-retained'))).toBe(true);
+  });
+
+  it('multiple failed tools cannot drop an older failure to fit a shared budget', () => {
+    const spans = [
+      { role: 'tool', text: `Error: OLDER_FAILURE ${'a'.repeat(1400)}`, isError: true },
+      { role: 'tool', text: `Error: NEWER_FAILURE ${'b'.repeat(1400)}`, isError: true },
+    ];
+    expect(toolExcerpt(spans).failureDiagnosticsComplete).toBe(false);
+    const card = buildCard('', '', 8000, spans);
+    expect(card.ok).toBe(false);
+    expect(card.failureDiagnosticsComplete).toBe(false);
+    expect(card.missing.some((line) => line.includes('failed-tool-diagnostics-not-retained'))).toBe(true);
+  });
+
+  it('budget-sized structured failures retain fields outside both streams', () => {
+    const text = JSON.stringify({ exitCode: 23, stderr: { text: 'Error: wrapper failed' }, stdout: { text: 'ordinary detail '.repeat(50) }, errorDetail: 'ROOT_FIELD_SENTINEL' });
+    const card = buildCard('', '', 8000, [{ role: 'tool', text, isError: false }]);
+    expect(card.ok).toBe(true);
+    expect(card.failureDiagnosticsComplete).toBe(true);
+    expect(card.text).toContain('ROOT_FIELD_SENTINEL');
+    expect(card.text).toContain(text);
+  });
+
+  it('short streams cannot certify an over-budget structured failure as complete', () => {
+    const text = JSON.stringify({ exitCode: 23, stderr: { text: 'Error: wrapper failed' }, stdout: { text: 'short output' }, diagnostic: 'other failure context '.repeat(300) });
+    const card = buildCard('', '', 8000, [{ role: 'tool', text, isError: false }]);
+    expect(card.ok).toBe(false);
+    expect(card.failureDiagnosticsComplete).toBe(false);
+  });
+
+  it('structured nonzero output keeps both streams when they fit', () => {
+    const text = JSON.stringify({ exitCode: 23, stdout: { text: 'STDOUT_CAUSE=missing setting' }, stderr: { text: 'STDERR_CAUSE=wrapper failed' } });
+    const card = buildCard('', '', 8000, [{ role: 'tool', text, isError: false }]);
+    expect(card.ok).toBe(true);
+    expect(card.failureDiagnosticsComplete).toBe(true);
+    expect(card.text).toContain('STDOUT_CAUSE');
+    expect(card.text).toContain('STDERR_CAUSE');
+    expect(card.text).toContain('"exitCode":23');
+  });
+
+  it('pointer labels agree with the nonzero-exit failure classifier', () => {
+    const span = { role: 'tool', text: 'Error: POINTER_ROOT_CAUSE\n[exit code: 1]', isError: false, name: 'shell', toolCallId: 'c1', raw: { ok: false, toolCallId: 'c1' } };
+    expect(pointerOnlyText([span])).toContain('(报错)');
+    // 卡片侧的分类器口径:同一个结果在卡片里也按报错原文保留。
+    expect(buildCard('', '', 8000, [span]).text).toContain('报错原文');
+  });
+
+  it('ordinary output mentioning errors stays eligible under the unknown-state rule', () => {
+    const card = buildCard('', '', 8000, [{ role: 'tool', text: 'File documentation: Error: is an example\n'.repeat(100), isError: false }]);
+    expect(card.ok).toBe(true);
+    expect(card.failureDiagnosticsComplete).toBe(true);
+  });
+
+  it('a complete failed diagnostic already retained in live context does not veto the card', () => {
+    const text = `Error: diagnostic retained outside the cut\n${'context\n'.repeat(500)}`;
+    const card = buildCard(text, text, 8000, [{ role: 'tool', text, isError: true }]);
+    expect(card.ok).toBe(true);
+    expect(card.failureDiagnosticsComplete).toBe(true);
+  });
+
+  it('refuses a pointer-only cut whose oversized result is a known failure', () => {
+    const round = (id) => [
+      entry('assistant', `ask ${id}`, { calls: [id], callMeta: new Map([[id, { name: 'shell', command: '', filePath: '', jobId: '', hiddenArgs: false }]]) }),
+      entry('toolResult', `out ${id}`, { results: [id] }),
+    ];
+    const entries = [
+      entry('system', 'sys'),
+      entry('user', 'go'),
+      ...round('c1'),
+      entry('assistant', 'read r0', {
+        calls: ['r0'],
+        callMeta: new Map([['r0', { name: 'read', command: '', filePath: '', jobId: '', hiddenArgs: false }]]),
+      }),
+      entry('toolResult', `${'x'.repeat(200000)}\n[exit code: 1]`, { results: ['r0'] }),
+      ...round('c2'),
+      ...round('c3'),
+    ];
+    // 1.1.5(#33): 失败诊断不允许只留指针 —— 这刀放弃,而不是把报错原文从上下文里抹掉。
+    expect(selectNewestChunk(entries, undefined, { drain: true, totalTokens: 90000 })).toBeNull();
+  });
+
+  it('retained rounds restart after the newest checkpoint', () => {
+    // 上游 issue-19 #36:卡片右边的短轮横跨卡片时,cutEnd 会被推到卡片左侧撞地板,
+    // 卡片与保留轮之间的区域饿死;保留轮只从最新卡片之后重新数。
+    const events = [
+      entry('assistant', 'a', { calls: ['c1'] }),
+      entry('toolResult', 'r1', { results: ['c1'] }),
+      { ...entry('user', 'Spine extract.\nsummary'), entryType: 'compaction' },
+      entry('assistant', 'a', { calls: ['c2'] }),
+      entry('toolResult', 'r2', { results: ['c2'] }),
+      entry('assistant', 'a', { calls: ['c3'] }),
+      entry('toolResult', 'r3', { results: ['c3'] }),
+    ];
+    expect(keptToolRounds(events, 3, undefined, 2)).toEqual([{ start: 3, end: 4 }, { start: 5, end: 6 }]);
+    // 不传地板时旧行为不变:三轮全保留。
+    expect(keptToolRounds(events, 3)).toEqual([{ start: 0, end: 1 }, { start: 3, end: 4 }, { start: 5, end: 6 }]);
   });
 });

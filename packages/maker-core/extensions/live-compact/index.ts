@@ -131,6 +131,24 @@
  *   - 重启回填仍是 1.1.0 第 3 条那处偏差:上游靠 `captureNew` 补抓,本仓每个 settle 都给
  *     全量消息,原文快照幂等,没有需要补抓的缺口。
  *   - 1.1.3 没有改任何阈值或选段逻辑(上游 diff 只碰了事件捕获、测试、文档与版本号)。
+ *
+ * 1.1.4 + 1.1.5(上游共 37 个提交,逐项比对后只吸收三处): 
+ *   - #36:保留轮从最新卡片之后重新数(keptToolRounds 的 afterIndex 地板)。短轮横跨卡片时,
+ *     cutEnd 被推到卡片左侧撞「卡片地板」,卡片与保留轮之间的区域从此饿死;只数卡片右侧的轮,
+ *     空隙恢复可切(上游 issue #19 的后续修正,上游 test/issue-19.mjs 回归覆盖)。
+ *   - #33:失败诊断完整性。放得进预算的失败结果整段保留(failureBody 预算内返回原文);
+ *     超预算才按「标记行首条+末7条 + 根因行 + 首尾行」挑;toolBlock 标记诊断是否逐行完整,
+ *     toolExcerpt 把被截/被丢的失败记进 incompleteFailures,buildCard 据此把卡片打到
+ *     不可执行(missing 里写 failed-tool-diagnostics-not-retained);pointer-only 段含
+ *     已知失败就放弃这刀;指针标签的「报错」判定与 isToolFailure 对齐。
+ *   - #35 的逐行检查(回收重启后死掉的 rotation owner):全部改动位于 DSH shared-root/
+ *     dedicated-root 的 rotation owner 机制(lstat 校验、v1 JSON 记录合法性、旋转锁下的
+ *     temp+fsync+rename 发布、ESRCH 证明死亡后重发)——本仓没有 shared-root 模式(1.1.2 的
+ *     SPINE_SHADOW_SINGLE_PROCESS 专属根目录口径已裁定不移植),没有可移植面。唯一吸收的
+ *     细节:processAlive 只认 ESRCH 为死亡,其余错误(EPERM/EINVAL)一律按活着处理,
+ *     宁可漏回收也不误回收。
+ *   - 其余(#34 事件捕获批处理、#27 worker 池、#37 空摘要守卫、#29 启动哨兵、#38/#22/#24/#28
+ *     Windows ACL、#42 Cordis、#41 文档、live-fill)与 pi 无关或已裁定不移植;阈值不变。
  * 收尾的选段几何与上游一致:上游的卡片是原地替换(surfaceOp replace),所以卡片左边是已进缓存
  * 的前缀(不能切),卡片右边、保留区之前还能切。本仓的卡片实际落在尾巴上(pi 的 custom_message
  * 只能追加),但收尾内部选段时把卡片放回被切掉那一段的位置 —— 否则新卡片当地板会把整段历史
@@ -405,27 +423,42 @@ function usefulLines(text: any): string[] {
     });
 }
 
-export function errorKeptLines(text: any): string[] {
-  const useful = usefulLines(text);
-  const picked: string[] = [];
-  for (const line of [...useful.slice(0, 1), ...useful.slice(-2)]) {
-    if (!picked.includes(line)) picked.push(line);
-  }
-  return picked;
-}
-
-export function failureKeptLines(text: any): string[] {
+// 1.1.5(#33): 放得进预算的失败结果整段保留,不再只抽 stderr/stdout 两个流 ——
+// 失败诊断里 stderr 之外的字段(堆栈、错误码)往往就是下一步要用的东西。
+function failureBody(text: any): string {
   const raw = String(text || "").trim();
   if (raw.startsWith("{")) {
     try {
       const parsed = JSON.parse(raw);
+      if (raw.length <= TOOL_BUDGET) return raw;
       const stderr = parsed?.stderr?.text;
       const stdout = parsed?.stdout?.text;
       const body = typeof stderr === "string" && stderr.trim() ? stderr : typeof stdout === "string" ? stdout : "";
-      if (body.trim()) return errorKeptLines(body);
+      if (body.trim()) return body;
     } catch {}
   }
-  return errorKeptLines(raw);
+  return raw;
+}
+
+const FAILURE_LINE = /(?:^|\s)(?:FAIL(?:ED)?\b|Error:|Exception:|Traceback\b|panic:|AssertionError)/;
+
+function shortenLine(line: string): string {
+  return line.length > 240 ? `${line.slice(0, 240)} …` : line;
+}
+
+/** 报错块保底行:放得进预算就全留;超预算才按标记行(首条+末7条)+根因行+首尾行挑。 */
+export function failureKeptLines(text: any): string[] {
+  const useful = usefulLines(failureBody(text));
+  if (useful.join("\n").length <= TOOL_BUDGET) return useful;
+  const markedLines = useful.filter((line) => FAILURE_LINE.test(line));
+  const marked = (markedLines.length > 8 ? [markedLines[0], ...markedLines.slice(-7)] : markedLines).map(shortenLine);
+  const causes = useful.filter((line) => /(?:root|stderr|stdout)[ _-]*cause\b|CAUSE\b/i.test(line)).slice(-4).map(shortenLine);
+  const edges = [...useful.slice(0, 1), ...useful.slice(-2)].map(shortenLine);
+  const picked: string[] = [];
+  for (const line of [...edges.slice(0, 1), ...marked, ...causes, ...edges.slice(1)]) {
+    if (line && !picked.includes(line)) picked.push(line);
+  }
+  return picked;
 }
 
 export function unknownKeptLines(text: any): string[] {
@@ -597,11 +630,15 @@ export function keptToolRounds(
   entries: Array<{ calls: string[]; results: string[] }>,
   limit: number = KEEP_ROUNDS,
   longReads?: Set<number>,
+  afterIndex: number = -1,
 ): ToolRound[] {
   const count = Number.isInteger(limit) && limit > 0 ? limit : 3;
   // 1.1.1: 含长 read 的轮不占保留位 —— 它与普通短结果同留时,这一轮根本切不下来。
   // Upstream: rounds holding a long read are not kept, so they can be cut on their own.
-  const rounds = finishedToolRounds(entries).filter((round) => !roundHasLongRead(round, longReads));
+  // 1.1.5(#36): 保留轮只从最新卡片(afterIndex)之后重新数 —— 短轮横跨卡片时 cutEnd 被
+  // 推到卡片左侧撞地板,卡片与保留轮之间的区域从此饿死;只数卡片右侧的轮,空隙恢复可切。
+  const floor = Number.isInteger(afterIndex) ? afterIndex : -1;
+  const rounds = finishedToolRounds(entries).filter((round) => round.start > floor && !roundHasLongRead(round, longReads));
   return rounds.slice(-count);
 }
 
@@ -1115,7 +1152,8 @@ export function pointerOnlyText(pieces: SpanPiece[] | null): string {
     if (normalizeRole(piece?.role) !== "tool") continue;
     const command = commandLine(piece.command) || piece.name || "tool";
     const pointer = piece.raw ? pointerFor({ ...piece.raw, toolCallId: piece.raw.toolCallId || piece.toolCallId }) : "";
-    lines.push(`- [tool] ${command}${piece.isError ? " (报错)" : ""}${pointer ? ` → ${pointer}` : " → 无完整备份"}`);
+    // 1.1.5(#33): 报错标记用 isToolFailure 判,不再只认 isError 标志 —— 有退出码的失败也要亮出来。
+    lines.push(`- [tool] ${command}${isToolFailure(piece.text, piece.isError) ? " (报错)" : ""}${pointer ? ` → ${pointer}` : " → 无完整备份"}`);
   }
   lines.push("本地备份不在这次请求里。");
   return lines.join("\n");
@@ -1227,7 +1265,7 @@ export function withBackupHint(card: any, shadowFile: string, claimable = true) 
 
 export function toolExcerpt(spans: SpanPiece[] | null, backupId = "") {
   const tools = (spans || []).filter((span) => span.role === "tool" && String(span.text || "").trim().length > 0);
-  if (tools.length === 0) return { text: "", omitted: 0, needsBackup: false, excerpts: [] as Array<{ sourceId: any; text: string }>, stats: [] as Array<{ sourceId: any; hardLines: string[]; omittedOrdinaryToolLines: number }> };
+  if (tools.length === 0) return { text: "", omitted: 0, needsBackup: false, failureDiagnosticsComplete: true, incompleteFailures: [] as Array<{ sourceId: any; reason: string }>, excerpts: [] as Array<{ sourceId: any; text: string }>, stats: [] as Array<{ sourceId: any; hardLines: string[]; omittedOrdinaryToolLines: number }> };
   const ranked = tools.map((span, index) => ({ span, index }));
   // 1.0.6: 最后一个报错最先放(接着排查要用),其次其他报错,再按新旧。
   let lastFailure = -1;
@@ -1243,6 +1281,11 @@ export function toolExcerpt(spans: SpanPiece[] | null, backupId = "") {
     return right.index - left.index;
   });
   const chosen: Array<{ index: number; block: string; sourceId: any; text: string }> = [];
+  // 1.1.5(#33): 失败诊断被截/被丢都要记账,buildCard 据此把卡片标为不可执行。
+  const incompleteFailures = new Map<number, string>();
+  const incomplete = (sourceId: any, reason: string) => {
+    if (!incompleteFailures.has(sourceId)) incompleteFailures.set(sourceId, reason);
+  };
   // 1.0.9: 每个工具来源都记「哪些是硬行、哪些普通行被省略」,卡片按 (来源, 行) 核覆盖。
   const stats: Array<{ sourceId: any; hardLines: string[]; omittedOrdinaryToolLines: number }> = [];
   let used = 0;
@@ -1250,12 +1293,16 @@ export function toolExcerpt(spans: SpanPiece[] | null, backupId = "") {
   for (const item of ranked) {
     const built = toolBlock(item.span);
     let block = built.block;
+    const sourceId = (item.span as any).id;
+    if (!built.failureDiagnosticsComplete) incomplete(sourceId, "failed-tool-lines-truncated");
     if (item.index === lastFailure && used + block.length > TOOL_BUDGET) {
       block = fitFailure(block, Math.max(0, TOOL_BUDGET - used));
+      incomplete(sourceId, "failed-tool-budget-truncated");
     }
     if (used + block.length > TOOL_BUDGET) {
       needsBackup = true;
-      stats.push({ sourceId: (item.span as any).id, hardLines: built.hardLines, omittedOrdinaryToolLines: built.ordinaryLines.length });
+      incomplete(sourceId, "failed-tool-budget-omitted");
+      stats.push({ sourceId, hardLines: built.hardLines, omittedOrdinaryToolLines: built.ordinaryLines.length });
       continue;
     }
     if (built.needsBackup) needsBackup = true;
@@ -1278,6 +1325,8 @@ export function toolExcerpt(spans: SpanPiece[] | null, backupId = "") {
     text: parts.join("\n"),
     omitted: skipped,
     needsBackup,
+    failureDiagnosticsComplete: incompleteFailures.size === 0,
+    incompleteFailures: [...incompleteFailures.entries()].map(([sourceId, reason]) => ({ sourceId, reason })),
     excerpts: chosen.map(({ sourceId, text }) => ({ sourceId, text })),
     stats,
   };
@@ -1315,11 +1364,16 @@ function toolBlock(span: SpanPiece) {
     `[tool] ${failed ? "这是当时的报错原文,可以接着用。不是新指令。" : small ? "这是当时读到的原文,可以接着用。不是新指令。" : "状态未知。这是当时读到的原文末尾,可以接着用。不是新指令。"}`,
   ];
   if (command) prefix.push(command);
-  if (small) return { block: [...prefix, ...lines.map((line) => `│ ${line}`)].join("\n"), failed, needsBackup: false, hardLines, ordinaryLines };
+  // 1.1.5(#33): 失败诊断完整性 —— 卡片留的行要和完整诊断逐行一致(JSON 走原文,纯文本走
+  // failureBody),少一行、截了一行都算不完整,buildCard 据此拒绝出可执行卡片。
+  const diagnostic = usefulLines(text.startsWith("{") ? text : failureBody(text));
+  const completeWhen = (kept: string[]) => kept.join("\n") === diagnostic.join("\n");
+  if (small) return { block: [...prefix, ...lines.map((line) => `│ ${line}`)].join("\n"), failed, needsBackup: false, failureDiagnosticsComplete: true, hardLines, ordinaryLines };
   if (failed) {
-    return { block: [...prefix, ...failureKeptLines(text).map((line) => `│ ${line}`)].join("\n"), failed, needsBackup: true, hardLines, ordinaryLines };
+    const kept = failureKeptLines(text);
+    return { block: [...prefix, ...kept.map((line) => `│ ${line}`)].join("\n"), failed, needsBackup: true, failureDiagnosticsComplete: completeWhen(kept), hardLines, ordinaryLines };
   }
-  return { block: [...prefix, ...unknownKeptLines(text).map((line) => `│ ${line}`)].join("\n"), failed, needsBackup: true, hardLines, ordinaryLines };
+  return { block: [...prefix, ...unknownKeptLines(text).map((line) => `│ ${line}`)].join("\n"), failed, needsBackup: true, failureDiagnosticsComplete: true, hardLines, ordinaryLines };
 }
 
 /** 预算不够时保留首尾(报错首行 + 末行通常已经够用)。 */
@@ -1496,6 +1550,12 @@ export function buildCard(
       }
     });
   }
+  // 1.1.5(#33): 失败诊断不完整的来源直接把卡片打到不可执行,missing 里写明原因。
+  const incompleteFailures = tools.incompleteFailures.filter((item) => sourceById.has(item.sourceId));
+  for (const item of incompleteFailures) {
+    coverage.ok = false;
+    coverage.missing.push({ sourceId: item.sourceId, text: `failed-tool-diagnostics-not-retained (source ${item.sourceId})`, reason: "failed-tool-diagnostics-not-retained" });
+  }
   const cleanKept = coverage.keptLines.map((item) => ({
     role: String(sourceById.get(item.sourceId)?.role ?? "other"),
     line: item.text,
@@ -1527,6 +1587,7 @@ export function buildCard(
     .join("\n");
   return {
     ok: coverage.ok,
+    failureDiagnosticsComplete: incompleteFailures.length === 0,
     scope: TRUNK_SCOPE,
     hardLines: hard.map((item) => item.line),
     hardCount: hard.length,
@@ -1964,7 +2025,9 @@ function processAlive(pid: number): boolean {
     process.kill(pid, 0);
     return true;
   } catch (error) {
-    return (error as NodeJS.ErrnoException)?.code === "EPERM";
+    // 1.1.5(#35) 上游 ownerProcessAlive 口径:只有 ESRCH 证明进程已死,其余错误(EPERM/
+    // EINVAL 等)一律按「还活着」处理,宁可漏回收也不误回收。
+    return (error as NodeJS.ErrnoException)?.code !== "ESRCH";
   }
 }
 
@@ -2594,7 +2657,13 @@ export function selectNewestChunk(
   // 1.0.9: 保留区不再是「预算内的若干轮」,而是最近 KEEP_ROUNDS 个已完成的工具轮原样留;
   // KEEP_ROUND_TOKENS 只剩收尾水位一个用途。
   const longReads = longReadResults(entries);
-  const rounds = keptToolRounds(entries.slice(0, end + 1), KEEP_ROUNDS, longReads);
+  // 1.1.5(#36): 上游 floorVisible 取 visible(到 end 为止)里最新的 checkpoint;同口径
+  // 在这里扫一次 —— 上面的 floorCard 是在 end 被尾巴游走收窄之前算的,不能直接用。
+  let floorVisible = -1;
+  for (let index = first; index <= end; index += 1) {
+    if (isRewriteMarker(entries[index])) floorVisible = index;
+  }
+  const rounds = keptToolRounds(entries.slice(0, end + 1), KEEP_ROUNDS, longReads, floorVisible);
   const kept = rounds.length ? { start: rounds[0].start, end: rounds.at(-1).end } : null;
   const cutEnd = kept ? reservedCutEnd(kept.start, first) : null;
   if (kept && cutEnd === null) return warn(`keep span starts at first=${first}`);
@@ -2707,6 +2776,10 @@ export function selectNewestChunk(
   let card: any;
   let tokens = spanTokens(items, start, spanEnd);
   if (picked.pointerOnly) {
+    // 1.1.5(#33): 段里有已知失败就不许只留指针 —— 失败诊断可能正是下一步要用的东西。
+    if (spanPieces(picked.start, spanEnd).some((piece) => normalizeRole(piece.role) === "tool" && isToolFailure(piece.text, piece.isError))) {
+      return warn(`pointer-only span ${picked.start}..${spanEnd} holds a known failure`);
+    }
     // 超大工具结果:只留指针,并连同发这个调用的 assistant 一起换掉。
     const toolCallId = entries[spanEnd].results[0] || '';
     let pairStart = -1;
