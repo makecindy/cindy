@@ -15,16 +15,17 @@ import { findCatalogModel, isModelSelectableForNewRoute } from '@cindy/model-pro
 import type { AgentKind } from '@cindy/maker-core';
 import type { RemoteAgentCaps } from '@cindy/device-link';
 
-import type {
-  ProviderGroupConfig,
-  ProviderGroupMember,
-  ProviderGroupMemberQuota,
-  ProviderGroupView,
-  ProviderGroupUsageLimit,
+import {
+  effectiveConcurrencyLimit,
+  type ProviderGroupConfig,
+  type ProviderGroupMember,
+  type ProviderGroupMemberQuota,
+  type ProviderGroupView,
+  type ProviderGroupUsageLimit,
 } from '../../shared/providerGroup.js';
 import type { ProviderGroupBinding } from './bindings.desktop.js';
 import type { ProviderGroupDirectory, ResolvedProviderGroupMember } from './directory.js';
-import { pickProviderGroupMember, type SchedulableMember } from './scheduler.js';
+import { pickProviderGroupMember, providerGroupMembersFull, type SchedulableMember } from './scheduler.js';
 import { createGuestSupportReader } from './sharedStatus.js';
 import { providerGroupMemberUsageState, providerGroupRebalanceTarget, PROVIDER_GROUP_USAGE_READ_TIMEOUT_MS } from './usage.js';
 import { coolingScope, currentCooling, PROVIDER_GROUP_COOLING_SCOPE_CAP, type ProviderGroupPersistedCooling } from './cooling.js';
@@ -99,7 +100,8 @@ export const PROVIDER_GROUP_LOCAL_PROVISIONAL_MS = 30_000;
 export type ProviderGroupPickResult =
   | { kind: 'none' }
   | { kind: 'member'; member: ProviderGroupMember; label: string; resolved: ResolvedProviderGroupMember[] }
-  | { kind: 'unavailable'; resolved: ResolvedProviderGroupMember[]; usageLimit?: ProviderGroupUsageLimit };
+  /** full：有能接的电脑但全部达到并发上限(2026-11-11 起满了不再分)，提示「已满载」而不是配额或不可用。 */
+  | { kind: 'unavailable'; resolved: ResolvedProviderGroupMember[]; usageLimit?: ProviderGroupUsageLimit; full?: true };
 
 export interface ProviderGroupRouter {
   pick(input: ProviderGroupPickInput): Promise<ProviderGroupPickResult>;
@@ -279,10 +281,11 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
       const paused = pausedFor(input);
       const resolved = await deps.directory.resolveMembers(input.providerId, config, {
         quickMs: PROVIDER_GROUP_PICK_QUICK_MS,
-        // 已经有一台能用、可以分的电脑(满载仍可接)：不再等慢的那几台。未满优先由调度器决定。
+        // 已经有一台能用、未满载、可以分的电脑：不再等慢的那几台。
         enough: (r) => usable(r)
           && !paused(r)
-          && !input.exclude?.has(r.member.key),
+          && !input.exclude?.has(r.member.key)
+          && memberRunning(input.providerId, r) < effectiveConcurrencyLimit(r.member),
         ...(input.fresh ? { fresh: true } : {}),
       });
       await Promise.all(resolved.filter((r) => !r.pending && !r.providerContinuity?.stale
@@ -295,10 +298,10 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
         return {
           key: r.member.key,
           usable: usable(r) && (!input.quotaRebalance
-            || (memberRunning(input.providerId, r) < r.member.limit && !!quota.quota && !quota.fiveHourTight)),
+            || (memberRunning(input.providerId, r) < effectiveConcurrencyLimit(r.member) && !!quota.quota && !quota.fiveHourTight)),
           paused: paused(r),
           running: memberRunning(input.providerId, r),
-          limit: r.member.limit,
+          limit: effectiveConcurrencyLimit(r.member),
           weight: r.member.weight,
           urgency: quota.urgency,
           fiveHourTight: quota.fiveHourTight,
@@ -310,6 +313,9 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
         random: deps.random,
       });
       if (!key) {
+        if (!input.quotaRebalance && providerGroupMembersFull(schedulable, { exclude: input.exclude })) {
+          return { kind: 'unavailable', resolved, full: true };
+        }
         // Only members that could take this model after a quota reset count. A paused,
         // offline or model-mismatched member must not supply a misleading reset time.
         const limited = resolved.filter((r) => !paused(r) && !input.exclude?.has(r.member.key)
@@ -358,7 +364,7 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
       const paused = pausedFor(input);
       return resolved.flatMap((r) => {
         if (input.exclude.has(r.member.key) || !usable(r) || paused(r)) return [];
-        if (memberRunning(input.providerId, r) >= r.member.limit) return [];
+        if (memberRunning(input.providerId, r) >= effectiveConcurrencyLimit(r.member)) return [];
         const state = providerGroupMemberUsageState(r, input.model, now, input.agentKind);
         if (!state.quota || state.fiveHourTight) return [];
         // 同一台电脑上有几个账号时带上账号名，提示里看得出是哪个号。
@@ -403,7 +409,7 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
               ? r.state
               : until !== null || quota.limited
                 ? 'cooling' as const
-                : count >= r.member.limit
+                : count >= effectiveConcurrencyLimit(r.member)
                   ? 'full' as const
                   : 'available' as const;
           return {
@@ -418,6 +424,7 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
             ...(r.reason ? { reason: r.reason } : {}),
             running: count,
             limit: r.member.limit,
+            ...(r.member.limitSet ? { limitSet: true as const } : {}),
             weight: r.member.weight,
             paused: r.member.paused,
             ...(until !== null ? { coolingUntil: until } : {}),
