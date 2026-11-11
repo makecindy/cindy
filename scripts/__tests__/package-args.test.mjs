@@ -186,6 +186,9 @@ test('--stage build 只用于 macOS 有版本打包,签名机按 pending build-i
   assert.deepEqual(signed.signing.signedFrom, unsigned);
   assert.deepEqual(signed.vendors, vendors);
   assert.equal(signed.version, '1.2.3');
+  const injected = signedBuildInfo({ ...pending, scripts: { 'release:sign': 'id' } }, { files, teamId: 'ABCDE12345' });
+  assert.equal('scripts' in injected, false);
+  assert.deepEqual(Object.keys(injected).sort(), Object.keys(signed).sort());
   assert.throws(() => signedBuildInfo(pending, { files, teamId: 'ZZZZZ99999' }), /Team ID/);
   assert.throws(() => signedBuildInfo(signed, { files, teamId: 'ABCDE12345' }), /pending/);
   // 打包机运行上游代码、可能被入侵:进签名机路径与 shell 命令的字段必须是固定格式。

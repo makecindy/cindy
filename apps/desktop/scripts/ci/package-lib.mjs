@@ -347,8 +347,10 @@ export function signedBuildInfo(pending, { files, teamId }) {
     throw new Error(`包里烘焙的 WebAuthn Team ID ${bakedTeamId} 与签名身份 ${teamId} 不一致`);
   }
   const unsigned = pending.files.find((f) => f.role === 'unsigned-app');
+  // 只带回 build-info 规定的字段:pending 来自打包机,多出来的键不进签名后的记录。
+  const known = Object.keys(buildBuildInfo({ files: [], signing: {} }));
   return {
-    ...pending,
+    ...Object.fromEntries(known.filter((key) => key in pending).map((key) => [key, pending[key]])),
     files,
     signing: { mode: 'developer-id+notarized', signedAt: new Date().toISOString(), signedFrom: unsigned },
   };

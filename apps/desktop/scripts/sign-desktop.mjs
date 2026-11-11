@@ -18,6 +18,7 @@
 // =============================================================================
 
 import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -38,6 +39,22 @@ function fail(message) {
   process.exit(1);
 }
 
+/**
+ * 产物目录与解开的 app 都来自打包机。签名机会往里写 build-info、描述文件、签名与 DMG,
+ * 一个指向外面的链接就能让这些写入落到签名机的其它文件上(例如 package.json 的 scripts)。
+ * 产物目录本身与其中的文件不允许是链接;app 内部的链接(Electron framework 的 Versions/Current 等)
+ * 只允许指向 app 内部。
+ */
+function assertNoLinksOut(dir, { allowInternal }) {
+  const root = fs.realpathSync(dir);
+  for (const rel of fs.readdirSync(root, { recursive: true })) {
+    const full = path.join(root, rel);
+    if (!fs.lstatSync(full).isSymbolicLink()) continue;
+    const target = path.resolve(path.dirname(full), fs.readlinkSync(full));
+    if (!allowInternal || !target.startsWith(root + path.sep)) fail(`${full} 是指向 ${target} 的链接,拒绝签名`);
+  }
+}
+
 function main() {
   loadDotenv(undefined, { refreshReleaseConfig: false });
   const { values } = parseArgs({ options: { 'build-info': { type: 'string' } } });
@@ -46,6 +63,8 @@ function main() {
 
   const buildInfoPath = path.resolve(values['build-info']);
   const artifactDir = path.dirname(buildInfoPath);
+  if (fs.lstatSync(artifactDir).isSymbolicLink()) fail(`${artifactDir} 是链接,请拷贝真实目录`);
+  assertNoLinksOut(artifactDir, { allowInternal: false });
   const pending = JSON.parse(fs.readFileSync(buildInfoPath, 'utf8'));
   // build-info 来自运行上游代码的打包机:路径与命令只用校验过格式的字段。
   let region, arch, version, unsignedName;
@@ -101,7 +120,13 @@ function main() {
     .map((name) => path.join(artifactDir, name));
   try {
     console.log(`==> Unpacking ${unsignedName}...`);
+    // ZIP 条目不能带绝对路径或 ..,否则解包就写到临时目录外面。
+    const entries = execFileSync('/usr/bin/zipinfo', ['-1', payloadPath], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 })
+      .split('\n').filter(Boolean);
+    const escaping = entries.find((e) => e.startsWith('/') || e.split('/').includes('..'));
+    if (escaping) fail(`${unsignedName} 含越界条目 ${escaping}`);
     execFileSync('/usr/bin/ditto', ['-x', '-k', payloadPath, packagedDir], { stdio: 'inherit' });
+    assertNoLinksOut(packagedDir, { allowInternal: true });
     const files = signAndPackMacApp({
       packagedDir,
       appName,
@@ -113,9 +138,10 @@ function main() {
     });
     const signed = signedBuildInfo(pending, { files, teamId: identity.teamId });
     // 先写同目录临时文件再 rename:写一半失败时原 pending build-info 完好,可以直接重跑。
-    const tmpPath = `${buildInfoPath}.tmp`;
+    // 随机文件名 + 独占创建(wx 不跟随已存在的链接);rename 替换的是目录项本身。
+    const tmpPath = path.join(artifactDir, `.build-info.${randomUUID()}.tmp`);
     try {
-      fs.writeFileSync(tmpPath, JSON.stringify(signed, null, 2) + '\n');
+      fs.writeFileSync(tmpPath, JSON.stringify(signed, null, 2) + '\n', { flag: 'wx' });
       fs.renameSync(tmpPath, buildInfoPath);
     } finally {
       fs.rmSync(tmpPath, { force: true });
