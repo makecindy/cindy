@@ -1059,8 +1059,8 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
             .describe('queue (default) = deliver now or queue behind the Lead\'s current turn; steer = try to enter the Lead\'s current turn.'),
           report: z
             .object({
-              state: z.enum(ORCA_WORKER_REPORT_STATES)
-                .describe('progress = internal update, no interruption; waiting = turn ended cleanly with nothing pending; ready = finished and verified; blocked = a person must answer (report.question required); failed = cannot continue; dropped = nothing for a person to act on.'),
+              state: z.enum(ORCA_WORKER_SETTLING_REPORT_STATES)
+                .describe('waiting = turn ended cleanly with nothing pending; ready = finished and verified; blocked = a person must answer (report.question required); failed = cannot continue; dropped = nothing for a person to act on. progress is NOT accepted here — it belongs to the report_progress tool.'),
               question: z.string().min(1).optional()
                 .describe('At most one concrete, answerable question. Required when state is blocked.'),
               summary: z.string().min(1).optional(),
@@ -1072,6 +1072,16 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
             .describe('The turn\'s conclusion. waiting = turn ended cleanly; ready = finished and verified; blocked = a person must answer (report.question required); failed = cannot continue; dropped = nothing to act on. Internal progress goes to the report_progress tool instead.'),
         },
         async ({ message, worker_id, delivery, report }) => {
+          // fail-closed 兜底：直连 handler 或旧运行时绕过 schema 时，progress 也绝不
+          // 走派发（更不会走到远端结算），必须改走 report_progress。schema 类型已不含
+          // progress，这里按运行期输入（不可信）放宽判定。
+          const reportState = report?.state as OrcaWorkerReportState | undefined;
+          if (reportState === 'progress') {
+            return text({
+              error: 'progress is telemetry, not a conclusion: report it with the report_progress tool',
+              worker_id,
+            }, true);
+          }
           if (report?.state === 'blocked' && !report.question?.trim()) {
             return text({
               error: 'a blocked report must carry one concrete question in report.question',

@@ -368,7 +368,7 @@ Lead 的消息流与历史记录。只放进回执等于没送——Worker 可�
 
 映射与结算规则（映射只有 `applyWorkerReportState` 一处，重复调用是最新一份覆盖）：
 
-- `progress` **不进 `send_to_lead`**：它是遥测不是结论，走独立的 `report_progress` 工具——只经 Worker link 落 `latest_report` 并广播，从工具层就不接触派发、Lead 会话、队列与结算（`send_to_lead` 的 `report.state` 枚举只收五个终段状态）。本轮若没有终段回报，turn 结束仍走既有文本 auto-bridge。
+- `progress` **不进 `send_to_lead`**：它是遥测不是结论，走独立的 `report_progress` 工具——只经 Worker link 落 `latest_report` 并广播，从工具层就不接触派发、Lead 会话、队列与结算。`send_to_lead` 的 `report.state` 枚举（`ORCA_WORKER_SETTLING_REPORT_STATES`）只收五个终段状态，schema 层拒收 progress，处理器另有 fail-closed 拒绝（防绕过 schema 的直连调用）。远端桥（`orcaRemoteWorkerBridge.handle`）对载有 progress 的成功回执跳过结算——即便旧执行端经旧 schema 送达，派活也不得被遥测退役。本轮若没有终段回报，turn 结束仍走既有文本 auto-bridge。
 - `waiting` 结算欠回报，映射时 worker 置 `idle`（不进完成待确认）。
 - `ready` 结算欠回报，映射时按本轮终态置 `done`/`error`（既有语义）。
 - `blocked` 结算欠回报，置 `done` 并携带 `question`：一轮干净结束、只是在等人回答，不是执行异常；面板标「等回复」，问题随正文到达 Lead 后由 Lead 收口。

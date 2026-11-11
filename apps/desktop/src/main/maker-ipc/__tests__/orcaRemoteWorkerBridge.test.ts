@@ -194,6 +194,30 @@ describe('cross-device Worker bridge', () => {
     expect(s.captureSettlement).toHaveBeenCalledWith('proxy-1', ['input-a']);
   });
 
+  // progress 是遥测不是结论：即便旧执行端经 send_to_lead 送达 progress，一次成功回执
+  // 也不得退役派活，否则终段结果永远不会再 auto-bridge。Unit: 生产桥 handler。
+  it('rejects progress at the schema so a relayed progress can never settle', async () => {
+    const s = setup();
+    // 新宿主的结论通道 schema 不收 progress：校验在结算之前抛出，派活保持原状。
+    await expect(
+      s.executionProvider.invokeTool(s.ctx, 'send_to_lead', {
+        ...s.request.args,
+        report: { state: 'progress', summary: '做到一半' },
+      }),
+    ).rejects.toThrow();
+    expect(s.settled).not.toHaveBeenCalled();
+    expect(s.worker.status).toBe('running');
+  });
+
+  it('settles normally when the report carries a settling state', async () => {
+    const s = setup();
+    await s.executionProvider.invokeTool(s.ctx, 'send_to_lead', {
+      ...s.request.args,
+      report: { state: 'ready', summary: '完成' },
+    });
+    expect(s.settled).toHaveBeenCalledTimes(1);
+  });
+
   // 2026-11-10: the four queued-report tools are registered for every Worker, but only the four
   // allowlisted tools cross devices. Before this check an unknown tool failed protocol validation
   // with an opaque error. Unit tier: the production execution-device handler, no remote call.

@@ -752,6 +752,21 @@ describe('orca_worker_bridge MCP helpers', () => {
     expect(settlingSchema.parse('waiting')).toBe('waiting');
   });
 
+  // 2026-11-11 progress 拆独立工具后的通道收口：结论通道 schema 不再接受 progress。
+  it('rejects progress in send_to_lead and points at report_progress', async () => {
+    const lead = makeSession('lead-1');
+    const h = makeWorkerBridgeLeadHarness(lead);
+    const json = expectToolError(await h.server._registeredTools.send_to_lead.handler({
+      worker_id: 'worker-1',
+      message: '做到一半',
+      report: { state: 'progress', summary: '已完成一半' },
+    }));
+
+    expect(json).toMatchObject({ error: expect.stringContaining('progress is telemetry') });
+    expect(lead.sent).toEqual([]);
+    expect(h.captureLocalWorkerReport).not.toHaveBeenCalled();
+  });
+
   it('rejects a blocked report without a question before dispatch', async () => {
     const lead = makeSession('lead-1');
     const h = makeWorkerBridgeLeadHarness(lead);
