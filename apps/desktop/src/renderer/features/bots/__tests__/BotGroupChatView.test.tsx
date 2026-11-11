@@ -4020,16 +4020,25 @@ describe('Telegram / Slack-grade timeline', () => {
     ['Tous', 'Tous les coéquipiers'], ['Todos', 'Todos los compañeros'],
     ['Todos', 'Todos os colegas'], ['诸', '诸同僚'], ['諸', '諸同僚'],
     ['모든', '모든 동료'],
-  ])('keeps the historical @%s / @%s highlight ranges separate', async (name, broadcast) => {
+    ['All', 'All teammates', 'root'], ['All', 'All teammates', 'reply'],
+  ])('keeps the historical @%s / @%s highlight ranges separate (%s)', async (name, broadcast, location = 'main') => {
     const registry = new Map<string, { ranges: Range[] }>();
     vi.stubGlobal('Highlight', class { ranges: Range[]; constructor(...ranges: Range[]) { this.ranges = ranges; } });
     vi.stubGlobal('CSS', { ...(globalThis.CSS ?? {}), highlights: registry });
-    const data = detail({ messages: [msg({ id: 'u1', content: `@${name} @${broadcast}`,
-      mentions: { all: false, allBots: true, botIds: ['mimi'] } })] });
+    const content = `@${name} @${broadcast}`;
+    const mentioned = { all: false, allBots: true, botIds: ['mimi'] };
+    const data = detail({ serverBacked: true, messages: [msg({ id: 'u1',
+      content: location === 'main' ? content : 'Open thread', mentions: mentioned })] });
+    mocks.thread.mockResolvedValue({ ok: true,
+      root: msg({ id: 'u1', content: location === 'root' ? content : 'Root', mentions: mentioned }),
+      replies: [msg({ id: 'reply-u1', content: location === 'reply' ? content : 'Reply', mentions: mentioned })], hasMore: false });
     data.members[0] = { ...data.members[0]!, botId: 'mimi', name };
     mocks.getBotGroup.mockResolvedValue({ ok: true, group: data });
     renderView();
-    await screen.findByText(`@${name} @${broadcast}`);
+    if (location !== 'main') {
+      fireEvent.click((await screen.findAllByRole('button', { name: 'bots.groupChat.server.startTopic' }))[0]!);
+      await within(screen.getByRole('complementary')).findByText(content);
+    } else await screen.findByText(content);
     await waitFor(() => expect(registry.get('bot-group-mention')?.ranges.map(range => range.toString()))
       .toEqual([`@${name}`, `@${broadcast}`]));
   });
