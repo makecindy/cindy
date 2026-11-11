@@ -16,7 +16,7 @@ vi.mock('../PluginUiView', async () => {
   return { PluginUiView: () => { useEffect(() => { page.mounted(); return page.released; }, []); return <div>Local page</div>; } };
 });
 import { memo } from 'react';
-import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES, PluginUiBody, PluginUiProvider, PluginUiSlot, renderPluginUiBody, usePluginUiMessageCandidates, type PluginUiMessageCandidates } from '../PluginUiContributions';
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES, PluginUiBody, PluginUiProvider, PluginUiSlot, PluginUiSidebarSections, readPluginUiEntries, renderPluginUiBody, usePluginUiMessageCandidates, type PluginUiMessageCandidates } from '../PluginUiContributions';
 
 // 生产入口：真实 Provider/正文/控件；只替换已装投影与 IPC，Main 订阅适配器不替换。
 // 规则与旧回归：无候选历史行不发请求、不构造数据；原测试只覆盖 App frame。
@@ -55,6 +55,39 @@ it('opens a page beside its trigger only on demand and releases it on close', as
   fireEvent.click(screen.getByRole('button', { name: 'Open here' }));
   await waitFor(() => expect(screen.queryByText('Local page')).toBeNull());
   expect(page.released).toHaveBeenCalledTimes(1);
+});
+
+// Unit, sidebar lifecycle: no page before expansion; close/revoke releases the View.
+// Existing popover tests cannot cover a persistent sidebar section. Empty directory
+// must keep the original aside with no native IPC. Frame protocol is tested separately.
+it('loads sidebar sections only on expansion and removes them after revocation', async () => {
+  const Sections = () => {
+    const entries = readPluginUiEntries('sidebar.section');
+    return <aside><span>Original sidebar</span>{entries.length > 0 && <PluginUiSidebarSections entries={entries} sessionId={null} />}</aside>;
+  };
+  const view = render(<PluginUiProvider><Sections /></PluginUiProvider>);
+  expect(screen.getByText('Original sidebar')).toBeTruthy(); expect(invoke).not.toHaveBeenCalled();
+  const ghost: InstalledGhost = { enabled: true, dir: '/fixture', uiCapabilityApproved: true,
+    approval: { state: 'approved', revision: 'one' }, manifest: { schemaVersion: 3, id: 'planner', name: 'Planner',
+      kind: 'chip', entry: 'main.js', version: '1', tools: [], mcpApps: {
+        ui: { resources: [{ uri: 'ui://view', file: 'view.html' }], tools: {} }, host: {
+          views: [{ id: 'view', title: 'View', resourceUri: 'ui://view', scope: 'global' }],
+          contributions: [{ id: 'summary', title: 'Summary', position: 'sidebar.section', view: 'view' }],
+        },
+      } } };
+  ghost.approvedHostUi = ghostHostUiApprovalTokens(ghost.manifest); installed.ghosts = [ghost];
+  view.rerender(<PluginUiProvider><Sections /></PluginUiProvider>);
+  expect(page.mounted).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Summary · Planner' }));
+  expect(await screen.findByText('Local page')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Summary · Planner' }));
+  expect(screen.queryByText('Local page')).toBeNull(); expect(page.released).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole('button', { name: 'Summary · Planner' }));
+  expect(await screen.findByText('Local page')).toBeTruthy();
+  installed.ghosts = [{ ...ghost, approvedHostUi: [] }];
+  view.rerender(<PluginUiProvider><Sections /></PluginUiProvider>);
+  expect(screen.queryByRole('button', { name: 'Summary · Planner' })).toBeNull();
+  expect(page.released).toHaveBeenCalledTimes(2); expect(screen.getByText('Original sidebar')).toBeTruthy();
 });
 
 it('mounts the window host only for enabled and approved host declarations', () => {

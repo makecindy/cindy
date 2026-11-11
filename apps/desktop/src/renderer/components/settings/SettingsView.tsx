@@ -31,7 +31,6 @@ import type { SettingsTab } from '@/lib/tabLabels';
 import { SettingsSidebarNav } from './SettingsSidebarNav';
 import { buildPluginSettingsPages, buildPluginSettingsSearchDocuments, type PluginSettingsPage } from './pluginSettingsNavigation';
 import { getApprovedGhostHostUi, type InstalledGhost } from '../../../shared/ghost';
-import { PluginUiView } from '@/cindy-brain/PluginUiView';
 import { isLegacyAppearanceDeepLink, resolveSettingsSearchEntry } from './settingsSearchCatalog';
 import { SettingsCard, SettingsPageScope, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { SettingsSearchNavigationContext } from './SettingsSearchNavigation';
@@ -99,6 +98,7 @@ const SettingsCatalogPanel = lazy(() => import('./SettingsCatalogPanel').then(mo
 const BillingSettingsSection = lazy(() => import('@/features/billing/BillingPage').then(module => ({ default: module.BillingSettingsSection })));
 const UsageHistorySection = lazy(() => import('./usage/UsageHistorySection').then(module => ({ default: module.UsageHistorySection })));
 const PluginSettingsFields = lazy(() => import('./PluginSettingsSection').then(module => ({ default: module.PluginSettingsFields })));
+const PluginUiView = lazy(() => import('@/cindy-brain/PluginUiView').then(module => ({ default: module.PluginUiView })));
 
 const DEFAULT_SETTINGS_MENU_WIDTH = 260;
 

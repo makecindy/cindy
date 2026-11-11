@@ -56,6 +56,8 @@
 | `session.menu` | 任务列表右键菜单及任务标题的同一操作菜单 |
 | `settings.section` | Cindy 设置页中的插件配置页面 |
 | `composer.completion` | 输入 `/` 或 `@` 后的文本补全提供者 |
+| `composer.attachment` | 用户新添加附件的处理提供者 |
+| `sidebar.section` | 侧栏中的折叠 MCP App 分区 |
 
 `statusbar` 等原生控件位置支持 `button`、`select` 和 `status`。需要点击打开页面或调用工具时，
 声明 `kind:"button"` 并指定 `view` 或 `tool`；示例的底部「示例已就绪」按钮会打开当前任务页。
@@ -78,6 +80,10 @@
 任务列表的每行内容、内置分组和任意布局面板不开放贡献位：前者处于长列表性能路径，后者由宿主布局树管理。
 插件可用全局 MCP App 和侧栏入口呈现自己的任务视图及分组，不向宿主列表逐行挂载组件。
 
+`sidebar.section` 必须引用具名 view，默认收起；用户展开且侧栏可见时才加载页面，收起、隐藏或撤权后释放。
+任务 view 只绑定实际本机任务，全局 view 不借用当前任务。分区沿原页面的主题、CSP 和小状态显隐，
+不接管内置任务列表与布局树，也不支持 `presentation:"popover"`。
+
 ### 输入补全
 
 ```json
@@ -99,6 +105,34 @@ Host 在现有输入触发状态出现后等待 200ms，传入 `{trigger,query}`
 每个提供者最多展示前 8 项，id 在该次结果中唯一且不超过 64 字符；label 不超过 200 字符，
 insertText 不超过 32768 字符，description 可选且不超过 2000 字符。
 用户选择后只在原查询选区插入纯文本，不解释 HTML、不调用命令、不发送消息。
+
+### 新添加附件的处理
+
+```json
+{"id":"prepare","title":"整理文本附件","position":"composer.attachment","tool":"prepare_attachment","accept":{"extensions":[".txt",".md"],"mimeTypes":["text/plain"]}}
+```
+
+`accept` 至少声明一项：小写的带点扩展名，或 MIME 类型（可用 `image/*`、`*/*`）；任一匹配即调用。
+仅用户本次选取、拖入或粘贴的附件进入此入口，不扫描已有草稿和消息。没有贡献时不订阅或请求。
+多个匹配提供者按声明目录顺序尝试，首个 `handled:true` 结束，`handled:false` 交给下一个。
+
+工具必须 app-visible。Host 填入 `attachment:{name,size,mimeType}` 元数据；文件本体沿原工具审批及
+附件过户，媒体放入原 `attachments` 参数；非媒体工具须声明保留参数 `cindy_handoff_files:{type:"array"}`，
+得到 `handoff:` 引用。插件不能从参数取得本机路径。字节处理仍使用原文件能力（见 `plugin-files-and-library.md` §4.10.3），
+需要联网时也沿原 network 声明；此入口不增添文件或网络权限。
+
+返回标准 MCP `structuredContent`，或含同一 JSON 的 text block：
+
+```json
+{"handled":true,"text":"写入草稿的提取文字","files":[{"type":"resource_link","uri":"handoff:<本实例引用>","name":"prepared.txt"}]}
+```
+
+`text` 与 `files` 至少一项非空。文字为纯文本、最多 128000 字符；文件沿原每次 4 个、每个 64 MiB 上限，
+只接受本实例可读的 `handoff:`、`library:` 或 `cindy-media:` 链接。Host 读取真实大小、类型与字节，再放入原附件仓；
+不信任插件自报路径、URL 或大小。不要把临时页面 URL 当文件引用返回。
+处理期间保留原附件，成功后才将结果写回同一份草稿并替换原附件，不自动发送。
+用户移除原附件、清空草稿或来源撤权后不接纳晚到结果；错误保留原附件，不自动重试。
+仅支持本机输入框，远程任务、手机和共享访客不在此入口传本机文件。
 
 ### 统一插件设置
 
@@ -232,7 +266,7 @@ await publish();
 
 ### 完整示例
 
-[host-ui 示例](examples/interactive-pages/host-ui/) 包含真实清单、后台和官方 SDK 页面，演示原生入口、输入补全、统一设置、
+[host-ui 示例](examples/interactive-pages/host-ui/) 包含真实清单、后台和官方 SDK 页面，演示原生入口、折叠侧栏、附件交接与重命名、输入补全、统一设置、
 全局/任务视图、命令、草稿和宿主操作。示例的历史 MCP Apps 版本下限只用于源码自测；发布前按实际新版本修改，
 并让用户提供图标或明确同意生成图标，不能生成占位色块。
 用包含本章实现的宿主执行 `ghost_forge_pack`；安装另需用户指示。验收应覆盖新能力明确批准、旧插件无感兼容、

@@ -1,7 +1,7 @@
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { PerformanceTrace, openPerformanceTrace } from '@/components/performance-trace/PerformanceTrace';
 import { readInstalledGhostsSnapshot } from '@/cindy-brain/useInstalledGhosts';
-import { readPluginUiSettings } from '@/cindy-brain/PluginUiContributions';
+import { readPluginUiSettings, readPluginUiEntries } from '@/cindy-brain/PluginUiContributions';
 import { installedGhostStoragePart, resolvePluginInstanceQuery } from '../../../shared/pluginIdentity';
 import { drainPendingDeepLinks } from '@/lib/pendingDeepLinks';
 import { ChatInviteHost, reportMalformedChatInvite, requestChatInvite } from '@/features/bots/ChatInviteHost';
@@ -1697,6 +1697,7 @@ export function MainLayout() {
   // Session/tool-pane declarations update Shell state during navigation. Keep
   // unrelated updates from invalidating the entire routed conversation again.
   const pluginSettings = readPluginUiSettings();
+  const pluginSidebarSections = readPluginUiEntries('sidebar.section');
   const outletContext = useMemo(() => ({
     sidebarWidth,
     pluginSettings,
@@ -1752,6 +1753,8 @@ export function MainLayout() {
                 spacer 卸载、aside 摘掉 fixed 落回流内 —— 两者矩形一致,交换无跳变。 */}
             {sidebarPeek.peekState === 'pinning' && <SidebarPinSpacer width={sidebarWidth} />}
             <Sidebar
+              pluginSections={pluginSidebarSections}
+              pluginSessionId={rightSidebarSessionId}
               isCollapsed={isSidebarCollapsed}
               // peek 抽屉恒以展开态呈现(预览完整列表),rail 视觉在 peek 期强制关闭。
               isRail={sidebarPeek.isPeekVisible ? false : isRailMode}

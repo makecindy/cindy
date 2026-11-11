@@ -19391,6 +19391,7 @@
     "save": "存定",
     "settingsFailed": "法器设定未能读取或存定，请重开此页。",
     "invalidSetting": "请核所标之值，勿逾允限。",
+    "attachmentFailed": "法器未能处理「{{name}}」，原附件仍存。",
     "display": "示法",
     "original": "原文",
     "menu": "法器页面与指令",

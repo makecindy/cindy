@@ -2113,6 +2113,18 @@ describe('interactive page declarations', () => {
         contributions: [{ id: 'settings', title: 'Settings', position: 'settings.section', view: 'page' }] },
     ]) expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host } }).ok).toBe(false);
   });
+  // B: processing user-added files is separately approved; a sidebar section
+  // must reference a declared view, with no native list/layout registry (unit).
+  it('approves attachment matching and a sidebar view as distinct contributions', () => {
+    const host = { views: [{ id: 'section', title: 'Section', resourceUri: 'ui://planner' }], contributions: [
+      { id: 'files', title: 'Parse files', position: 'composer.attachment', tool: 'help', accept: { extensions: ['.pdf'], mimeTypes: ['image/*'] } },
+      { id: 'section', title: 'Section', position: 'sidebar.section', view: 'section' },
+    ] };
+    expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host } }).ok).toBe(true);
+    expect(hostUiApprovalSubjects(host).map(subject => subject.key)).toContain('contribution:files');
+    expect(hostUiApprovalSubjects(host).find(subject => subject.key === 'contribution:files')?.detail).toContain('image/*');
+    expect(hostUiApprovalSubjects(host).map(subject => subject.key)).toContain('contribution:section');
+  });
   it('validates appearance resource declarations and grants only known fields', () => {
     const host = { capabilities: ['appearance', 'app-icon'], appearance: { fields: ['bodyFont', 'appIcon', 'future-field'],
       resources: [{ id: 'font', kind: 'font' as const, path: 'assets/font.woff2' }] } };

@@ -5,6 +5,7 @@ export const HOST_UI_POSITIONS = [
   'composer.toolbar', 'session.header', 'statusbar', 'message.actions', 'message.menu',
   'turn.footer', 'message.body', 'tool.body',
   'sidebar.navigation', 'session.menu', 'settings.section', 'composer.completion',
+  'composer.attachment', 'sidebar.section',
 ] as const;
 export type GhostHostUiPosition = typeof HOST_UI_POSITIONS[number];
 export const HOST_UI_CAPABILITIES = ['context', 'draft', 'appearance', 'visibility'] as const;
@@ -38,6 +39,7 @@ export interface GhostHostUiContribution extends GhostHostUiAction {
   options?: { label: string; value: string }[];
   match?: GhostHostUiMatch;
   trigger?: '/' | '@';
+  accept?: { extensions?: string[]; mimeTypes?: string[] };
   [key: string]: unknown;
 }
 export interface GhostHostUiSetting {
@@ -84,6 +86,11 @@ export function isGhostHostUiSettingValue(field: GhostHostUiSetting, value: unkn
 }
 export const isHostUiPosition = (value: string): value is GhostHostUiPosition =>
   (HOST_UI_POSITIONS as readonly string[]).includes(value);
+export function matchesGhostHostUiAttachment(accept: GhostHostUiContribution['accept'], file: { name: string; mimeType: string }): boolean {
+  const name = file.name.toLowerCase(), mime = file.mimeType.toLowerCase().split(';')[0].trim();
+  return !!accept && (accept.extensions?.some(ext => name.endsWith(ext)) === true || accept.mimeTypes?.some(type =>
+    type === '*/*' || type === mime || type.endsWith('/*') && mime.startsWith(type.slice(0, -1))) === true);
+}
 export const isHostUiCapability = (value: string): value is GhostHostUiCapability =>
   (HOST_UI_CAPABILITIES as readonly string[]).includes(value);
 
@@ -123,15 +130,23 @@ export function parseGhostHostUi(
       } else if (!action(item)) return null;
       if ((item.position === 'message.body' || item.position === 'tool.body') &&
           (item.view === undefined || item.tool !== undefined || item.kind !== undefined && item.kind !== 'button')) return null;
-      if (['message.menu', 'session.menu', 'sidebar.navigation', 'settings.section', 'composer.completion'].includes(String(item.position)) &&
+      if (['message.menu', 'session.menu', 'sidebar.navigation', 'settings.section', 'composer.completion', 'composer.attachment', 'sidebar.section'].includes(String(item.position)) &&
           item.kind !== undefined && item.kind !== 'button') return null;
       if (item.position === 'settings.section' && (item.view === undefined ||
           (raw.views as GhostHostUiView[]).find(view => view.id === item.view)?.scope === 'task')) return null;
       if (item.position === 'composer.completion' && (item.tool === undefined || !['/', '@'].includes(String(item.trigger)))) return null;
       if (item.trigger !== undefined && item.position !== 'composer.completion') return null;
+      if (item.position === 'sidebar.section' && item.view === undefined) return null;
+      if (item.position === 'composer.attachment') {
+        if (item.tool === undefined || !object(item.accept) || !item.accept.extensions && !item.accept.mimeTypes) return null;
+        if (item.accept.extensions !== undefined && (!strings(item.accept.extensions) ||
+            item.accept.extensions.some(ext => !/^\.[a-z0-9][a-z0-9._+-]{0,31}$/.test(ext)))) return null;
+        if (item.accept.mimeTypes !== undefined && (!strings(item.accept.mimeTypes) ||
+            item.accept.mimeTypes.some(mime => !/^(?:\*\/\*|[a-z0-9!#$&^_.+-]+\/(?:\*|[a-z0-9!#$&^_.+-]+))$/.test(mime)))) return null;
+      } else if (item.accept !== undefined) return null;
       if (item.presentation !== undefined && (!['sidebar', 'popover'].includes(String(item.presentation)) ||
           item.view === undefined || item.kind !== undefined && item.kind !== 'button' ||
-          ['message.body', 'tool.body', 'message.menu', 'session.menu', 'sidebar.navigation', 'settings.section', 'composer.completion'].includes(item.position as string))) return null;
+          ['message.body', 'tool.body', 'message.menu', 'session.menu', 'sidebar.navigation', 'settings.section', 'composer.completion', 'composer.attachment', 'sidebar.section'].includes(item.position as string))) return null;
       if (item.kind === 'select') {
         if (!Array.isArray(item.options) || !item.options.length || item.options.some(option =>
           !object(option) || !title(option.label) || typeof option.value !== 'string' || option.value.length > 256) ||
@@ -204,6 +219,8 @@ export function hostUiApprovalSubjects(host: GhostHostUi): { key: string; detail
       kind: item.kind ?? 'button', ...action(item), match,
       ...(item.presentation === 'popover' ? { presentation: 'popover' } : {}),
       ...(item.trigger ? { trigger: item.trigger } : {}),
+      ...(item.accept ? { accept: { extensions: item.accept.extensions && [...item.accept.extensions].sort(),
+        mimeTypes: item.accept.mimeTypes && [...item.accept.mimeTypes].sort() } } : {}),
       options: item.options?.map(option => option.value) }) });
   }
   for (const command of host.commands ?? []) result.push({ key: `command:${command.id}`,

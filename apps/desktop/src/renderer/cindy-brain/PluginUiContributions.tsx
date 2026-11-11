@@ -11,8 +11,9 @@ import { Select } from '@/components/ui/select';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/lib/toast';
-import { Puzzle } from 'lucide-react';
+import { ChevronDown, ChevronRight, Puzzle } from 'lucide-react';
 import { SidebarIconButton } from '@/components/sidebar/SidebarIconButton';
+import { SectionCollapse } from '@/features/cc-agent/sidebar/SectionCollapse';
 import { MAIN_VIEW_ICONS } from './mainViewIcons';
 import { isPluginUiElementVisible, subscribePluginUiRegions } from './pluginUiVisibility';
 const PluginUiView = lazy(() => import('./PluginUiView').then(module => ({ default: module.PluginUiView })));
@@ -295,6 +296,39 @@ export function PluginUiSlotControls({ entries, sessionId = null, clientId, appe
     {entries.map(entry => <EntryControl key={`${entry.instanceId}:${entry.contribution.id}`} entry={entry}
       sessionId={sessionId} clientId={clientId} active={active} appearance={appearance} />)}
   </span>;
+}
+
+export function PluginUiSidebarSections({ entries, sessionId }: { entries: readonly PluginUiEntry[]; sessionId: string | null }) {
+  return <div className="max-h-[45%] shrink-0 overflow-y-auto px-3 pb-2">
+    {entries.map(entry => <PluginUiSidebarSection key={`${entry.instanceId}:${entry.contribution.id}`} entry={entry} sessionId={sessionId} />)}
+  </div>;
+}
+function PluginUiSidebarSection({ entry, sessionId }: { entry: PluginUiEntry; sessionId: string | null }) {
+  const [expanded, setExpanded] = useState(false);
+  const [visible, setVisible] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const element = root.current;
+    if (element) return observeSlotVisibility(element.closest('aside') ?? element.parentElement ?? element, setVisible);
+  }, []);
+  const state = usePluginUiControl(useMemo(() => ({ instanceId: entry.instanceId, id: entry.contribution.id,
+    sessionId }), [entry.instanceId, entry.contribution.id, sessionId]), entry.ghost, visible);
+  const view = getApprovedGhostHostUi(entry.ghost)?.views?.find(view => view.id === entry.contribution.view);
+  const available = !!view && (view.scope !== 'task' || sessionId && !getStickySessionDeviceId(sessionId));
+  const title = `${state?.title ?? entry.contribution.title} · ${entry.ghost.manifest.name}`;
+  if (state?.visible === false) return null;
+  return <div ref={root} className="min-w-0">
+    <button type="button" aria-expanded={expanded} disabled={!available || state?.disabled}
+      onClick={() => setExpanded(value => !value)} title={title}
+      className="flex min-h-8 w-full min-w-0 items-center gap-2 rounded-lg px-2 text-left text-12 text-[var(--text-secondary)] hover:bg-sidebar-item-hover disabled:opacity-40">
+      {expanded ? <ChevronDown size={13} className="shrink-0" /> : <ChevronRight size={13} className="shrink-0" />}
+      <span className="truncate">{title}</span>
+    </button>
+    <SectionCollapse collapsed={!expanded}>
+      {expanded && visible && available && <Suspense fallback={<Spinner size={16} />}><PluginUiView ghost={entry.ghost}
+        viewId={view!.id} sessionId={view!.scope === 'task' ? sessionId : null} input={entry.contribution.arguments} /></Suspense>}
+    </SectionCollapse>
+  </div>;
 }
 
 /** One explicit selection owns the body; the original stays the default and fallback. */

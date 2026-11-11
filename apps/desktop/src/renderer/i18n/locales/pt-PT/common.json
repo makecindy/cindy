@@ -19637,6 +19637,7 @@
     "save": "Guardar",
     "settingsFailed": "Não foi possível carregar ou guardar as definições do plugin. Volte a abrir esta página.",
     "invalidSetting": "Verifique se os valores assinalados respeitam os limites permitidos.",
+    "attachmentFailed": "O plugin não conseguiu processar «{{name}}». O anexo original foi mantido.",
     "display": "Apresentação",
     "original": "Original",
     "menu": "Vistas e comandos do plugin",

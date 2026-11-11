@@ -19391,6 +19391,7 @@
     "save": "保存",
     "settingsFailed": "未能读取或保存插件设置，请重新打开此页再试。",
     "invalidSetting": "请检查标记的值是否符合允许的范围。",
+    "attachmentFailed": "插件未能处理「{{name}}」，原附件已保留。",
     "display": "显示方式",
     "original": "原始内容",
     "menu": "插件视图与命令",

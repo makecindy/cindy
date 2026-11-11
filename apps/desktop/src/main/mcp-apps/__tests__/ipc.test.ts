@@ -4,6 +4,7 @@ import type { SQL } from 'drizzle-orm';
 import type { McpAppsHostDeps } from '../host.js';
 import type { AppServerConfig } from '../connection.js';
 import type { GhostHostUi } from '@cindy/plugin-protocol';
+import path from 'node:path';
 import { configurePluginSettings } from '../../app-settings/plugins.js';
 const state = vi.hoisted(() => ({
   owner: null as object | null,
@@ -162,6 +163,25 @@ beforeEach(() => {
   registerMcpAppsIpc(async () => {}, request);
 });
 describe('MCP App persistence and IPC wiring', () => {
+  // Unit: a selected local file goes through the original Host handoff, not tool JSON.
+  // Existing completion cases have no files; a MIME/extension mismatch must not call it.
+  it('matches added attachments and passes the path only in the Main-owned grant', async () => {
+    state.plugin = { host: { contributions: [{ id: 'parse', title: 'Parse', position: 'composer.attachment',
+      tool: 'parse', accept: { extensions: ['.pdf'] } }] }, config: { id: 'plugin-source', url: '', transport: 'in-process',
+      plugin: { assertCurrent() {} } as AppServerConfig['plugin'] } };
+    const event = { sender: { id: 1, isDestroyed: () => false } };
+    const input = { op: 'plugin-action', instanceId: 'local__demo', id: 'parse', requestId: 'file',
+      input: { attachment: { name: 'input.pdf', uri: path.resolve('input.pdf'), size: 5, mimeType: 'application/pdf' } } };
+    state.action.mockResolvedValue({ structuredContent: { handled: false } });
+    expect(await state.handle!(event, null, input)).toEqual({ handled: false });
+    expect(state.action.mock.calls[0].slice(0, 5)).toEqual(['renderer:1', null,
+      expect.objectContaining({ attachments: [path.resolve('input.pdf')] }), 'parse',
+      { attachment: { name: 'input.pdf', size: 5, mimeType: 'application/pdf' } }]);
+    state.action.mockClear();
+    await expect(state.handle!(event, null, { ...input, input: { attachment: { ...input.input.attachment,
+      name: 'input.exe', mimeType: 'application/octet-stream' } } })).rejects.toThrow('MCP_APP_INVALID_REQUEST');
+    expect(state.action).not.toHaveBeenCalled();
+  });
   // New provider contract, unit: production Main handler must bind trigger/query,
   // cancellation to the renderer and all settings writes to the physical instance.
   // Existing card persistence/policy tests do not exercise native provider requests.

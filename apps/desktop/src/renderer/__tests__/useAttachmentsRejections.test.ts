@@ -12,9 +12,13 @@
  */
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ghostHostUiApprovalTokens, type InstalledGhost } from '../../shared/ghost';
 
 const toastWarning = vi.hoisted(() => vi.fn());
 const stageChatAttachment = vi.hoisted(() => vi.fn());
+const cleanupStaged = vi.hoisted(() => vi.fn(async () => {}));
+const plugins = vi.hoisted(() => ({ ghosts: [] as InstalledGhost[], call: vi.fn() }));
+vi.mock('@/cindy-brain/useInstalledGhosts', () => ({ useInstalledGhosts: () => plugins.ghosts, readInstalledGhostsSnapshot: () => plugins.ghosts }));
 
 vi.mock('react-i18next', () => ({
   initReactI18next: { type: '3rdParty', init: vi.fn() },
@@ -60,15 +64,30 @@ function deferred<T>(): {
   };
 }
 
+function enableAttachmentProvider() {
+  const ghost: InstalledGhost = { enabled: true, dir: '/fixture', uiCapabilityApproved: true,
+    approval: { state: 'approved', revision: 'one' }, manifest: { schemaVersion: 3, id: 'parse', name: 'Parse', kind: 'chip',
+      version: '1', entry: 'main.js', tools: [{ name: 'parse', description: 'Parse' }], mcpApps: {
+        ui: { resources: [], tools: { parse: { visibility: ['app'] } } }, host: { contributions: [
+          { id: 'parse', title: 'Parse PDF', position: 'composer.attachment', tool: 'parse', accept: { extensions: ['.pdf'] } },
+        ] },
+      } } };
+  ghost.approvedHostUi = ghostHostUiApprovalTokens(ghost.manifest); plugins.ghosts = [ghost];
+}
+
 beforeEach(() => {
   dataOwnerTesting.reset();
   setComposerDraftOwner(null);
   toastWarning.mockClear();
   stageChatAttachment.mockReset();
+  plugins.ghosts = []; plugins.call.mockReset();
+  cleanupStaged.mockClear();
   stageChatAttachment.mockResolvedValue({ success: true, path: '/cache/setup.exe.bin' });
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     getFilePath: (f: { name: string }) => `/tmp/${f.name}`,
     stageChatAttachment,
+    cleanupStagedChatAttachments: cleanupStaged,
+    maker: { mcpApps: plugins.call },
   };
 });
 
@@ -79,6 +98,39 @@ afterEach(() => {
 });
 
 describe('useAttachments inline rejections', () => {
+  // B, unit: the real add/drop hook must keep the user's file while processing,
+  // append text through the same draft and discard late output after removal.
+  // Existing read/cache failures do not exercise plugin processing.
+  it('keeps the original attachment during processing and applies the result to its own draft', async () => {
+    enableAttachmentProvider();
+    const pending = deferred<unknown>(); plugins.call.mockReturnValue(pending.promise);
+    const { result } = renderHook(() => useAttachments(undefined, 'plugin-attachment'));
+    await act(async () => { await result.current.addFiles(fileListOf([{ name: 'input.pdf', size: 5 }])); });
+    expect(result.current.attachments.map(file => file.name)).toEqual(['input.pdf']);
+    expect(plugins.call).toHaveBeenCalledWith(null, expect.objectContaining({ op: 'plugin-action',
+      input: { attachment: { name: 'input.pdf', uri: '/tmp/input.pdf', size: 5, mimeType: 'application/pdf' } } }));
+    await act(async () => pending.resolve({ handled: true, text: 'Extracted text' }));
+    expect(JSON.stringify(getDraft('plugin-attachment')?.text)).toContain('Extracted text');
+    expect(result.current.attachments).toEqual([]);
+    act(() => discardDraft('plugin-attachment'));
+  });
+  it.each(['remove', 'revoke'] as const)('discards late output and releases staged files after %s', async kind => {
+    enableAttachmentProvider();
+    const pending = deferred<unknown>();
+    plugins.call.mockImplementation((_session, input) => input.op === 'plugin-action' ? pending.promise : Promise.resolve({}));
+    const key = `plugin-late-${kind}`;
+    const { result } = renderHook(() => useAttachments(undefined, key));
+    await act(async () => { await result.current.addFiles(fileListOf([{ name: 'input.pdf', size: 5 }])); });
+    if (kind === 'remove') act(() => result.current.removeFile(result.current.attachments[0].id));
+    else plugins.ghosts = [];
+    await act(async () => pending.resolve({ handled: true, text: 'Late text', files: [
+      { name: 'output.txt', path: '/cache/output.txt.bin', size: 1, mimeType: 'text/plain' },
+    ] }));
+    expect(JSON.stringify(getDraft(key)?.text)).not.toContain('Late text');
+    expect(result.current.attachments.map(file => file.name)).toEqual(kind === 'remove' ? [] : ['input.pdf']);
+    expect(cleanupStaged).toHaveBeenCalledWith(['/cache/output.txt.bin']);
+    act(() => discardDraft(key));
+  });
   it('routes an empty (0-byte) file to rejections, not a toast', async () => {
     const { result } = renderHook(() => useAttachments());
 

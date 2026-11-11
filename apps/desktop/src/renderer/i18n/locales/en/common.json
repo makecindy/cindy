@@ -19463,6 +19463,7 @@
     "save": "Save",
     "settingsFailed": "Could not load or save the plugin settings. Reopen this page to try again.",
     "invalidSetting": "Check the highlighted values against the allowed limits.",
+    "attachmentFailed": "The plugin could not process “{{name}}”. The original attachment is kept.",
     "display": "Display",
     "original": "Original",
     "menu": "Plugin views and commands",

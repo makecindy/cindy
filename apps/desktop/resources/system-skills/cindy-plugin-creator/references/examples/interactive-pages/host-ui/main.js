@@ -6,6 +6,15 @@ function publish() {
 cindy.onHostMessage(message => {
   if (message.type === 'ui-consumers') { void publish(); return; }
   if (message.type !== 'tool-call') return;
+  if (message.tool === 'prepare_attachment') {
+    // Re-emit the selected handoff under a new name; the Host re-reads the owned ref.
+    const file = message.args?.cindy_handoff_files?.[0];
+    const result = file ? { handled: true, text: `附件：${file.name}（${file.size} 字节）`,
+      files: [{ type: 'resource_link', uri: file.ref, name: `prepared-${file.name}`.slice(0, 200) }] } : { handled: false };
+    void cindy.send({ type: 'tool-result', callId: message.callId, ok: true,
+      result: { content: [{ type: 'text', text: JSON.stringify(result) }] } });
+    return;
+  }
   if (message.tool === 'complete') {
     const query = typeof message.args?.query === 'string' ? message.args.query : '';
     void cindy.send({ type: 'tool-result', callId: message.callId, ok: true, result: {
