@@ -15,7 +15,6 @@ import {
   ZoomOut,
   X,
   Monitor,
-  Smartphone,
   createLucideIcon,
 } from 'lucide-react';
 import {
@@ -33,7 +32,6 @@ import {
   DesktopViewerController,
   type ViewerSnapshot,
 } from './viewerController';
-import { LIVE_SCREEN_ICONS, liveScreenToolbarButtons } from './liveScreenButtons';
 import { Select } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
 import { FormField } from '@/components/ui/form-field';
@@ -130,8 +128,7 @@ export function RemoteDesktopViewerWindow() {
     controller.current?.releaseInput();
     setSettings(null);
     setSelectOpen(false);
-    // Closing a device screen changes nothing on the computer: no question to ask.
-    if (!latestState.current?.ready || latestState.current.target?.screen) {
+    if (!latestState.current?.ready) {
       const owner = generation.current;
       void controller.current?.close().catch(() => {
         if (owner !== generation.current) return;
@@ -324,9 +321,6 @@ export function RemoteDesktopViewerWindow() {
     });
   };
   const action = 'remote-viewer-action';
-  // A device screen (such as a simulator): the window shows only that device.
-  const screenView = !!state?.target?.screen;
-  const deviceName = state?.screen?.name ?? state?.target?.screen?.name;
   const network = state?.ready && (
     <span className="remote-viewer-network">
       {t(
@@ -406,15 +400,9 @@ export function RemoteDesktopViewerWindow() {
           } as CSSProperties
         }
       >
-        {screenView ? <Smartphone size={16} /> : <Monitor size={16} />}
+        <Monitor size={16} />
         <div className="remote-viewer-heading">
           <span className="remote-viewer-title">
-            {screenView && (
-              <>
-                {deviceName ?? t('remoteDesktop.liveScreenTitle')}
-                <span aria-hidden="true"> · </span>
-              </>
-            )}
             {state?.target?.name ?? t('remoteDesktop.title')}
             {state?.window && (
               <>
@@ -451,29 +439,8 @@ export function RemoteDesktopViewerWindow() {
             )}
           </div>
         </div>
-        {screenView && state?.screen && (
-          <div
-            className="remote-viewer-toolgroup"
-            role="group"
-            aria-label={t('remoteDesktop.liveScreenTitle')}
-          >
-            {liveScreenToolbarButtons(state.screen.buttons).map((button) => {
-              const Icon = LIVE_SCREEN_ICONS[button.icon];
-              return (
-                <ViewerTool
-                  key={button.id}
-                  label={button.label}
-                  disabled={!state.controlling || state.controlPending}
-                  onClick={() => controller.current?.press(button.id)}
-                >
-                  <Icon size={16} />
-                </ViewerTool>
-              );
-            })}
-          </div>
-        )}
-        {/* A 代输入 window view or a device screen has no desktop to navigate. */}
-        {!state?.target?.handoff && !screenView && (
+        {/* A 代输入 window view has no desktop to navigate. */}
+        {!state?.target?.handoff && (
           <div
             className="remote-viewer-toolgroup"
             role="group"
@@ -723,191 +690,175 @@ export function RemoteDesktopViewerWindow() {
             {(state?.caps?.displayModes || state?.fittedDisplay) && (
               <p>{t('remoteDesktop.viewer.resolutionHint')}</p>
             )}
-            {!screenView && (
-              <div className="remote-viewer-panel-section">
-                <label className="remote-viewer-toggle-row" htmlFor="viewer-audio">
-                  <span>{t('remoteDesktop.viewer.sound')}</span>
-                  <Switch
-                    id="viewer-audio"
-                    checked={state?.settings.audio === true}
-                    disabled={!state?.caps?.systemAudio || !state.ready}
-                    onCheckedChange={(audio) => controller.current?.settings({ audio })}
-                  />
-                </label>
-                {!state?.caps?.systemAudio && (
-                  <p>
-                    {t(
-                      state?.ready
-                        ? 'remoteDesktop.settingUnsupported'
-                        : 'remoteDesktop.loadingSettings',
-                    )}
-                  </p>
-                )}
-                {preference('hostMute')}
-              </div>
-            )}
+            <div className="remote-viewer-panel-section">
+              <label className="remote-viewer-toggle-row" htmlFor="viewer-audio">
+                <span>{t('remoteDesktop.viewer.sound')}</span>
+                <Switch
+                  id="viewer-audio"
+                  checked={state?.settings.audio === true}
+                  disabled={!state?.caps?.systemAudio || !state.ready}
+                  onCheckedChange={(audio) => controller.current?.settings({ audio })}
+                />
+              </label>
+              {!state?.caps?.systemAudio && (
+                <p>
+                  {t(
+                    state?.ready
+                      ? 'remoteDesktop.settingUnsupported'
+                      : 'remoteDesktop.loadingSettings',
+                  )}
+                </p>
+              )}
+              {preference('hostMute')}
+            </div>
             {network && <div className="remote-viewer-panel-section">{network}</div>}
           </ViewerPanel>
-          {/* The computer's clipboard and lock belong to the computer, not to a device on it. */}
-          {!screenView && (
-            <>
-              <ViewerPanel
-                label={t('remoteDesktop.viewer.clipboardPanel')}
-                icon={<Clipboard size={16} />}
-                open={settings === 'clipboard'}
-                restoreFocus={() => activePanel.current === null}
-                onOpenChange={(open) => openPanel('clipboard', open)}
-              >
-                {preference('clipboardSync')}
-                {state && (
-                  <>
-                    {(state.caps?.clipboardText || state.caps?.clipboardContent) && (
-                      <div className="flex gap-2">
-                        {(['copy', 'paste'] as const).map((action) => (
-                          <Button
-                            key={action}
-                            variant="secondary"
-                            disabled={!state.controlling || state.closing}
-                            onClick={() => {
-                              const attempt = ++clipboardAttempt.current;
-                              setNotice(null);
-                              void controller.current?.clipboard(action).catch((error) => {
-                                // A stopped connection already shows its own state.
-                                if (
-                                  attempt === clipboardAttempt.current &&
-                                  !(error instanceof Error && error.message === 'DESKTOP_STOPPED')
-                                )
-                                  setNotice(t(clipboardFailureKey(error, action)));
-                              });
-                            }}
-                          >
-                            {t(`remoteDesktop.${action}`)}
-                          </Button>
-                        ))}
-                      </div>
-                    )}
-                    {state.safety.clipboardProgress !== null && (
-                      <progress
-                        aria-label={t('remoteDesktop.clipboardSync')}
-                        max={1}
-                        value={state.safety.clipboardProgress}
-                      />
-                    )}
-                  </>
+          <ViewerPanel
+            label={t('remoteDesktop.viewer.clipboardPanel')}
+            icon={<Clipboard size={16} />}
+            open={settings === 'clipboard'}
+            restoreFocus={() => activePanel.current === null}
+            onOpenChange={(open) => openPanel('clipboard', open)}
+          >
+            {preference('clipboardSync')}
+            {state && (
+              <>
+                {(state.caps?.clipboardText || state.caps?.clipboardContent) && (
+                  <div className="flex gap-2">
+                    {(['copy', 'paste'] as const).map((action) => (
+                      <Button
+                        key={action}
+                        variant="secondary"
+                        disabled={!state.controlling || state.closing}
+                        onClick={() => {
+                          const attempt = ++clipboardAttempt.current;
+                          setNotice(null);
+                          void controller.current?.clipboard(action).catch((error) => {
+                            // A stopped connection already shows its own state.
+                            if (
+                              attempt === clipboardAttempt.current &&
+                              !(error instanceof Error && error.message === 'DESKTOP_STOPPED')
+                            )
+                              setNotice(t(clipboardFailureKey(error, action)));
+                          });
+                        }}
+                      >
+                        {t(`remoteDesktop.${action}`)}
+                      </Button>
+                    ))}
+                  </div>
                 )}
-                <p>{t('remoteDesktop.viewer.clipboardShortcutHint')}</p>
-              </ViewerPanel>
-              <ViewerPanel
-                label={t('remoteDesktop.viewer.securityPanel')}
-                icon={<Shield size={16} />}
-                open={settings === 'security'}
-                restoreFocus={() => activePanel.current === null}
-                onOpenChange={(open) => openPanel('security', open)}
-              >
-                {preference('privacyScreen')}
-                {preference('lockOnExit')}
-                <FormField
+                {state.safety.clipboardProgress !== null && (
+                  <progress
+                    aria-label={t('remoteDesktop.clipboardSync')}
+                    max={1}
+                    value={state.safety.clipboardProgress}
+                  />
+                )}
+              </>
+            )}
+            <p>{t('remoteDesktop.viewer.clipboardShortcutHint')}</p>
+          </ViewerPanel>
+          <ViewerPanel
+            label={t('remoteDesktop.viewer.securityPanel')}
+            icon={<Shield size={16} />}
+            open={settings === 'security'}
+            restoreFocus={() => activePanel.current === null}
+            onOpenChange={(open) => openPanel('security', open)}
+          >
+            {preference('privacyScreen')}
+            {preference('lockOnExit')}
+            <FormField
+              label={t('remoteDesktop.idleLock')}
+              className="remote-viewer-field"
+              hint={
+                state?.caps && !state.caps.idleLock
+                  ? t('remoteDesktop.settingUnsupported')
+                  : undefined
+              }
+            >
+              {(field) => (
+                <Select
+                  {...field}
                   label={t('remoteDesktop.idleLock')}
-                  className="remote-viewer-field"
-                  hint={
-                    state?.caps && !state.caps.idleLock
-                      ? t('remoteDesktop.settingUnsupported')
-                      : undefined
-                  }
-                >
-                  {(field) => (
-                    <Select
-                      {...field}
-                      label={t('remoteDesktop.idleLock')}
-                      value={String(
-                        state?.preferences.idleTimeoutMinutes ??
-                          REMOTE_DESKTOP_DEFAULT_IDLE_MINUTES,
-                      )}
-                      disabled={!state?.ready || state.closing || !state.caps?.idleLock}
-                      options={REMOTE_DESKTOP_IDLE_MINUTES.map((minutes) => ({
-                        value: String(minutes),
-                        label:
-                          minutes === 0
-                            ? t('remoteDesktop.idleNever')
-                            : t('remoteDesktop.idleMinutes', { count: minutes }),
-                      }))}
-                      onValueChange={(value) =>
-                        void controller.current?.preference({ idleTimeoutMinutes: Number(value) })
-                      }
-                      onOpenChange={onSelectOpenChange}
-                    />
+                  value={String(
+                    state?.preferences.idleTimeoutMinutes ?? REMOTE_DESKTOP_DEFAULT_IDLE_MINUTES,
                   )}
-                </FormField>
-                <div className="remote-viewer-panel-section">
-                  {state && (
-                    <>
-                      {isMac && state.caps?.platform === 'darwin' && (
-                        <div className="flex flex-col gap-2">
-                          <label className="remote-viewer-toggle-row" htmlFor="viewer-autoUnlock">
-                            <span>{t('remoteDesktop.autoUnlock')}</span>
-                            <Switch
-                              id="viewer-autoUnlock"
-                              checked={state.credential?.autoUnlock === true}
-                              disabled={!state.ready || state.closing || state.credentialBusy}
-                              onCheckedChange={(enabled) =>
-                                void controller.current?.credential(enabled ? 'enable' : 'disable')
-                              }
-                            />
-                          </label>
-                          <p>{t('remoteDesktop.autoUnlockHint')}</p>
-                          {state.credential?.autoUnlock && (
-                            <label className="remote-viewer-toggle-row" htmlFor="viewer-biometric">
-                              <span>{t('remoteDesktop.biometricVerification')}</span>
-                              <Switch
-                                id="viewer-biometric"
-                                checked={state.credential.biometricVerification}
-                                disabled={
-                                  state.credentialBusy ||
-                                  (!state.credential.biometricAvailable &&
-                                    !state.credential.biometricVerification)
-                                }
-                                onCheckedChange={(enabled) =>
-                                  void controller.current?.credential('biometric', enabled)
-                                }
-                              />
-                            </label>
-                          )}
-                          <p>{t('remoteDesktop.autoUnlockStorageHint')}</p>
-                          {state.credentialBusy && (
-                            <p role="status">{t('remoteDesktop.loadingSettings')}</p>
-                          )}
-                          {state.credentialNotice && (
-                            <div role="alert">
-                              <p>{t(`remoteDesktop.${state.credentialNotice}`)}</p>
-                              <Button
-                                variant="secondary"
-                                onClick={() => controller.current?.retryCredential()}
-                              >
-                                {t('remoteDesktop.retry')}
-                              </Button>
-                            </div>
-                          )}
+                  disabled={!state?.ready || state.closing || !state.caps?.idleLock}
+                  options={REMOTE_DESKTOP_IDLE_MINUTES.map((minutes) => ({
+                    value: String(minutes),
+                    label:
+                      minutes === 0
+                        ? t('remoteDesktop.idleNever')
+                        : t('remoteDesktop.idleMinutes', { count: minutes }),
+                  }))}
+                  onValueChange={(value) =>
+                    void controller.current?.preference({ idleTimeoutMinutes: Number(value) })
+                  }
+                  onOpenChange={onSelectOpenChange}
+                />
+              )}
+            </FormField>
+            <div className="remote-viewer-panel-section">
+              {state && (
+                <>
+                  {isMac && state.caps?.platform === 'darwin' && (
+                    <div className="flex flex-col gap-2">
+                      <label className="remote-viewer-toggle-row" htmlFor="viewer-autoUnlock">
+                        <span>{t('remoteDesktop.autoUnlock')}</span>
+                        <Switch
+                          id="viewer-autoUnlock"
+                          checked={state.credential?.autoUnlock === true}
+                          disabled={!state.ready || state.closing || state.credentialBusy}
+                          onCheckedChange={(enabled) =>
+                            void controller.current?.credential(enabled ? 'enable' : 'disable')
+                          }
+                        />
+                      </label>
+                      <p>{t('remoteDesktop.autoUnlockHint')}</p>
+                      {state.credential?.autoUnlock && (
+                        <label className="remote-viewer-toggle-row" htmlFor="viewer-biometric">
+                          <span>{t('remoteDesktop.biometricVerification')}</span>
+                          <Switch
+                            id="viewer-biometric"
+                            checked={state.credential.biometricVerification}
+                            disabled={
+                              state.credentialBusy ||
+                              (!state.credential.biometricAvailable &&
+                                !state.credential.biometricVerification)
+                            }
+                            onCheckedChange={(enabled) =>
+                              void controller.current?.credential('biometric', enabled)
+                            }
+                          />
+                        </label>
+                      )}
+                      <p>{t('remoteDesktop.autoUnlockStorageHint')}</p>
+                      {state.credentialBusy && (
+                        <p role="status">{t('remoteDesktop.loadingSettings')}</p>
+                      )}
+                      {state.credentialNotice && (
+                        <div role="alert">
+                          <p>{t(`remoteDesktop.${state.credentialNotice}`)}</p>
+                          <Button
+                            variant="secondary"
+                            onClick={() => controller.current?.retryCredential()}
+                          >
+                            {t('remoteDesktop.retry')}
+                          </Button>
                         </div>
                       )}
-                    </>
+                    </div>
                   )}
-                </div>
-              </ViewerPanel>
-            </>
-          )}
+                </>
+              )}
+            </div>
+          </ViewerPanel>
         </div>
         {!isMac && <WindowControls onClose={requestClose} />}
       </header>
       <div ref={root} className="remote-viewer-content">
-        <div
-          id="stage"
-          tabIndex={0}
-          aria-label={
-            screenView
-              ? (deviceName ?? t('remoteDesktop.liveScreenTitle'))
-              : t('remoteDesktop.title')
-          }
-        >
+        <div id="stage" tabIndex={0} aria-label={t('remoteDesktop.title')}>
           <div id="bg" aria-hidden="true">
             <canvas id="bg-canvas" />
           </div>
@@ -949,12 +900,8 @@ export function RemoteDesktopViewerWindow() {
                       state?.controlPending
                         ? 'remoteDesktop.viewer.controlPending'
                         : state?.status === 'reconnecting'
-                          ? screenView
-                            ? 'remoteDesktop.liveScreenReconnecting'
-                            : 'remoteDesktop.reconnecting'
-                          : screenView
-                            ? 'remoteDesktop.liveScreenConnecting'
-                            : 'remoteDesktop.connecting',
+                          ? 'remoteDesktop.reconnecting'
+                          : 'remoteDesktop.connecting',
                     )}
               </span>
               {state?.error && (

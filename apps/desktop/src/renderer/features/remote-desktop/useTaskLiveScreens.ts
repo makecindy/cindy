@@ -16,6 +16,13 @@ const REFRESH_MS = 15_000;
 const REFOCUS_MS = 3_000;
 const NONE: RemoteLiveScreen[] = [];
 
+export interface TaskLiveScreens {
+  screens: RemoteLiveScreen[];
+  /** The list was just read from that computer: an empty one means no device, not "unknown". */
+  loaded: boolean;
+}
+const UNKNOWN: TaskLiveScreens = { screens: NONE, loaded: false };
+
 /**
  * Plugin live screens (such as simulators) that the task's computer has bound
  * to this task, for the entries beside the remote desktop button. Only a
@@ -27,7 +34,7 @@ const NONE: RemoteLiveScreen[] = [];
 export function useTaskLiveScreens(
   deviceId: string | null | undefined,
   sessionId: string | null | undefined,
-): RemoteLiveScreen[] {
+): TaskLiveScreens {
   const devices = useDeviceLinkDeviceList();
   const revoked = useSyncExternalStore(
     revokedDevicesStore.subscribe,
@@ -48,9 +55,9 @@ export function useTaskLiveScreens(
     !revoked.has(device.deviceId) &&
     !unresponsive.has(device.deviceId);
   const key = reachable && deviceId && sessionId ? `${deviceId}:${sessionId}` : '';
-  const [state, setState] = useState<{ key: string; screens: RemoteLiveScreen[] }>({
+  const [state, setState] = useState<{ key: string; value: TaskLiveScreens }>({
     key: '',
-    screens: NONE,
+    value: UNKNOWN,
   });
   useEffect(() => {
     if (!key || !deviceId || !sessionId) return;
@@ -59,12 +66,14 @@ export function useTaskLiveScreens(
     let busy = false;
     let readAt = 0;
     let supported: boolean | null = null;
-    const publish = (screens: RemoteLiveScreen[]) => {
+    const publish = (screens: RemoteLiveScreen[], loaded = true) => {
       if (cancelled) return;
       setState((current) =>
-        current.key === key && JSON.stringify(current.screens) === JSON.stringify(screens)
+        current.key === key &&
+        current.value.loaded === loaded &&
+        JSON.stringify(current.value.screens) === JSON.stringify(screens)
           ? current
-          : { key, screens },
+          : { key, value: { screens, loaded } },
       );
     };
     const invoke = (op: 'capabilities' | 'screens') =>
@@ -80,11 +89,22 @@ export function useTaskLiveScreens(
           const caps = (await invoke('capabilities')) as RemoteDesktopCapabilities | null;
           supported = caps?.version === 1 && caps.enabled && caps.liveScreens === true;
         }
-        publish(supported ? taskLiveScreens(await invoke('screens'), sessionId) : NONE);
+        if (!supported) {
+          publish(NONE);
+          return;
+        }
+        // One device may be listed twice when that computer has two copies of
+        // the same plugin installed; it is still one device with one tab.
+        const devices = new Set<string>();
+        publish(
+          taskLiveScreens(await invoke('screens'), sessionId).filter(
+            (screen) => !devices.has(screen.id) && devices.add(screen.id),
+          ),
+        );
       } catch {
         // Ask again next time: the computer may have been busy or reconnecting.
         supported = null;
-        publish(NONE);
+        publish(NONE, false);
       } finally {
         busy = false;
         if (!cancelled) timer = setTimeout(() => void refresh(), REFRESH_MS);
@@ -105,5 +125,5 @@ export function useTaskLiveScreens(
       window.removeEventListener('focus', returned);
     };
   }, [key, deviceId, sessionId]);
-  return key && state.key === key ? state.screens : NONE;
+  return key && state.key === key ? state.value : UNKNOWN;
 }

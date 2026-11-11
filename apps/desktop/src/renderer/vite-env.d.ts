@@ -1251,6 +1251,8 @@ interface ElectronAPI {
   pageZoomOut: () => Promise<{ ok: true; zoomFactor: number }>;
   pageZoomReset: () => Promise<{ ok: true; zoomFactor: number }>;
   accessibilitySupport: import('../shared/accessibilitySupport').AccessibilitySupportBridge;
+  /** Device screens of another computer shown inside this window (sidebar tab). */
+  liveScreenEmbed?: import('../shared/remoteDesktopViewer').LiveScreenEmbedBridge;
   appPreferenceControl?: import('../shared/appPreferenceControl').AppPreferenceControlBridge;
   appearanceSettings: {
     importWallpaper: () => Promise<import('../shared/appearanceSettings').AppearanceSettings | null>;
@@ -4257,12 +4259,7 @@ interface ElectronAPI {
   fetchReleaseNotesIndex: () => Promise<string[] | null>;
 
   // ── Device Link (设备互联/跨设备远程控制) ─────────────────────────────
-  openRemoteDesktop: (target: {
-    deviceId: string;
-    name: string;
-    handoff?: string;
-    screen?: { plugin: string; id: string; name?: string };
-  }) => Promise<void>;
+  openRemoteDesktop: (target: { deviceId: string; name: string; handoff?: string }) => Promise<void>;
   remoteDesktopViewer: import('../shared/remoteDesktopViewer').RemoteDesktopViewerApi;
   remoteDesktop: import('../shared/remoteDesktop').RemoteDesktopApi;
   selfHostedRelay: import('../shared/selfHostedRelay').SelfHostedRelayApi;

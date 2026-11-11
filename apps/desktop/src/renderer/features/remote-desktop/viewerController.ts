@@ -74,6 +74,8 @@ export interface ViewerSnapshot {
   window?: { app: string; title?: string } | null;
   /** Device screen view: the plugin screen shown; clicks are touches on that device. */
   screen?: RemoteDesktopLeaseScreen | null;
+  /** Device screen view: the picture's upright size now (it changes as the device turns). */
+  screenSize?: Size | null;
 }
 
 /** A device picture's upright size as a host reports it; anything else is ignored. */
@@ -103,7 +105,11 @@ function connectionBudget(caps: RemoteDesktopCapabilities | null): number {
   // Match Mobile: system consent has its own two-minute host deadline.
   return (
     REMOTE_DESKTOP_CONNECTION_TIMEOUT_MS +
-    (caps?.displays.some((display) => display.id === 'wayland-portal') ? 120_000 : 0)
+    (caps?.displays.some((display) => display.id === 'wayland-portal') ? 120_000 : 0) +
+    // A device screen (its caps list no display) that is standing still: older
+    // computers send its first picture only when something on it changes, which
+    // a clock does within a minute. Waiting is right; the connection is fine.
+    (caps?.liveScreens && caps.displays.length === 0 ? 60_000 : 0)
   );
 }
 
@@ -387,6 +393,7 @@ export class DesktopViewerController {
       preferences: { ...DEFAULT_VIEWER_PREFERENCES },
       window: null,
       screen: null,
+      screenSize: null,
     });
     this.unlockAttempted = false;
     this.credentialRetry = null;
@@ -483,6 +490,9 @@ export class DesktopViewerController {
         status: 'connecting',
         window: lease.window ?? null,
         screen: lease.screen ?? null,
+        screenSize: lease.screen
+          ? { width: lease.display.width, height: lease.display.height }
+          : null,
       });
       this.runtime.receive({
         type: 'init',
@@ -653,6 +663,7 @@ export class DesktopViewerController {
     if (shape.width === lease.display.width && shape.height === lease.display.height) return;
     lease.display = { ...lease.display, ...shape };
     this.runtime.receive({ type: 'displayGeometry', ...shape, restore: true });
+    this.publish({ screenSize: shape });
   }
   selectDisplay(displayId: string): void {
     if (

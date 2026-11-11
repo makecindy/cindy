@@ -1222,6 +1222,7 @@
       "noDisplay": "No available display on this computer."
     },
     "viewer": {
+      "fitShort": "Fit",
       "displayPanel": "Display & Sound",
       "clipboardPanel": "Clipboard",
       "securityPanel": "Security",

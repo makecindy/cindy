@@ -1210,6 +1210,7 @@
       "noDisplay": "此机无可用之显示器。"
     },
     "viewer": {
+      "fitShort": "适",
       "displayPanel": "声影",
       "clipboardPanel": "剪贴板",
       "securityPanel": "安全",

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-// 测试价值：通过真实入口保护「远程任务的模拟器在电脑上一键打开」——只列出那台电脑绑定到
-// 当前任务、正在运行的设备，点开时把设备交给查看窗口；旧版电脑（不支持设备画面）不发列表请求、
-// 不出现入口。此前只有手机任务页有这个入口。最小输入：一台在线可远控的电脑与一份设备列表；
+// 测试价值：通过真实入口保护「远程任务的模拟器在电脑上自动出现在侧边栏」——只认那台电脑绑定到
+// 当前任务、正在运行的设备；设备出现时自动打开一次页签（之后不反复弹出），入口可再次打开；
+// 旧版电脑（不支持设备画面）不发列表请求、不出现入口。此前只有手机任务页有这个入口。最小输入：一台在线可远控的电脑与一份设备列表；
 // unit tier，单独约 3 秒。
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -9,7 +9,11 @@ import { REMOTE_DESKTOP_CHANNEL } from '@cindy/device-link';
 import i18n from '@/i18n';
 import { revokedDevicesStore } from '@/features/device-link/revokedDevicesStore';
 import { unresponsiveDevicesStore } from '@/features/device-link/unresponsiveDevicesStore';
-import { TaskLiveScreenButtons } from '../TaskLiveScreenButtons';
+import {
+  resetAutoOpenedTaskLiveScreens,
+  TaskLiveScreenButtons,
+  useAutoOpenTaskLiveScreens,
+} from '../TaskLiveScreenButtons';
 import { useTaskLiveScreens } from '../useTaskLiveScreens';
 
 const fixture = vi.hoisted(() => ({ devices: [] as DeviceLinkDeviceView[] }));
@@ -17,10 +21,10 @@ vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
   useDeviceLinkDeviceList: () => fixture.devices,
   useDeviceLinkDeviceListRequestState: () => ({ status: 'ready', error: null }),
 }));
-vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn(), info: vi.fn() } }));
+const openTab = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock('@/features/right-sidebar/lib/openLiveScreenTab', () => ({ openLiveScreenTab: openTab }));
 
 const invoke = vi.fn();
-const open = vi.fn();
 const listed = (id: string, name: string, taskIds: string[], state = 'running') => ({
   plugin: 'cindy-simulator',
   pluginName: 'Device Simulator',
@@ -32,7 +36,8 @@ const listed = (id: string, name: string, taskIds: string[], state = 'running') 
 });
 function Entries() {
   const screens = useTaskLiveScreens('remote', 'task-1');
-  return <TaskLiveScreenButtons deviceId="remote" screens={screens} />;
+  useAutoOpenTaskLiveScreens('task-1', screens);
+  return <TaskLiveScreenButtons sessionId="task-1" screens={screens.screens} />;
 }
 const settle = () => act(async () => void (await Promise.resolve()));
 
@@ -54,8 +59,9 @@ beforeEach(async () => {
     },
   ];
   invoke.mockReset();
-  open.mockReset().mockResolvedValue(undefined);
-  Object.assign(window, { electronAPI: { deviceLink: { invoke }, openRemoteDesktop: open } });
+  openTab.mockClear();
+  resetAutoOpenedTaskLiveScreens();
+  Object.assign(window, { electronAPI: { deviceLink: { invoke } } });
   vi.spyOn(document, 'hasFocus').mockReturnValue(true);
   await i18n.changeLanguage('en');
 });
@@ -82,35 +88,52 @@ it('reads the list only while this window is in front, and again when the user r
   }
 });
 
-it('offers the running devices of this task and opens one as a device screen', async () => {
+it('opens a device of this task in the sidebar when it appears, once, and again from its entry', async () => {
+  let screens = [
+    listed('sim-a', 'iPhone Air', ['task-1']),
+    listed('sim-b', 'Other task', ['task-2']),
+    listed('sim-c', 'Shut down', ['task-1'], 'off'),
+    { plugin: 'bad plugin', id: 'x' },
+  ];
   invoke.mockImplementation(
     async (_device: string, _channel: string, [request]: [{ op: string }]) =>
       request.op === 'capabilities'
         ? { version: 1, enabled: true, liveScreens: true }
-        : {
-            screens: [
-              listed('sim-a', 'iPhone Air', ['task-1']),
-              listed('sim-b', 'Other task', ['task-2']),
-              listed('sim-c', 'Shut down', ['task-1'], 'off'),
-              { plugin: 'bad plugin', id: 'x' },
-            ],
-          },
+        : { screens },
   );
-  render(<Entries />);
-  await settle();
-  await settle();
-  expect(invoke).toHaveBeenCalledWith('remote', REMOTE_DESKTOP_CHANNEL, [{ op: 'screens' }]);
-  const buttons = screen.getAllByRole('button');
-  expect(buttons.map((button) => button.getAttribute('aria-label'))).toEqual([
-    'Device screen · iPhone Air',
-  ]);
-  fireEvent.click(buttons[0]);
-  expect(open).toHaveBeenCalledExactlyOnceWith({
-    deviceId: 'remote',
-    name: 'Remote computer',
-    screen: { plugin: 'cindy-simulator', id: 'sim-a', name: 'iPhone Air' },
-  });
-  await settle();
+  vi.useFakeTimers();
+  try {
+    render(<Entries />);
+    await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
+    expect(invoke).toHaveBeenCalledWith('remote', REMOTE_DESKTOP_CHANNEL, [{ op: 'screens' }]);
+    const state = {
+      plugin: 'cindy-simulator',
+      id: 'sim-a',
+      name: 'iPhone Air',
+      pluginName: 'Device Simulator',
+    };
+    // The device appeared: its tab opens by itself, without claiming a user gesture.
+    expect(openTab).toHaveBeenCalledExactlyOnceWith('task-1', state, { userInitiated: false });
+    const buttons = screen.getAllByRole('button');
+    expect(buttons.map((button) => button.getAttribute('aria-label'))).toEqual([
+      'Device screen · iPhone Air',
+    ]);
+    // The same device on later reads does not open again (the user may have closed the tab).
+    await act(async () => void (await vi.advanceTimersByTimeAsync(15_000)));
+    expect(openTab).toHaveBeenCalledTimes(1);
+    fireEvent.click(buttons[0]);
+    expect(openTab).toHaveBeenLastCalledWith('task-1', state);
+    // Shut down and started again: a new appearance.
+    screens = [];
+    await act(async () => void (await vi.advanceTimersByTimeAsync(15_000)));
+    expect(screen.queryByRole('button')).toBeNull();
+    screens = [listed('sim-a', 'iPhone Air', ['task-1'])];
+    await act(async () => void (await vi.advanceTimersByTimeAsync(15_000)));
+    expect(openTab).toHaveBeenCalledTimes(3);
+    expect(openTab).toHaveBeenLastCalledWith('task-1', state, { userInitiated: false });
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 it('shows no entry and asks for no list on a computer without device screens', async () => {
@@ -122,4 +145,5 @@ it('shows no entry and asks for no list on a computer without device screens', a
     { op: 'capabilities' },
   ]);
   expect(screen.queryByRole('button')).toBeNull();
+  expect(openTab).not.toHaveBeenCalled();
 });

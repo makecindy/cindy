@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { InstalledGhost } from '../../../../shared/ghost';
-import { mergeAvailableTabOrder, projectAvailableTabs } from '../tabAvailability';
+import {
+  buildTabAvailabilities,
+  mergeAvailableTabOrder,
+  projectAvailableTabs,
+} from '../tabAvailability';
 import type { TabState } from '../types';
 const tabs = [
   { id: 'file', kind: 'file-browser', state: null },
@@ -49,6 +53,24 @@ describe('sidebar availability', () => {
       projectAvailableTabs(taskTabs, 'task-b', { installedGhosts: [alpha, beta, gamma], subagentsAvailable: true }).tabs.map((tab) => tab.id),
     ).toEqual(['task-a']);
     expect(projectAvailableTabs(taskTabs, null, { installedGhosts: [], subagentsAvailable: true }).tabs).toEqual([]);
+  });
+  // 「设备画面」页签只属于另一台电脑上的任务:确认是本机或 SSH 任务才收起;归属未解析时
+  // 保留投影,否则冷启动会把选中的页签让给别的页签。
+  it('projects the device screen tab only for tasks on another computer', () => {
+    const liveTabs = [
+      { id: 'file', kind: 'file-browser', state: null },
+      { id: 'live', kind: 'live-screen', state: { plugin: 'cindy-simulator', id: 'sim' } },
+    ] as unknown as TabState[];
+    const visible = (deviceLinkDeviceId: string | null | undefined, remoteHostId: string | null = null) =>
+      projectAvailableTabs(
+        liveTabs,
+        'live',
+        buildTabAvailabilities({ installedGhosts: [], remoteHostId, deviceLinkDeviceId }).session,
+      );
+    expect(visible('other-computer').activeTabId).toBe('live');
+    expect(visible(undefined).activeTabId).toBe('live');
+    expect(visible(null).tabs.map((tab) => tab.id)).toEqual(['file']);
+    expect(visible('other-computer', 'ssh-host').tabs.map((tab) => tab.id)).toEqual(['file']);
   });
   it('filters persisted Cindy Make tabs when the product is disabled', () => {
     const cindyTabs = [

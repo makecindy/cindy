@@ -1239,6 +1239,7 @@
       "noDisplay": "Aucun écran disponible sur cet ordinateur."
     },
     "viewer": {
+      "fitShort": "Ajuster",
       "displayPanel": "Affichage et son",
       "clipboardPanel": "Presse-papiers",
       "securityPanel": "Sécurité",

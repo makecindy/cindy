@@ -1210,6 +1210,7 @@
       "noDisplay": "이 컴퓨터에 사용 가능한 디스플레이가 없습니다."
     },
     "viewer": {
+      "fitShort": "맞춤",
       "displayPanel": "화면 및 소리",
       "clipboardPanel": "클립보드",
       "securityPanel": "보안",

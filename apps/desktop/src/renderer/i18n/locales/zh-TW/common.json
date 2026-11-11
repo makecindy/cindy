@@ -1210,6 +1210,7 @@
       "noDisplay": "這台電腦沒有可用的顯示器。"
     },
     "viewer": {
+      "fitShort": "適合",
       "displayPanel": "影音",
       "clipboardPanel": "剪貼簿",
       "securityPanel": "安全",

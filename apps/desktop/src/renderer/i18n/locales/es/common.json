@@ -1239,6 +1239,7 @@
       "noDisplay": "No hay pantalla disponible en esta computadora."
     },
     "viewer": {
+      "fitShort": "Ajustar",
       "displayPanel": "Pantalla y sonido",
       "clipboardPanel": "portapapeles",
       "securityPanel": "Seguridad",

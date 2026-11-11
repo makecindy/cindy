@@ -15,7 +15,6 @@ const lifecycle = vi.hoisted(() => ({
   fit: vi.fn(),
   actualSize: vi.fn(),
   keys: vi.fn(),
-  press: vi.fn(),
   workspaceAction: vi.fn(async () => {}),
   resolutionModes: vi.fn(async (): Promise<unknown[]> => []),
   fitDisplay: vi.fn(async () => {}),
@@ -42,7 +41,6 @@ vi.mock('../viewerController', async (importOriginal) => ({
     fit = lifecycle.fit;
     actualSize = lifecycle.actualSize;
     keys = lifecycle.keys;
-    press = lifecycle.press;
     workspaceAction = lifecycle.workspaceAction;
     resolutionModes = lifecycle.resolutionModes;
     fitDisplay = lifecycle.fitDisplay;
@@ -884,104 +882,4 @@ it('explains why a manual clipboard transfer failed and clears it on the next at
   lifecycle.clipboard.mockRejectedValueOnce(new Error('DESKTOP_STOPPED'));
   await act(async () => fireEvent.click(paste));
   expect(screen.queryByText(i18n.t('remoteDesktop.viewer.clipboardPasteFailed'))).toBeNull();
-});
-
-// 测试价值：设备画面窗口只呈现那台设备——标题是设备名、工具栏是设备自己的按键，
-// 电脑才有的操作（窗口导航、剪贴板、安全与锁屏）不出现，关闭也不必确认；
-// 否则用户会在模拟器窗口里看到并误触作用于整台电脑的开关。既有用例只覆盖整屏远程桌面。
-// 最小输入：一个带 screen 的目标与一份设备描述；unit tier。
-it("presents a device screen with the device's own buttons and none of the computer's controls", async () => {
-  await i18n.changeLanguage('zh-CN');
-  const close = vi.fn(async () => {});
-  let closeRequested!: (generation: number) => void;
-  Object.assign(window, {
-    electronAPI: {
-      remoteDesktopViewer: {
-        onActive: () => () => {},
-        onLocale: () => () => {},
-        onCloseRequested: (listener: typeof closeRequested) => {
-          closeRequested = listener;
-          return () => {};
-        },
-        state: async () => ({ generation: 1 }),
-        rendererReady: async () => {},
-        presentationReady: async () => {},
-        inputFocus: async () => {},
-        close,
-      },
-    },
-  });
-  render(<RemoteDesktopViewerWindow />);
-  await act(async () =>
-    lifecycle.update?.({
-      target: {
-        deviceId: 'host',
-        name: 'Studio',
-        screen: { plugin: 'cindy-simulator', id: 'sim', name: 'iPhone Air' },
-      },
-      screen: {
-        plugin: 'cindy-simulator',
-        id: 'sim',
-        name: 'iPhone Air',
-        platform: 'ios',
-        cornerRadius: 0.1,
-        maxTouches: 5,
-        keyboard: true,
-        buttons: [
-          { id: 'home', icon: 'home', label: '主屏幕' },
-          { id: 'rotate-left', icon: 'rotate-left', label: '向左旋转' },
-          { id: 'rotate-right', icon: 'rotate-right', label: '向右旋转' },
-          { id: 'orientation-portrait', icon: 'rotate-right', label: '竖屏' },
-        ],
-      },
-      status: 'live',
-      error: null,
-      ready: true,
-      controlling: true,
-      controlPending: false,
-      closing: false,
-      displayId: 'live-screen:sim',
-      transport: 'direct',
-      latency: null,
-      receiveRate: null,
-      settings: { fps: 30, quality: 'auto', audio: false },
-      caps: {
-        version: 1,
-        enabled: true,
-        canControl: true,
-        platform: 'darwin',
-        displays: [],
-        liveScreens: true,
-      },
-      preferences: {
-        audio: true,
-        idleTimeoutMinutes: 5,
-        privacyScreen: true,
-        hostMute: false,
-        clipboardSync: true,
-        lockOnExit: true,
-      },
-      safety: { privacyActive: false, notice: null, clipboardProgress: null },
-      credential: null,
-      credentialBusy: false,
-      credentialNotice: null,
-      fittedDisplay: null,
-    }),
-  );
-  expect(document.querySelector('.remote-viewer-title')?.textContent).toBe('iPhone Air · Studio');
-  const device = screen.getByRole('group', { name: '设备画面' });
-  // The absolute poses are for a phone that turns with the device; rotate covers a window.
-  expect(
-    within(device)
-      .getAllByRole('button')
-      .map((button) => button.getAttribute('aria-label')),
-  ).toEqual(['主屏幕', '向左旋转', '向右旋转']);
-  fireEvent.click(within(device).getByRole('button', { name: '主屏幕' }));
-  expect(lifecycle.press).toHaveBeenCalledExactlyOnceWith('home');
-  for (const name of ['所有窗口', '显示桌面', '剪贴板', '安全'])
-    expect(screen.queryByRole('button', { name })).toBeNull();
-  // Leaving a device screen changes nothing on the computer: no confirmation.
-  act(() => closeRequested(1));
-  expect(screen.queryByRole('alertdialog')).toBeNull();
-  expect(close).toHaveBeenCalledExactlyOnceWith(1);
 });

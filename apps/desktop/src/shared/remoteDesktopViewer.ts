@@ -26,6 +26,46 @@ export const REMOTE_VIEWER = {
   CHANNEL_REPLY: 'remote-desktop-viewer:channel-reply',
 } as const;
 
+/**
+ * A device screen shown inside an app window (a sidebar tab) rather than in its
+ * own viewer window. Main owns the target and lease exactly as for a viewer
+ * window; these channels only carry what a device screen needs.
+ */
+export const LIVE_SCREEN_EMBED = {
+  OPEN: 'live-screen-embed:open',
+  REQUEST: 'live-screen-embed:request',
+  ICE: 'live-screen-embed:ice',
+  CLOSE: 'live-screen-embed:close',
+  CHANNEL_REPLY: 'live-screen-embed:channel-reply',
+  ACTIVE: 'live-screen-embed:active',
+  CHANNEL_REQUEST: 'live-screen-embed:channel-request',
+} as const;
+export const LIVE_SCREEN_EMBED_ID = /^[A-Za-z0-9_-]{1,64}$/;
+/** Preload bridge of the embedded device screen; `embedId` names one mounted panel. */
+export interface LiveScreenEmbedBridge {
+  /** Binds a new connection to this panel; any earlier one of the same id ends. */
+  open(embedId: string, target: RemoteViewerTarget): Promise<RemoteViewerState>;
+  request(
+    embedId: string,
+    generation: number,
+    request: RemoteDesktopRequest,
+    mediaAttempt?: string,
+  ): Promise<unknown>;
+  ice(embedId: string, generation: number, mediaAttempt: string): Promise<DesktopIceServer[]>;
+  close(embedId: string): Promise<void>;
+  channelReply(
+    embedId: string,
+    generation: number,
+    id: string,
+    outcome: RemoteViewerChannelOutcome,
+  ): Promise<void>;
+  /** Main ended the connection (account change, this computer locked or went to sleep). */
+  onActive(listener: (payload: { embedId: string; state: RemoteViewerState }) => void): () => void;
+  onChannelRequest(
+    listener: (payload: { embedId: string } & RemoteViewerChannelRequest) => void,
+  ): () => void;
+}
+
 export interface RemoteViewerTarget {
   deviceId: string;
   name: string;

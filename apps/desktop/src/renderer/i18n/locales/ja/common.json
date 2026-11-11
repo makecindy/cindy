@@ -1210,6 +1210,7 @@
       "noDisplay": "このコンピュータに利用可能なディスプレイがありません。"
     },
     "viewer": {
+      "fitShort": "フィット",
       "displayPanel": "画面とサウンド",
       "clipboardPanel": "クリップボード",
       "securityPanel": "セキュリティ",

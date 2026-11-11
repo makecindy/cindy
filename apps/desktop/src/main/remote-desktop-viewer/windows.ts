@@ -9,8 +9,6 @@ import {
 } from 'electron';
 import {
   REMOTE_DESKTOP_CHANNEL,
-  LIVE_SCREEN_ID,
-  LIVE_SCREEN_PLUGIN_ID,
   DeviceLinkError,
   parseClipboardContent,
   parseRemoteDesktopRequest,
@@ -18,8 +16,8 @@ import {
 import { createHash } from 'node:crypto';
 import { desktopDiagnosticCode } from '../../shared/remoteDesktopDiagnostics';
 import {
+  LIVE_SCREEN_EMBED,
   REMOTE_VIEWER,
-  sameViewerScope,
   type RemoteViewerTarget,
 } from '../../shared/remoteDesktopViewer.js';
 import {
@@ -49,6 +47,7 @@ import { t } from '../i18n.desktop.js';
 import { markRemoteDesktopViewer } from './registry.js';
 import { extractIpcError } from '../../shared/ipcError.js';
 import { RemoteViewerConnection } from './connection.js';
+import { EmbeddedLiveScreens } from './embedded.js';
 import { ViewerCredentials } from './credentials.js';
 import { readViewerPreferences, writeViewerPreferences } from './preferences.js';
 import { readViewerResolution, writeViewerResolution } from './resolutionMemory.js';
@@ -123,6 +122,14 @@ type Entry = {
  */
 export class RemoteDesktopViewerWindows {
   private entries = new Set<Entry>();
+  /** Device screens shown inside app windows; same authority, no window of their own. */
+  private embedded = new EmbeddedLiveScreens({
+    owner: activeOwnerScopeKey,
+    available: () => getAppCapabilities().canUseDeviceLink && !isAppSessionBoundaryPending(),
+    selfDeviceId: getSelfDeviceId,
+    request: requestRemote,
+    ice: loadDesktopIceServers,
+  });
   private locale: SupportedLocale | null = null;
   constructor(private readonly isOpenSender: (sender: WebContents) => boolean) {}
   prewarm(): void {
@@ -149,37 +156,21 @@ export class RemoteDesktopViewerWindows {
       typeof target.name !== 'string' ||
       target.name.length > 256 ||
       (target.handoff !== undefined &&
-        (typeof target.handoff !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(target.handoff))) ||
-      (target.screen !== undefined &&
-        (!target.screen ||
-          typeof target.screen !== 'object' ||
-          target.handoff !== undefined ||
-          typeof target.screen.plugin !== 'string' ||
-          !LIVE_SCREEN_PLUGIN_ID.test(target.screen.plugin) ||
-          typeof target.screen.id !== 'string' ||
-          !LIVE_SCREEN_ID.test(target.screen.id) ||
-          (target.screen.name !== undefined &&
-            (typeof target.screen.name !== 'string' || target.screen.name.length > 256))))
+        (typeof target.handoff !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(target.handoff)))
     )
       throwIpcError('INVALID_PARAMS', 'Invalid remote desktop target');
-    // A 代输入 window view or a device screen is its own window, separate from
-    // a whole-desktop viewer of the same computer.
-    let entry = [...this.entries].find((e) => sameViewerScope(e.connection.target, target));
+    // A 代输入 window view is its own window, separate from a whole-desktop viewer.
+    let entry = [...this.entries].find(
+      (e) =>
+        e.connection.target?.deviceId === target.deviceId &&
+        e.connection.target.handoff === target.handoff,
+    );
     if (!entry) entry = [...this.entries].find((e) => !e.connection.target) ?? this.create();
     if (!entry.connection.active)
       entry.connection.bind({
         deviceId: target.deviceId,
         name: target.name,
         ...(target.handoff ? { handoff: target.handoff } : {}),
-        ...(target.screen
-          ? {
-              screen: {
-                plugin: target.screen.plugin,
-                id: target.screen.id,
-                ...(target.screen.name ? { name: target.screen.name } : {}),
-              },
-            }
-          : {}),
       });
     entry.controller.open(sender);
     // The spare shell is created off the next click path, never connects to a peer.
@@ -190,6 +181,7 @@ export class RemoteDesktopViewerWindows {
     for (const e of this.entries) e.controller.setLocale(locale);
   }
   reset(): void {
+    this.embedded.endAll();
     for (const e of this.entries) {
       e.connection.deactivate();
       e.controller.dispose();
@@ -272,10 +264,7 @@ export class RemoteDesktopViewerWindows {
       localeChannel: REMOTE_VIEWER.LOCALE,
       onCloseRequested: () => this.requestClose(entry),
       resolveNativeTitle: () =>
-        connection.target?.screen
-          ? [connection.target.screen.name, connection.target.name].filter(Boolean).join(' · ') ||
-            t('remoteDesktop.title')
-          : [connection.target?.name, t('remoteDesktop.title')].filter(Boolean).join(' · '),
+        [connection.target?.name, t('remoteDesktop.title')].filter(Boolean).join(' · '),
       onActivityChanged: (win, active) => {
         connection.setActive(active);
         if (!active) this.setInputCaptured(entry, false);
@@ -347,6 +336,7 @@ export class RemoteDesktopViewerWindows {
     return entry;
   }
   private readonly endForLocalLock = () => {
+    this.embedded.endAll();
     for (const entry of this.entries) {
       if (!entry.connection.active) continue;
       try {
@@ -366,6 +356,26 @@ export class RemoteDesktopViewerWindows {
     ipcMain.handle(REMOTE_VIEWER.OPEN, (event, target) => {
       assertTrustedAppRendererEvent(event);
       this.open(event.sender, target);
+    });
+    ipcMain.handle(LIVE_SCREEN_EMBED.OPEN, (event, embedId, target) => {
+      assertTrustedAppRendererEvent(event);
+      return this.embedded.open(event.sender, embedId, target);
+    });
+    ipcMain.handle(LIVE_SCREEN_EMBED.CLOSE, (event, embedId) => {
+      assertTrustedAppRendererEvent(event);
+      this.embedded.close(event.sender, embedId);
+    });
+    ipcMain.handle(LIVE_SCREEN_EMBED.REQUEST, (event, embedId, generation, request, attempt) => {
+      assertTrustedAppRendererEvent(event);
+      return this.embedded.request(event.sender, embedId, generation, request, attempt);
+    });
+    ipcMain.handle(LIVE_SCREEN_EMBED.ICE, (event, embedId, generation, attempt) => {
+      assertTrustedAppRendererEvent(event);
+      return this.embedded.ice(event.sender, embedId, generation, attempt);
+    });
+    ipcMain.handle(LIVE_SCREEN_EMBED.CHANNEL_REPLY, (event, embedId, generation, id, outcome) => {
+      assertTrustedAppRendererEvent(event);
+      this.embedded.channelReply(event.sender, embedId, generation, id, outcome);
     });
     ipcMain.handle(REMOTE_VIEWER.STATE, (event) => this.entry(event).connection.snapshot());
     ipcMain.handle(REMOTE_VIEWER.READY, (event) => {

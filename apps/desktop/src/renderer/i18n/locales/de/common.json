@@ -1222,6 +1222,7 @@
       "noDisplay": "Auf diesem Computer ist keine Anzeige verfügbar."
     },
     "viewer": {
+      "fitShort": "Anpassen",
       "displayPanel": "Anzeige & Ton",
       "clipboardPanel": "Zwischenablage",
       "securityPanel": "Sicherheit",

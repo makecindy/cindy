@@ -1,4 +1,5 @@
 import { createAccessibilitySupportBridge } from './accessibilitySupport';
+import { createLiveScreenEmbedBridge } from './liveScreenEmbed';
 import { invokeOpenPath } from './openPath';
 import { COPY_PNG_TO_CLIPBOARD_CHANNEL, type CopyPngToClipboardParams } from '../shared/pngClipboard';
 import { SELECTION_CONTEXT_MENU_ADD_TO_CHAT_CHANNEL } from '../shared/selectionContextMenu';
@@ -111,6 +112,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onSelectionContextMenuAddToChat: (callback: () => void): (() => void) =>
     onPayload(SELECTION_CONTEXT_MENU_ADD_TO_CHAT_CHANNEL, () => callback()),
   accessibilitySupport: createAccessibilitySupportBridge(),
+  liveScreenEmbed: createLiveScreenEmbedBridge(),
   onWindowHiddenChange: (cb: (hidden: boolean) => void): (() => void) => {
     const off = onPayload('window-hidden-change', cb);
     cb(windowHidden);

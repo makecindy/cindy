@@ -7,6 +7,7 @@
  */
 
 import { ipcMain } from 'electron';
+import { LIVE_SCREEN_ID, LIVE_SCREEN_PLUGIN_ID } from '@cindy/device-link';
 import type { BrowserWindow } from 'electron';
 import type { SubagentProvider } from '@cindy/maker-shared/subagent-workspace';
 
@@ -156,6 +157,30 @@ function parseCommand(raw: unknown): RsbWindowCommand {
       throwIpcError('INVALID_PARAMS', 'Invalid plugin instance');
     }
     return { type: 'open-plugin-task', sessionId: r.sessionId, instanceId: r.instanceId };
+  }
+  if (r.type === 'open-live-screen') {
+    const screen = requireObject(r.screen, 'command.screen');
+    const text = (value: unknown) => typeof value === 'string' && value.length <= 256;
+    if (
+      typeof screen.plugin !== 'string' ||
+      !LIVE_SCREEN_PLUGIN_ID.test(screen.plugin) ||
+      typeof screen.id !== 'string' ||
+      !LIVE_SCREEN_ID.test(screen.id) ||
+      !text(screen.name) ||
+      !text(screen.pluginName)
+    ) {
+      throwIpcError('INVALID_PARAMS', 'Invalid device screen');
+    }
+    return {
+      type: 'open-live-screen',
+      sessionId: r.sessionId,
+      screen: {
+        plugin: screen.plugin,
+        id: screen.id,
+        name: screen.name as string,
+        pluginName: screen.pluginName as string,
+      },
+    };
   }
   if (r.type === 'open-background-tasks-tab') {
     const hasFocusTaskId =

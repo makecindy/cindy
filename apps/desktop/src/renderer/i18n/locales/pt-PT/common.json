@@ -1239,6 +1239,7 @@
       "noDisplay": "Nenhum ecrã disponível neste computador."
     },
     "viewer": {
+      "fitShort": "Ajustar",
       "displayPanel": "Imagem e som",
       "clipboardPanel": "Área de transferência",
       "securityPanel": "Segurança",

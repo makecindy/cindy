@@ -339,3 +339,30 @@
   /* --border-default nearly matches the Light track; derive from the tool ink instead. */
   background: color-mix(in srgb, var(--segmented-option-fg) 35%, transparent);
 }
+
+/* A device screen in a sidebar tab: the device alone on the plain surface, in
+   a frame with its own corners, like the same plugin's page on the computer
+   that runs it. The margin leaves room for the frame, so nothing clips here;
+   the panel around it does. The runtime shows the ambient backdrop inline,
+   hence the override. */
+.remote-viewer-content.live-screen-content {
+  margin: var(--space-4);
+  overflow: visible;
+}
+.live-screen-content #stage {
+  overflow: visible;
+}
+.live-screen-content #bg {
+  display: none !important;
+}
+.live-screen-content #image,
+.live-screen-content video {
+  border-radius: var(--live-screen-radius, 0);
+  box-shadow: 0 0 0 5px color-mix(in srgb, var(--text-primary) 88%, var(--surface));
+}
+/* The zoom track's middle segment names the mode instead of showing a glyph. */
+.cindy-button.remote-viewer-tool.live-screen-fit {
+  width: auto;
+  padding-inline: var(--space-3);
+  font-size: var(--text-12);
+}
