@@ -14,9 +14,14 @@ import { describe, expect, it } from 'vitest';
  * 规则：renderer 的 .ts / .tsx（不含测试）里不得出现
  *   - Tailwind 数字时长 `duration-150`（`duration-0` 除外，那是「无动画」不是档位）；
  *   - 任意值时长 `duration-[250ms]` / `duration-[0.3s]`；
- *   - 任意值曲线 `ease-[cubic-bezier(...)]`；
- *   - 行内 transition 字符串里的字面量时长，如 `'transform 300ms ease-out'`。
+ *   - 任何写死的曲线 `cubic-bezier(...)`：Tailwind `ease-[…]`、行内 transition、Web Animations 的
+ *     `easing` 都算；只有 `var(--motion-ease-*, cubic-bezier(...))` 这种 token 回退值不算；
+ *   - Tailwind 任意值动画里的字面量时长，如 `animate-[x_200ms_ease-out]`；
+ *   - 行内 transition 字符串里的字面量时长，如 `'transform 300ms ease-out'`；
+ *   - 只有时长的字符串，如 `transitionDuration: '300ms'`。
  * 改用 `duration-[var(--motion-*)]`、`ease-[var(--motion-ease-*)]` 或 `var(--motion-*)`。
+ * 盲区：数字形式的时长（Web Animations 的 `duration: 300`、计时器毫秒）与普通计时常量无法
+ * 区分，不在扫描范围；`themes/` 是 token 定义源，不扫。
  *
  * 存量命中按「文件 → 次数」登记在 MOTION_LITERAL_DEBT，只减不增：新增一处（哪怕在已登记
  * 文件里）即红；迁移掉一处后次数变少也会红，提示同步下调或删除登记。不扫 globals.css：
@@ -28,7 +33,9 @@ const RENDERER_ROOT = join(__dirname, '..');
 const PATTERNS: Array<{ rule: string; re: RegExp }> = [
   { rule: 'tailwind-duration', re: /(?<![\w-])duration-(?!0(?![\d.]))\d+(?![\w-])/g },
   { rule: 'arbitrary-duration', re: /(?<![\w-])duration-\[\d+(?:\.\d+)?m?s\]/g },
-  { rule: 'arbitrary-ease', re: /(?<![\w-])ease-\[cubic-bezier\(/g },
+  { rule: 'cubic-bezier', re: /(?<!--motion-[\w-]+,\s*)cubic-bezier\(/g },
+  { rule: 'arbitrary-animation', re: /(?<![\w-])animate-\[[^\]\s'"`]*?_\d+(?:\.\d+)?m?s/g },
+  { rule: 'bare-duration', re: /['"`]\d+(?:\.\d+)?m?s['"`]/g },
   {
     rule: 'inline-transition',
     re: /['"`][^'"`\n]*\b[a-z-]+ \d+(?:\.\d+)?m?s(?: |,|['"`])[^'"`\n]*['"`]/g,
@@ -37,6 +44,7 @@ const PATTERNS: Array<{ rule: string; re: RegExp }> = [
 
 /** 存量写死时长（2026-11-11 基线，只减不增）。key 为相对 renderer 的路径。 */
 const MOTION_LITERAL_DEBT: Record<string, number> = {
+  'cindy-brain/ghostCardLive.ts': 1,
   'components/chat/CopyAsImageBlock.tsx': 1,
   'components/chat/GhostToolCard.tsx': 3,
   'components/chat/ImageLightbox.tsx': 2,
@@ -50,10 +58,10 @@ const MOTION_LITERAL_DEBT: Record<string, number> = {
   'components/chat/ToolPayloadLightbox.tsx': 1,
   'components/chat/VideoLightbox.tsx': 1,
   'components/diff-panel/DiffPanelShell.tsx': 3,
-  'components/layout/FadeSwitcher.tsx': 1,
+  'components/layout/FadeSwitcher.tsx': 2,
   'components/login/LoginCaptchaOverlay.tsx': 1,
   'components/markdown/codemirrorGithubTheme.ts': 2,
-  'components/new-chat/ChatInput.tsx': 2,
+  'components/new-chat/ChatInput.tsx': 3,
   'components/new-chat/FastModeToggle.tsx': 2,
   'components/new-chat/HomeUsageDashboard.tsx': 1,
   'components/new-chat/ModelSelector.tsx': 2,
@@ -67,13 +75,14 @@ const MOTION_LITERAL_DEBT: Record<string, number> = {
   'components/settings/UnifiedModelList.tsx': 2,
   'components/settings/VoiceSpeakerEnrollmentDialog.tsx': 1,
   'components/sidebar/GhostMainViewNavEntries.tsx': 1,
-  'components/sidebar/Sidebar.tsx': 4,
+  'components/sidebar/Sidebar.tsx': 6,
   'components/sidebar/SidebarTopNav.tsx': 1,
   'components/sidebar/UserInfoSection.tsx': 2,
   'components/splash/SplashScreen.tsx': 2,
   'components/ui/effort-slider.tsx': 2,
-  'components/ui/morph-popover.tsx': 1,
+  'components/ui/morph-popover.tsx': 2,
   'components/ui/toast/ToastContainer.tsx': 1,
+  'contexts/LoginHandoffContext.tsx': 3,
   'features/billing/BillingPage.tsx': 1,
   'features/bots/BotGlancePopover.tsx': 1,
   'features/bots/TeammatesSection.tsx': 1,
@@ -101,6 +110,7 @@ const MOTION_LITERAL_DEBT: Record<string, number> = {
   'features/scheduler/components/TemplateCard.tsx': 1,
   'features/skillhub/SkillhubHomeView.tsx': 2,
   'features/skillhub/components/HomeMarketCard.tsx': 1,
+  'features/skillhub/components/SkillDetailLayout.tsx': 1,
 };
 
 /** 去掉注释，只扫代码：注释里描述旧值不算违规。 */
@@ -115,6 +125,7 @@ function collectFiles(): string[] {
   const walk = (dir: string) => {
     for (const name of readdirSync(dir)) {
       if (name === '__tests__' || name === 'node_modules' || name === 'generated') continue;
+      if (dir === RENDERER_ROOT && name === 'themes') continue;
       const p = join(dir, name);
       if (statSync(p).isDirectory()) walk(p);
       else if (/\.tsx?$/.test(name) && !/\.(test|spec)\.tsx?$/.test(name)) files.push(p);
@@ -140,6 +151,10 @@ describe('motion discipline (DESIGN.md §14.4 motion tokens, D-04)', () => {
       "el.style.transition = 'transform 300ms ease-out';",
       "'transition-opacity duration-150'",
       "{ transition: 'left 250ms cubic-bezier(0.4, 0, 0.2, 1)' }",
+      "{ transition: 'transform var(--motion-base) cubic-bezier(0.4,0,0.2,1)' }",
+      "{ transitionDuration: '300ms' }",
+      "el.animate(frames, { duration: PULSE_MS, easing: 'cubic-bezier(0, 0, 0.2, 1)' })",
+      "'animate-[sidebar-peek-in_200ms_ease-out]'",
     ];
     for (const line of bad) expect(findMotionLiterals(line), line).not.toHaveLength(0);
     const good = [
@@ -148,6 +163,8 @@ describe('motion discipline (DESIGN.md §14.4 motion tokens, D-04)', () => {
       "{ transition: 'left var(--motion-base) var(--motion-ease-move)' }",
       '// 旧值 duration-[250ms] 只出现在注释里',
       'const timeoutMs = 250;',
+      "'transition-transform duration-[var(--motion-base,200ms)] ease-[var(--motion-ease-move,cubic-bezier(0.4,0,0.2,1))]'",
+      "'animate-[spin_var(--motion-spinner-cycle)_linear_infinite]'",
     ];
     for (const line of good) expect(findMotionLiterals(line), line).toHaveLength(0);
   });
