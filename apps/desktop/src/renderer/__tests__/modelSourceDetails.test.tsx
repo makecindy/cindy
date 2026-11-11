@@ -168,10 +168,10 @@ describe('model source second line', () => {
     expect(view.container.textContent).toContain('100%');
     expect(view.container.textContent).not.toContain('a@example.test');
     expect(command).toHaveBeenCalledTimes(2);
-    // Pausing B removes its identity, plan and quota together, before the read returns.
+    // Refresh keeps the complete previous display until the replacement arrives.
     pool = { ...pool, accounts: pool.accounts.map(account => ({ ...account, paused: true })) };
     act(() => changed?.({ providerId: 'anthropic' }));
-    expect(view.container.textContent).not.toContain('b@example.test');
+    expect(view.container.textContent).toContain('b@example.test · Max');
     await act(async () => {});
     expect(view.container.textContent).toContain('subscriptionAccounts.unassigned');
     expect(view.container.textContent).not.toMatch(/Pro|Max|%|@/);

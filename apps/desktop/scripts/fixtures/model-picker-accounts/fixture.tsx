@@ -66,13 +66,13 @@ void mountPage({
           {
             id: 'default',
             identity: 'first@example.test',
-            paused: !['ambiguous', 'session-bound', 'reset-soon', 'reset-urgent', 'unknown', 'full-panel', 'full-panel-warning'].includes(ctx.case),
+            paused: !['ambiguous', 'session-bound', 'reset-soon', 'reset-urgent', 'unknown', 'full-panel', 'full-panel-warning', 'quota-pool', 'quota-partial'].includes(ctx.case),
             status: 'ready',
             running: 0,
             limit: 4,
             plan: 'max',
             usage: {
-              claude: { sevenDay: { utilization: ctx.case === 'unknown' ? NaN : 66, resetsAt: Date.now() / 1000 + 3 * 86400 } },
+              claude: { ...(ctx.case.startsWith('quota-') ? { fiveHour: { utilization: 100, resetsAt: Date.now() / 1000 + 45 * 60 } } : {}), sevenDay: { utilization: ctx.case === 'unknown' ? NaN : 66, resetsAt: Date.now() / 1000 + 3 * 86400 } },
             },
           },
           {
@@ -84,7 +84,7 @@ void mountPage({
             limit: 4,
             plan: 'pro',
             usage: {
-              claude: { sevenDay: { utilization: 20, resetsAt: Date.now() / 1000 + (ctx.case === 'reset-urgent' || ctx.case === 'full-panel' ? 5 * 3600 : ctx.case === 'reset-soon' || ctx.case === 'unknown' || ctx.case === 'full-panel-warning' ? 12 * 3600 : 2 * 86400) } },
+              claude: { ...(ctx.case.startsWith('quota-') ? { fiveHour: { utilization: ctx.case === 'quota-low' ? 92 : ctx.case === 'quota-partial' ? 20 : 100, resetsAt: Date.now() / 1000 + 32 * 60 } } : {}), sevenDay: { utilization: 20, resetsAt: Date.now() / 1000 + (ctx.case === 'reset-urgent' || ctx.case === 'full-panel' ? 5 * 3600 : ctx.case === 'reset-soon' || ctx.case === 'unknown' || ctx.case === 'full-panel-warning' ? 12 * 3600 : 2 * 86400) } },
             },
           },
         ],

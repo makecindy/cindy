@@ -81,10 +81,10 @@ export function readClaimedClassicalStyle(value: unknown): ClassicalReplyStyleId
   return isClassicalReplyStyle(claimed) ? claimed : null;
 }
 
-export function turnUiLanguageFromSendOpts(
+export function turnUiLanguageFromSendOpts<T extends SupportedLocale | null>(
   sendOpts: { uiLanguage?: unknown } | null | undefined,
-  fallback: SupportedLocale,
-): SupportedLocale {
+  fallback: T,
+): SupportedLocale | T {
   // Present only after main stamps a supported locale. Wire values are stripped first.
   return isSupportedUiLanguage(sendOpts?.uiLanguage) ? sendOpts.uiLanguage : fallback;
 }
