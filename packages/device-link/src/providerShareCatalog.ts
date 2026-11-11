@@ -179,7 +179,7 @@ export function scrubSharedProvider<T>(provider: T): T {
   const groupSize = readProviderShareGroupSize(provider);
   const groupStatus = readProviderShareGroupStatus(provider);
   const guestRunning = readProviderShareGuestRunning(provider);
-  const { subscriptionAccount, openAiAccount, ...fields } = provider as Record<string, unknown>;
+  const { subscriptionAccount, openAiAccount, subscriptionPoolAlias: _poolAlias, ...fields } = provider as Record<string, unknown>;
   delete fields.group;
   // Sharing a gateway must not disclose the owner's organization identity.
   if (fields.id === 'xd') delete fields.logoKind;

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { legacyCodexAccountCanRun, setLegacyCodexAccountPaused } from './legacyAccountAccess.js';
 import { getCodexHome } from '../maker-host/codex-home-path.js';
 import { mkdir } from 'node:fs/promises';
 import { type AuthState, type NativeSubscriptionAccount } from '@cindy/maker-core';
@@ -33,6 +34,7 @@ import {
   accountOwnerPrefix,
   defaultPool,
   readPool,
+  readLegacyCodexProviderId,
   readAccountBinding,
   updatePool as updateStoredPool,
   writeAccountBindings,
@@ -44,6 +46,8 @@ import {
   readNativeCodexTokens,
   readLegacyCodexAccount,
   loginLegacyCodexAccount,
+  readLegacyCodexProviderAccount,
+  loginLegacyCodexProviderAccount,
 } from './nativeCli.js';
 
 type Usage = {
@@ -217,8 +221,10 @@ async function snapshot(
       result = { auth: { authenticated: false }, at: Date.now() };
     } else {
       try {
-        let auth =
-          id === 'default' && legacyCodexDefault(provider)
+        const imported = provider === 'openai' ? readLegacyCodexProviderId(id) : undefined;
+        let auth = imported
+          ? await readLegacyCodexProviderAccount(imported, directory)
+          : id === 'default' && legacyCodexDefault(provider)
             ? await readLegacyCodexAccount()
             : await readNativeAccount(provider, directory);
         const invalidated = state.invalidated.get(key);
@@ -505,6 +511,7 @@ export async function acquireSubscriptionAccount(
   model: string | undefined,
   keys: string[],
   control = false,
+  options: { remote?: boolean; accountId?: string; resuming?: boolean } = {},
 ): Promise<SubscriptionAccountLease | null> {
   const pool = readPool(provider);
   if (!pool) return null;
@@ -517,6 +524,7 @@ export async function acquireSubscriptionAccount(
   const latest = readPool(provider);
   if (!latest || latest.disconnected) throw new Error('Subscription accounts changed');
   const members = latest.accounts.map((a) => {
+    const imported = provider === 'openai' ? readLegacyCodexProviderId(a.id) : undefined;
     const index = pool.accounts.findIndex((p) => p.id === a.id);
     const info = snapshots[index];
     const usage = providerGroupMemberUsageState(
@@ -532,14 +540,19 @@ export async function acquireSubscriptionAccount(
       ...a,
       paused: control ? false : a.paused,
       key: a.id,
-      usable: !loggingIn && info?.auth.authenticated === true && (control || !usage.limited),
+      usable: !loggingIn && info?.auth.authenticated === true && (control || !usage.limited)
+        && (control || !imported || legacyCodexAccountCanRun(imported, model, {
+          remote: options.remote === true, newRoute: !binding && !options.resuming,
+        })),
       running: state.running.get(keyOf(provider, a.id))?.size ?? 0,
       urgency: usage.urgency,
       fiveHourTight: usage.fiveHourTight,
     };
   });
   // Reopening an old task without a recorded binding must keep its original default home.
-  const pinned = binding?.accountId;
+  if (binding && options.accountId && binding.accountId !== options.accountId)
+    throw new Error('The task subscription account changed');
+  const pinned = binding?.accountId ?? options.accountId;
   const selected =
     pinned ??
     pickProviderGroupMember(members, latest.strategy, {
@@ -569,6 +582,9 @@ export async function acquireSubscriptionAccount(
       throw new Error('Subscription account was disconnected');
     if (selected === 'default' && !defaultAccountBound(provider))
       throw new Error('Subscription account was disconnected');
+    const imported = provider === 'openai' ? readLegacyCodexProviderId(selected) : undefined;
+    if (options.remote && imported && !legacyCodexAccountCanRun(imported, model, { remote: true, newRoute: false }))
+      throw new Error('Subscription account remote access was revoked');
   };
   return {
     account: {
@@ -668,6 +684,9 @@ export async function runSubscriptionAccountCommand(
             },
       ),
     }));
+    assertOwner(state);
+    const imported = provider === 'openai' && command.accountId ? readLegacyCodexProviderId(command.accountId) : undefined;
+    if (imported && command.paused !== undefined) setLegacyCodexAccountPaused(imported, command.paused);
   } else if (command.action === 'remove') {
     if (command.accountId === 'default')
       throw new Error('The default CLI account cannot be removed');
@@ -762,7 +781,9 @@ export async function runSubscriptionAccountCommand(
         throw new Error('codex_provider_managed_auth');
       const attachDefault = adding && accountId === 'default' && currentAuth?.authenticated;
       if (!attachDefault) {
-        if (accountId === 'default' && legacyCodexDefault(provider))
+        const imported = provider === 'openai' ? readLegacyCodexProviderId(accountId) : undefined;
+        if (imported) await loginLegacyCodexProviderAccount(imported, abort.signal);
+        else if (accountId === 'default' && legacyCodexDefault(provider))
           await loginLegacyCodexAccount(abort.signal);
         else await loginNativeAccount(provider, directory, abort.signal);
       }

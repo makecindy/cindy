@@ -1120,6 +1120,10 @@ function projectInvokeResultForTunnel(
     : {};
   const providers = (r.providers as Record<string, unknown>[]).map((p) => {
     const rest = { ...p };
+    // Keep an individually offered old route selectable when the whole pool is not offered.
+    if (p.subscriptionPoolAlias && !(r.providers as Record<string, unknown>[])
+      .some(provider => provider.id === 'openai' && provider.remoteInvocationEnabled === true))
+      delete rest.subscriptionPoolAlias;
     // 「允许被远程调用」只是标记、不裁剪目录：远程控制与手机仍要看到全部供应商，
     // 只有远程 Agent 的选择入口按它筛选。只放行布尔值。
     delete rest.remoteInvocationEnabled;

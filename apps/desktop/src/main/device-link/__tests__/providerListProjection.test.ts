@@ -51,6 +51,16 @@ const projectForCurrentController = (result: unknown) =>
     modelVisibilityOverrides?: Record<string, boolean>;
   };
 
+// Upgrade 2026-11-11, standard: folding the local list must not remove an old remote grant.
+it.each([false, true])('retains the old remote source unless the complete pool is offered (%s)', offered => {
+  const projected = project({ providers: [
+    { id: 'openai', name: 'OpenAI', agents: [], models: {}, remoteInvocationEnabled: offered },
+    { id: 'old-openai', name: 'Old OpenAI', agents: [], models: {}, remoteInvocationEnabled: true, subscriptionPoolAlias: true },
+  ] });
+  expect(projected.providers.find(provider => provider.id === 'old-openai')?.subscriptionPoolAlias)
+    .toBe(offered ? true : undefined);
+});
+
 describe('schedule binding list projection', () => {
   const fields = {
     id: 'heartbeat', name: 'Heartbeat', status: 'paused', targetSessionId: 'task',
