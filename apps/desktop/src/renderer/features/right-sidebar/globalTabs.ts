@@ -277,10 +277,10 @@ export function addGlobalPluginTab(
     const wantedView = opts?.view;
     const switched =
       wantedView !== undefined && effectivePluginView(existingState, opts?.ghost) !== wantedView;
-    const changedInput = opts?.resourceViewId && opts.resourceInput !== undefined;
+    const changedInput = Boolean(opts?.resourceViewId);
     const next = switched || changedInput
       ? { ...existing, state: { ...existingState, ...(switched ? { view: wantedView } : {}),
-          ...(changedInput ? { resourceInput: opts.resourceInput } : {}) } as PluginViewTabState }
+          ...(changedInput ? { resourceInput: opts?.resourceInput ?? {} } : {}) } as PluginViewTabState }
       : existing;
     if (switched || changedInput || dismissed.length !== current.dismissedInstanceIds.length) {
       persist({

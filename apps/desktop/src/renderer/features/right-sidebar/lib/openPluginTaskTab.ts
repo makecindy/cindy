@@ -34,7 +34,9 @@ export async function openPluginTaskTab(
     );
     let tabId = existing?.id;
     if (existing) {
-      if (options.resourceInput) await patchTabState(sessionId, existing.id, state => ({ ...(state as PluginTaskTabState), resourceInput: options.resourceInput }));
+      if (options.resourceViewId || options.resourceInput) {
+        await patchTabState(sessionId, existing.id, state => ({ ...(state as PluginTaskTabState), resourceInput: options.resourceInput ?? {} }));
+      }
       await setActiveTab(sessionId, existing.id, { userInitiated });
     } else {
       tabId = (await addTab(sessionId, 'plugin-task', { instanceId,

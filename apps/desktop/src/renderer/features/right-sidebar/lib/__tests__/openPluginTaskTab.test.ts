@@ -83,6 +83,17 @@ describe('openPluginTaskTab', () => {
     expect(routeSidebarCommand).toHaveBeenLastCalledWith({ type: 'open-plugin-task', sessionId: 'task-1',
       instanceId: 'sim', resourceViewId: 'one', resourceInput: { selected: 'b' } }, { userInitiated: true });
   });
+  // #9496 discussion_r4533414901：省略 input 重开应清空旧参数；已有用例只覆盖显式更新。
+  // unit：真实任务桶与持久化回执；最小输入为 { selected: 'a' } 后不传 input。
+  it('clears omitted input when reopening a named task page', async () => {
+    await openPluginTaskTab('task-1', 'sim', { resourceViewId: 'one', resourceInput: { selected: 'a' } });
+    const firstId = getBucket('task-1').tabs[0].id;
+    await openPluginTaskTab('task-1', 'sim', { resourceViewId: 'one' });
+    expect(getBucket('task-1').tabs.map(tab => tab.id)).toEqual([firstId]);
+    const expected = { instanceId: 'sim', resourceViewId: 'one', resourceInput: {} };
+    expect(taskTabs('task-1')).toEqual([expected]);
+    expect(rows.get(firstId)?.state).toEqual(expected);
+  });
   // PR #6939 discussion_r4357791816：先开页、后挂载目标任务时不能丢失选中。
   // unit：无 Shell 订阅，验证真实任务桶与全局/组激活位；保留其他组与弹出窗口选择。
   it.each(['same-group', 'other-group', 'popped-out', 'passive'] as const)(
