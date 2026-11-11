@@ -10,18 +10,26 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AgentIslandLiveActivityState } from '../liveActivity.js';
+import { createEmptyAgentIslandPillSnapshot } from '../../../shared/agentIsland.js';
 
 vi.mock('electron', () => ({ app: { isPackaged: false, getAppPath: () => '/nonexistent' } }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ info: vi.fn(), warn: vi.fn() }) }));
 
 const { AgentIslandLiveActivity, agentIslandLiveActivityStateFromPill } = await import('../liveActivity.js');
 
+const strings = {
+  needsInput: 'Needs input', running: 'Running', completed: 'Completed', error: 'Error',
+  runningCount: (n: number) => `${n} running`,
+  alsoRunningCount: (n: number) => `${n} more tasks running`,
+  waitingCount: (n: number) => `${n} waiting`,
+};
+
 function state(
   runningCount: number,
   status: AgentIslandLiveActivityState['status'] = 'running',
   attentionCount = 0,
 ): AgentIslandLiveActivityState {
-  return { status, runningCount, attentionCount, title: 'Task', detail: status, summary: '', completedCount: 0, completedLabel: 'Completed', mascot: 'cindy' };
+  return { status, runningCount, attentionCount, attentionTotal: attentionCount, title: 'Task', detail: status, summary: '', completedCount: status === 'completed' ? 1 : 0, completedLabel: 'Completed', mascot: 'cindy' };
 }
 
 function fakeAddon(replies: Array<Record<string, unknown>> = [], system = { allowed: true }) {
@@ -61,6 +69,65 @@ afterEach(() => {
 });
 
 describe('AgentIslandLiveActivity', () => {
+  // Regression: the system island showed only 5 running tasks while Agent Notch
+  // showed 1 unread result · 5 running. Existing tests covered alerts, not the
+  // projected counts/status. Unit tier: production projection and native payloads.
+  it.each(['completed', 'error'] as const)('keeps the surfaced %s result visible while other tasks run', (phase) => {
+    const pill = {
+      ...createEmptyAgentIslandPillSnapshot(),
+      priorityId: 'finished', priorityStatus: phase, priorityCompactTitle: 'Finished task',
+      sessionCount: 6, runningSessionCount: 5, unreadCompletedCount: 1, attentionCount: 1,
+    };
+    const companion = { name: 'Lizi', hue: 'pink' as const, glyph: 'L', glyphIsInitial: true };
+    expect(agentIslandLiveActivityStateFromPill(pill, 'cindy', strings, companion, 'cindy://session/finished'))
+      .toMatchObject({
+        status: 'completed', runningCount: 5, attentionCount: 0, attentionTotal: 1,
+        completedCount: 1, detail: phase === 'error' ? 'Error' : 'Completed',
+        summary: '5 more tasks running', companion: { glyph: 'L' }, taskUrl: 'cindy://session/finished',
+      });
+  });
+
+  it.each([
+    { phase: 'needs-interaction', pending: 1, completed: 1, total: 2, status: 'attention' },
+    { phase: 'completed', pending: 0, completed: 1, total: 1, status: 'completed' },
+    // Chat unread counts even while its running session is excluded from the running badge.
+    { phase: 'running', pending: 0, completed: 0, total: 1, status: 'running' },
+  ] as const)('preserves the $phase badge with no other running tasks, then ends once read', ({ phase, pending, completed, total, status }) => {
+    const pill = {
+      ...createEmptyAgentIslandPillSnapshot(), priorityStatus: phase, sessionCount: total,
+      pendingInteractionCount: pending, unreadCompletedCount: completed, attentionCount: total,
+    };
+    expect(agentIslandLiveActivityStateFromPill(pill, 'cindy', strings))
+      .toMatchObject({ status, runningCount: 0, attentionCount: pending, attentionTotal: total, completedCount: completed });
+    expect(agentIslandLiveActivityStateFromPill(createEmptyAgentIslandPillSnapshot(), 'cindy', strings)).toBeNull();
+  });
+
+  it('updates unread badges independently without treating them as new questions', async () => {
+    const fake = fakeAddon();
+    const live = controller(fake.addon);
+    live.sync(state(1));
+    await vi.advanceTimersByTimeAsync(0);
+    // A companion can have unread chat while its runtime phase stays running.
+    live.sync({ ...state(1), attentionTotal: 1 });
+    await vi.advanceTimersByTimeAsync(1000);
+    live.sync(state(1));
+    await vi.advanceTimersByTimeAsync(1000);
+    const updates = fake.calls.filter((call) => call.action === 'sync');
+    expect(updates.map((call) => call.state?.attentionTotal)).toEqual([0, 1, 0]);
+    expect(updates.every((call) => call.alert === undefined)).toBe(true);
+  });
+
+  it('does not alert again when the pill surfaces an already-unread result', async () => {
+    const fake = fakeAddon();
+    const live = controller(fake.addon);
+    live.sync({ ...state(1), completedCount: 2, attentionTotal: 2 });
+    await vi.advanceTimersByTimeAsync(0);
+    live.sync({ ...state(1, 'completed'), completedCount: 1, attentionTotal: 1 });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(fake.calls.at(-1)).toMatchObject({ action: 'sync', state: { status: 'completed', attentionTotal: 1 } });
+    expect(fake.calls.at(-1)?.alert).toBeUndefined();
+  });
+
   it('clears stale activities once, then sends only the latest of rapid island updates', async () => {
     const fake = fakeAddon([{ ok: true, result: 'started' }]);
     const live = controller(fake.addon);
@@ -183,7 +250,7 @@ describe('AgentIslandLiveActivity', () => {
       waitingCount: (n: number) => `${n} waiting`,
     };
     const pill = (running: number, pending: number) => ({
-      priorityId: 's1', priorityStatus: 'running' as const, priorityMicroTitle: 'Lizi', priorityCompactTitle: 'Lizi',
+      priorityId: 's1', priorityStatus: pending > 0 ? 'needs-interaction' as const : 'running' as const, priorityMicroTitle: 'Lizi', priorityCompactTitle: 'Lizi',
       sessionCount: 1, runningSessionCount: running, pendingInteractionCount: pending,
       unreadCompletedCount: 0, deferredRevealCount: 0, attentionCount: pending,
     });

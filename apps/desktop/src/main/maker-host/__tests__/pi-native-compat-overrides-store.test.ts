@@ -98,7 +98,9 @@ describe('learned cache compatibility', () => {
 // Real child processes execute the production bridge wrapper. A controlled
 // rename barrier holds one writer after its disk read, reproducing lost updates
 // without relying on scheduler timing; the other writer must observe the lock.
-function cacheProcess(id: string, options: { pause?: boolean; failWrite?: boolean; failRelease?: 'once' | 'held' } = {}) {
+function cacheProcess(id: string, options: {
+  pause?: boolean; failWrite?: boolean; failRelease?: 'once' | 'held'; releaseOnContention?: string;
+} = {}) {
   const release = path.join(root.path, 'release-' + id);
   const script = `
 import * as fs from 'node:fs';
@@ -117,6 +119,7 @@ const registry = { getProvider() {}, getRegisteredNativeProvider() {} };
 let pendingTimers = 0;
 let calls = 0, pause = ${Boolean(options.pause)}, failWrite = ${Boolean(options.failWrite)};
 let releaseFailure = ${JSON.stringify(options.failRelease ?? '')};
+let releaseOnContention = ${JSON.stringify(options.releaseOnContention ?? '')};
 const api = runInNewContext(${JSON.stringify(PI_CACHE_RECOVERY_SOURCE + '\ninstallCindyCacheRecovery(pi)')}, {
   ...fs, path, process: { pid: process.pid, platform: process.platform, uptime: () => process.uptime(), kill: (...a) => process.kill(...a),
     env: { PI_CODING_AGENT_DIR: '/fixture', CINDY_PI_CACHE_COMPAT_FILE: file } },
@@ -131,6 +134,16 @@ const api = runInNewContext(${JSON.stringify(PI_CACHE_RECOVERY_SOURCE + '\ninsta
   pi: { on: (event, fn) => handlers.set(event, fn) },
   statSync: (name, ...args) => name === ruleFile ? { size: rule.length } : fs.statSync(name, ...args),
   readFileSync: (name, ...a) => name === ruleFile ? rule : fs.readFileSync(name, ...a),
+  openSync: (name, ...args) => {
+    try { return fs.openSync(name, ...args); }
+    catch (error) {
+      if (name === file + '.lock' && error.code === 'EEXIST' && releaseOnContention) {
+        fs.writeFileSync(releaseOnContention, 'release'); releaseOnContention = '';
+        process.send({ event: 'lock-contended' });
+      }
+      throw error;
+    }
+  },
   writeFileSync: (name, ...a) => {
     if (failWrite && typeof name === 'string' && name.endsWith('.tmp')) throw new Error('fixture write failure');
     return fs.writeFileSync(name, ...a);
@@ -217,7 +230,7 @@ process.send({ event: 'ready', key });
 describe('native and Desktop cache writers share one lock', () => {
   it.each(['native', 'desktop'])('merges an overlapping %s writer after a native read', async writer => {
     const first = cacheProcess('first', { pause: true });
-    const second = writer === 'native' ? cacheProcess('second') : undefined;
+    const second = writer === 'native' ? cacheProcess('second', { releaseOnContention: first.release }) : undefined;
     try {
       await first.event('ready');
       if (second) await second.event('ready');
@@ -232,10 +245,16 @@ describe('native and Desktop cache writers share one lock', () => {
       const other = second
         ? (second.send('start'), second.event('success'))
         : record('desktop', 'second', fix, b);
-      if (second) await other;
-      else await vi.waitFor(() => expect(attempted).toBe(true));
+      if (second) {
+        await other;
+        await second.event('lock-contended');
+        // Let persistence settle before the parent processes the barrier. The
+        // contender releases it directly on EEXIST: a busy parent must not keep
+        // the first writer locked past the native persistence retry budget.
+        await second.event('persistence-idle');
+      } else await vi.waitFor(() => expect(attempted).toBe(true));
       spy.mockRestore();
-      fs.writeFileSync(first.release, 'release');
+      if (!second) fs.writeFileSync(first.release, 'release');
       expect((await first.event('success')).events).toEqual(['done']);
       await other;
       await vi.waitFor(() => expect(Object.keys(JSON.parse(fs.readFileSync(file, 'utf8')).routes)).toHaveLength(2));

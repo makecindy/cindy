@@ -19,6 +19,7 @@ pnpm ui:check --page group-chat --case long-device --focus '[data-controlled-ban
 pnpm ui:check --entry tmp/my-card.tsx --case all         # 还没注册的组件
 pnpm ui:check --list                                     # 已注册页面与场景
 pnpm ui:preview --page group-chat --case long-thread     # 人工验收：保持窗口，改文件自动重载
+pnpm ui:preview --page remote-connection-v2 --motion     # 人工看动效：预览窗口里放开「减弱动效」
 ```
 
 ## 读结果
@@ -235,7 +236,8 @@ Tailwind 配置由 Tailwind 直接从磁盘加载，两侧都用当前版本；�
 - `--platform` 默认是当前电脑的平台；指定其它平台只改变页面读到的 `electronAPI.platform`，
   报告会写明模拟的平台。
 - `ui:preview` 只用于人工验收：显示一个窗口，依赖的源码、样式、翻译或场景变化后自动重载，
-  关窗或 Ctrl+C 结束。自动检查不要用它保持窗口。修改运行器、依赖或 Tailwind 配置后重启命令。
+  关窗或 Ctrl+C 结束。默认和检查一样按「减弱动效」渲染；加 `--motion` 才播放页面真实的动效，
+  只给人看，检查与截图始终是减弱动效。自动检查不要用它保持窗口。修改运行器、依赖或 Tailwind 配置后重启命令。
 
 ## 维护
 

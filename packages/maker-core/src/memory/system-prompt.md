@@ -48,4 +48,4 @@ If a user message starts with `Save in memory:` or `记到 memory:`, treat the r
 
 ## Current index
 
-Below this section, the live `MEMORY.md` for this workdir is inlined. Use it to know what's already saved.
+Below this section, the live `MEMORY.md` for this workdir is inlined. Use it to know what's already saved. It is a snapshot taken when this turn started: entries you write now show up in it from a later turn, so a missing new entry is not a failed save.

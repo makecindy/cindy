@@ -94,18 +94,49 @@ export function environmentRedactions(env: Record<string, string>): Record<strin
 
 /** Compile once per projection/traversal; keep credential state local to its caller. */
 export function createEnvironmentRedactor(env: Record<string, string>, onMatch?: (value: string) => void): (text: string) => string {
+  const { values, matcher } = environmentMatcher(env);
+  if (!matcher) return text => text;
+  return text => text.replace(matcher, value => { onMatch?.(value); return values.get(value)!; });
+}
+
+function environmentMatcher(env: Record<string, string>) {
   // Unknown variable names remain private. Short values match whole tokens so
   // "us" cannot corrupt "status"; exact short credentials are still masked.
   // Match in one pass so replacements cannot redact each other.
   const values = new Map(Object.entries(environmentRedactions(env)).map(([name, value]) => [value, `[${name}]`]));
-  if (!values.size) return text => text;
+  if (!values.size) return { values, matcher: undefined };
   const pattern = [...values.keys()].sort((a, b) => b.length - a.length)
     .map(value => {
       const literal = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       return value.length < 8 ? `(?<![\\p{L}\\p{N}])${literal}(?![\\p{L}\\p{N}])` : literal;
     }).join('|');
   const matcher = new RegExp(pattern, 'gu');
-  return text => text.replace(matcher, value => { onMatch?.(value); return values.get(value)!; });
+  return { values, matcher };
+}
+
+/** Same matcher as whole-file projection, with lookbehind and enough lookahead
+ * for a credential split across chunks. Never re-scan replacement labels. */
+export function createStreamingEnvironmentRedactor(env: Record<string, string>, onMatch?: (value: string) => void) {
+  const { values, matcher } = environmentMatcher(env);
+  const overlap = [...values.keys()].reduce((max, value) => Math.max(max, value.length + 2), 2);
+  let pending = '', before = '';
+  return (text: string, final = false): string => {
+    if (!matcher) return text;
+    const input = before + pending + text;
+    let end = final ? input.length : Math.max(before.length, input.length - overlap);
+    if (!final && end > before.length && /[\uD800-\uDBFF]/.test(input[end - 1]!)) end--;
+    let output = '', cursor = before.length;
+    matcher.lastIndex = cursor;
+    let match: RegExpExecArray | null;
+    while ((match = matcher.exec(input)) && match.index < end) {
+      if (match.index + match[0].length > end) { end = match.index; break; }
+      output += input.slice(cursor, match.index) + values.get(match[0])!;
+      onMatch?.(match[0]); cursor = match.index + match[0].length;
+    }
+    output += input.slice(cursor, end);
+    pending = input.slice(end); before = input.slice(Math.max(0, end - 2), end);
+    return output;
+  };
 }
 
 export function redactEnvironmentValues(text: string, env: Record<string, string>, onMatch?: (value: string) => void): string {

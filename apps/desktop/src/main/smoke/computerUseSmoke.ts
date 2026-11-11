@@ -2,7 +2,12 @@ import { createHash, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { app, BrowserWindow, screen } from 'electron';
+import {
+  app,
+  BrowserWindow,
+  powerMonitor,
+  screen,
+} from 'electron';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -11,6 +16,7 @@ import { createComputerMcpServer } from '@cindy/mcps/computer';
 import { cleanupComputerDriverSession, getComputerMcpDeps } from '../mcp-integrations/computer.js';
 import { createLogger } from '../logger.js';
 import { windowStateElements } from './windowStateElements.js';
+import { runFolderPickerWheelSmoke } from './folderPickerWheelSmoke.js';
 
 const logger = createLogger('computer-use-smoke');
 let started = false;
@@ -22,7 +28,14 @@ const requested =
   (process.env.CINDY_CUA_SMOKE === '1' || cursorGoalDemo || desktopPointerSmoke);
 
 /** Explicit, isolated, real-driver smoke. It operates only on its own disposable window. */
-export async function runComputerUseSmokeIfRequested(): Promise<void> {
+export async function runComputerUseSmokeIfRequested(mainWindow?: BrowserWindow): Promise<void> {
+  if (!started && !app.isPackaged && process.env.XDT_ISOLATED === '1'
+    && process.env.XDT_UI_MOCK === '1' && process.env.CINDY_CUA_SMOKE === 'folder-picker'
+    && mainWindow) {
+    started = true;
+    await runFolderPickerWheelSmoke(mainWindow);
+    return;
+  }
   if (started || !requested) return;
   started = true;
   const sessionId = `cua-smoke-${randomUUID()}`;
@@ -137,6 +150,14 @@ export async function runComputerUseSmokeIfRequested(): Promise<void> {
       const clicked = await call('click', { ...pointer, capture_id: fresh.data.capture_id });
       check(clicked.ok, 'fresh desktop click is delivered');
       check(await window.webContents.executeJavaScript("document.getElementById('count').textContent") === '1', 'desktop click reached own fixture exactly once');
+      // This explicit native smoke shares the real HID clock. Capture only after
+      // the click's events have settled; a new picture is not a timing exemption.
+      currentStep = 'wait for native input to settle';
+      const idleDeadline = Date.now() + 10_000;
+      while (powerMonitor.getSystemIdleTime() < 3) {
+        if (Date.now() >= idleDeadline) throw new Error('Native input did not settle before the next capture');
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
       const after = await call('get_desktop_state', captureArgs);
       check(after.ok, 'desktop can be observed after input');
       const slider = await window.webContents.executeJavaScript(`(() => {

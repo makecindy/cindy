@@ -16,6 +16,8 @@ export interface SubscriptionPoolConfig {
   disconnected?: boolean;
   /** Upgrade-only: preserve an already authorized private Cindy Codex home. */
   legacyCodexDefault?: boolean;
+  /** Upgrade aliases: old connection ID -> pool account ID. Retained after removal to prevent re-import. */
+  legacyCodexAccounts?: Record<string, string>;
   strategy: ProviderGroupStrategy;
   accounts: SubscriptionAccountConfig[];
 }
@@ -47,6 +49,8 @@ export interface SubscriptionAccountView extends SubscriptionAccountConfig {
   plan?: string;
   directory: string;
   status: 'ready' | 'signed-out' | 'unavailable' | 'limited';
+  /** Advisory diagnosis only; absent on older hosts. Never includes CLI output. */
+  authIssue?: 'codex-provider-managed-auth';
   running: number;
   usage?: SubscriptionAccountUsage;
 }
@@ -54,10 +58,12 @@ export interface SubscriptionPoolView {
   providerId: SubscriptionProvider;
   configured: boolean;
   strategy: ProviderGroupStrategy;
+  /** Present only for an explicitly task-scoped read; null means no recorded binding. */
+  boundAccountId?: string | null;
   accounts: SubscriptionAccountView[];
 }
 export type SubscriptionAccountCommand =
-  | { action: 'read'; providerId: SubscriptionProvider }
+  | { action: 'read'; providerId: SubscriptionProvider; taskId?: string }
   /** Advisory login presentation only; never binds detected system credentials. */
   | { action: 'preview'; providerId: SubscriptionProvider }
   | { action: 'add'; providerId: SubscriptionProvider; loginKey: string }
@@ -81,6 +87,78 @@ export type SubscriptionAccountCommand =
       weight?: number;
     };
 
+/**
+ * Read-only: which pooled account an existing task runs on, for its usage display. Sent on the
+ * account channel; older hosts reject the action and callers keep their original readers.
+ */
+export interface SubscriptionSessionAccountQuery {
+  action: 'session';
+  providerId: SubscriptionProvider;
+  /** The task id on the executing computer. */
+  sessionId?: string;
+  /** The task's native Claude / Codex session id. */
+  nativeSessionId?: string;
+}
+export interface SubscriptionSessionAccount {
+  isDefault: boolean;
+  /** 1-based pool position, shown as 「账号 N」 when the identity is unknown. */
+  number: number;
+  identity?: string;
+  plan?: string;
+  paused: boolean;
+  status: SubscriptionAccountView['status'];
+  usage?: SubscriptionAccountUsage;
+}
+export type SubscriptionSessionAccountView =
+  /** No pool, only the CLI default, or a pre-pool task: the provider's original readers apply. */
+  | { providerId: SubscriptionProvider; state: 'legacy' }
+  /** The pool picks an account on the task's next turn. */
+  | { providerId: SubscriptionProvider; state: 'unassigned' }
+  /** The bound account was removed or the provider disconnected; nothing else stands in. */
+  | { providerId: SubscriptionProvider; state: 'unavailable' }
+  | { providerId: SubscriptionProvider; state: 'bound'; account: SubscriptionSessionAccount };
+
+const SESSION_ACCOUNT_STATUSES: ReadonlySet<unknown> = new Set([
+  'ready',
+  'signed-out',
+  'unavailable',
+  'limited',
+]);
+/** Validates a host reply; null when it is not a session-account view for this provider. */
+export function parseSubscriptionSessionAccountView(
+  raw: unknown,
+  providerId: SubscriptionProvider,
+): SubscriptionSessionAccountView | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const view = raw as Record<string, unknown>;
+  if (view.providerId !== providerId) return null;
+  if (view.state === 'legacy' || view.state === 'unassigned' || view.state === 'unavailable')
+    return { providerId, state: view.state };
+  if (view.state !== 'bound') return null;
+  const account = view.account as Record<string, unknown> | null | undefined;
+  if (!account || typeof account !== 'object' || Array.isArray(account)) return null;
+  if (typeof account.isDefault !== 'boolean' || !Number.isInteger(account.number)) return null;
+  if (!SESSION_ACCOUNT_STATUSES.has(account.status)) return null;
+  const text = (value: unknown) =>
+    typeof value === 'string' && value.trim() ? value.trim() : undefined;
+  const usage = account.usage;
+  return {
+    providerId,
+    state: 'bound',
+    account: {
+      isDefault: account.isDefault,
+      number: account.number as number,
+      ...(text(account.identity) ? { identity: text(account.identity) } : {}),
+      ...(text(account.plan) ? { plan: text(account.plan) } : {}),
+      paused: account.paused === true,
+      status: account.status as SubscriptionAccountView['status'],
+      ...(usage && typeof usage === 'object' && !Array.isArray(usage)
+        ? { usage: usage as SubscriptionAccountUsage }
+        : {}),
+    },
+  };
+}
+
 /** Accounts one provider pool can hold. */
 export const MAX_SUBSCRIPTION_ACCOUNTS = 32;
 export const DEFAULT_SUBSCRIPTION_ACCOUNT: SubscriptionAccountConfig = {
@@ -89,6 +167,18 @@ export const DEFAULT_SUBSCRIPTION_ACCOUNT: SubscriptionAccountConfig = {
   limit: 4,
   weight: 1,
 };
+/**
+ * Before anything signs in, the host still lists the CLI default slot. Signed out, idle and with no
+ * known identity it is not an account yet; a known identity that needs signing in again still is.
+ */
+export function isUnusedDefaultAccount(account: SubscriptionAccountView): boolean {
+  return (
+    account.id === 'default' &&
+    account.status === 'signed-out' &&
+    account.running === 0 &&
+    !account.identity
+  );
+}
 export function isSubscriptionProvider(value: unknown): value is SubscriptionProvider {
   return value === 'anthropic' || value === 'openai';
 }

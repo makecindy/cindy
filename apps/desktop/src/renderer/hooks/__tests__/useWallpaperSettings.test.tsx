@@ -433,7 +433,9 @@ describe('application wallpaper lifecycle', () => {
   it('enables the desktop background with no wallpaper unless the window opts out', () => {
     vi.stubGlobal('electronAPI', {
       platform: 'darwin',
-      appearanceSettings: { getSync: () => ({ ...DEFAULT_APPEARANCE_SETTINGS, wallpaperId: 'none' }) },
+      appearanceSettings: { getSync: () => ({
+        ...DEFAULT_APPEARANCE_SETTINGS, wallpaperId: 'none', desktopVisibility: 0.4,
+      }) },
     });
     const first = render(<WallpaperSettingsProvider><Controls /></WallpaperSettingsProvider>);
     expect(document.documentElement.dataset.desktopBackground).toBe('true');
@@ -441,12 +443,13 @@ describe('application wallpaper lifecycle', () => {
     render(<WallpaperSettingsProvider desktopBackground={false}><Controls /></WallpaperSettingsProvider>);
     expect(document.documentElement.dataset.desktopBackground).toBeUndefined();
   });
-  // #9424: Windows has no native sidebar material, so the default 0% desktop
-  // background left the sidebar showing the unblurred desktop. Keep the original
-  // backdrop until the user raises transparency.
-  it('keeps the original Windows backdrop at 0% desktop transparency', () => {
+  // #9424, extended 2026-11-10: the sidebar has no separate material on any
+  // platform, so the default 0% desktop background would leave it opaque on macOS
+  // and unblurred on Windows. Keep the original backdrop until the user raises
+  // transparency.
+  it.each(['darwin', 'win32'])('keeps the original %s backdrop at 0% desktop transparency', (platform) => {
     vi.stubGlobal('electronAPI', {
-      platform: 'win32',
+      platform,
       appearanceSettings: {
         getSync: () => ({ ...DEFAULT_APPEARANCE_SETTINGS, wallpaperId: 'none' }),
         setPatch: vi.fn().mockResolvedValue(undefined),

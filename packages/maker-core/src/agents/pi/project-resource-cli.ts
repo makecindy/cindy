@@ -89,14 +89,25 @@ function isSymlinkDirectory(target: string): boolean {
   }
 }
 
+/** readdir 把 Windows junction 报成目录时 Dirent.isSymbolicLink 为 false,需 lstat
+ * 兜底:软链 namespace 不枚举(可越界/成环)这条规则在 Windows 上也必须成立。 */
+function isSymlinkEntry(entry: fs.Dirent, absPath: string): boolean {
+  return entry.isSymbolicLink() || (entry.isDirectory() && isSymlinkDirectory(absPath));
+}
+
 function hasSkillFile(dir: string): boolean {
   return ['SKILL.md', 'skill.md'].some((name) => isFile(path.join(dir, name)));
 }
 
+/**
+ * 走一遍 skills 根的两层树(collector 的枚举深度,不往更深处看)。
+ * 先判清单(2 次 stat)再决定是否枚举 namespace:skill 目录不必付 readdir 代价。
+ */
 function collectSkillDirs(repoRoot: string, skillsDir: string, bucket: Set<string>): void {
   const resolvedDir = realpathOrNull(skillsDir);
   if (!resolvedDir || !isDir(resolvedDir) || !isWithinRoot(repoRoot, resolvedDir)) return;
 
+  // 清单经 realpath 后须仍在仓内,否则这个目录不算本项目的 skill。
   const addSkill = (realFolder: string): void => {
     const skillMd = ['SKILL.md', 'skill.md']
       .map((name) => path.join(realFolder, name))
@@ -118,9 +129,8 @@ function collectSkillDirs(repoRoot: string, skillsDir: string, bucket: Set<strin
     // could escape the repo or cycle and is intentionally not walked.
     // lstat must see the unresolved path: a Windows junction may be reported
     // as a directory by readdir and by the resolved realpath.
-    const isSymlink = entry.isSymbolicLink()
-      || (entry.isDirectory() && isSymlinkDirectory(candidatePath));
-    if (isSymlink || shouldPruneSkillScanDirectory(entry.name)) continue;
+    if (isSymlinkEntry(entry, candidatePath)) continue;
+    if (shouldPruneSkillScanDirectory(entry.name)) continue; // node_modules/dist 等生成目录
 
     // At most one namespace/author level: <root>/<namespace>/<skill>.
     for (const nested of listDir(realFolder)) {
@@ -132,6 +142,11 @@ function collectSkillDirs(repoRoot: string, skillsDir: string, bucket: Set<strin
   }
 }
 
+/**
+ * 收集 Pi CLI 需要加载的项目资源路径。这是 argv 资源段的**唯一产出点** ——
+ * 漂移检测也复用同一个函数(见 piProjectResourcesDrifted),所以「检测」与
+ * 「实际使用」不可能描述同一份事实两次。
+ */
 export function collectPiProjectResourceCliPaths(workingDir: string): PiProjectResourceCliPaths {
   if (!workingDir || !path.isAbsolute(workingDir) || !isDir(workingDir)) {
     return emptyPiProjectResourceCliPaths();
@@ -185,6 +200,60 @@ export function collectPiProjectResourceCliPaths(workingDir: string): PiProjectR
     promptTemplates: Object.freeze([...promptTemplates].sort(comparePiResourcePaths)),
     extensions: Object.freeze([...extensions].sort(comparePiResourcePaths)),
   });
+}
+
+/**
+ * 启动快照 = spawn 时**实际交给 CLI 的资源路径集合** + 比较口径。
+ *
+ * 刻意只有这两样:任何额外的「基线」都是对 collector 消费方式的手写镜像,而镜像
+ * 与实现必然随时间分歧(2026-11-10 六轮 review 的六类漏检全部来自这种分歧:身份
+ * 采样晚于收集、窗口复核比错基线、软链键跳读过头、清单 TOCTOU、剪枝目录全列表、
+ * 软链 namespace 全列表)。没有镜像就没有分歧。
+ */
+export interface PiProjectResourceLaunchSnapshot {
+  readonly workingDir: string;
+  /** spawn 时 argv 里的资源路径集合。漂移 = 现在采集一遍是否仍等于它。 */
+  readonly paths: PiProjectResourceCliPaths;
+  /** 采集 → argv 的唯一口径(受邀者裁剪 + 停用技能过滤)。启动与比较都用它:
+   * 少了它,受邀者会拿全量比裁剪基线恒判漂移(回收死循环),停用技能的增删会
+   * 被当成漂移(白等一次冷启动)。 */
+  readonly toCliPaths: ((collected: PiProjectResourceCliPaths) => PiProjectResourceCliPaths) | null;
+}
+
+export function snapshotPiProjectResourceLaunch(
+  workingDir: string,
+  paths: PiProjectResourceCliPaths,
+  toCliPaths?: (collected: PiProjectResourceCliPaths) => PiProjectResourceCliPaths,
+): PiProjectResourceLaunchSnapshot {
+  return Object.freeze({ workingDir, paths, toCliPaths: toCliPaths ?? null });
+}
+
+function samePiResourceList(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((entry, index) => entry === right[index]);
+}
+
+/**
+ * 盘上项目资源是否已偏离运行时实际使用的 argv。
+ *
+ * 判定 = 用 collector 采集一遍,与快照里的集合逐项相等比较。**没有任何其他信号**:
+ * - argv 的输入是路径集合,不是内容 → 集合相等即无需回收(改文件内容/在已收集的
+ *   skill 目录里加文件都不影响 argv);
+ * - 采集按 realpath 出路径 → 软链改指到别处(哪怕 mtime 逐位相同)必然改变集合;
+ * - 清单后落地、模板目标移动、扩展目录补 index.ts → 都直接改变集合;
+ * - 与时间戳无关 → 同一 tick 内的增删不会漏(不需要 mtime 或条目指纹)。
+ *
+ * 代价:每次空闲发送前一次采集(约「每目录 1 readdir + 每资源 3~5 stat」,与过去
+ * 那套 mtime/身份快检的 syscall 数量同量级)。这是买「结构上不可能分歧」付的钱;
+ * 若将来资源规模大到有感知,应当减采集范围,不要恢复基线镜像。
+ */
+export function piProjectResourcesDrifted(snapshot: PiProjectResourceLaunchSnapshot): boolean {
+  const fresh = collectPiProjectResourceCliPaths(snapshot.workingDir);
+  const compare = snapshot.toCliPaths ? snapshot.toCliPaths(fresh) : fresh;
+  return !(
+    samePiResourceList(compare.skills, snapshot.paths.skills)
+    && samePiResourceList(compare.promptTemplates, snapshot.paths.promptTemplates)
+    && samePiResourceList(compare.extensions, snapshot.paths.extensions)
+  );
 }
 
 /** Locale-independent path order so duplicate Skill names pick the same winner everywhere. */

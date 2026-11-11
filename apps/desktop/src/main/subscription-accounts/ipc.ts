@@ -6,12 +6,21 @@ import {
   SUBSCRIPTION_ACCOUNTS_CHANNEL,
   isSubscriptionProvider,
 } from '../../shared/subscriptionAccounts.js';
-import { parseSubscriptionAccountCommand } from './commands.js';
+import {
+  parseSubscriptionAccountCommand,
+  parseSubscriptionSessionAccountQuery,
+} from './commands.js';
 export { parseSubscriptionAccountCommand } from './commands.js';
 import { executeSubscriptionAccountCommand } from './service.js';
-import { onSubscriptionAccountsChanged, readSubscriptionPoolUsage, readLegacySubscriptionPoolUsage, readSubscriptionSessionUsage } from './runtime.js';
+import {
+  onSubscriptionAccountsChanged,
+  readSubscriptionPoolUsage,
+  readLegacySubscriptionPoolUsage,
+  readSubscriptionSessionAccount,
+  readSubscriptionSessionUsage,
+} from './runtime.js';
 import { broadcast } from '../device-link/index.js';
-import { setRemoteSubscriptionPoolQuotaReader } from '../device-link/dispatch.js';
+import { setRemoteSubscriptionPoolQuotaReader } from '../device-link/dispatch.desktop.js';
 import { readLegacySubscriptionQuota } from './legacyQuota.js';
 
 export function registerSubscriptionAccountsIpc(): void {
@@ -35,11 +44,25 @@ export function registerSubscriptionAccountsIpc(): void {
     if (context?.sharedTask)
       throwIpcError('PERMISSION_DENIED', 'Account management requires the owner');
     if (!context) assertTrustedAppRendererEvent(event);
+    // Read-only task account for its usage display; same owner gate as `read`.
+    const session = parseSubscriptionSessionAccountQuery(raw);
+    if (session) {
+      try {
+        return await readSubscriptionSessionAccount(session.providerId, session);
+      } catch {
+        throwIpcError('SUBSCRIPTION_ACCOUNT_FAILED', 'Could not read the task account');
+      }
+    }
     const command = parseSubscriptionAccountCommand(raw);
     try {
       return await executeSubscriptionAccountCommand(command);
     } catch (error) {
       const reason = error instanceof Error ? error.message : '';
+      if (reason === 'codex_provider_managed_auth')
+        throwIpcError(
+          'SUBSCRIPTION_CODEX_PROVIDER_AUTH',
+          'The active Codex provider does not expose a ChatGPT account',
+        );
       throwIpcError(
         reason === 'login_cancelled'
           ? 'SUBSCRIPTION_LOGIN_CANCELLED'

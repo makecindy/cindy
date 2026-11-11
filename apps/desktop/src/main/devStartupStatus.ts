@@ -26,6 +26,8 @@ export type DesktopDevInstanceState = 'starting' | 'ready' | 'failed';
 export interface DesktopDevInstanceRecord {
   schemaVersion: 1;
   worktreeLeaseProtocol?: 1;
+  /** Local developer restart handshake; absent on packaged and older instances. */
+  quitRequestProtocol?: 1;
   instanceId: string;
   pid: number;
   /** Main reports the actual window renderer; Linux zygote children may retain argv. */
@@ -233,6 +235,33 @@ function settleDesktopDevReadyIfPossible(): void {
     instance: trackedInstance?.record ?? null,
   });
   publishDesktopStartupResult(true);
+}
+
+/** Installed only by Windows dev after lifecycle handlers exist. Requests live beside
+ * provenance, never in the checkout, and are bound to this random instance generation. */
+export function enableDesktopDevQuitRequests(quit: () => void): () => void {
+  const instance = trackedInstance;
+  if (!instance) return () => {};
+  const { record, filePath } = instance;
+  const requestPath = path.join(path.dirname(filePath), `${record.pid}-${record.instanceId}.quit`);
+  let consumed = false;
+  const check = () => {
+    if (consumed || trackedInstance?.record.instanceId !== record.instanceId) return;
+    const request = readJson(requestPath);
+    if (request?.action !== 'quit' || request.instanceId !== record.instanceId || request.pid !== record.pid
+      || typeof request.expiresAt !== 'number' || request.expiresAt < Date.now()
+      || request.expiresAt > Date.now() + 30_000) return;
+    consumed = true;
+    quit();
+  };
+  fs.watchFile(requestPath, { persistent: false, interval: 250 }, check);
+  instance.record = { ...instance.record, quitRequestProtocol: 1 };
+  updateTrackedInstance(instance.record.state);
+  return () => {
+    consumed = true;
+    fs.unwatchFile(requestPath, check);
+    try { fs.rmSync(requestPath, { force: true }); } catch { /* Best-effort dev cleanup. */ }
+  };
 }
 
 /** Record that the main BrowserWindow can render, without claiming the database is ready. */

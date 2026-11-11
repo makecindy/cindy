@@ -109,7 +109,7 @@ export function DialogueDirectorySection() {
           <div className="flex shrink-0 items-center gap-2">
             {state?.isCustomized && (
               <Tip text={t('settings.about.storage.dialogueDirectoryReset')}>
-                <Button {...setting.controlProps} variant="secondary" size="md" className="w-8 border-transparent bg-transparent px-0" disabled={busy} aria-label={t('settings.about.storage.dialogueDirectoryReset')} onClick={() => void update('reset')}>
+                <Button {...setting.controlProps} variant="secondary" tone="quiet" size="sm" className="w-7 px-0" disabled={busy} aria-label={t('settings.about.storage.dialogueDirectoryReset')} onClick={() => void update('reset')}>
                   <RotateCcw size={15} aria-hidden />
                 </Button>
               </Tip>

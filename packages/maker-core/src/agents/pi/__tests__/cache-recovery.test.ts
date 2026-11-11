@@ -13,6 +13,11 @@ const body = { model: 'wire', messages: [{ role: 'user', content: 'OK' }], promp
 const failure = (text = '400: {"error":{"message":"opaque refusal","param":null,"type":"invalid_request_error"}}') => ({
   type: 'error', error: { role: 'assistant', content: [], stopReason: 'error', errorMessage: text, usage: { output: 0 } },
 });
+// #9785: the gateway identifies the rejected field in its message, leaving param empty.
+const emptyParamRejection = 'fixture API error (400): ' + JSON.stringify({
+  message: 'Validation: Unsupported parameter(s): `prompt_cache_retention`',
+  type: 'invalid_request_error', param: '', code: 'invalid_request_error',
+});
 const success = { type: 'done', message: { stopReason: 'stop', content: [{ type: 'text', text: 'OK' }], usage: { input: 3, output: 1, cacheRead: 2 } } };
 const modernRegistry = { getProvider() {}, getRegisteredNativeProvider() {} };
 function fixture(legacy = false) {
@@ -430,6 +435,39 @@ describe('Pi native cache recovery', () => {
     expect(h.record()).toBeUndefined();
   });
 
+  it.each([undefined, null, '', 'prompt_cache_retention'])('learns explicit rejection with param %s only after a successful retry', async param => {
+    const h = fixture(); h.fresh();
+    const rejection = failure('fixture API error (400): ' + JSON.stringify({
+      message: 'Validation: Unsupported parameter(s): `prompt_cache_retention`',
+      type: 'invalid_request_error', param, code: 'invalid_request_error',
+    }));
+    expect(await h.request([rejection, success])).toEqual([success]);
+    const { prompt_cache_key: _key, prompt_cache_retention: _retention, ...without } = body;
+    expect(h.sent).toEqual([body, without]);
+    expect(h.record()).toMatchObject({ evidence: 'explicit', expiresAt: 1604800000 });
+    h.fresh(); await h.request([success]);
+    expect(h.sent).toEqual([body, without, without]);
+  });
+
+  it.each([
+    { type: 'authentication_error' },
+    { code: 'rate_limit_exceeded' },
+    { code: 'context_length_exceeded' },
+    { type: 'invalid_type' },
+    { param: 'temperature' },
+    { message: 'Unsupported parameters: prompt_cache_retention, temperature' },
+    { message: 'Invalid value for prompt_cache_retention' },
+  ])('keeps unrelated and mixed error gates with an empty param: %j', async other => {
+    const h = fixture(); h.fresh();
+    const rejection = failure('400: ' + JSON.stringify({
+      message: 'Unsupported parameter(s): prompt_cache_retention',
+      param: '', type: 'invalid_request_error', ...other,
+    }));
+    await h.request([rejection, success]);
+    expect(h.sent).toHaveLength(1);
+    expect(h.record()).toBeUndefined();
+  });
+
   it.each(['Validation: Unsupported parameter(s): prompt_cache_key',
     'Unsupported parameter: prompt_cache_retention.',
     "The parameter 'prompt_cache_key' is not supported",
@@ -448,9 +486,9 @@ describe('Pi native cache recovery', () => {
   });
 
   it.each(['start', 'thinking_delta', 'toolcall_start'])('never retries after %s or a prior tool', async type => {
-    const h = fixture(); h.fresh(); await h.request([[{ type }, failure()]]);
+    const h = fixture(); h.fresh(); await h.request([[{ type }, failure(emptyParamRejection)]]);
     expect(h.sent).toHaveLength(1); expect(h.record()).toBeUndefined();
-    h.fresh(); h.handlers.get('tool_execution_start')!(); await h.request([failure()]);
+    h.fresh(); h.handlers.get('tool_execution_start')!(); await h.request([failure(emptyParamRejection)]);
     expect(h.sent).toHaveLength(2);
   });
 
@@ -465,7 +503,7 @@ describe('Pi native cache recovery', () => {
   it('respects stop and queued input while a payload hook is awaiting', async () => {
     for (const cancel of [true, false]) {
       const h = fixture(); h.fresh(); const controller = new AbortController(); let n = 0;
-      await h.request(undefined, { signal: controller.signal, onPayload: async (p: any) => {
+      await h.request([failure(emptyParamRejection), success], { signal: controller.signal, onPayload: async (p: any) => {
         if (++n === 2) { if (cancel) controller.abort(); else h.interrupt(); }
         return p;
       } });

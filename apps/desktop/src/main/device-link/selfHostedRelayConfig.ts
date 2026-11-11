@@ -20,6 +20,10 @@ import { createLogger } from '../logger.js';
 import { oauthSecureStorageAvailable } from '../plugin-oauth/identityStore.js';
 import { DEFAULT_RELAY_PORT } from '../../shared/selfHostedRelay.js';
 import { setSelfHostedRelaySource, type ActiveSelfHostedRelay } from './selfHostedRelayRouting.js';
+import type { DeviceCertificate } from '@cindy/agent-net-protocol';
+import { readNotificationBridgeConfig } from '@cindy/agent-net-relay/notification-bridge';
+
+export function readHostNotificationBridgeConfig() { return readNotificationBridgeConfig(process.env); }
 
 const log = createLogger('self-hosted-relay:config');
 
@@ -40,6 +44,11 @@ export interface ActiveRelay {
   /** 本机在这个中转上的设备 ID。 */
   deviceId: string;
   ownerPublicKey: string;
+  /**
+   * 别人分享给这个账号的中转(§5.5):本账号在那台中转上有自己的网络(只走 V2),`relayId` 是这个网络的 ID,
+   * `ownerPublicKey` 是本账号自己的根公钥。`ownerName` 是分享者在链接里写的名字。
+   */
+  shared?: { ownerName: string | null };
 }
 
 export interface RelayHostSettings {
@@ -77,9 +86,18 @@ export interface RelayConfig {
 
 /** 本机在某个中转上的秘密。 */
 export interface RelaySecrets {
+  /** 旧版(V1)中转凭证;只走 V2 的网络为空字符串,此时必有 `agentNet`。 */
   credential: string;
   /** Ed25519 私钥种子(base64url)。 */
   seed: string;
+  /** V2 keys use this same account-scoped safeStorage boundary, never renderer state or plaintext JSON. */
+  agentNet?: {
+    version: 2;
+    signingPrivateKey: string;
+    transportPrivateKey: string;
+    certificate: DeviceCertificate;
+    rootPublicKey: string;
+  };
 }
 
 const DEFAULT_CONFIG: RelayConfig = {
@@ -129,6 +147,7 @@ function parseActive(raw: unknown): ActiveRelay | null {
   ) {
     return null;
   }
+  const shared = a.shared && typeof a.shared === 'object' ? (a.shared as Record<string, unknown>) : null;
   return {
     relayId: a.relayId,
     name: a.name,
@@ -137,6 +156,7 @@ function parseActive(raw: unknown): ActiveRelay | null {
     origin: a.origin,
     deviceId: a.deviceId,
     ownerPublicKey: a.ownerPublicKey,
+    ...(shared ? { shared: { ownerName: isString(shared.ownerName) ? shared.ownerName.slice(0, 64) : null } } : {}),
   };
 }
 
@@ -216,7 +236,10 @@ function readSecretsFile(relayId: string): RelaySecrets | null {
   try {
     const encrypted = fs.readFileSync(secretsFile(relayId), 'utf8');
     const parsed = JSON.parse(safeStorage.decryptString(Buffer.from(encrypted, 'base64'))) as Partial<RelaySecrets>;
-    return isString(parsed.credential) && isString(parsed.seed) ? { credential: parsed.credential, seed: parsed.seed } : null;
+    // 只走 V2 的网络没有旧版凭证(空字符串),但必须带着 V2 身份。
+    const credentialOk = isString(parsed.credential) || (parsed.credential === '' && Boolean(parsed.agentNet));
+    return credentialOk && typeof parsed.credential === 'string' && isString(parsed.seed)
+      ? { credential: parsed.credential, seed: parsed.seed, ...(parsed.agentNet ? { agentNet: parsed.agentNet } : {}) } : null;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') log.warn('relay secrets unreadable');
     return null;
@@ -260,8 +283,9 @@ export function readRelayConfig(): RelayConfig {
   return structuredClone(load().config);
 }
 
-export function readRelaySecrets(relayId: string): RelaySecrets | null {
+export function readRelaySecrets(relayId: string, options?: { fresh?: boolean }): RelaySecrets | null {
   if (!getActiveAppSession().dataOwnerId) return null;
+  if (options?.fresh) load().secrets.delete(relayId);
   return cachedSecrets(load(), relayId);
 }
 
@@ -276,6 +300,7 @@ export function activeSelfHostedRelay(): ActiveSelfHostedRelay | null {
   if (!active || !secrets) return null;
   return {
     relayId: active.relayId,
+    scopeKey: activeOwnerScopeKey(),
     name: active.name,
     baseUrl: active.baseUrl,
     role: active.role,

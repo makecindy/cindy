@@ -8,7 +8,7 @@
  *   2. 目标模型清单按三态标注渲染（已知无视觉 / 已知有视觉 / 未知）；
  *   3. 勾选目标模型 → IPC SET 携带 targetModels patch；
  *   4. 视觉后端主/备 ModelSelector 装配；
- *   5. 总开关关闭时目标模型/后端控件禁用。
+ *   5. 总开关关闭时隐藏目标模型/后端控件，重新开启保留已保存选择。
  */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -25,6 +25,8 @@ class ResizeObserverStub {
 
 // The shared-quota rail observes auth; this component fixture has no auth host.
 vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null }));
+// Collapse 的动画帧不在 jsdom 自动推进；此组件回归验证 reduced-motion 终态。
+vi.mock('@/hooks/useReducedMotion', () => ({ useReducedMotion: () => true }));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -138,8 +140,9 @@ afterEach(() => {
 
 describe('VisionBridgeSection', () => {
   it('renders target models with capability labels', async () => {
+    settingsGetMock.mockResolvedValue(baseSettings({ enabled: true }));
     render(<VisionBridgeSection />);
-    await waitFor(() => expect(settingsGetMock).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByText('Claude Opus 5')).toBeTruthy());
     // 已知有视觉
     expect(screen.getByText('Claude Opus 5')).toBeTruthy();
     // 已知无视觉（deepseek）
@@ -168,8 +171,7 @@ describe('VisionBridgeSection', () => {
     // 被点项——否则保存后 customized=true，其余默认勾选项全部消失（codex P2）。
     settingsGetMock.mockResolvedValue(baseSettings({ enabled: true }));
     render(<VisionBridgeSection />);
-    await waitFor(() => expect(settingsGetMock).toHaveBeenCalled());
-    const toggles = screen.getAllByLabelText(
+    const toggles = await screen.findAllByLabelText(
       'settings.visionBridge.targetModels.toggleAria',
     );
     // 排序后 no-vision 在前：deepseek-v3、deepseek-v4-flash、mystery-m1、claude-opus-5。
@@ -187,8 +189,7 @@ describe('VisionBridgeSection', () => {
     // 不丢失（codex P2）。
     settingsGetMock.mockResolvedValue(baseSettings({ enabled: true }));
     render(<VisionBridgeSection />);
-    await waitFor(() => expect(settingsGetMock).toHaveBeenCalled());
-    const toggles = screen.getAllByLabelText(
+    const toggles = await screen.findAllByLabelText(
       'settings.visionBridge.targetModels.toggleAria',
     );
     // Claude Opus 5 是 vision，在 no-vision 之后（排序）。找到它的 Switch。
@@ -204,13 +205,43 @@ describe('VisionBridgeSection', () => {
     );
   });
 
-  it('disables target/backend controls when disabled', async () => {
+  // 生产入口：VisionBridgeSection；规则：配置分层 §1（关闭时隐藏详细配置）。
+  // 旧用例只检查禁用态，未覆盖明细随总开关显示、隐藏且保留已保存选择。
+  // 最小失败输入：关闭视觉桥但已有模型选择；tier：unit（真实组件 + jsdom）。
+  it('shows model settings only while enabled and preserves saved choices', async () => {
+    const saved = baseSettings({
+      targetModels: ['deepseek/deepseek-v3'],
+      primary: { providerId: 'anthropic', modelId: 'claude-opus-5' },
+      isCustomized: true,
+      customizedKeys: ['targetModels'],
+    });
+    const off = { ...saved, enabled: false };
+    const on = { ...saved, enabled: true };
+    settingsGetMock.mockResolvedValue(off);
+    settingsSetMock.mockImplementation(async ({ enabled }) => enabled ? on : off);
     render(<VisionBridgeSection />);
-    await waitFor(() => expect(settingsGetMock).toHaveBeenCalled());
-    // 默认 disabled，目标模型 Switch 不可点。
-    const toggles = screen.getAllByLabelText(
-      'settings.visionBridge.targetModels.toggleAria',
-    );
-    expect(toggles[0].hasAttribute('data-disabled')).toBe(true);
+    const toggle = await screen.findByLabelText('settings.visionBridge.enableAria');
+
+    expect(toggle.getAttribute('aria-checked')).toBe('false');
+    expect(screen.queryByRole('switch', { name: 'settings.visionBridge.targetModels.toggleAria' })).toBeNull();
+    expect(screen.queryByRole('button', { expanded: false })).toBeNull();
+
+    fireEvent.click(toggle);
+    await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('true'));
+    await screen.findByText('settings.visionBridge.targetModels.label');
+    expect(screen.getByText('settings.visionBridge.backends.label')).toBeTruthy();
+    expect(screen.getAllByRole('switch', { name: 'settings.visionBridge.targetModels.toggleAria' })[0].getAttribute('aria-checked')).toBe('true');
+
+    fireEvent.click(toggle);
+    await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('false'));
+    await waitFor(() => expect(screen.queryByRole('switch', { name: 'settings.visionBridge.targetModels.toggleAria' })).toBeNull());
+    expect(screen.queryByRole('button', { expanded: false })).toBeNull();
+
+    fireEvent.click(toggle);
+    await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('true'));
+    await screen.findByText('settings.visionBridge.targetModels.label');
+    expect(screen.getAllByRole('switch', { name: 'settings.visionBridge.targetModels.toggleAria' })[0].getAttribute('aria-checked')).toBe('true');
+    expect(settingsSetMock.mock.calls).toEqual([[{ enabled: true }], [{ enabled: false }], [{ enabled: true }]]);
+    expect(settingsResetMock).not.toHaveBeenCalled();
   });
 });

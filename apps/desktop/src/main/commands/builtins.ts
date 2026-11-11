@@ -16,7 +16,7 @@ import { parseGoalCommand } from '@cindy/maker-shared/goal-command';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
 import { createLogger } from '../logger.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { isTrustedAppRendererWindow } from '../security/trustedAppRenderer.js';
 import { createMakeDoctorCommand } from '../cindy-make/doctorCommand.js';
@@ -395,7 +395,7 @@ export function registerBuiltinDesktopCommands(
           }),
         allowInstallTest: () => !app.isPackaged,
         searchUpstream: async (request, signal) => {
-          const { outboundFetch } = await import('../maker-host/outbound-fetch.js');
+          const { outboundFetch } = await import('../maker-host/outbound-fetch.desktop.js');
           const runtime = await resolveMakeRuntime(
             { packaged: app.isPackaged, version: app.getVersion() },
             signal,

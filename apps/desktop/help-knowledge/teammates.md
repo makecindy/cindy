@@ -1,7 +1,7 @@
 ---
 id: teammates
 title: Teammates (Cindy and custom companions)
-summary: Teammates are long-lived AI companions (the built-in Cindy plus ones you create) listed at the top of the left sidebar. Chat with them, set their profile, model, memory, capabilities, projects, voice, messaging platforms, and routines; let them run background tasks, follow up on your sessions, and keep todos; put several in a group chat; choose which computer runs them.
+summary: Teammates are long-lived AI companions (the built-in Cindy plus ones you create) listed at the top of the left sidebar. Chat with them, set their profile, model, memory, capabilities, projects, voice, and messaging platforms; give them automations; let them open tasks, follow up on your sessions, and keep todos; put several in a group chat; choose which computer runs them.
 ---
 A **teammate** is a long-lived AI companion with its own name, avatar, personality, memory, skills, and one continuous conversation. **Cindy** is built in and is added automatically the first time you use teammates; you can create more. A teammate belongs to your account, not to one computer: you see the same teammate on every computer and on your phone, but it runs on one **main computer**.
 
@@ -28,7 +28,7 @@ A **teammate** is a long-lived AI companion with its own name, avatar, personali
 - **+ → New teammate** opens **Create a teammate**. Pick a portrait (or **Upload image**), enter a **Name** (names must be distinct), and check the **Model**. It follows the default teammate model unless you change it ("This selection applies only to this teammate"). If no model is connected, connect a provider first. Click **Create teammate**.
 - Cindy then prepares the teammate ("Getting ready to meet"), and it sends a first hello. You can start typing right away. If preparation pauses, everything done so far is saved; use **Change Model** or retry.
 - **Import an Agent** (in the same dialog) brings in a teammate from Hermes or OpenClaw on this computer. You can bring its personality, memories, skills, environment and connections, automations, and messaging bots.
-- **Discover Teammates** lists ready-made teammates with their skills and routines; click **Invite** to add one. Their routines start turned off.
+- **Discover Teammates** lists ready-made teammates with their skills; click **Invite** to add one.
 - You can also ask Cindy to create a teammate for you.
 
 **Teammate settings** (click the name/avatar or gear in the chat header; changes save automatically):
@@ -37,32 +37,29 @@ A **teammate** is a long-lived AI companion with its own name, avatar, personali
 - **Personality & conversation** — free text describing who the teammate is and how it talks.
 - **Memory** — **Use memory** toggle (off: memories aren't read or saved), **What you know about me**, and the teammate's saved memories grouped as About you / Your preferences / Projects / References. Search, edit, or delete them. Each teammate's memory is its own, separate from Settings > Personalization > Memory.
 - **Linked Projects** — projects the teammate may read for background when needed (**Choose a project**, **Add**). Linking doesn't assign the project's sessions or start background work.
-- **Model** — **Primary Model** with up to 5 candidates (**Add fallback model**; **Backup models (N)**). If one is unavailable, it automatically continues with the next. **Task Model** is the model for new background tasks; by default it uses **Inherit Primary Model**. **Restore default model** goes back to the shared default.
+- **Model** — **Primary Model** with up to 5 candidates (**Add fallback model**; **Backup models (N)**). If one is unavailable, it automatically continues with the next. **Restore default model** goes back to the shared default. When a teammate starts a new task, it picks that task's model itself (you can tell it which one you prefer).
 - **Voice** — speech model, voice, speech speed, and **Read by sentence** for voice conversations (see below).
-- **Capabilities** — choose which **Built-in tools**, **MCP** servers, and **Skills** this teammate may use (items unavailable on this computer are marked). By default it follows the tools enabled on this computer; turning one off switches to an explicit list. **Input Handoff** lets it ask you to type a password or code on any of your devices; it never sees the value.
+- **Capabilities** — choose which **Built-in tools**, **MCP** servers, and **Skills** this teammate may use (items unavailable on this computer are marked). By default it follows the tools enabled on this computer; turning one off switches to an explicit list. Cindy built-in Skills and verified official plugin Skills are inherited automatically and follow their enabled state on this computer. Personal, third-party, and engine-provided Skills remain opt-in. **Input Handoff** lets it ask you to type a password or code on any of your devices; it never sees the value.
 - **Messaging platforms** — give the teammate its own bot (see below).
-- **Routines** — follow-ups, built-in routines, nightly learning, and your own routines (see below).
-- **Search teammate history** — search past messages, background tasks, and archived records.
+- **Search teammate history** — search past messages, tasks it opened, and archived records.
 - **Advanced configuration** — **Open folder** opens the teammate's own folder (SOUL.md, USER.md, system_prompt.md, skills/, memories/). Use it only to fix something by hand.
 - Also on the settings home: **Main Computer** (see below), **Restart teammate** (stops the current run for a fresh start; history, memory, and files are kept; send a message to continue), and **Permanently delete teammate**. Deleting removes its profile, memory, working directory, channel connections, and automated tasks. Task history and separate worktrees are kept. A paused teammate shows **Resume teammate**.
 
 **What a teammate can do for you:**
 
-- **Background tasks:** for bigger work, a teammate starts a normal Cindy task. The task shows in your task list as "…'s background task", and a **Background task** card in the chat lets you **Open task** or **Stop task**. The result comes back to the teammate's chat.
+- **Tasks:** for bigger work, a teammate opens an ordinary Cindy task. It shows in your task list with the teammate's avatar, and when the teammate asks for the result, its final reply comes back to the teammate's chat once. **Background task** cards from earlier versions stay in the chat history and still open their task; they no longer offer **Stop task** or adding a note.
 - **At a glance** (grid button in the chat header) has up to three blocks:
   - **Computers**: where it runs and other computers it can move to.
   - **Todos**: open todos, due ones first. Click one to quote it in the message box and tell the teammate what to change. Right-click → **Delete**. **Check for me** asks it to look through your connected mail and chats for new todos; **Check every day** does that on weekdays at 9:00 and stays quiet when nothing is new.
   - **Outputs**: finished files from its tasks.
-- **Follow Up on My Sessions** (Settings → **Routines**): when on, the teammate reads summaries of sessions you create on this computer, assesses progress, and tells you about important changes. This uses your model allowance. It's off by default, and only one teammate can hold it; Cindy may offer to turn it on in chat (**Start Following Up** / **Not Now**). Tasks you hand to a teammate are followed by that teammate either way (built-in **Follow assigned sessions**). It reacts when they stall, need you, fail, reach a usage limit, or finish. Sessions a teammate is looking after show its avatar in the sidebar ("This task is looked after by …").
-- **Routines:** **Add Routine** gives the teammate standing instructions plus triggers (Hourly, Daily, Weekdays, Weekly, Monthly, Interval, Cron, or plugin events; any trigger can start a run). Each routine has **Run Now**, **Run History**, and an optional **Stay quiet when checks find nothing**. Built-in routines can only be paused or resumed. Routines run on the teammate's main computer and are managed on the desktop.
-- **Nightly learning** (built-in, on by default): every night at 3:30 (or weekly), it reviews new conversations, tidies memories, and saves approaches that keep coming up as skills. When there's nothing new, it skips without calling a model. Open it under **Routines** for **Review now**, **Frequency**, **History** (with **Undo** per change), and **Approaches being watched** (**Make it a skill** / **Don't learn**). It runs only on the main computer; with memory off, only skills are reviewed.
+- **Automations:** recurring or triggered work is an ordinary automation of the teammate's own project (see Scheduling automations). Ask the teammate to set one up, or create it yourself. Routines from earlier versions become automations of that project, keeping their schedule and paused or running state.
 - Teammates can message each other; those exchanges appear as cards in the chat.
 
 **How permissions work (high level):**
 
 - When you ask in its chat, a teammate acts on your behalf under the chat's permission mode. **Full access** doesn't ask, **Auto-review** reviews automatically, and **Default permissions** asks you. No extra confirmation cards are added.
-- When it acts on its own (a follow-up wake-up, a message from another teammate or a stranger), it can only touch its own background tasks and tasks already handed to it. It can keep those going toward the original goal or switch their model. Anything else on your sessions (new requirements, stopping, renaming, archiving, creating or changing routines) becomes a todo or a note to you. Reply to it and the teammate does it on your behalf.
-- Routines you set up run as your standing instructions.
+- When something else starts its turn (a message from another task or teammate, or an automation), it works like any other task under the same permission mode. There are no extra teammate-only limits, and nothing is turned into a todo for you.
+- Automations you set up run as your standing instructions.
 
 **Messaging platforms (the teammate's own bot):**
 
@@ -86,16 +83,16 @@ A **teammate** is a long-lived AI companion with its own name, avatar, personali
 
 **Main computer and other devices:**
 
-- The computer where you created a teammate is its **Main Computer**. Its working folder, logins, model connections, and routines live there. Other computers and your phone see the same teammate and can chat with it through remote control. This needs "Allow same-account devices to control this machine" on in Settings → Remote Connection on the main computer.
-- To move it, use **Main Computer** in its settings or **Computers** in **at a glance**, then **Move to "…"**. Chat history, memory, skills, todos, and routine definitions come along. Working directories, connections, and local files stay where they are. On the new computer it uses that computer's default permissions, and if its model isn't available there, it follows that computer's default model.
+- The computer where you created a teammate is its **Main Computer**. Its working folder, logins, model connections, and automations live there. Other computers and your phone see the same teammate and can chat with it through remote control. This needs "Allow same-account devices to control this machine" on in Settings → Remote Connection on the main computer.
+- To move it, use **Main Computer** in its settings or **Computers** in **at a glance**, then **Move to "…"**. Chat history, memory, skills, and todos come along. Working directories, connections, and local files stay where they are. On the new computer it uses that computer's default permissions, and if its model isn't available there, it follows that computer's default model.
 - If the main computer is offline, other computers show the cloud copy of the conversation (read only) and offer **Continue on This Computer**. Only visible messages and final replies are saved in the cloud; tool details stay on the main computer.
-- If you had a separate Cindy on several computers, Cindy's settings show **Merge Duplicate Cindys**. It merges them into one and keeps everyone's history, memories, skills, todos, and routines.
+- If you had a separate Cindy on several computers, Cindy's settings show **Merge Duplicate Cindys**. It merges them into one and keeps everyone's history, memories, skills, and todos.
 
 **On your phone:**
 
 - The phone's home screen starts with the same **Teammates** section (tap **+** to create a teammate or group chat). Creating a teammate needs a computer that's online and signed in to the same account.
 - In a chat, tap the teammate's avatar at the top for **at a glance**. Use the settings button for **Teammate settings**: Profile & Personality, Memory, Skills & Connections, Artifacts, Teammate Messages, Models & Permissions, Main Computer, and Messaging platforms.
-- Routines can't be managed on the phone (except **Check every day**). Voice conversations and private threads are desktop-only.
+- Voice conversations and private threads are desktop-only.
 
 **Settings shared by all teammates** (Settings > General > **Teammates**):
 
