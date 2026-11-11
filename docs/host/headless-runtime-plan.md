@@ -771,3 +771,17 @@ provider 尚未确认 idle、持久写入尚在进行时，以及旧账号或关
 网页适配层已显式忽略 `input_receipt`，不再把传输回执转成 Agent 消息；排队投影仍正常更新。
 既有真实 shim bundle 的事件测试增加回执与后续文字帧，先红后绿：
 `/tmp/cindy-stop-shim-red.log`、`/tmp/cindy-stop-shim-green.log`。未做浏览器实机目检。
+
+### 插话工厂抽取检查点（2026-11-11）
+
+`steerToAgentAccepted` 已移为 `createMakerSteerTransaction`。桌面原位置装配原有准入、
+清空/代次边界、消息归一化、历史授权、App 上下文与代输入服务；定义较晚的检查函数
+通过箭头函数延迟调用，不在启动阶段提前读取。新工厂 import 放在原静态 imports 末尾。
+除两个宿主检查端口和允许 Host 无界面语言偏好的空值分支外，原插话函数体逐字保留；
+桌面的语言值始终非空。消息诊断摘要函数一并移动并保留原调用，不增加日志内容。
+
+既有 GoalController 测试由源码切片执行改为直接调用真实工厂，不改原行为断言；原来源
+及输入边界 guard 跟随实现位置，三个派发位置的检查总数不变。桌面 339 项定向回归通过，
+新工厂在 Node 实际加载通过（`/tmp/cindy-steer-desktop-tests.log`、
+`/tmp/cindy-steer-node-load.log`）；函数体比对见 `/tmp/cindy-steer-extraction-check.log`。
+本检查点只完成抽取，Host 接线和新增的插话可观察行为需要后续独立验证。
