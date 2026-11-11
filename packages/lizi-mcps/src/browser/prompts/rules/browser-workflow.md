@@ -45,7 +45,7 @@
      - 下拉:`{ kind: "select", ref, values: [...] }`
      - 悬停 / 拖拽:`{ kind: "hover", ref }` / `{ kind: "drag", startRef, endRef }`
      - 对元素右键、双击或带修饰键点击:`click` + `ref` 加 `button` / `doubleClick` / `modifiers`。`{ kind: "clickCoords", x, y }` 只在没有可用 ref 时用,x/y 是页面 CSS 像素;截图像素会因设备像素比和压缩缩放而不同,不要直接把截图上的位置当坐标。
-   - 需要操作后观察时，在 `act` / `open` / `navigate` / `upload` 加 `afterSnapshot:{}`，一次调用就返回动作结果和正文默认最多 4000 字符的精简快照（`maxChars` 可调，最高 20000）。已看过页面结构、只需继续表单时可用 `afterSnapshot:{selector:"已确认的区域选择器"}`，避免每次重读整页。后置快照不保证异步页面已加载完；需要的信息还未出现时，等待具体内容再补读。
+   - 需要操作后观察时，在 `act` / `open` / `navigate` / `upload` 加 `afterSnapshot:{}`，一次调用就返回动作结果和正文默认最多 4000 字符的精简快照（`maxChars` 可调，最高 20000）。已看过页面结构、只需继续表单时可用 `afterSnapshot:{selector:"已确认的区域选择器"}`，避免每次重读整页。`open` / `navigate` 带 `afterSnapshot`，或在 batch 里后面还有步骤时，会先等页面出现内容（最多约 5 秒）再继续，不用另加等待；点击等动作之后的后置快照不保证异步内容已加载完，需要的信息还未出现时，等待具体内容再补读。
    - `ref` 必须取自**最近一次** snapshot（含返回的 `afterSnapshot`）。导航 / 弹窗 / 提交后页面变了，先观察再继续，别用旧 ref。`afterSnapshot.ok:false` 只表示后续读取失败；顶层 `ok:true` 表示动作已经成功，只补读页面，不重做提交或上传。没带后置快照、快照被截断或内容不足时，再按需单独 snapshot。
    - 别盲等。需要等待用 `{ kind: "wait", ... }`，优先指定页面就绪条件（`text` / `textGone` / `selector` / `url` / `loadState`）；确需固定等待时用 `timeMs`。`timeoutMs` 只是等待上限，不能单独作为等待条件。不要靠反复重试空转。
    - 动作成功但页面没有变化(菜单没展开、没跳转、链接落回首页),不要马上交给用户,依次换办法:① 重新 snapshot,让键盘落在同一控件上再按 Enter(或 `" "`):

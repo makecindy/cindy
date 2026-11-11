@@ -1932,14 +1932,15 @@ describe('browser · backend capability gating (user browser via extension)', ()
 // stays paused on secret pages and always ends its protocol session. No earlier test reached these
 // paths: batch and cdp did not exist, and list_tools returned one untailored rule body.
 describe('browser · batch, cdp and target-tailored rules', () => {
-  type Scripted = (request: Record<string, unknown>) => { ok?: boolean; data?: unknown; message?: string } | undefined;
+  type Scripted = (request: Record<string, unknown>) => { ok?: boolean; data?: unknown; message?: string; errorCode?: string } | undefined;
   async function scripted(respond: Scripted, extraDeps?: Partial<BrowserMcpDeps>) {
     const calls: Array<Record<string, unknown>> = [];
     const runtime: BrowserControlRuntime = {
       async call(request) {
         calls.push(request as unknown as Record<string, unknown>);
         const reply = respond(request as unknown as Record<string, unknown>);
-        return { ok: reply?.ok ?? true, action: request.action, data: reply?.data ?? {}, ...(reply?.message ? { message: reply.message } : {}) };
+        return { ok: reply?.ok ?? true, action: request.action, data: reply?.data ?? {}, ...(reply?.message ? { message: reply.message } : {}),
+          ...(reply?.errorCode ? { errorCode: reply.errorCode } : {}) } as Awaited<ReturnType<BrowserControlRuntime['call']>>;
       },
     };
     const h = await makeHarness({ ...extraDeps, getRuntime: () => runtime });
@@ -1949,12 +1950,17 @@ describe('browser · batch, cdp and target-tailored rules', () => {
     };
     return { calls, invoke, client: h.client, cleanup: h.cleanup };
   }
+  /** The tool layer's own checks that a page shows something, not steps the caller asked for. */
+  const isContentScript = (request: Record<string, unknown>) =>
+    request.action === 'act' && String((request.request as { fn?: unknown } | undefined)?.fn ?? '').includes('document.readyState');
+  const isContentSnapshot = (request: Record<string, unknown>) => request.action === 'snapshot' && request.maxChars === undefined;
 
   it('runs batch steps in order on the tab an earlier step opened and stops at the first failure', async () => {
     const h = await scripted((request) => {
       if (request.action === 'open') return { data: { targetId: 'tab-9', url: 'https://example.test/' } };
       if (request.action === 'tabs') return { data: { tabs: [] } };
       if ((request.request as { kind?: string } | undefined)?.kind === 'click') return { ok: false, message: 'element is not visible' };
+      if (isContentScript(request)) return { data: { result: ['https://example.test/', 'complete', 4000] } };
       return { data: { targetId: request.targetId } };
     });
     try {
@@ -1967,9 +1973,90 @@ describe('browser · batch, cdp and target-tailored rules', () => {
       expect(isError).toBe(true);
       expect(body).toMatchObject({ ok: false, action: 'batch', completed: 2, total: 4, failedStep: 2 });
       expect(body.steps.map((step: { ok: boolean }) => step.ok)).toEqual([true, true, false]);
-      const acts = h.calls.filter((request) => request.action === 'act');
+      const acts = h.calls.filter((request) => request.action === 'act' && !isContentScript(request));
       // Both acts ran on the opened tab; the read after the failure was never dispatched.
       expect(acts.map((request) => [request.targetId, (request.request as { kind: string }).kind])).toEqual([['tab-9', 'type'], ['tab-9', 'click']]);
+    } finally { await h.cleanup(); }
+  });
+
+  // Reading right after open (2026-11-11). Unit tier, production MCP entry with a scripted runtime.
+  // Rule protected: a read in the same call as `open` / `navigate` waits, bounded, until the page shows
+  // text that stopped growing, instead of returning the empty page the tab starts as. Measured on real
+  // sites: 10 of 12 `open` + afterSnapshot calls came back empty and cost the model another round.
+  // No earlier test reached this: every scripted runtime answered the first snapshot with a finished page.
+  // Left out of the order: open's same-site tab listing and the login-wall check after a snapshot.
+  const order = (calls: Array<Record<string, unknown>>) => calls
+    .filter((request) => request.action !== 'tabs'
+      && (isContentScript(request) || (request.request as { kind?: string } | undefined)?.kind !== 'evaluate'))
+    .map((request) => isContentScript(request) ? 'script' : isContentSnapshot(request) ? 'look'
+      : request.action === 'act' ? (request.request as { kind: string }).kind : request.action);
+  type Probe = unknown[] | { ok: false; errorCode?: string };
+  const page = (probes: Probe[], settled: Probe, snapshots: string[] = []) => (request: Record<string, unknown>) => {
+    if (request.action === 'tabs') return { data: { tabs: [] } };
+    if (isContentScript(request)) {
+      const probe = probes.shift() ?? settled;
+      return Array.isArray(probe) ? { data: { result: probe } } : { message: 'Execution context was destroyed', ...probe };
+    }
+    if (isContentSnapshot(request)) return { data: { targetId: 'tab-1', snapshot: snapshots.shift() ?? '- main' } };
+    return { data: { targetId: 'tab-1', url: 'https://example.test/', snapshot: '- main' } };
+  };
+
+  it('reads after open only once the requested document shows text that stopped growing', async () => {
+    const h = await scripted(page([
+      ['chrome://new-tab-page/', 'complete', 0], // what a new tab shows first: finished and empty, not the page
+      { ok: false },                             // the navigation replaced the document under the probe
+      ['https://example.test/', 'loading', 0],
+      ['https://example.test/', 'interactive', 40],
+      ['https://example.test/', 'complete', 180], // finished, but too little text to trust on first sight
+    ], ['https://example.test/', 'complete', 180]));
+    try {
+      const { body } = await h.invoke({ action: 'open', url: 'https://example.test/', afterSnapshot: {} });
+      expect(body.afterSnapshot.data.snapshot).toBe('- main');
+      // Only the sixth probe sees the same length twice; the page is read after it, never before.
+      // The placeholder's two seconds of emptiness do not count towards giving up on a blank page.
+      expect(order(h.calls)).toEqual(['open', 'script', 'script', 'script', 'script', 'script', 'script', 'snapshot']);
+      expect(h.calls.filter(isContentScript).every((request) => request.targetId === 'tab-1')).toBe(true);
+    } finally { await h.cleanup(); }
+  });
+
+  it.each([
+    ['open: a finished page with enough text is taken at the first probe', { action: 'open', url: 'https://example.test/', afterSnapshot: {} }, ['open', 'script', 'snapshot']],
+    ['a batch step with more steps after it', { action: 'batch', steps: [{ action: 'open', url: 'https://example.test/' }, { action: 'snapshot' }] }, ['open', 'script', 'snapshot']],
+    // navigate already waited for the document: a page that shows something needs no page script.
+    ['navigate with afterSnapshot', { action: 'navigate', targetId: 'tab-1', url: 'https://example.test/next', afterSnapshot: {} }, ['navigate', 'look', 'snapshot']],
+    ['open as the last step of a batch', { action: 'batch', steps: [{ action: 'tabs' }, { action: 'open', url: 'https://example.test/' }] }, ['open']],
+    ['open on its own', { action: 'open', url: 'https://example.test/' }, ['open']],
+    ['a click with afterSnapshot', { action: 'act', targetId: 'tab-1', request: { kind: 'click', ref: 'e1' }, afterSnapshot: {} }, ['click', 'snapshot']],
+  ] as const)('probes only when a read follows open or navigate in the same call: %s', async (_name, args, expected) => {
+    const h = await scripted(page([], ['https://example.test/', 'complete', 4000]));
+    try {
+      const { isError } = await h.invoke(args as unknown as Record<string, unknown>);
+      expect(isError).toBe(false);
+      expect(order(h.calls)).toEqual(expected);
+    } finally { await h.cleanup(); }
+  });
+
+  it('after navigate, waits for a page that renders from scripts and is still empty when the document loaded', async () => {
+    const h = await scripted(page([['https://example.test/app', 'complete', 0], ['https://example.test/app', 'complete', 640]],
+      ['https://example.test/app', 'complete', 2800], ['']));
+    try {
+      const { isError } = await h.invoke({ action: 'navigate', targetId: 'tab-1', url: 'https://example.test/app', afterSnapshot: {} });
+      expect(isError).toBe(false);
+      // Empty, then header and footer only, then the content: read at the third probe.
+      expect(order(h.calls)).toEqual(['navigate', 'look', 'script', 'script', 'script', 'snapshot']);
+    } finally { await h.cleanup(); }
+  });
+
+  it.each([
+    ['cannot be probed for a while', [{ ok: false }, { ok: false }, { ok: false }, { ok: false }] as Probe[], ['open', 'script', 'script', 'script', 'script', 'snapshot']],
+    ['is on a backend without page scripts', [{ ok: false, errorCode: 'BROWSER_RUNTIME_INVALID_REQUEST' }] as Probe[], ['open', 'script', 'snapshot']],
+  ])('still reads the page when it %s', async (_name, probes, expected) => {
+    const h = await scripted(page(probes, ['https://example.test/', 'complete', 4000]));
+    try {
+      const { isError, body } = await h.invoke({ action: 'open', url: 'https://example.test/', afterSnapshot: {} });
+      expect(isError).toBe(false);
+      expect(body.afterSnapshot.data.snapshot).toBe('- main');
+      expect(order(h.calls)).toEqual(expected);
     } finally { await h.cleanup(); }
   });
 

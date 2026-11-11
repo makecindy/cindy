@@ -296,6 +296,93 @@ function readTargetId(result: { data?: unknown }): string | undefined {
   return typeof id === 'string' && id ? id : undefined;
 }
 
+const PAGE_CONTENT_TIMEOUT_MS = 5000;
+const PAGE_CONTENT_POLL_MS = 250;
+/**
+ * A finished document with at least this much text is taken as is; less has to stop changing first. Measured:
+ * a page that renders from scripts shows its header and footer (a few hundred characters) well before its
+ * content, and a short finished page costs one more probe.
+ */
+const PAGE_CONTENT_ENOUGH_CHARS = 1500;
+/** How long a finished document may stay without text before it is treated as a page that has none. */
+const PAGE_CONTENT_BLANK_MS = 2000;
+/** What a new tab shows before the requested document arrives: finished, empty and not what was asked for. */
+const PAGE_CONTENT_PLACEHOLDER = /^(about|chrome|chrome-search|edge|brave|devtools):/;
+/** A probe fails while a navigation replaces the document; this many in a row is a page that cannot be probed. */
+const PAGE_CONTENT_MAX_PROBE_FAILURES = 4;
+const PAGE_CONTENT_PROBE = '() => [location.href, document.readyState, (document.body?.innerText ?? "").trim().length]';
+
+/**
+ * `open` returns as soon as the tab exists and `navigate` as soon as the document loaded, which for a page
+ * that renders from scripts is before it shows anything. A read in the same call then comes back empty and
+ * costs the model another round. Wait, bounded, until the page shows text that has stopped growing.
+ *
+ * After `navigate` the requested document is already there, so a snapshot that is not empty settles it at
+ * once. A tab that was just opened still shows its placeholder (the new tab page), whose snapshot is not
+ * empty and whose load state is "complete" while the tab already reports the requested address; only the
+ * page itself can tell which document it is, so that case is probed with a page script. Best effort: when
+ * the page cannot be probed, or nothing appears in time, the caller reads what is there.
+ */
+async function waitForPageContent(
+  runtime: BrowserControlRuntime,
+  profile: string | undefined,
+  targetId: string | undefined,
+  opened: boolean,
+): Promise<void> {
+  const deadline = Date.now() + PAGE_CONTENT_TIMEOUT_MS;
+  if (!opened) {
+    try {
+      const shown = await runtime.call({ action: 'snapshot', profile, targetId, snapshotFormat: 'ai', refs: 'aria', compact: true });
+      if (shown.ok && String((shown.data as { snapshot?: unknown } | undefined)?.snapshot ?? '').trim()) return;
+    } catch { /* The probes below decide. */ }
+  }
+  let previousLength = -1;
+  let blankSince: number | undefined;
+  let failures = 0;
+  for (;;) {
+    const probedAt = Date.now();
+    let value: unknown;
+    try {
+      const probe = await runtime.call({
+        action: 'act',
+        profile,
+        targetId,
+        // A probe waits for the document it lands in; it must not outlast the whole wait (seen: 6 s on a slow page).
+        request: { kind: 'evaluate', fn: PAGE_CONTENT_PROBE, timeoutMs: Math.max(deadline - probedAt, PAGE_CONTENT_POLL_MS) },
+      } as BrowserControlRequest);
+      // A backend that cannot run page scripts at all (My browser with an older extension) says so; no retry helps.
+      if (!probe.ok && probe.errorCode === 'BROWSER_RUNTIME_INVALID_REQUEST') return;
+      value = probe.ok ? (probe.data as { result?: unknown } | undefined)?.result : undefined;
+    } catch { /* Counted as a failed probe below. */ }
+    if (Array.isArray(value) && typeof value[2] === 'number') {
+      failures = 0;
+      const [url, readyState, length] = value as [unknown, unknown, number];
+      if (typeof url === 'string' && !PAGE_CONTENT_PLACEHOLDER.test(url) && readyState !== 'loading') {
+        if (readyState === 'complete' && length >= PAGE_CONTENT_ENOUGH_CHARS) return;
+        if (length > 0 && length === previousLength) return;
+        if (length === 0 && readyState === 'complete') {
+          blankSince ??= Date.now();
+          if (Date.now() - blankSince >= PAGE_CONTENT_BLANK_MS) return;
+        } else {
+          blankSince = undefined;
+        }
+        previousLength = length;
+      } else {
+        // Not the requested document yet, or it is still arriving: nothing seen so far counts.
+        previousLength = -1;
+        blankSince = undefined;
+      }
+    } else if (++failures >= PAGE_CONTENT_MAX_PROBE_FAILURES) {
+      return;
+    }
+    // The dedicated browser watches every page script for a navigation it may have started, so a probe there
+    // already takes longer than the interval; only wait out what is left of it.
+    const rest = PAGE_CONTENT_POLL_MS - (Date.now() - probedAt);
+    if (Date.now() + Math.max(rest, 0) >= deadline) return;
+    if (rest > 0) await new Promise<void>((resolve) => setTimeout(resolve, rest));
+  }
+}
+
 /** Some runtime role snapshots ignore maxChars; bound the advertised observation here. */
 function limitAfterSnapshot(result: BrowserControlResult, maxChars: number): BrowserControlResult {
   const data = result.data as { snapshot?: unknown; refs?: Record<string, unknown>; [key: string]: unknown } | undefined;
@@ -777,7 +864,8 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
     // Named so a batch can run each step through this same path (same checks, hints and bounds).
     // `checkOnly` stops right before anything is dispatched: a batch uses it to ask every step the very
     // question the real call would ask, so the two can never disagree about what is a bad step.
-    handler: async function handle(args, onTarget?: (targetId: string) => void, checkOnly = false): Promise<BrowserToolResult> {
+    // `readFollows` is set by a batch for a step that has more steps after it.
+    handler: async function handle(args, onTarget?: (targetId: string) => void, checkOnly = false, readFollows = false): Promise<BrowserToolResult> {
       try {
         if (args.target === 'user-browser' || args.target === 'external' || args.target === 'rsb-webview') {
           const { target: _browserName, ...rest } = args;
@@ -829,7 +917,7 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
           const done: unknown[] = [];
           const images: BrowserToolContentBlock[] = [];
           let failed = false;
-          for (const step of steps) {
+          for (const [index, step] of steps.entries()) {
             if (syncBackendScope() !== batchScope) {
               done.push({ ok: false, action: 'batch', errorCode: 'BROWSER_RUNTIME_INVALID_REQUEST',
                 message: '浏览器后端在批量执行中途被切换,这一步和后面的都没有执行。先 status 确认当前模式并重新观察页面,不要整批重放。' });
@@ -838,7 +926,7 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
             }
             const inherits = current !== undefined && step.targetId === undefined && step.request?.targetId === undefined
               && BATCH_TAB_ACTIONS.has(step.action);
-            const ran = await handle(inherits ? { ...step, targetId: current } : step, (targetId) => { current = targetId; });
+            const ran = await handle(inherits ? { ...step, targetId: current } : step, (targetId) => { current = targetId; }, false, index < steps.length - 1);
             const text = ran.content.find((block): block is { type: 'text'; text: string } => block.type === 'text')?.text;
             let parsed: unknown = text ?? null;
             try { if (text !== undefined) parsed = JSON.parse(text); } catch { /* Keep the raw text. */ }
@@ -1385,6 +1473,11 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
                 : '这个网站已有打开的页面(往往已在正确的账号和位置):优先在它们上面继续,不要从入口重新找;新开的页面不需要时可以 close。',
             } as typeof result;
           }
+        }
+        // Every backend: whatever reads the page next in this same call (the snapshot asked for below, or the
+        // next step of a batch) must not find a page that has not shown anything yet.
+        if ((args.action === 'open' || args.action === 'navigate') && result.ok && (args.afterSnapshot || readFollows)) {
+          await waitForPageContent(runtime, args.profile, readTargetId(result) ?? args.targetId, args.action === 'open');
         }
         if (args.action === 'snapshot' && result.ok) {
           const loginWall = await detectLoginWall(runtime, args.profile, readTargetId(result) ?? args.targetId);
