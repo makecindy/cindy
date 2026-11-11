@@ -33,7 +33,7 @@ test('page tools accept a null task without changing task-bound context', async 
     createPluginAppPublisher: () => () => undefined,
     createGhostAttachmentResolver: () => () => undefined,
     createImageCacheStore: () => ({}), hostChatAttachments: {},
-    createGhostGateway: () => ({ getCindyGhostsMcpDeps(context) {
+    createGhostGateway: () => ({ setPageControlGhostProvider() {}, getCindyGhostsMcpDeps(context) {
       contexts.push(context);
       return { callGhostTool: async () => ({ ok: true, result: { content: [{ type: 'text', text: 'delivered' }] } }) };
     } }),
