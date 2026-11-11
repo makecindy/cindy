@@ -11139,6 +11139,17 @@
           "failed": "Fehlgeschlagen",
           "cancelled": "Abgebrochen",
           "timed-out": "Zeitüberschreitung"
+        },
+        "label": "Aufgabe",
+        "untitled": "Unbenannte Aufgabe",
+        "askedBy": "Angefragt von {{requester}}",
+        "pr": "PR #{{number}}",
+        "open": "Aufgabe „{{title}}“ öffnen",
+        "live": {
+          "running": "Läuft",
+          "waiting": "Wartet auf Antwort",
+          "finished": "Erledigt",
+          "failed": "Fehlgeschlagen"
         }
       },
       "files": {

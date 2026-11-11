@@ -28,6 +28,35 @@ export function chatServerWorkspaces(endpoint: string, actorId: string, current:
   };
 }
 
+const liveTaskCard = z.object({
+  roomId: z.string().uuid(), botId: z.string().uuid(), threadRootId: z.string().uuid().nullable(),
+  taskId: z.string(), deviceId: z.string().nullable(), title: z.string(), requesterName: z.string(), botName: z.string(),
+  state: z.enum(['running', 'waiting', 'finished', 'failed']), prUrl: z.string().optional(),
+  /** The posted message's server revision; the next edit expects it. */
+  revision: z.number().int().positive(), createdAt: z.number(),
+});
+export type ChatLiveTaskCardRecord = z.infer<typeof liveTaskCard>;
+/**
+ * Task cards this computer posted for its teammates (bot-group-chat.md §10), by message ID: this
+ * computer keeps each card in step with its task. Local only; the card itself is in the group.
+ */
+export function chatServerTaskCards(endpoint: string, actorId: string, current: () => boolean) {
+  const file = ownerScopedUserDataPath('chat-workspace-settings', createHash('sha256').update(`${endpoint}\n${actorId}`).digest('hex'), 'task-cards.json');
+  const check = () => { if (!current()) throw new Error('OWNER_CHANGED'); };
+  return {
+    read(): Record<string, ChatLiveTaskCardRecord> {
+      check(); const raw = readAtomicFileSync(file);
+      if (!raw) return {};
+      const parsed = z.record(z.string(), liveTaskCard).safeParse(JSON.parse(raw));
+      return parsed.success ? parsed.data : {};
+    },
+    save(value: Record<string, ChatLiveTaskCardRecord>) {
+      check(); mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+      atomicWriteFileSync(file, JSON.stringify(value));
+    },
+  };
+}
+
 /** `owner/name` of a GitHub remote URL (HTTPS, SSH or scp form), or null for any other remote. */
 export function githubRepositoryOfRemote(url: string): string | null {
   const match = /^(?:https?:\/\/(?:[^@/\s]+@)?github\.com\/|ssh:\/\/git@github\.com(?::\d+)?\/|git@github\.com:)([^/\s]+\/[^/\s]+?)(?:\.git)?\/?$/i

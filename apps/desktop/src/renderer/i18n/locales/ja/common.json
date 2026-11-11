@@ -11094,6 +11094,17 @@
           "failed": "失敗",
           "cancelled": "キャンセル済み",
           "timed-out": "タイムアウト"
+        },
+        "label": "タスク",
+        "untitled": "無題のタスク",
+        "askedBy": "{{requester}} の依頼",
+        "pr": "PR #{{number}}",
+        "open": "タスク「{{title}}」を開く",
+        "live": {
+          "running": "進行中",
+          "waiting": "返信待ち",
+          "finished": "完了",
+          "failed": "エラー"
         }
       },
       "files": {

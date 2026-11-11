@@ -11230,6 +11230,17 @@
           "failed": "Échec",
           "cancelled": "Annulée",
           "timed-out": "Délai dépassé"
+        },
+        "label": "Tâche",
+        "untitled": "Tâche sans titre",
+        "askedBy": "Demandée par {{requester}}",
+        "pr": "PR #{{number}}",
+        "open": "Ouvrir la tâche « {{title}} »",
+        "live": {
+          "running": "En cours",
+          "waiting": "En attente de réponse",
+          "finished": "Terminée",
+          "failed": "En erreur"
         }
       },
       "files": {

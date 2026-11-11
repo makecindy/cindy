@@ -11094,6 +11094,17 @@
           "failed": "실패",
           "cancelled": "취소됨",
           "timed-out": "시간 초과"
+        },
+        "label": "작업",
+        "untitled": "제목 없는 작업",
+        "askedBy": "{{requester}} 님의 요청",
+        "pr": "PR #{{number}}",
+        "open": "작업 '{{title}}' 열기",
+        "live": {
+          "running": "진행 중",
+          "waiting": "답장 대기",
+          "finished": "완료",
+          "failed": "오류"
         }
       },
       "files": {

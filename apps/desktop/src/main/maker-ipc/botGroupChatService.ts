@@ -183,6 +183,11 @@ export interface BotGroupChatServiceDeps {
   workDir?: Pick<BotGroupWorkDir, 'prepare' | 'snapshot' | 'changedFiles' | 'trashGroupFolder'>;
   /** Existing local directory usable as a 项目文件夹 (same rules as new-task projects). */
   validateProjectDir?: (dir: string) => Promise<{ ok: true; dir: string } | { ok: false; message: string }>;
+  /**
+   * A task this computer runs, for its group card: title, state and recorded pull request; null
+   * when the task is gone (bot-group-chat.md §10).
+   */
+  readGroupTaskStatus?: (taskId: string) => Promise<{ title: string; state?: 'running' | 'waiting' | 'finished' | 'failed'; prUrl?: string } | null>;
   /** Registered project folders on this computer whose git `origin` is this GitHub repository. */
   findProjectDirsForRepo?: (repo: string) => Promise<string[]>;
   /**

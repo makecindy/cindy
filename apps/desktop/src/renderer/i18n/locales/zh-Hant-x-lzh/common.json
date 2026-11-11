@@ -11094,6 +11094,17 @@
           "failed": "未成",
           "cancelled": "已罷",
           "timed-out": "逾時矣"
+        },
+        "label": "事",
+        "untitled": "無題之事",
+        "askedBy": "{{requester}} 所託",
+        "pr": "PR #{{number}}",
+        "open": "啟「{{title}}」之事",
+        "live": {
+          "running": "方行",
+          "waiting": "待復",
+          "finished": "已畢",
+          "failed": "有誤"
         }
       },
       "files": {

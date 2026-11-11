@@ -11230,6 +11230,17 @@
           "failed": "Fallido",
           "cancelled": "Cancelado",
           "timed-out": "Tiempo agotado"
+        },
+        "label": "Tarea",
+        "untitled": "Tarea sin título",
+        "askedBy": "Pedida por {{requester}}",
+        "pr": "PR #{{number}}",
+        "open": "Abrir la tarea «{{title}}»",
+        "live": {
+          "running": "En curso",
+          "waiting": "Esperando respuesta",
+          "finished": "Terminada",
+          "failed": "Con error"
         }
       },
       "files": {

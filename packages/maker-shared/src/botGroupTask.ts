@@ -33,8 +33,8 @@ export interface BotGroupTaskCard {
 }
 
 /** Preview/quote text without duplicating a task card in the message body. */
-export function botGroupMessageSummaryText(message: Pick<BotGroupMessageView, 'content' | 'task' | 'deleted'>): string {
-  return message.content.trim() || (message.deleted ? '' : message.task?.title.trim() ?? '');
+export function botGroupMessageSummaryText(message: Pick<BotGroupMessageView, 'content' | 'task' | 'deleted'> & Partial<Pick<BotGroupMessageView, 'liveTask'>>): string {
+  return message.content.trim() || (message.deleted ? '' : message.task?.title.trim() ?? message.liveTask?.title.trim() ?? '');
 }
 
 const TITLE_MAX = 120;
@@ -103,4 +103,73 @@ export function readBotGroupTaskCard(block: unknown): BotGroupTaskCardView | nul
 export function parseBotGroupTaskCardView(value: unknown): BotGroupTaskCardView | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   return viewFromFields(value as Record<string, unknown>);
+}
+
+/**
+ * Revision 2 (2026-11-11): an ordinary task a teammate opened from the group with `send_to_session`
+ * (bot-group-chat.md §10). The teammate's owner's computer posts it as the teammate's message and
+ * edits that same message when the task's status changes; nobody else writes it. Clients that only
+ * know revision 1 read the `fallback` line.
+ */
+export const BOT_GROUP_LIVE_TASK_SCHEMA_REVISION = 2;
+export type BotGroupLiveTaskState = 'running' | 'waiting' | 'finished' | 'failed';
+const LIVE_STATES: readonly BotGroupLiveTaskState[] = ['running', 'waiting', 'finished', 'failed'];
+
+export interface BotGroupLiveTaskView {
+  /** The task's session id on the computer that runs it. */
+  taskId: string;
+  /** That computer (null on hosts that do not know their device id). */
+  deviceId: string | null;
+  title: string;
+  state: BotGroupLiveTaskState;
+  /** Who asked in the group, and which teammate opened the task (names when posted). */
+  requesterName: string;
+  botName: string;
+  /** The task's pull request, when it has recorded one. */
+  prUrl?: string;
+}
+
+export interface BotGroupLiveTaskCardLabels {
+  task: string;
+  untitled: string;
+  states: Record<BotGroupLiveTaskState, string>;
+}
+
+const PR_URL = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/\d+$/;
+const NAME_MAX = 80;
+
+export function buildBotGroupLiveTaskCard(view: BotGroupLiveTaskView, labels: BotGroupLiveTaskCardLabels) {
+  const title = clip(view.title, TITLE_MAX) || clip(labels.untitled, TITLE_MAX);
+  return {
+    type: 'card' as const,
+    namespace: BOT_GROUP_TASK_NAMESPACE,
+    schemaRevision: BOT_GROUP_LIVE_TASK_SCHEMA_REVISION,
+    fallback: `[${labels.task}] ${title} · ${labels.states[view.state]}${view.prUrl ? ` · ${view.prUrl}` : ''}`,
+    data: { taskId: view.taskId, deviceId: view.deviceId, title, state: view.state,
+      requesterName: clip(view.requesterName, NAME_MAX), botName: clip(view.botName, NAME_MAX),
+      ...(view.prUrl && PR_URL.test(view.prUrl) ? { prUrl: view.prUrl } : {}) },
+  };
+}
+
+/** Strict, like revision 1: a malformed card is no card. */
+export function readBotGroupLiveTaskCard(block: unknown): BotGroupLiveTaskView | null {
+  if (!block || typeof block !== 'object') return null;
+  const value = block as { type?: unknown; namespace?: unknown; schemaRevision?: unknown; data?: unknown };
+  if (value.type !== 'card' || value.namespace !== BOT_GROUP_TASK_NAMESPACE
+    || value.schemaRevision !== BOT_GROUP_LIVE_TASK_SCHEMA_REVISION) return null;
+  return parseBotGroupLiveTaskView(value.data);
+}
+
+/** The card as a controller receives it in a message view. */
+export function parseBotGroupLiveTaskView(value: unknown): BotGroupLiveTaskView | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const data = value as Record<string, unknown>;
+  if (typeof data.taskId !== 'string' || !/^[\w-]{1,128}$/.test(data.taskId)) return null;
+  if (data.deviceId !== null && (typeof data.deviceId !== 'string' || !/^[\w.:-]{1,128}$/.test(data.deviceId))) return null;
+  if (typeof data.state !== 'string' || !LIVE_STATES.includes(data.state as BotGroupLiveTaskState)) return null;
+  if (typeof data.title !== 'string' || typeof data.requesterName !== 'string' || typeof data.botName !== 'string') return null;
+  if (data.prUrl !== undefined && (typeof data.prUrl !== 'string' || !PR_URL.test(data.prUrl))) return null;
+  return { taskId: data.taskId, deviceId: data.deviceId as string | null, title: clip(data.title, TITLE_MAX),
+    state: data.state as BotGroupLiveTaskState, requesterName: clip(data.requesterName, NAME_MAX), botName: clip(data.botName, NAME_MAX),
+    ...(data.prUrl ? { prUrl: data.prUrl as string } : {}) };
 }

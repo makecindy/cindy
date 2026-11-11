@@ -11094,6 +11094,17 @@
           "failed": "失败了",
           "cancelled": "已取消",
           "timed-out": "已超时"
+        },
+        "label": "任务",
+        "untitled": "未命名任务",
+        "askedBy": "{{requester}} 让做的",
+        "pr": "PR #{{number}}",
+        "open": "打开任务「{{title}}」",
+        "live": {
+          "running": "进行中",
+          "waiting": "等待回复",
+          "finished": "已完成",
+          "failed": "出错了"
         }
       },
       "files": {

@@ -5,7 +5,7 @@ export * from './botGroupProcess.js';
  * Product rules: docs/product-rules/bot-group-chat.md.
  */
 import type { BotGroupQuoteInput, BotGroupQuoteView } from './botGroupQuote';
-import type { BotGroupTaskCardView } from './botGroupTask';
+import type { BotGroupLiveTaskView, BotGroupTaskCardView } from './botGroupTask';
 
 export * from './botGroupQuote';
 export * from './botGroupTask';
@@ -191,6 +191,12 @@ export interface BotGroupMessageView {
   quote?: BotGroupQuoteView;
   /** An independent task this teammate started from the group (bot-group-chat.md §10). */
   task?: BotGroupTaskCardView;
+  /**
+   * An ordinary task this teammate opened from the group, as its card last said (revision 2).
+   * `openable`: this account owns the teammate, so it may open the task itself; `here`: the task
+   * runs on this computer (otherwise it opens through the same-account remote path).
+   */
+  liveTask?: BotGroupLiveTaskView & { openable?: boolean; here?: boolean };
   reactions?: Array<{ emoji: string; count: number; me: boolean }>;
   id: string;
   sequence: number;

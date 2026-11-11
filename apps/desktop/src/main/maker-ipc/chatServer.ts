@@ -26,7 +26,7 @@ import { chatInviteShareBase, createChatInviteShare, notifyChatInviteRevoked, re
 import { createChatMedia } from './chatServerMedia.js';
 import { mergeChatReplyAttachments } from './chatServerReplyAttachments.js';
 import { prepareChatReplyImages } from './chatServerReplyImages.js';
-import { chatServerWorkspaces } from './chatServerWorkspaces.js';
+import { chatServerTaskCards, chatServerWorkspaces, type ChatLiveTaskCardRecord } from './chatServerWorkspaces.js';
 import { buildPlanStepBrief, draftPlanSteps, type PlanStepDraft } from './botGroupDivision.js';
 import { botGroupMentionAudience, resolveBotGroupMentions, splitBotGroupRelaySteps, type BotGroupMentionMember } from '@cindy/maker-shared/botGroupMentions';
 import { chatMigrationReceipts } from './chatMigrationReceipts.js';
@@ -53,7 +53,7 @@ import {
   type BotGroupThreadShareView, type BotGroupThreadSummary, type BotGroupThreadUnread,
   type BotGroupDetail, type BotGroupMessageReaders, type BotGroupSpeaker, type BotGroupPlanView, type BotGroupFailure, type BotGroupMessageView, type BotGroupAttachment, type ChatServerApi,
   botGroupQuoteAttachmentName, botGroupQuoteExcerpt, botGroupQuoteFromMessage, buildBotGroupQuoteCard, readBotGroupQuote, readBotGroupQuoteCard, type BotGroupQuoteView,
-  readBotGroupTaskCard, botGroupMessageSummaryText, botGroupProcessCard, readBotGroupProcessCard,
+  readBotGroupTaskCard, readBotGroupLiveTaskCard, buildBotGroupLiveTaskCard, type BotGroupLiveTaskView, botGroupMessageSummaryText, botGroupProcessCard, readBotGroupProcessCard,
   readBotGroupCapabilityNotice, buildBotGroupCapabilityNotice, type BotGroupCapabilityNoticeCode,
 } from '../../shared/botGroupChat.js';
 import type { BotGroupChatService, BotGroupChatServiceDeps, BotGroupLaneTerminal, BotGroupPreparedAttachments } from './botGroupChatService.js';
@@ -235,8 +235,9 @@ const groupInput = z.object({ name: z.string().trim().min(1).max(40), botIds: z.
 // A recognized quote card is shown as the quote, not as body text; unknown revisions keep their fallback.
 // A task card is the message's task only on a teammate's own message; a human may not post one for it.
 const taskCardOf = (m: Message) => m.author.kind === 'bot' ? m.content.map(readBotGroupTaskCard).find(Boolean) ?? null : null;
+const liveTaskCardOf = (m: Message) => m.author.kind === 'bot' ? m.content.map(readBotGroupLiveTaskCard).find(Boolean) ?? null : null;
 const bodyBlocks = (m: Message) => m.content.filter(b => !readBotGroupProcessCard(b) && (b.namespace !== 'cindy.local-history' || b.data?.activity === true) && !readBotGroupQuoteCard(b)
-  && !(m.author.kind === 'bot' && readBotGroupTaskCard(b)));
+  && !(m.author.kind === 'bot' && (readBotGroupTaskCard(b) || readBotGroupLiveTaskCard(b))));
 const contentText = (m: Message, forModel: boolean) => m.deleted ? '（消息已删除）' : forModel && readBotGroupCapabilityNotice(m) ? '' : readImportedBotGroupRuntimeFailureCode(m) ? '' : bodyBlocks(m)
   .flatMap(b => b.type !== 'media' ? [b.text ?? b.fallback ?? ''] : forModel ? [b.text ?? b.fallback ?? `[附件: ${b.caption ?? '文件'}]`] : []).join('\n');
 /** What a Bot reads: each attachment stays a `[附件: …]` line beside the text. */
@@ -468,6 +469,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   };
   let profiles: Array<typeof botProfiles.$inferSelect> = [];
   const workspaces = () => chatServerWorkspaces(config.baseUrl, selfId, current);
+  const taskCards = () => chatServerTaskCards(config.baseUrl, selfId, current);
   const planning = new Map<string, { botId: string; controller: AbortController }>();
   // Invalidate even a send still preparing/uploading its attachments. Its delayed
   // receipt must not start an arrangement after a newer message or control action.
@@ -1493,9 +1495,13 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       planId: null, files: [], attachments: [], createdAt: Date.parse(m.createdAt) };
     const quote = m.deleted || planCard ? null : readBotGroupQuote(m.content);
     const task = m.deleted || planCard ? null : taskCardOf(m);
+    const liveTask = m.deleted || planCard ? null : liveTaskCardOf(m);
     const process = !m.deleted && m.author.kind === 'bot' ? m.content.map(readBotGroupProcessCard).find(Boolean) : null;
     return { id: m.id, maskAttribution: m.maskAttribution, sequence: Number(m.seq), serverSequence: m.seq, deleted: m.deleted, kind: capabilityNoticeCode ? 'notice' : planCard ? 'plan' : 'message', ...(capabilityNoticeCode ? { capabilityNoticeCode } : {}), authorKind: legacy?.authorKind === 'system' ? 'system' : m.author.kind === 'human' ? 'user' : 'bot',
       isSelf: m.authorId === selfId, threadRootId: m.threadRootId, replyCount: m.replyCount ?? 0, reactions: m.reactions ?? [], ...(quote ? { quote } : {}), ...(task ? { task } : {}), ...(process ? { process } : {}),
+      // The teammate's owner opens the task itself; other members see the card as last posted.
+      ...(liveTask ? { liveTask: { ...liveTask, ...(member?.ownerActorId === selfId ? { openable: true } : {}),
+        ...(!liveTask.deviceId || liveTask.deviceId === selfDeviceId ? { here: true } : {}) } } : {}),
       authorBotId: localBot(m.authorId)?.id ?? m.authorId, authorName: legacy?.authorKind === 'system' && typeof legacy.authorName === 'string' ? legacy.authorName : member ? memberName(member, ownerMembers) : m.author.name, content: displayText(m),
       mentions: { all: m.mentionAudience === 'humans' || m.mentionAudience === 'everyone', ...(m.mentionAudience === 'bots' || m.mentionAudience === 'everyone' ? { allBots: true } : {}), botIds: (m.mentions ?? []).map(actorId => localBot(actorId)?.id ?? actorId) }, noticeCode: null, planId: typeof planCard?.data?.planId === 'string' ? planCard.data.planId : null, files: [], attachments: [], createdAt: Date.parse(m.createdAt) };
   }
@@ -2168,6 +2174,77 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     notices.set(code, pending);
     return pending;
   }
+  /**
+   * A task the teammate opened during this group execution shows in the group as a card, posted as
+   * the teammate where the request was (main group or Thread). This computer keeps the same message
+   * in step with the task afterwards (`syncTaskCards`); progress never adds messages.
+   */
+  async function postTaskCard(run: Running, s: Snapshot, threadRootId: string | undefined, task: { taskId: string; deviceId: string | null; title: string }) {
+    if (!current() || run.execution.mask_owner_id) return;
+    const member = (id?: string) => s.members.find(m => m.id === id);
+    const bot = member(run.execution.bot_id);
+    const view: BotGroupLiveTaskView = { taskId: task.taskId, deviceId: task.deviceId ?? selfDeviceId ?? null, title: task.title, state: 'running',
+      requesterName: (() => { const m = member(run.execution.requester_id); return m ? memberName(m, s.members) : ''; })(),
+      botName: bot ? memberName(bot, s.members) : actors.find(actor => actor.id === run.execution.bot_id)?.name ?? '' };
+    try {
+      const posted = await api<{ id: string; revision?: number }>(`/conversations/${run.execution.conversation_id}/messages`, 'POST', {
+        operationId: `task-card:${run.execution.id}:${task.taskId}`.slice(0, 160), content: [liveTaskCard(view)], mentions: [],
+        ...(threadRootId ? { threadRootId } : {}),
+      }, run.execution.bot_id);
+      if (!current() || typeof posted?.id !== 'string') return;
+      const cards = taskCards().read();
+      cards[posted.id] = { roomId: run.execution.conversation_id, botId: run.execution.bot_id, threadRootId: threadRootId ?? null,
+        ...view, ...(view.prUrl ? { prUrl: view.prUrl } : {}), revision: posted.revision ?? 1, createdAt: Date.now() };
+      taskCards().save(cards);
+      changed(run.execution.conversation_id);
+    } catch (error) {
+      deps.log?.warn('Group task card could not be posted', chatErrorDiagnostic(error));
+    }
+  }
+  function liveTaskCard(view: BotGroupLiveTaskView) {
+    return buildBotGroupLiveTaskCard(view, { task: t('bots.groupChat.task.label'), untitled: t('bots.groupChat.task.untitled'),
+      states: { running: t('bots.groupChat.task.live.running'), waiting: t('bots.groupChat.task.live.waiting'),
+        finished: t('bots.groupChat.task.live.finished'), failed: t('bots.groupChat.task.live.failed') } });
+  }
+  /** Cards follow their task for a week; after that a card keeps what it last said. */
+  const TASK_CARD_FOLLOW_MS = 7 * 24 * 60 * 60_000;
+  let syncingTaskCards = false;
+  async function syncTaskCards() {
+    if (syncingTaskCards || !current() || !deps.readGroupTaskStatus) return;
+    syncingTaskCards = true;
+    try {
+      const cards = taskCards().read();
+      let dirty = false;
+      for (const [messageId, card] of Object.entries(cards)) {
+        if (!current()) return;
+        if (Date.now() - card.createdAt > TASK_CARD_FOLLOW_MS) { delete cards[messageId]; dirty = true; continue; }
+        // Only the computer running the task reads it; another of my computers keeps its own cards.
+        if (card.deviceId && selfDeviceId && card.deviceId !== selfDeviceId) continue;
+        const status = await deps.readGroupTaskStatus(card.taskId).catch(() => undefined);
+        if (status === undefined) continue;
+        if (status === null) { delete cards[messageId]; dirty = true; continue; }
+        // An idle task with no recorded turn end (e.g. after a restart) has finished once it has had time to start.
+        const state = status.state ?? (card.state === 'running' && Date.now() - card.createdAt > 120_000 ? 'finished' : card.state);
+        const next: BotGroupLiveTaskView = { taskId: card.taskId, deviceId: card.deviceId, title: status.title || card.title, state,
+          requesterName: card.requesterName, botName: card.botName, ...(status.prUrl ?? card.prUrl ? { prUrl: status.prUrl ?? card.prUrl } : {}) };
+        if (next.title === card.title && next.state === card.state && next.prUrl === card.prUrl) continue;
+        try {
+          const edited = await api<{ revision?: number }>(`/conversations/${card.roomId}/messages/${id.parse(messageId)}`, 'PATCH', {
+            operationId: `task-card:${messageId}:${card.revision}`, expectedRevision: card.revision, content: [liveTaskCard(next)],
+          }, card.botId);
+          cards[messageId] = { ...card, ...next, revision: edited?.revision ?? card.revision + 1 };
+          dirty = true;
+          changed(card.roomId);
+        } catch (error) {
+          // A deleted card, a teammate that left or a card edited elsewhere is no longer ours to keep.
+          if (error instanceof ChatResponseError && [403, 404, 409, 410].includes(error.status)) { delete cards[messageId]; dirty = true; }
+        }
+      }
+      if (dirty && current()) taskCards().save(cards);
+    } catch (error) {
+      deps.log?.warn('Group task cards could not be refreshed', chatErrorDiagnostic(error));
+    } finally { syncingTaskCards = false; }
+  }
   async function validateExecutionAuthority(run: Running): Promise<void> {
     const execution = run.execution;
     const assertCurrent = () => {
@@ -2627,6 +2704,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           isCurrent: () => current() && running.get(execution.id) === run && !run.settlement,
           validate: () => validateExecutionAuthority(run),
           onDenied: error => postCapabilityNotice(run, error.temporary ? 'GROUP_AUTHORIZATION_UNAVAILABLE' : 'GROUP_AUTHORIZATION_REQUIRED', threadRootId),
+          onTaskCreated: task => void postTaskCard(run, s, threadRootId, task),
         });
         if (run.plan && run.workspace?.ownerSessionId) {
           const settings = workspaces().read(s.room.id)!;
@@ -2862,7 +2940,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           sourceMessageId: execution.source_message_id, unavailableAttachments: missingAttachments }),
         execution.access_mode === 'chat' ? 'This group has chat-only access: use only public identity and group messages. Private memory, owner files and tools are unavailable. Explain this boundary when asked to use them.' : 'Your owner has authorized this group to use your existing capabilities. Outputs are visible to every group member.',
         // 2026-11-10: results reach the group only as a reply to a request here (no host delivery).
-        ...(execution.access_mode === 'chat' ? [] : ['Only your reply to a request here reaches the group; a message sent to this conversation later is not posted. So do not ask a task you start to send its result back here. When someone asks how it is going, read that task with `get_task_digest` and answer then.']),
+        ...(execution.access_mode === 'chat' ? [] : ['Only your reply to a request here reaches the group; a message sent to this conversation later is not posted. So do not ask a task you start to send its result back here. A task you start here shows in the group as a card that follows its status. When someone asks how it is going, read that task with `get_task_digest` and answer then.']),
         ...(talk ? discussionTurnBrief(talk, execution.plan_step!, briefHistory) : run.plan ? [run.workspace ? buildPlanStepBrief({ groupName: s.room.name, botName: bot.displayName, request: run.plan.request_text,
           attachments: attachments.map(a => a.name), attachmentsIncluded: true, steps: run.plan.steps, position: execution.plan_step!, workDir: run.workspace.workDir, branch: run.workspace.branch,
           recent: [], userNotes: run.plan.note_message_ids?.length ? { kind: 'more', texts: history.filter(m => run.plan!.note_message_ids!.includes(m.id)).map(bodyText) } : undefined, handoffs: run.plan.steps.filter(step => step.position < execution.plan_step!).flatMap(step => { const result = history.find(m => m.id === step.resultMessageId);
@@ -3176,7 +3254,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (recheck.delete(run) && running.get(run.execution.id) === run) void checkLease(run);
     }
   }
-  const heartbeat = setInterval(() => { for (const run of running.values()) void checkLease(run); }, 15000);
+  const heartbeat = setInterval(() => { for (const run of running.values()) void checkLease(run); void syncTaskCards(); }, 15000);
   timer.unref(); heartbeat.unref();
   const safe = <T>(fn: () => Promise<T>): Promise<T | BotGroupFailure> => fn().catch(error => {
     deps.log?.warn('Chat group action failed', chatErrorDiagnostic(error));

@@ -702,6 +702,7 @@ import { validateExistingLocalProjectDirectory } from '../mcp-integrations/creat
 import { findRepositoryFolders } from './chatServerWorkspaces.js';
 import { listRecentWorkdirs } from '../localDb/ipc/recentWorkdirsCore.js';
 import { runGit } from '../git-review/gitRunner.js';
+import { listPrRefs } from '../git-context/prRefsStore.js';
 import { gitExec } from '../worktree/gitExec.js';
 import { BOT_GROUP_CLIENT_ID_PREFIX } from '../../shared/botGroupChat.js';
 import { syncBotLanePermission, syncBotLinkedLanePermissions } from './botPermissionSync.js';
@@ -13746,6 +13747,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       } catch {
         return { ok: false as const, message: '项目文件夹不存在' };
       }
+    },
+    // A group task card follows its task (bot-group-chat.md §10): title, live phase and recorded PR.
+    readGroupTaskStatus: async (taskId) => {
+      const [row] = await getDbClient().drizzle.select({ title: sessions.title, status: sessions.status })
+        .from(sessions).where(eq(sessions.id, taskId)).limit(1);
+      if (!row || row.status === 'deleted') return null;
+      const runtime = await tryGetOrcaCollabService()?.getSessionRuntime({ targetSessionId: taskId }).catch(() => undefined);
+      const phase = runtime?.ok && typeof runtime.runtime.phase === 'string' ? runtime.runtime.phase : 'idle';
+      const pr = (await listPrRefs(taskId).catch(() => [])).find(ref => /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+$/.test(ref.url));
+      const state = phase === 'running' ? 'running' as const : phase === 'needs-interaction' ? 'waiting' as const
+        : phase === 'error' ? 'failed' as const : phase === 'completed' ? 'finished' as const : undefined;
+      return { title: row.title, ...(state ? { state } : {}), ...(pr ? { prUrl: pr.url } : {}) };
     },
     // A group's GitHub repository picks this computer's checkout among the registered projects.
     findProjectDirsForRepo: async (repo) => findRepositoryFolders(

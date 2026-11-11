@@ -11139,6 +11139,17 @@
           "failed": "Failed",
           "cancelled": "Cancelled",
           "timed-out": "Timed out"
+        },
+        "label": "Task",
+        "untitled": "Untitled task",
+        "askedBy": "Asked by {{requester}}",
+        "pr": "PR #{{number}}",
+        "open": "Open task “{{title}}”",
+        "live": {
+          "running": "In progress",
+          "waiting": "Waiting for a reply",
+          "finished": "Done",
+          "failed": "Failed"
         }
       },
       "files": {

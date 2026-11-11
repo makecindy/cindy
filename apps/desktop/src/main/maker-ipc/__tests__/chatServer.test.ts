@@ -11,11 +11,15 @@ const replyImages = vi.hoisted(() => vi.fn(async (text: string): Promise<{ text:
 vi.mock('../chatServerReplyImages.js', () => ({ prepareChatReplyImages: replyImages }));
 // This computer's group settings; each test starts with none.
 const workspaceSettings = vi.hoisted(() => new Map<string, unknown>());
+const taskCardStore = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
 vi.mock('../chatServerWorkspaces.js', () => ({ chatServerWorkspaces: () => ({
   read: (room: string) => workspaceSettings.get(room) ?? null,
   save: (room: string, value: unknown) => { workspaceSettings.set(room, value); },
+}), chatServerTaskCards: () => ({
+  read: () => structuredClone(taskCardStore.value),
+  save: (value: Record<string, unknown>) => { taskCardStore.value = structuredClone(value); },
 }) }));
-beforeEach(() => workspaceSettings.clear());
+beforeEach(() => { workspaceSettings.clear(); taskCardStore.value = {}; });
 const migration = vi.hoisted(() => ({ read: vi.fn<(_groupId: string) => { roomId: string; sequence: number; version: 2 } | null>(() => null) }));
 const sendJournal = vi.hoisted(() => ({ enabled: false, rows: new Map<string, { intent?: unknown; receipt?: string }>() }));
 vi.mock('../chatSendJournal.js', () => ({ chatSendJournal: () => ({
@@ -90,7 +94,7 @@ import { t } from '../../i18n.desktop.js';
 import { signalBotProfilesChanged } from '../botProfilesChangedSignal.js';
 import { projectBotGroupExecutionFailures } from '@cindy/maker-shared/botGroupPresentation';
 import { botGroupRuntimeFailureCode, settleClosedBotGroupTurn, settleUndispatchedBotGroupTurn } from '../botGroupRuntimeFailure.js';
-import { authorizeGroupTool } from '../botGroupToolAuthorization.js';
+import { authorizeGroupTool, reportGroupTaskCreated } from '../botGroupToolAuthorization.js';
 import { createAutoPermissionReviewer, type AutoPermissionReviewerDeps } from '../../maker-host/auto-permission-reviewer.js';
 import { createAutoReviewIntentProjection } from '@cindy/maker-shared/auto-review-intent';
 import { buildBotGroupCapabilityNotice, botGroupQuoteFromMessage, buildBotGroupQuoteCard, buildBotGroupTaskCard, buildBotGroupThreadShareCard } from '../../../shared/botGroupChat.js';
@@ -1490,6 +1494,38 @@ describe('Chat Server result delivery and refresh', () => {
     await service.settleLaneTurn({ ...terminal, resultText: '@Luna can you review this? @Bot is done.' });
     if (supported) expect(deliveries()[0][2].mentions).toEqual([luna]);
     else expect(deliveries()[0][2]).not.toHaveProperty('mentions');
+  });
+
+  // bot-group-chat.md §10: a task the teammate opens during a group execution shows as its card,
+  // and this computer edits that same message as the task's status changes; no progress messages.
+  it('posts a task card for a task opened from the group and keeps it in step with the task', async () => {
+    const posted: unknown[] = [];
+    const edits: Array<{ route: string; body: Record<string, unknown> }> = [];
+    let state: 'running' | 'finished' = 'running';
+    deps.readGroupTaskStatus = vi.fn(async () => ({ title: 'Fix login', state, ...(state === 'finished' ? { prUrl: 'https://github.com/makecindy/cindy/pull/42' } : {}) }));
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route === '/executions/claim') { const next = claimed ? null : { ...execution, requester_id: selfId, access_mode: 'owner' }; claimed = true; return { body: { execution: next } }; }
+      if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members: [
+        { id: botId, kind: 'bot', name: 'Bot', displayName: 'Bot', nickname: null, state: 'joined', ownerActorId: selfId, ownerName: 'Owner', role: 'member', guestAccess: 'chat', accessRevision: 1, avatar: null },
+        { id: selfId, kind: 'human', name: 'Owner', displayName: 'Owner', nickname: null, state: 'joined', ownerActorId: selfId, ownerName: 'Owner', role: 'owner', guestAccess: 'none', accessRevision: 1, avatar: null },
+      ], messages: [], cursor: '1' } };
+      if (route === `/conversations/${roomId}/messages` && method === 'POST') { posted.push(body); return { body: { id: '70000000-0000-4000-8000-000000000001', revision: 1 } }; }
+      if (method === 'PATCH' && route.includes('/messages/')) { edits.push({ route, body }); return { body: { revision: edits.length + 1 } }; }
+      return response(route);
+    });
+    await start();
+    reportGroupTaskCreated('lane', { taskId: 'task-1', deviceId: null, title: 'Fix login' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(posted).toEqual([expect.objectContaining({ mentions: [], content: [expect.objectContaining({ namespace: 'cindy.task', schemaRevision: 2,
+      data: { taskId: 'task-1', deviceId: null, title: 'Fix login', state: 'running', requesterName: 'Owner', botName: 'Bot (Owner)' } })] })]);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(edits).toHaveLength(0);
+    state = 'finished';
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(edits).toEqual([{ route: `/conversations/${roomId}/messages/70000000-0000-4000-8000-000000000001`, body: expect.objectContaining({ expectedRevision: 1,
+      content: [expect.objectContaining({ data: expect.objectContaining({ state: 'finished', prUrl: 'https://github.com/makecindy/cindy/pull/42' }) })] }) }]);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(edits).toHaveLength(1);
   });
 
   // #7583, unit: runtime close without an SDK terminal left the leased execution
