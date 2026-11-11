@@ -361,6 +361,8 @@ export function MainLayout() {
   isRightSidebarCollapsedRef.current = isRightSidebarCollapsed;
   const rsbDetachedRef = useRef(rsbDetached);
   rsbDetachedRef.current = rsbDetached;
+  // 跨任务的用户开栏手势：导航到目标任务后，那一次记忆恢复仍算用户触发。
+  const userRevealSessionRef = useRef<string | null>(null);
   const navigateToSessionRef = useRef<(sessionId: string) => void>(() => undefined);
   const declareRightSidebarSessionId = useCallback(
     (sessionId: string | null, opts: RightSidebarSessionDeclarationOptions = {}) => {
@@ -376,7 +378,7 @@ export function MainLayout() {
       const nextCollapsed = hasInitialCollapsed
         ? opts.initialCollapsed === true
         : readCollapsedFor(sessionId);
-      setRightTabsUserToggle(false);
+      setRightTabsUserToggle(userRevealSessionRef.current === sessionId);
       setIsRightSidebarCollapsed(nextCollapsed);
       setRightTabsRestored(true);
       if (hasInitialCollapsed && opts.writeInitialCollapsedRecord === true) {
@@ -1019,7 +1021,10 @@ export function MainLayout() {
   // 直接同步,切 session "瞬间生效"(用户体感:不应看着一栏慢慢展开/收起)。
   useLayoutEffect(() => {
     if (!rsbWindow.loaded || !rightSidebarSessionId || rsbDetached) return;
-    setRightTabsUserToggle(false);
+    // 跨任务用户开栏保留用户来源，其余切任务恢复都按导航处理；标记用完即清。
+    const reveal = userRevealSessionRef.current === rightSidebarSessionId;
+    if (reveal) userRevealSessionRef.current = null;
+    setRightTabsUserToggle(reveal);
     setIsRightSidebarCollapsed(readCollapsedFor(rightSidebarSessionId));
     setRightTabsRestored(true);
   }, [rightSidebarSessionId, rsbDetached, rsbWindow.loaded]);
@@ -1085,6 +1090,7 @@ export function MainLayout() {
         // agent / 插件自动化(userInitiated:false)只落档,不抢当前输入焦点。
         writeCollapsedFor(targetSessionId, targetCollapsed);
         if (visibility === 'open' && opts.userInitiated !== false) {
+          userRevealSessionRef.current = targetSessionId;
           navigateToSessionRef.current?.(targetSessionId);
         }
       }
