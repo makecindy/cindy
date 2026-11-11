@@ -338,6 +338,30 @@ describe('createProviderService', () => {
     expect(provider?.models['claude-code']).toEqual([discoveredModel]);
   });
 
+  // Unit regression: imported account members must pass through the same access
+  // overrides as raw members. Existing override tests had no catalog projection.
+  it('applies model disable overrides to projected account membership', async () => {
+    const openai = BUNDLED_CATALOG.providers.find(provider => provider.id === 'openai')!;
+    const model = { id: 'pool-model', name: 'Pool model', contextWindow: 200_000,
+      efforts: [], defaultEffort: null };
+    const catalog = { ...BUNDLED_CATALOG, providers: [{ ...openai, models: { codex: [] } }] };
+    let disabled = true;
+    const svc = createProviderService({
+      getCatalog: () => catalog,
+      projectCatalog: source => ({ ...source, providers: source.providers.map(provider => ({
+        ...provider, models: { codex: [model] },
+      })) }),
+      connection: { xd: () => false, anthropic: () => false, openai: () => true, xai: () => false },
+      getModelAccess: () => ({ disabledModels: disabled ? { 'openai:pool-model': true } : {} }),
+    });
+    expect(checkModelRoute(await svc.listProviders({ catalog }), 'codex', model.id, 'openai'))
+      .toEqual({ kind: 'reject', reason: 'explicit-source-disabled' });
+    disabled = false;
+    expect(checkModelRoute(await svc.listProviders({ getCatalog: () => catalog }), 'codex', model.id, 'openai'))
+      .toEqual({ kind: 'pass' });
+    expect(catalog.providers[0].models.codex).toEqual([]);
+  });
+
   it('supports async connection readers (codex oauth)', async () => {
     const svc = createProviderService({
       getCatalog: bundledCatalog,
