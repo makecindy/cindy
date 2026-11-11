@@ -36,6 +36,10 @@
     "exit": "Plan modundan çık"
   },
   "panel": {
+    "questionUnanswered": "Yanıtlanmadı",
+    "questionWithdrawn": "Artık yanıt gerekmiyor",
+    "withdrawnDraft": "Bu soru artık yanıt gerektirmiyor.\n{{reason}}\nTaslağınız korundu; ek bilgi olarak gönderebilirsiniz.",
+    "sendSupplement": "Ek bilgi gönder",
     "readOnlyKind": "Beklemede",
     "readOnlyTitle": "Bilgisayarınızda onay bekleniyor",
     "pendingRequests": "Bekleyen istekler",
@@ -43,7 +47,7 @@
     "queueSwitchGeneric": "Bekleyen isteği değiştir",
     "queuePositionCurrent": "geçerli",
     "queuePositionNext": "sonraki",
-    "queuePositionNth": "no. {{index}}",
+    "queuePositionNth": "{{index}}. sırada",
     "composerBlockedByPending": "Tekrar yazmadan önce bilgisayarınızdan gelen bekleyen isteği yanıtlayın.",
     "missingRequestId": "Bu uzak etkileşimin requestId değeri yok, bu nedenle karar geri gönderilemez.",
     "desktopConfirmUnsupported": "Bu onay yalnızca uzak bilgisayarda gerçekleştirilir. Devam etmek için masaüstü uygulamasına dönün.",

@@ -493,7 +493,7 @@
           "provenance": {
             "locator": "newChat.createAgent.quickStarts.explore",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json",
-            "hash": "8b15bad4b06d5b8ad926e2d028ed6e248e2774972d17813f45f1abd99080282d"
+            "hash": "sha256:2f1e95ad76d7a07e92b3e71242b2756bf87f4b91f38569e1ff1a5b7cd3a147a8"
           }
         }
       }
@@ -617,7 +617,7 @@
           "provenance": {
             "locator": "newChat.createAgent.quickStarts.build",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json",
-            "hash": "8b15bad4b06d5b8ad926e2d028ed6e248e2774972d17813f45f1abd99080282d"
+            "hash": "sha256:2f1e95ad76d7a07e92b3e71242b2756bf87f4b91f38569e1ff1a5b7cd3a147a8"
           }
         }
       }
@@ -741,7 +741,7 @@
           "provenance": {
             "locator": "newChat.createAgent.quickStarts.review",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json",
-            "hash": "8b15bad4b06d5b8ad926e2d028ed6e248e2774972d17813f45f1abd99080282d"
+            "hash": "sha256:2f1e95ad76d7a07e92b3e71242b2756bf87f4b91f38569e1ff1a5b7cd3a147a8"
           }
         }
       }
@@ -865,7 +865,7 @@
           "provenance": {
             "locator": "newChat.createAgent.quickStarts.fix",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json",
-            "hash": "8b15bad4b06d5b8ad926e2d028ed6e248e2774972d17813f45f1abd99080282d"
+            "hash": "sha256:2f1e95ad76d7a07e92b3e71242b2756bf87f4b91f38569e1ff1a5b7cd3a147a8"
           }
         }
       }
@@ -1188,9 +1188,9 @@
       "tr": {
         "value": "Hızlı Başlangıç",
         "provenance": {
-          "locator": "newChat.createAgent.quickStarts.title",
+          "locator": "newChat.createAgent.quickStart",
           "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json",
-          "hash": "8b15bad4b06d5b8ad926e2d028ed6e248e2774972d17813f45f1abd99080282d"
+          "hash": "sha256:2f1e95ad76d7a07e92b3e71242b2756bf87f4b91f38569e1ff1a5b7cd3a147a8"
         }
       }
     }

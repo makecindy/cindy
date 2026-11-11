@@ -706,6 +706,8 @@
     },
     "viewMr": "MR'yi Görüntüle",
     "viewPrMr": "PR'yi Görüntüle",
+    "mrCount": "{{count}} MR",
+    "prMrCount": "{{count}} PR",
     "mrCount_one": "{{count}} MR",
     "mrCount_other": "{{count}} MR",
     "prMrCount_one": "{{count}} PR",

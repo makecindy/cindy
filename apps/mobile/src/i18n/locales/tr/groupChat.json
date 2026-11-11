@@ -1,8 +1,13 @@
 {
   "progress": {
-    "stop": "Durdur"
+    "stop": "Durdur",
+    "stopMine": "Benim isteklerimi durdur",
+    "stopAll": "Tümünü durdur",
+    "stopAllHint": "Diğer kişilerin istekleri de dahildir",
+    "step": "Adım {{step}}/{{total}}"
   },
   "title": "Grup Sohbetleri",
+  "waitingForOwner": "Onay bekleniyor",
   "memberSeparator": ", ",
   "memberCount_one": "{{count}} üye",
   "memberCount_other": "{{count}} üye",
@@ -62,6 +67,7 @@
     "send": "Gönder"
   },
   "timeline": {
+    "endTalk": "Konuşmayı bitir",
     "newMessages_one": "{{count}} yeni mesaj",
     "newMessages_other": "{{count}} yeni mesaj",
     "emptyTitle": "Bu grupta henüz mesaj yok",
@@ -170,6 +176,8 @@
     }
   },
   "plan": {
+    "autoContinue": "Sonraki adımı otomatik başlat",
+    "autoContinueSaveFailed": "Adımlar arası geçiş ayarı kaydedilemedi. Tekrar deneyin.",
     "intro_one": "Bu {{count}} adım sürecek. İşte kimin yapacağı:",
     "intro_other": "Bu {{count}} adım sürecek. İşte kimin ne yapacağı:",
     "missing": "Bu plan artık kullanılamıyor",
@@ -219,12 +227,6 @@
     "stopping": "Durduruluyor…",
     "planning": "İş bölüştürülüyor…",
     "step": "Üzerinde çalışılıyor…"
-  },
-  "work": {
-    "queued": "Kuyrukta {{count}}",
-    "active": "Devam ediyor {{count}}",
-    "expand": "Yol arkadaşı etkinliğini genişlet",
-    "collapse": "Yol arkadaşı etkinliğini daralt"
   },
   "task": {
     "state": {
@@ -308,6 +310,8 @@
     "allowMentionAllBotsHint": "Bunu yalnızca grup sahibi değiştirebilir. Yol arkadaşları hep birlikte yanıt verebilir; büyük gruplarda dikkatli kullanın. Sizin adınıza AI yanıtları bağımsızdır."
   },
   "errors": {
+    "stopOwnershipUnknown": "İstekte bulunan kişi doğrulanamadığından bazı işler durdurulamadı.",
+    "nothingToStop": "Durdurulacak etkin bir iş yok.",
     "memberLimit": "Bir grup sohbeti 2–6 yol arkadaşına ihtiyaç duyar",
     "memberUnavailable": "Bu yol arkadaşlarından biri kullanılamıyor. Başka birini seçip tekrar deneyin.",
     "mentionUnavailable": "Bahsedilen bir üye artık kullanılamıyor. Yeniden göndermeden önce kimden bahsedeceğinizi seçin.",
@@ -563,7 +567,7 @@
     "accessChatTitle": "Yalnızca grup konuşması",
     "accessChatHint": "Yalnızca grup mesajlarından yanıtlar. Belleğinize veya özel bilgilerinize erişim yoktur ve araç yoktur.",
     "accessToolsTitle": "Araçlar ve bilgiler",
-    "accessToolsHint": "{{name}} yol arkadaşının mevcut araçlarını ve özel bilgilerinizi kullanabilir. Sonuçlar herkes tarafından görülebilir. Onaylar yine de geçerlidir; erişimi iptal ettikten sonra tamamlanan eylemler geri alınamaz.",
+    "accessToolsHint": "{{name}} yol arkadaşının mevcut araçlarını ve özel bilgilerinizi kullanabilir. Sonuçlar herkes tarafından görülebilir. Onaylar yine de geçerlidir; erişimi iptal etmek, daha önce tamamlanmış eylemleri geri almaz.",
     "capabilitiesRow": "{{name}} araçları ve erişimi",
     "capabilityScope": "Bunlar yalnızca bu grup için ayarlar değil, {{name}} yol arkadaşının kendi araçları ve erişimidir.",
     "accessMenu": "Buradaki izinler",

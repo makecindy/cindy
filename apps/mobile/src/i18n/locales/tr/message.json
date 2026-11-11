@@ -109,7 +109,7 @@
     "sessionFallbackPill": "Özetten devam edildi",
     "sessionResumedPill": "Orijinal görev sürdürüldü",
     "handoffContentDesc": "Devir — geçiş sırasında yeni motora gönderilen bağlam özeti (sohbet dökümünün bir parçası değildir; yalnızca burada gösterilir)",
-    "handoffContentDescEnglishSource": "Handoff — context summary sent to the new engine when switching (not part of the chat transcript; shown only here)",
+    "handoffContentDescEnglishSource": "Devir — geçiş sırasında yeni motora gönderilen bağlam özeti; aslı İngilizcedir (sohbet kaydına dahil değildir; yalnızca burada gösterilir)",
     "openDiagramDetail": "Diyagram ayrıntısını aç",
     "sessionChipFallback": "Bir görev",
     "messageChipFallback": "Alıntılanan mesaj",
@@ -275,7 +275,7 @@
       "labelTimeout": "Son tur yanıt vermedi; devam etmek için bağlam yeniden düzenlendi",
       "labelStrip": "Büyük resimler kaldırıldı, devam ediliyor",
       "handoffTitle": "Devir — bu diyaloğun bir sonraki bölümüne gönderilen bağlam özeti (sohbet dökümünün bir parçası değildir; yalnızca burada gösterilir)",
-      "handoffTitleEnglishSource": "Handoff — the context summary sent to the next stretch of this conversation (not part of the chat transcript; shown only here)"
+      "handoffTitleEnglishSource": "Devir — bu sohbetin devamına gönderilen bağlam özeti; aslı İngilizcedir (sohbet kaydına dahil değildir; yalnızca burada gösterilir)"
     },
     "compact": {
       "savedTokens": "{{tokens}} token tasarruf edildi",

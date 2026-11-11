@@ -130,17 +130,22 @@
     "unavailable": "Beta kanalı kullanılamıyor — beta güncelleme sunucusuna ulaşılamadı."
   },
   "notifications": {
+    "backgroundModes": {
+      "auto": "Otomatik",
+      "on": "Her zaman açık",
+      "off": "Kapalı"
+    },
     "sectionTitle": "Bildirimler",
     "taskDone": "Mesaj ve görev bildirimleri",
     "taskDoneHint": "Biten, başarısız olan veya yanıtınızı bekleyen sohbet mesajları ve görevler hakkında bildirim alın.",
     "permissionDenied": "Sistem ayarlarınızda Cindy bildirimlerine izin verin.",
     "unregisterQueued": "Kapatıldı. Tekrar çevrimiçi olduğunuzda kayıt silme işlemi tamamlanacaktır.",
     "preview": "Sohbet önizlemelerini göster",
-    "background": "Sohbet bağlantısını arka planda açık tut",
-    "backgroundActive": "Arka planda sohbet mesajları alınıyor",
+    "background": "Arka plan bildirimleri",
+    "backgroundActive": "Arka planda bildirimler alınıyor",
     "backgroundStop": "Almayı durdur",
-    "backgroundHint": "Arka plan bağlantısı Google olmadan çalışır ve devam eden bir bildirim gösterir. Bu bildirim üzerinden durdurabilirsiniz.",
-    "googleUnavailable": "Google push kullanılamıyor. Mesajları almak için arka plan sohbet bağlantısını etkinleştirin."
+    "backgroundHint": "Google anlık bildirimleri kullanılamayabilecek durumlarda Cindy arka plan bağlantısını otomatik olarak açık tutar. Bağlıyken sürekli bir bildirim gösterilir.",
+    "googleUnavailable": "Google anlık bildirimleri kullanılamıyor. Arka planda bildirim alımı, bildirim ayarlarınıza göre çalışır."
   },
   "about": {
     "sectionTitle": "Bu Telefon Hakkında",

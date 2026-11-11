@@ -287,7 +287,7 @@
   "screen": {
     "thinking": "Düşünüyor…",
     "tokenCount": "{{tokens}} tok",
-    "tokenCountFull": "{{tokens}} tokens",
+    "tokenCountFull": "{{tokens}} token",
     "tokenRate": "{{rate}} tok/s",
     "currentRate": "En son hız",
     "averageRate": "Tur ortalaması",
@@ -823,6 +823,9 @@
     "saveFailed": "Kaydedilemedi. Tekrar deneyin."
   },
   "providerGroupRebalance": {
+    "disable": "Otomatik geçiş yapma (bu görev)",
+    "disableFailed": "Tercihinizin kaydedilip kaydedilmediği doğrulanamadı. Bağlantıyı kontrol edin ve görevin çalıştığı bilgisayardaki Cindy'nin güncel olduğundan emin olup tekrar deneyin. Bu mesaj her zamanki gibi gönderilecek.",
+    "moreOptions": "Diğer seçenekler",
     "title": "{{label}} üzerinde devam edilsin mi?",
     "body": "Her hesabın kotasını eşit kullanmak için bu mesajı {{label}} ({{quota}}) üzerinden gönderin. Son birkaç mesaj ve bir özet aktarılır; daha eski ayrıntılar kaybolabilir.",
     "quota": "%{{left}} kaldı",

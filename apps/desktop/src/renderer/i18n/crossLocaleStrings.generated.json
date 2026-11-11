@@ -184,9 +184,9 @@
     "modelNames.manufacturers.zai": "Z.ai"
   },
   "tr": {
-    "cindyMake.history.mergeTaskTitle": "Resolve Integration Conflicts",
-    "cindyMake.history.revertTaskTitle": "Resolve Undo Integration Conflicts",
-    "cindyMake.merge.taskTitle": "Resolve Source Update Conflicts",
+    "cindyMake.history.mergeTaskTitle": "Bütünleştirme çakışmalarını çöz",
+    "cindyMake.history.revertTaskTitle": "Bütünleştirmeyi geri alma çakışmalarını çöz",
+    "cindyMake.merge.taskTitle": "Kaynak kod güncelleme çakışmalarını çöz",
     "modelNames.families.doubao": "Doubao",
     "modelNames.families.hunyuan": "Hunyuan",
     "modelNames.families.qwen": "Qwen",
