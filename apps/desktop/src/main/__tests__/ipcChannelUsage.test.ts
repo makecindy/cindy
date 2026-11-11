@@ -5,7 +5,7 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { createIpcChannelUsage, tapIpcChannelUsage } from '../ipcChannelUsage';
+import { createIpcChannelUsage, registeredIpcChannels, tapIpcChannelUsage } from '../ipcChannelUsage';
 
 const roots: string[] = [];
 afterEach(() => {
@@ -52,6 +52,16 @@ describe('IPC channel usage', () => {
     expect(report.mode).toBe('embedded');
     expect(report.channels).toEqual({ x: { kind: 'invoke', count: 1, handled: 1, missing: 0, unsupported: 0 } });
     expect(fs.readdirSync(path.dirname(file))).toEqual(['usage.json']);
+  });
+
+  it('includes the registered handler snapshot when asked', () => {
+    const ipcMain = new FakeIpcMain();
+    ipcMain.handle('b:invoke', () => 1);
+    ipcMain.handle('a:invoke', () => 2);
+    ipcMain.on('z:event', () => {});
+    const usage = createIpcChannelUsage({ mode: 'client', registered: () => registeredIpcChannels(ipcMain) });
+    expect(usage.report().registered).toEqual({ invoke: ['a:invoke', 'b:invoke'], event: ['z:event'] });
+    expect(createIpcChannelUsage({ mode: 'client' }).report()).not.toHaveProperty('registered');
   });
 
   it('taps invokes and events without counting registrations or changing results', () => {

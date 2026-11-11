@@ -28,6 +28,13 @@ export interface IpcChannelUsageReport {
   startedAt: string;
   updatedAt: string;
   channels: Record<string, IpcChannelUsageEntry>;
+  /** Channels with a main-process handler when the report was written. */
+  registered?: IpcRegisteredChannels;
+}
+
+export interface IpcRegisteredChannels {
+  invoke: string[];
+  event: string[];
 }
 
 export interface IpcChannelUsage {
@@ -45,6 +52,18 @@ export interface IpcChannelUsageOptions {
   readonly log?: (line: string) => void;
   readonly now?: () => Date;
   readonly flushDelayMs?: number;
+  /** Snapshot of registered handlers to include in the report (see `registeredIpcChannels`). */
+  readonly registered?: () => IpcRegisteredChannels;
+}
+
+/** Invoke handlers and event listeners currently registered on an Electron-shaped ipcMain. */
+export function registeredIpcChannels(ipcMain: unknown): IpcRegisteredChannels {
+  const target = ipcMain as TappableIpcMain & { eventNames?: () => Array<string | symbol> };
+  const invoke = target._invokeHandlers instanceof Map ? [...target._invokeHandlers.keys()] : [];
+  const event = typeof target.eventNames === 'function'
+    ? target.eventNames().filter((name): name is string => typeof name === 'string')
+    : [];
+  return { invoke: invoke.sort(), event: event.sort() };
 }
 
 export function createIpcChannelUsage(options: IpcChannelUsageOptions): IpcChannelUsage {
@@ -60,6 +79,7 @@ export function createIpcChannelUsage(options: IpcChannelUsageOptions): IpcChann
     startedAt,
     updatedAt,
     channels: Object.fromEntries([...channels].map(([channel, entry]) => [channel, { ...entry }])),
+    ...(options.registered ? { registered: options.registered() } : {}),
   });
 
   const flush = () => {

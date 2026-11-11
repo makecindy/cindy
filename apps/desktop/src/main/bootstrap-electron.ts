@@ -488,7 +488,7 @@ import {
   startHostEventBridge,
   type HostDelegationConfig,
 } from './host-delegation';
-import { createIpcChannelUsage, tapIpcChannelUsage } from './ipcChannelUsage';
+import { createIpcChannelUsage, registeredIpcChannels, tapIpcChannelUsage } from './ipcChannelUsage';
 import { hasRecentWorkdir, listRecentWorkdirs } from './localDb/ipc/recentWorkdirs';
 import { getActiveCatalog } from './maker-host/active-catalog';
 import { resolveSessionContextWindow } from '../shared/sessionContextWindow';
@@ -1333,6 +1333,7 @@ function installHostClientMode(): boolean {
   const channelUsage = createIpcChannelUsage({
     mode: 'client',
     file: ipcUsageReportFile,
+    registered: ipcUsageReportFile ? () => registeredIpcChannels(ipcMain) : undefined,
     log: (line) => console.log(`[bootstrap-electron] client mode ${line}`),
   });
   installUnsupportedMakerFallbacks({ ipcMain, usage: channelUsage });
@@ -1444,6 +1445,7 @@ else if (ipcUsageReportFile) {
   const channelUsage = createIpcChannelUsage({
     mode: 'embedded',
     file: ipcUsageReportFile,
+    registered: () => registeredIpcChannels(ipcMain),
     log: (line) => console.log(`[bootstrap-electron] ${line}`),
   });
   tapIpcChannelUsage(ipcMain, channelUsage);

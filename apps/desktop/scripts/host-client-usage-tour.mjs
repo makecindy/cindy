@@ -50,10 +50,11 @@ const PAGES = ['/cc-agent/new', '/cc-agent/new-dialogue', '/cc-agent/scheduled',
 const browser = await chromium.connectOverCDP(cdp);
 try {
   await assertIsolatedInstance(browser);
+  // Secondary windows (sidebar tabs, resource usage) carry a query flag; the main window does not.
   const pages = browser.contexts().flatMap((context) => context.pages());
-  const page = pages.find((p) => /#\/(cc-agent|settings|boot)/.test(p.url()) && !/sidebar-window/.test(p.url()))
-    ?? pages.find((p) => !/devtools|sidebar-window/.test(p.url()));
-  assert.ok(page, 'no renderer window on the CDP endpoint');
+  const page = pages.find((p) => /^https?:\/\/[^?#]+\/?#/.test(p.url()) || /^file:.*index\.html#/.test(p.url()));
+  assert.ok(page, `no main renderer window on the CDP endpoint (${pages.map((p) => p.url()).join(', ')})`);
+  await page.waitForFunction(() => Boolean(/** @type {any} */ (window).electronAPI?.localDb?.sessions), null, { timeout: 60_000 });
 
   const visit = async (hash) => {
     await page.evaluate((target) => { location.hash = target; }, hash);

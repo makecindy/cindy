@@ -96,6 +96,10 @@ Orca 协同、记忆与文件工具等仍由 Desktop 内 Runtime 提供，不会
 `has()`，所以 `maker:*` 实际上也只回 `No handler registered`；现已一并应答 `has()`，
 并且不影响桌面之后注册的 `maker:*` 通道。
 
+注意：本该留在窗口的通道（清单里的 B 类）有 14 个在客户端模式下也被拒，主要是电脑控制与
+浏览器状态，因为它们注册在客户端模式跳过的 `registerMakerIpcsAfterSplash` 里；清单的
+「被误拒的 B 类」列出全部，尚未修改。
+
 在把这些通道全部改为 Host API 之前，「Electron 不参与 Runtime」不视为达成。
 
 ## 验证

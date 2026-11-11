@@ -1142,22 +1142,39 @@ CI 的三类测试位置问题同时修正：模型对账/手机说明 guard 指
   `node scripts/host-channel-coverage.mjs` 生成。用 TypeScript 类型检查器解析桌面主进程
   每个 `ipcMain.handle/on` 及包装函数的通道名（字面量、常量对象、模板字符串、
   `as const` 循环、`Object.entries` 处理器表、透传参数的包装函数），0 处未解析。
-  主进程共 **1454** 个通道：已在合同里 61、客户端模式自有 2、只属于窗口 362、
-  **应由 Host 提供但还没接 1029**。“只属于窗口”的判定规则写在脚本的 `WINDOW_RULES`
-  里（窗口外壳与多窗口、原生对话框/剪贴板/系统外壳与通知、本机截屏录屏与远程桌面、
-  由窗口执行的图形能力、本机输入设备与语音、桌面安装包自身的更新与诊断），规则是可审的
-  判断，不是事实；改规则就重新生成。
+  主进程共 **1454** 个通道：已在合同里 61、客户端模式自有 2，其余按归属分三类：
+  **A 必须由后台处理 941**、**B 永久留在窗口 363**、**C 待定 87**。
+- **归属规则**（清单里有完整规则表，正本是脚本的 `OWNERSHIP_RULES`）：按通道名或注册模块
+  先中先得。B 规则：窗口外壳与多窗口、原生对话框／剪贴板／系统外壳与通知、本机截屏录屏与
+  远程桌面、由窗口执行的图形能力（电脑控制、浏览器）、本机输入设备与语音、安装包自身的更新
+  与诊断。C 规则：终端 PTY、本机文件读取、弹出系统选择框后写后台数据、在访达或系统浏览器
+  里打开后台内容、安全输入交接。A 规则只标领域（任务与消息、自动化、Orca、伙伴与 IM、
+  账号与凭据、供应商、插件、设备互联、git、记忆、附件、设置、Cindy Make）。再加一条
+  **依赖判定**：处理函数及其调用的两层桌面源码函数若用到窗口 API（对话框、系统外壳、
+  剪贴板、`BrowserWindow.fromWebContents` 等），A 领域改判 C；未登记前缀的通道用到窗口
+  API 判 C，否则判 A。发送方校验（`src/main/security/`）与发给某个窗口的推送不算窗口 API。
+  A 类 829 条按规则、112 条按默认；C 类 68 条按规则、19 条按依赖。规则是可审的判断，
+  改规则就重新生成。
 - **真实使用排行**：`--mock` 界面夹具（隔离沙箱 `host-usage`，免登录本地数据）里用
-  `apps/desktop/scripts/host-client-usage-tour.mjs` 走一遍 24 个夹具任务、20 个设置页、
+  `apps/desktop/scripts/host-client-usage-tour.mjs` 走一遍 25 个夹具任务、20 个设置页、
   10 个主页面并新建任务发送一次，主进程按 `CINDY_IPC_USAGE_FILE` 计数（仅源码运行）。
   报告存为 [`evidence/channel-usage-mock-tour.json`](evidence/channel-usage-mock-tour.json)，
-  清单脚本默认读它排序。这一轮共调用 **253** 个通道（1604 次）：合同 30、客户端 1、
-  窗口 72、**Host 还没接的 150 个（730 次）**。按模块：maker-ipc 302 次，插件 65、
-  bootstrap 63、设备互联 59、git 上下文 48、IM 绑定 31、侧栏设置 29、localDb 23。
+  清单脚本默认读它排序。这一轮共调用 **253** 个通道（1862 次）：合同 30、客户端 1、
+  **A 144（782 次）**、B 73、C 5。A 类调用按领域：任务与消息 180 次、伙伴与 IM 128、
+  插件 104、供应商 81、git 75、设备互联 66、设置 59。
 
-**离“桌面窗口作为客户端能日常使用”的距离**：按夹具巡检至少还差 150 个通道；这是下限，
-巡检没有覆盖真实模型回合、附件、新建自动化、Orca、伙伴与 IM、远程执行，这些路径的通道
-只会再增加。全量上限是 1029 个。
+**离“桌面窗口作为客户端能日常使用”的距离**（口径为 A 类）：按夹具巡检至少还差 **144** 个
+A 类通道；这是下限，巡检没有覆盖真实模型回合、附件、新建自动化、Orca、伙伴与 IM、远程
+执行。A 类全量 941 个。C 类 87 个需要逐项定归属后再计入。
+
+**B 类在客户端模式下的实际行为**（对照两份主进程处理者快照：客户端模式登录页
+[`evidence/channel-usage-client-login.json`](evidence/channel-usage-client-login.json) 与普通模式
+巡检后）：347 个窗口本地照常处理；**14 个被误拒**——电脑控制与浏览器状态的 11 个 invoke 返回
+`UNSUPPORTED_CAPABILITY`、1 个拖拽事件无人监听（都注册在客户端模式跳过的
+`registerMakerIpcsAfterSplash` 里），`update-relaunch:blocking-activity/summary` 两个返回
+`No handler registered`；另 2 个插件页面通道注册在 `webContents.ipc` 上，快照不覆盖。
+误拒清单见清单的「被误拒的 B 类」，本批只记录、不改；电脑控制与浏览器交回窗口执行属于
+“个人版”平台 RPC 的范围。
 
 **为什么排行用普通模式而不是客户端模式**：Host 只有云端账号一种登录态，没有桌面的
 免账号本地模式；隔离 profile 里没有真实账号，窗口以客户端模式启动后停在登录页，而真实
@@ -1176,10 +1193,15 @@ CI 的三类测试位置问题同时修正：模型对账/手机说明 guard 指
 非 `maker:*` 的未接通道仍保持 Electron 原错误，只计数。
 
 **巡检顺带发现**（普通模式也存在，未在本批修改）：`maker:sync-worker-creation-prefs`
-（6 次里 3 次）与 `maker:sync-provider-model-memory`（1 次）在主进程注册监听之前就由渲染层
-发出，这几次同步被丢弃；`host-client:observe` 只在客户端模式有监听，普通模式发出属预期。
+（两轮巡检均为一半左右，最近一轮 5 次里 3 次）与 `maker:sync-provider-model-memory`（1 次）
+在主进程注册监听之前就由渲染层发出，这几次同步被丢弃；`host-client:observe` 只在客户端
+模式有监听，普通模式发出属预期。
 
 重新测量：`CINDY_IPC_USAGE_FILE=<文件> XDT_CDP_PORT=9333 pnpm restart:desktop:remote --
 --mock --isolated=host-usage`，再跑巡检脚本（`--cdp=… --profile=<沙箱目录>`，只接受开发
-实例登记为隔离沙箱的进程），把报告覆盖到 `evidence/channel-usage-mock-tour.json` 后重新
+实例登记为隔离沙箱的进程），把报告覆盖到 `evidence/channel-usage-mock-tour.json`。客户端
+模式快照：在新的空沙箱目录上用 `CINDY_HOST_DATA_DIR=<沙箱> CINDY_HOST_PORT=0` 启动 Host，
+再用 `CINDY_HOST_API=<Host 地址> CINDY_IPC_USAGE_FILE=<文件> pnpm restart:desktop:remote --
+--isolated=<同名沙箱>` 启动窗口，停在登录页后取报告覆盖到
+`evidence/channel-usage-client-login.json`。两份报告都带写入时的主进程处理者快照，最后重新
 生成清单。restart 脚本为此转发 `CINDY_IPC_USAGE_FILE` 与 `CINDY_HOST_API` 两个变量。
