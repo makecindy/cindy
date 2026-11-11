@@ -52,12 +52,15 @@ describe('withholdAccountMemoryIndexInSharedConversation', () => {
     await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }).catch(() => {});
   });
 
+  const noteStart = vi.fn();
   const run = async (opts: SharedConversationMemoryOpts, shared: boolean, source = manager) => {
     const warn = vi.fn();
+    noteStart.mockClear();
     await withholdAccountMemoryIndexInSharedConversation('task-1', opts, {
       isSharedSession: () => shared,
       manager: source,
       warn,
+      noteStart,
     });
     return warn;
   };
@@ -69,12 +72,15 @@ describe('withholdAccountMemoryIndexInSharedConversation', () => {
     expect(opts.makerMemoryIndexSnapshot).toContain('[project_arch.md]');
     expect(opts.makerMemoryIndexSnapshot).not.toContain('home-address');
     expect(opts.makerMemoryIndexSnapshot).toContain('memory_list');
+    expect(noteStart).toHaveBeenCalledWith('task-1', false);
   });
 
   it('leaves the owner\'s own tasks to load the full index as before', async () => {
     const opts: SharedConversationMemoryOpts = { workingDir };
     await run(opts, false);
     expect(opts.makerMemoryIndexSnapshot).toBeUndefined();
+    // 渠道据此知道: 这个任务以后要是被接管到群里, 得先重启。
+    expect(noteStart).toHaveBeenCalledWith('task-1', true);
   });
 
   it('does not touch a teammate task, which carries its own memory', async () => {
@@ -85,6 +91,7 @@ describe('withholdAccountMemoryIndexInSharedConversation', () => {
     const botScope: SharedConversationMemoryOpts = { workingDir, makerMemoryScopeKey: 'bot:helper' };
     await run(botScope, true);
     expect(botScope.makerMemoryIndexSnapshot).toBeUndefined();
+    expect(noteStart).toHaveBeenCalledWith('task-1', false);
   });
 
   it('starts with an empty index, not the full one, when the index cannot be read', async () => {

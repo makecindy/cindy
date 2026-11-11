@@ -26,12 +26,28 @@ export async function withholdAccountMemoryIndexInSharedConversation(
     isSharedSession(sessionId: string): boolean;
     manager: Pick<MakerMemoryManager, 'getPromptIndex'>;
     warn(message: string, fields?: Record<string, unknown>): void;
+    /**
+     * 每次启动都登记「这次的提示词里有没有账号级索引」。对话在任务启动之后才变成别人也能
+     * 说话的 (把运行中的任务接管到群里), 渠道据此在派发下一轮之前先重启任务。
+     */
+    noteStart?(sessionId: string, includesAccountIndex: boolean): void;
   },
 ): Promise<void> {
   // 已经给了快照的 (伙伴用自己的记忆) 不动; 伙伴的记忆不是账号级记忆。
-  if (opts.makerMemoryIndexSnapshot !== undefined) return;
-  if (opts.makerMemoryScopeKey?.startsWith('bot:')) return;
-  if (!opts.workingDir || !deps.isSharedSession(sessionId)) return;
+  if (
+    opts.makerMemoryIndexSnapshot !== undefined
+    || opts.makerMemoryScopeKey?.startsWith('bot:')
+    || !opts.workingDir
+  ) {
+    deps.noteStart?.(sessionId, false);
+    return;
+  }
+  if (!deps.isSharedSession(sessionId)) {
+    // 引擎稍后自己读完整的索引。
+    deps.noteStart?.(sessionId, true);
+    return;
+  }
+  deps.noteStart?.(sessionId, false);
   try {
     const scopeKey = opts.makerMemoryScopeKey
       ?? await resolveMemoryScopeKey(opts.workingDir, opts.remoteHostId ?? undefined);

@@ -26,7 +26,9 @@ const {
   forgetNotedChannelSessionsForTest,
   isSharedChannelSession,
   isSharedChannelTurn,
+  noteSessionStartAccountIndex,
   noteSharedChannelSession,
+  sharedSessionCarriesAccountIndex,
 } = await import('../channelSessionLanes');
 
 describe('channel shared sessions', () => {
@@ -84,6 +86,19 @@ describe('channel shared sessions', () => {
 
     expect(isSharedChannelSession('group-task')).toBe(true);
     expect(readFileSync(file, 'utf8')).toBe('{ not json');
+  });
+
+  it('flags a running task that carries the account index once its conversation becomes shared', () => {
+    // 把运行中的桌面任务接管到群里: 任务启动时带了索引, 之后对话才登记为别人也能说话。
+    noteSessionStartAccountIndex('desktop-task', true);
+    expect(sharedSessionCarriesAccountIndex('desktop-task')).toBe(false);
+
+    noteSharedChannelSession('desktop-task');
+    expect(sharedSessionCarriesAccountIndex('desktop-task')).toBe(true);
+
+    // 重启之后启动钩子登记「这次没带索引」: 不再需要重启。
+    noteSessionStartAccountIndex('desktop-task', false);
+    expect(sharedSessionCarriesAccountIndex('desktop-task')).toBe(false);
   });
 
   it('withholds while the account folder is not available yet', () => {

@@ -31,6 +31,7 @@ import { createDingTalkTurnPermissionPolicy } from '../../dingtalk/permissionPol
 import { createFeishuGroupTurnPermissionPolicy } from '../../feishu/permissionPolicy';
 import { createWechatTurnPermissionPolicy } from '../../wechat/permissionPolicy';
 import { withGuestMemoryConfirmation } from '../channelToolPolicy';
+import { forgetNotedChannelSessionsForTest, noteSessionStartAccountIndex } from '../channelSessionLanes';
 import { enqueueAskCardPatch } from '../askCardPatchQueue';
 import { createSerializedConnectionLifecycle } from '../../connectionLifecycle';
 
@@ -1950,6 +1951,75 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       expect.objectContaining({ title: expect.any(String) }),
       { deliverToOwnerDm: true },
     );
+  });
+
+  // 评审 (Codex P1): 对话在任务启动之后才变成别人也能说话的 (把运行中的桌面任务接管到群里)。
+  // 已经写进提示词的账号级记忆索引逐轮确认管不到, 所以派发前先重启任务 (cindy-memory.md §7)。
+  it.each([
+    { label: 'a task that started with the account memory index', startedWithIndex: true, restarted: true },
+    { label: 'a task that started without it', startedWithIndex: false, restarted: false },
+  ])('restarts $label before a shared-conversation turn is sent', async ({ startedWithIndex, restarted }) => {
+    const order: string[] = [];
+    const oldSession = createSessionHarness(async () => {
+      order.push('send-old');
+      return { accepted: true };
+    });
+    const rebuilt = createSessionHarness(async () => {
+      order.push('send-rebuilt');
+      return { accepted: true };
+    });
+    let live: Session | undefined = oldSession.session;
+    const maker = {
+      createSession: vi.fn(async () => {
+        if (live) return live;
+        order.push('recreate');
+        live = rebuilt.session;
+        return rebuilt.session;
+      }),
+      recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
+      closeSessionIfCurrent: vi.fn(async (session: Session, reason: string) => {
+        order.push(`close:${reason}`);
+        live = undefined;
+        emitMakerEvent({ type: 'session:closed', sessionId: 'feishu-session', session, reason: 'runtime-refresh' });
+        return 'closed' as const;
+      }),
+      getSession: vi.fn(() => live),
+      on: vi.fn((listener: (event: MakerEvent) => void) => {
+        makerEventListeners.push(listener);
+        return () => {
+          makerEventListeners = makerEventListeners.filter((candidate) => candidate !== listener);
+        };
+      }),
+    };
+    mocks.getMaker.mockReturnValue(maker);
+    forgetNotedChannelSessionsForTest();
+    // 任务启动钩子在启动时登记的事实: 这个任务的提示词里有没有账号级索引。
+    noteSessionStartAccountIndex('feishu-session', startedWithIndex);
+    const localRunner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, {
+      acquirePendingAgentSwitch: vi.fn(async () => vi.fn()),
+    });
+
+    try {
+      await localRunner.runAgentTurn({
+        botContextId: 'cli_test_bot',
+        userId: 'ou_user',
+        userMessageId: `msg-shared-${startedWithIndex}`,
+        text: 'what do you know about the owner?',
+        attachments: [],
+        channelNoteSource: { chatKind: 'group' },
+      });
+
+      if (restarted) {
+        expect(maker.closeSessionIfCurrent).toHaveBeenCalledWith(oldSession.session, 'runtime-refresh');
+        expect(order).toEqual(['close:runtime-refresh', 'recreate', 'send-rebuilt']);
+      } else {
+        expect(maker.closeSessionIfCurrent).not.toHaveBeenCalled();
+        expect(order).toEqual(['send-old']);
+      }
+    } finally {
+      localRunner.disposeAllSessions();
+      forgetNotedChannelSessionsForTest();
+    }
   });
 
   it('does not suppress a requested close during no-op switch acquisition', async () => {

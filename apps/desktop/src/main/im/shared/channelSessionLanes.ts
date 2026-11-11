@@ -110,7 +110,30 @@ export function noteSharedChannelSession(sessionId: string): void {
   }
 }
 
+/**
+ * 本进程里, 哪些任务这一次启动时提示词里带了账号级索引。任务启动钩子在每次启动时登记
+ * (见 maker-host/shared-conversation-memory.ts)。只记在内存里: 进程退出后任务也不在运行了。
+ */
+const startedWithAccountIndex = new Set<string>();
+
+/** 任务启动钩子调用: 这次启动的提示词里有没有账号级索引。 */
+export function noteSessionStartAccountIndex(sessionId: string, included: boolean): void {
+  if (!sessionId) return;
+  if (included) startedWithAccountIndex.add(sessionId);
+  else startedWithAccountIndex.delete(sessionId);
+}
+
+/**
+ * 对话已登记为「别人也能说话」, 但正在运行的这个任务是带着账号级索引启动的 ——
+ * 登记发生在它启动之后 (把正在运行的桌面任务接管到群里; 升级前就在运行的群聊任务)。
+ * 这种任务要先重新启动、去掉索引, 才能继续接这段对话里的轮次。
+ */
+export function sharedSessionCarriesAccountIndex(sessionId: string): boolean {
+  return startedWithAccountIndex.has(sessionId) && isSharedChannelSession(sessionId);
+}
+
 /** 仅测试用: 模拟应用重启 (内存清空, 文件还在)。 */
 export function forgetNotedChannelSessionsForTest(): void {
   notedThisProcess.clear();
+  startedWithAccountIndex.clear();
 }
