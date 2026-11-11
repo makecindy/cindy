@@ -1045,7 +1045,7 @@ import {
   materializeDirectSendOssAttachments,
   materializeQueuedOssAttachmentsDeferred,
   collectQueuedAttachmentRefs,
-} from './normalizeAttachments.js';
+} from './normalizeAttachments.desktop.js';
 import { QueuedAttachmentOwnershipRegistry } from './queuedAttachmentOwnership.js';
 import { prepareRemoteReviewAttachments } from './reviewRemoteInput.js';
 import { AGENT_ISLAND_DISPLAY_CONFIG } from '../agent-island/displayConfig.js';

@@ -39,7 +39,7 @@ import {
   normalizeUserMessage,
   tempAttachmentRootPath,
   writeTempFile,
-} from '../normalizeAttachments.js';
+} from '../normalizeAttachments.desktop.js';
 import * as imageCacheStore from '../../imageCacheStore.desktop.js';
 import * as cindyMediaBlobStore from '../../cindy-media/blobStore.desktop.js';
 import { ingestMedia } from '../../cindy-media/ingest.js';

@@ -84,7 +84,7 @@ import {
   normalizeUserMessage,
   materializeQueuedOssAttachmentsDeferred,
   collectQueuedAttachmentRefs,
-} from '../maker-ipc/normalizeAttachments';
+} from '../maker-ipc/normalizeAttachments.desktop';
 import { QueuedAttachmentOwnershipRegistry } from '../maker-ipc/queuedAttachmentOwnership';
 import { buildAttachmentOssRef } from '../../shared/attachmentOssRef';
 import { buildPeerAttachmentRef } from '@cindy/device-link';
