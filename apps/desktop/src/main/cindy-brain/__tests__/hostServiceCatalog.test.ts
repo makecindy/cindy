@@ -17,11 +17,33 @@ function provider(name: string, tools: Array<{ name: string; category: string }>
 }
 
 describe('Host service discovery', () => {
+  // Unit, performance regression: registering providers at startup built MCP
+  // runtimes even without a discovery consumer. One unused provider suffices;
+  // the existing cases started by discovering services and missed this path.
+  it('does not construct or probe unused providers and caches metadata until replacement', () => {
+    const enabled = vi.fn(() => true);
+    const browser = provider('cindy_browser', [{ name: 'browser', category: 'browser' }], enabled);
+    const create = vi.spyOn(browser.value, 'toHostTools');
+    const catalog = new HostServiceCatalog();
+    expect(catalog.replace([browser.value])).toBe(false);
+    expect(catalog.replace([browser.value])).toBe(false);
+    expect(create).not.toHaveBeenCalled();
+    expect(enabled).not.toHaveBeenCalled();
+    expect(browser.close).not.toHaveBeenCalled();
+    expect(catalog.available('browser', context)).toBe(true);
+    expect(catalog.list(context).find(service => service.group === 'browser')?.tools).toEqual(['browser']);
+    expect(create).toHaveBeenCalledOnce();
+    expect(browser.close).toHaveBeenCalledOnce();
+    catalog.replace([]);
+    expect(catalog.available('browser', context)).toBe(false);
+  });
   it('invalidates setup only when supplied services or live default enablement change', () => {
     let enabled = true;
     const browser = provider('cindy_browser', [{ name: 'browser', category: 'browser' }], () => enabled);
     const catalog = new HostServiceCatalog();
-    expect(catalog.replace([browser.value])).toBe(true);
+    expect(catalog.replace([browser.value])).toBe(false);
+    // Once discovery has a consumer, retain change notifications and live defaults.
+    catalog.list(context);
     expect(catalog.replace([{ ...browser.value }])).toBe(false);
     enabled = false;
     expect(catalog.replace([browser.value])).toBe(true);

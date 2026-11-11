@@ -14,20 +14,33 @@ const SERVERS: Record<GhostHostToolGroup, string> = {
 export class HostServiceCatalog {
   private providers: readonly LiziMcpProvider[] = [];
   private supplied = new Map<string, string[]>();
-  private snapshot = '';
+  private snapshot?: string;
+  private dirty = true;
+  private readonly context: LiziMcpSessionContext = { agentKind: 'claude-code', workingDir: '', getSessionContext: () => this.context };
 
   replace(providers: readonly LiziMcpProvider[]): boolean {
     this.providers = providers;
+    this.dirty = true;
+    // No consumer: registration only records references. In particular do not
+    // construct/close MCP runtimes or probe enablement on the startup path.
+    if (this.snapshot === undefined) return false;
+    this.materialize();
+    const snapshot = JSON.stringify(this.project(this.context));
+    const changed = snapshot !== this.snapshot;
+    this.snapshot = snapshot;
+    return changed;
+  }
+
+  private materialize(): void {
+    if (!this.dirty) return;
     this.supplied = new Map();
     // A detached, explicit context prevents inspection from inheriting an Agent
     // task or closing a plugin's native computer connection.
-    const context: LiziMcpSessionContext = { agentKind: 'claude-code', workingDir: '' };
-    context.getSessionContext = () => context;
-    for (const provider of providers) {
+    for (const provider of this.providers) {
       if (!provider.toHostTools || !Object.values(SERVERS).includes(provider.name)) continue;
       let runtime: HostToolRuntime | undefined;
       try {
-        runtime = provider.toHostTools(context);
+        runtime = provider.toHostTools(this.context);
         const tools = runtime.list?.() ?? [];
         for (const group of GHOST_HOST_TOOL_GROUPS) {
           if (SERVERS[group] !== provider.name) continue;
@@ -37,13 +50,16 @@ export class HostServiceCatalog {
         }
       } finally { void runtime?.close().catch(() => {}); }
     }
-    const snapshot = JSON.stringify(this.list(context));
-    const changed = snapshot !== this.snapshot;
-    this.snapshot = snapshot;
-    return changed;
+    this.dirty = false;
   }
 
   list(context: LiziMcpSessionContext) {
+    this.materialize();
+    this.snapshot ??= JSON.stringify(this.project(this.context));
+    return this.project(context);
+  }
+
+  private project(context: LiziMcpSessionContext) {
     return GHOST_HOST_TOOL_GROUPS.map(group => {
       const server = SERVERS[group], provider = this.providers.find(item => item.name === server);
       const tools = this.supplied.get(group) ?? [];
