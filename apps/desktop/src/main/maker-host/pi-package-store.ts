@@ -314,6 +314,14 @@ function observePiPackageChangeToken(): Promise<void> {
     });
   }).finally(() => {
     if (changeTokenReadInFlight === pending) changeTokenReadInFlight = undefined;
+    if (!changeTokenDirectoryWatcher) {
+      // A replaced package home can be recreated after its watcher already
+      // failed to reattach, and this read may have seen the new directory.
+      // Attach now instead of waiting for the poll, then read once more for
+      // an edge that landed between this read and the attach.
+      watchPiPackageChangeTokenDirectory();
+      if (changeTokenDirectoryWatcher) changeTokenReadQueued = true;
+    }
     if (changeTokenReadQueued) {
       changeTokenReadQueued = false;
       void observePiPackageChangeToken();
@@ -362,7 +370,8 @@ function watchPiPackageChangeTokenDirectory(): void {
         // The watched directory itself was removed or moved. Linux reports this
         // as a rename of the directory and never raises `error`, and the handle
         // stays bound to the old directory. Drop it and watch a recreated
-        // directory right away; if none exists yet, the poll reattaches later.
+        // directory right away; if none exists yet, the next token read or
+        // the poll reattaches later.
         if (changeTokenDirectoryWatcher === watcher) {
           closePiPackageChangeTokenDirectoryWatcher();
           watchPiPackageChangeTokenDirectory();
