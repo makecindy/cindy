@@ -50,8 +50,14 @@ function assertNoLinksOut(dir, { allowInternal }) {
   for (const rel of fs.readdirSync(root, { recursive: true })) {
     const full = path.join(root, rel);
     if (!fs.lstatSync(full).isSymbolicLink()) continue;
-    const target = path.resolve(path.dirname(full), fs.readlinkSync(full));
-    // 抛错而不是 process.exit:解包后调用时要让 finally 清掉临时目录。
+    // 按文件系统实际语义解析整条链接链(path.resolve 只折叠字面上的 ..,不跟随途中的链接);
+    // 悬空或无法解析的链接一律拒绝。抛错而不是 process.exit:解包后调用时要让 finally 清掉临时目录。
+    let target;
+    try {
+      target = fs.realpathSync(full);
+    } catch {
+      throw new Error(`${full} 是无法解析的链接(${fs.readlinkSync(full)}),拒绝签名`);
+    }
     if (!allowInternal || !target.startsWith(root + path.sep)) throw new Error(`${full} 是指向 ${target} 的链接,拒绝签名`);
   }
 }
