@@ -17,7 +17,7 @@ export function botGroupMentionMember(label: string, members: readonly BotGroupM
   // The sender's locale can differ from the reader's; cover every shipped broadcast label.
   const broadcast = [allLabel, '所有人', '全員', '모두', 'all', 'everyone'].some((label) => label.toLowerCase() === name.toLowerCase());
   if ((mentions.all || fallback) && broadcast) return undefined;
-  const botBroadcast = ['所有伙伴', '所有夥伴', 'すべての仲間', '모든 동료', 'all teammates', 'bots'].some(label => label.toLowerCase() === name.toLowerCase());
+  const botBroadcast = ['所有伙伴', '所有夥伴', 'すべての仲間', '모든 동료', '모든 동반자', 'all teammates', 'all buddies', 'bots'].some(label => label.toLowerCase() === name.toLowerCase());
   if ((mentions.allBots || fallback) && botBroadcast) return undefined;
   const mentioned = new Set(mentions.botIds);
   const matches = members.filter((member) => (fallback || mentioned.has(member.botId))

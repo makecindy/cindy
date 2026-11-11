@@ -1853,7 +1853,7 @@
       "windowBehavior": "應用行為",
       "shortcuts": "鍵盤快捷鍵",
       "mcpServers": "自定義 MCP",
-      "bots": "伙伴"
+      "bots": "夥伴"
     },
     "remote": {
       "title": "遠端機器",
@@ -10578,7 +10578,7 @@
     "sessionLoadFailedTitle": "無法載入這個夥伴任務",
     "sessionLoadFailedDescription": "任務關聯仍然存在，但 Cindy 暫時無法讀取夥伴狀態。你可以重試，或返回夥伴總覽。",
     "sessionUnavailableTitle": "這個夥伴任務已無法使用",
-    "sessionUnavailableDescription": "這條任務可能已遺失、被刪除，或不再屬於這個伙伴。返回後會開啟已復原的主任務。",
+    "sessionUnavailableDescription": "這條任務可能已遺失、被刪除，或不再屬於這個夥伴。返回後會開啟已復原的主任務。",
     "settings": "設定",
     "settingsTabs": {
       "model": "模型"
@@ -10688,7 +10688,7 @@
     "profileSaveOffline": "無法連線至夥伴所在的電腦，請恢復連線後重新儲存。",
     "modelLabel": "模型",
     "modelUnavailable": "{{model}}（目前無法使用）",
-    "codexAutomaticCompact": "Codex 伙伴會自己壓縮上下文，/new 也會保留目前任務。只有確實需要從頭開始時，才去開新任務。",
+    "codexAutomaticCompact": "Codex 夥伴會自己壓縮上下文，/new 也會保留目前任務。只有確實需要從頭開始時，才去開新任務。",
     "image": "新增圖片",
     "send": "傳送訊息",
     "roster": {
@@ -10706,8 +10706,8 @@
       "restoreFailed": "恢復預設失敗，請重試。",
       "defaultModel": "預設模型",
       "defaultModelHint": "僅用於夥伴，與新任務的模型選擇獨立。個別夥伴可以另選。",
-      "title": "伙伴",
-      "description": "和伙伴有關的通用設定。單個伙伴的設定在{{pronoun}}自己的頁面裡。",
+      "title": "夥伴",
+      "description": "和夥伴有關的通用設定。單個夥伴的設定在{{pronoun}}自己的頁面裡。",
       "rosterNote": "預置陣容會隨版本更新。",
       "showReplyTarget": "顯示回覆對應的訊息",
       "showReplyTargetHint": "夥伴回覆上方標出它回的是你哪則訊息。較早的回覆不顯示。"
@@ -11297,7 +11297,7 @@
           "removeTitle": "將 {{name}} 移出群組？",
           "removeHint": "該成員將無法繼續查看或傳送訊息；其夥伴也會退出。",
           "leave": "退出群組",
-          "leaveHint": "你和你的伙伴將退出此群聊，不再接收新訊息，也無法查看群歷史。",
+          "leaveHint": "你和你的夥伴將退出此群聊，不再接收新訊息，也無法查看群歷史。",
           "soleOwnerHint": "群組裡只剩你。可以封存群組，保留歷史記錄，以後再恢復使用。",
           "archive": "封存群組",
           "archiveHint": "封存會對所有成員停用本群組，停止新訊息與夥伴執行。歷史記錄保留，之後可透過搜尋找到本群組、查看歷史並取消封存。",
@@ -11387,7 +11387,7 @@
         "hide": "從我的列表移除",
         "hideNote": "從你所有裝置的列表中移除此群聊。不改變成員關係，不刪除歷史訊息、不停止進行中的工作，也不影響其他成員。",
         "leave": "退出群聊",
-        "leaveNote": "你和你的伙伴將退出此群聊，不再接收新訊息，也無法查看群歷史。",
+        "leaveNote": "你和你的夥伴將退出此群聊，不再接收新訊息，也無法查看群歷史。",
         "unavailable": "目前伺服器或電腦尚不支援此操作。",
         "dissolved": "群聊已解散，仍可查看有權存取的歷史訊息。",
         "failed": "操作未完成，請重試。",

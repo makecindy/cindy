@@ -1812,7 +1812,7 @@ export async function recoverActiveTeammateInvitations(): Promise<void> {
     owner.assertCurrent();
     for (const { id } of profiles) queueBotInvitation(id);
   } catch (cause) {
-    log.warn('recover pending teammate invitations failed', {
+    log.warn('recover pending buddy invitations failed', {
       error: cause instanceof Error ? cause.name : typeof cause,
     });
   }
@@ -1826,7 +1826,7 @@ export async function setBotProfileAvatar(botId: string, image: { buffer: Buffer
   const db = client.drizzle;
     const [current] = await db.select().from(botProfiles).where(eq(botProfiles.id, botId)).limit(1);
     if (!current) throwIpcError('NOT_FOUND', 'Bot 不存在');
-    if (expectedVersion !== undefined && current.currentVersion !== expectedVersion) throwIpcError('PRECONDITION_FAILED', 'Teammate changed');
+    if (expectedVersion !== undefined && current.currentVersion !== expectedVersion) throwIpcError('PRECONDITION_FAILED', 'Buddy changed');
     if (current.status === 'archived') {
       throwIpcError('PRECONDITION_FAILED', '已停止的 Bot 不能修改头像');
     }
@@ -2015,7 +2015,7 @@ export async function createBotProfile(raw: unknown, restored?: RestoredBotOrigi
   try {
     await newTeammateSetup?.(id, creationOwnerBoundary.userDataDir, assertCreationOwnerStillCurrent);
   } catch (error) {
-    log.warn('new teammate V2 setup failed; retries on next start', { botId: id, error: String(error) });
+    log.warn('new buddy V2 setup failed; retries on next start', { botId: id, error: String(error) });
   }
   assertCreationOwnerStillCurrent();
   if (prepareInvitation) {
@@ -2326,7 +2326,7 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
       ownerRoot: owner.userDataDir,
       legacyUserDataDir: app.getPath('userData'),
     }).catch((error) => {
-      log.warn('teammate project preparation failed', { botId: id, error: String(error) });
+      log.warn('buddy project preparation failed', { botId: id, error: String(error) });
       return null;
     });
     owner.assertCurrent();
@@ -2334,7 +2334,7 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
     if (prepared) {
       const [route] = await readEffectiveBotModelChain(normalizedNextConfig).catch(() => []);
       await ensureBotProjectAutomations({ botId: id, displayName, workingDir: prepared.workingDir, route })
-        .catch((error) => log.warn('teammate project automations failed', { botId: id, error: String(error) }));
+        .catch((error) => log.warn('buddy project automations failed', { botId: id, error: String(error) }));
       owner.assertCurrent();
     }
   } else if (readBotProjectMode(normalizedNextConfig) && patch.displayName !== undefined

@@ -26,7 +26,7 @@ export function botGroupMentionMember(label: string, context: BotGroupMentionCon
   const fallback = serverBacked && !mentions.all && !mentions.allBots && mentions.botIds.length === 0;
   const broadcast = [...allLabels, '所有人', '全員', '모두', 'all', 'everyone'].some(label => label.toLowerCase() === name.toLowerCase());
   if ((mentions.all || fallback) && broadcast) return undefined;
-  const botBroadcast = [...allBotsLabels, '所有伙伴', '所有夥伴', 'すべての仲間', '모든 동료', 'all teammates', 'bots'].some(label => label.toLowerCase() === name.toLowerCase());
+  const botBroadcast = [...allBotsLabels, '所有伙伴', '所有夥伴', 'すべての仲間', '모든 동료', '모든 동반자', 'all teammates', 'all buddies', 'bots'].some(label => label.toLowerCase() === name.toLowerCase());
   if ((mentions.allBots || fallback) && botBroadcast) return undefined;
   const matches = members.filter(member => (fallback || mentions.botIds.includes(member.botId))
     && [member.name, botGroupMentionDisplayName(member), member.nickname || member.displayName || member.name]
