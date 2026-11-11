@@ -1,0 +1,12 @@
+{
+  "model": "independent-burst-calendar-v2",
+  "exit": 0,
+  "seconds": 748.94,
+  "filter": "\u65e0\u4e22\u5305 40ms,\u7a81\u53d1\u4e22\u5305,Wi-Fi 200Mbit,\u5730\u94c1,\u5c71\u533a,\u7559\u51fa \u9ad8\u94c1",
+  "seeds": 16,
+  "windows": [
+    128,
+    1024
+  ],
+  "kcp_configurations": 12
+}

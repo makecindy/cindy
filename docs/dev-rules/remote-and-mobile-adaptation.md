@@ -1,5 +1,41 @@
 # 远程连接与手机版适配
 
+## 手机远程画面的心跳回复等待（2026-11-08）
+
+手机的设备画面和远程桌面共用续期逻辑。中转心跳回复只等 5 秒，该时限由共享的
+`resolveRemoteInvokeTimeoutMs`（packages/device-link `invokePolicy.ts`）按请求解析，
+`DeviceLinkContext.invoke` 并不接收调用方传入的 timeout，页面也不应再传。心跳每 3 秒检查一次，
+在途请求会阻止下一次发送，而电脑的租约只有 12 秒；回复丢失后由现有定时器继续续期，
+不新增定时器、不并发堆积心跳、不延长电脑的安全过期时限。
+
+故障半径：① 单次心跳回复延迟，不等于设备离线；② 只释放当前心跳的等待，保留原会话和
+现有续期节奏；③ 不重建共享 link、不影响其它任务，明确撤权和退出仍按原流程终止。
+本条只补回归测试：Mobile `remote-desktop/__tests__/screen.test.tsx` 的缺失心跳回复用例按
+真实的 `resolveMobileInvokeTimeoutMs` 结算，若策略退回默认长等待则失败。
+
+## 供应商目录与已有许可的故障边界（2026-11-03）
+
+故障半径三问：① 目录 REST/信令暂时不可用，影响的是信息新鲜度，不等于所有执行机都失效；
+② 只在同 owner、区域、权限代次下回退最多 30 分钟的只读快照，不重放写操作、不刷新旧执行许可；
+③ 一个目标的拒绝或显式关闭不得清掉另一目标的目录，恢复 probe 必须走实时路径。
+转发剩余有效期并在 Main、Desktop、Mobile 各自以双时钟收口，不能只给 Main 加 TTL 而让界面永久保留旧结果。
+缓存的组负载或额度不能作为自动切走正在运行任务的依据。
+
+同账号组的离线新任务必须持有 O/M 已确认的限定路由上下文，再实时询问 M 准入，不能仅凭目录快照发起。
+故障半径补充：① O/云端目录失联不能扩大为所有 M 离线；② 每个 M 使用原期限、实时负载和已收到的 O Fast 策略，
+不缓存新任务授权或伪造第三方分享权限；③ 某台 M 的超时、拒绝、数据路径失效只影响它，其他已确认 M 可按原策略选择。
+新动作先协商可选能力位，旧端完全沿用原在线路径。跨账号新任务、改模型、受限预算与第三方转分享继续要求原授权方。
+
+Desktop 的任务发送、镜像、订阅与 Mobile 目录读取使用逐目标实际数据通道状态；全局信令离线仅用于诊断。
+订阅补发/退避也使用当前 SDK 的保留路径证明；已失效的路径、明确权限拒绝、熔断和停服仍终止重放。
+Mobile 前台已有可靠直连可保留，进入后台仍释放；中继重连不以变化的连接 epoch 重挂数据 WebView。
+目录 REST 暂时失败沿用原 30 分钟有界快照，但旧 online 字段不能安装成权威 presence。
+
+历史任务可复用本进程记录的原任务/模型/执行机有效许可，M 仍实时核验；内存许可丢失、到期、
+明确权限变化或显式断开后重新取得授权。不能用持久化的位置记录代替授权，也不能把任务放回组电脑运行原生历史。
+验证入口：Main `deviceLinkIpc.test.ts`、`providerMetadataContinuity.test.ts`、`responsivenessTracker.test.ts`，
+远程 Agent `roundtrip.test.ts`，以及 Desktop/Mobile 模型目录缓存与就绪状态回归。
+
 > **状态**：权威开发规则（authoritative）
 > **读取时机**：新增或修改涉及 workdir 文件、agent 进程或会话数据的功能，新增／修改 IPC
 > channel 或推送事件，修改 device-link 的重试／超时／断链恢复逻辑，或设计功能入口之前
@@ -54,6 +90,20 @@ allowlist、重试或 relay 生命周期；手机端完整保留“主机 + 路�
 实现与回归：`device-link/remote-workdir-guard.ts`、`device-link/dispatch.ts`、
 `maker-ipc/register.ts` 与 `__tests__/deviceLinkHostDispatch.test.ts`（均相对 Desktop main）。
 
+## 远程供应商任务导出
+
+远程供应商任务的消息保存在发起任务的电脑，允许从任务菜单导出 `.cshare`，
+保留对话记录与本机可用媒体，沿用 `db-only` 提示说明导入后无法无缝续聊。
+原生转录在运行 Agent 的电脑上，不查找本机同名文件，也不保留不可恢复的原生会话 ID，
+包括历史 Agent 切换记录里的停泊 ID；切换记录的展示与交接内容仍保留。
+协同包包含这类 Worker 时同样不能标为完整。完整任务迁移仍要求原生历史。
+
+此路径复用本机导出 IPC 与文件选择，不新增跨设备协议。SSH 工作区与设备互联镜像任务
+仍不提供本机导出，手机端没有该本机文件导出入口；不能把它们当成远程供应商任务。
+实现见 [sessionShareExport.ts](../../apps/desktop/src/main/session-share/sessionShareExport.ts)，
+回归见 [导出测试](../../apps/desktop/src/main/session-share/__tests__/sessionShareExport.test.ts)
+与 [菜单测试](../../apps/desktop/src/renderer/features/cc-agent/sidebar/__tests__/SessionCard.visual.test.ts)。
+
 ## 远程任务存档的即时反馈
 
 桌面与手机的远程任务列表在点击存档后立即乐观移走任务行，不能等待远程预检或写入
@@ -78,7 +128,7 @@ Mobile `useSessionListActions`、`SessionMenuSheet`、`orphanSessionActions.test
 产品规则见 [`../product-rules/input-handoff.md`](../product-rules/input-handoff.md)。三种形态的落点：
 
 - **SSH 远程工作区**：不支持。目标窗口必须在执行代输入的这台电脑上；带 `remoteHostId` 的任务里
-  `ask_owner` 不列出 fill／scan，直接调用（含旧名 `request_input_handoff`）返回 `CAPABILITY_NOT_AVAILABLE`，
+  `request_input_handoff` 不提供远程窗口交接，调用返回 `CAPABILITY_NOT_AVAILABLE`，
   由 Agent 改为直接告诉主人需要什么。
 - **设备互联远程控制**：卡片快照随既有交互推送（`kind: "input_handoff"`）到所有控制端；交还、取消、
   停留、刷新、接手、看画面等**不带值**的决定走既有 `resolveInteraction`；**带值**的提交与截图只走插件
@@ -89,7 +139,7 @@ Mobile `useSessionListActions`、`SessionMenuSheet`、`orphanSessionActions.test
   推送深链回到所属任务。
 - 单窗口实时画面复用远程桌面通道：控制端只在 `start` 里带 `handoff: requestId`，由被控端按请求选窗口；
   被控端以 `handoffWindow` 能力位声明支持，旧被控端不声明时控制端不展示入口。协议细节见
-  [`protocol-compatibility.md`](protocol-compatibility.md)「代输入」。
+  [`protocol-compatibility/input-handoff.md`](protocol-compatibility/input-handoff.md)「代输入」。
 
 ## 恢复动作先回答故障半径（device-link 共享链路）
 
@@ -134,6 +184,21 @@ RPC 时才替换。候选失败或仍走中继继续用旧连接；受现有四�
 紧接着的文件重新走同一慢链路，不重连共享 WSS、不影响另一控制端的文件或请求。
 取消、退后台、切账号依然是取消，不触发 OSS；不并行竞速或预先上传用户文件。
 回归包含两台控制端一台停滞、另一台持续写入并完成，以及旧端缺能力字段的兼容。
+
+### 输入推荐的请求级恢复
+
+Desktop 远控输入推荐使用任务执行电脑 B 的完成轮次；控制电脑 A 的时钟和两条推送流的
+到达先后不决定该轮次是否有效。缓冲先到的完成通知，临时水合、排队或输入框忙碌不消费推荐；
+实际开始新轮次、用户采用/关闭推荐和账号切换仍使旧请求失效。
+
+故障半径三问：① 证据仅是这一笔预测请求超时、背压，或 B 明确尚未完成终末交付；
+② 只对原 B、原任务、原完成轮次做有限退避重试，复用 B 的在途 Promise/缓存，不重置 peer、
+共享 relay 或其它任务；下层原有建链/熔断策略不变。③ `predictPromptUntilDisabled.test.ts`
+以两个控制端调用同一 B 的路由替身验证一端超时退避期间另一端完成，`predictPromptIpcBoundary.test.ts`
+验证同轮并发只调用一次模型以及重试等待中新轮/换账号隔离；未做真实双电脑断网演练。
+`promptRecommendationStore.test.ts` 覆盖时钟差和乱序推送，输入框 DOM 回归覆盖忙碌投影恢复后
+显示与 Tab 采用。响应兼容说明见 [`protocol-compatibility.md`](protocol-compatibility.md)
+「远程输入推荐的完成轮次与重试」。
 
 ### 共享连接静默与请求隔离
 
@@ -186,9 +251,13 @@ relay 以 close 1013 `inbound backpressure` 主动断连，此时任何「立即
   (invoke / invoke-result / push)及普通累计 ACK。可靠层按 seq 去重、按序交付，
   同一条消息经两条路径各到一次也只执行一次。
 - **授权**：直连帧的来源取自通道绑定的设备，不信任帧内 `src`；被控端照常逐条复验
-  被控开关、撤权名单与 allowlist。共享任务、供应商分享等跨账号范围不走直连，逐帧
-  授权仍由 relay 执行。relay 报告对端离线(含被移出账号)、链路被关闭或撤权、客户端
-  停止时立即撤下直连。ACK 原路返回，单向失效时发送端不会被困在直连上。
+  被控开关、撤权名单与 allowlist。共享任务不走本段同账号直连；供应商分享遵循其
+  独立短期许可合同，不能混用本段保留窗口。Desktop 对已完成认证与可靠握手的同账号数据通道，遇到本端
+  relay 断线或对端离线通知时保留最多 30 分钟；不以信令离线认定数据通道死亡。
+  此窗口同时受墙钟与单调时钟约束，重复离线通知、重连失败和业务流量均不续期。
+  不能离线建链或扩大权限；本地逐请求授权照常核验，显式关闭、撤权、停止、设备移除、
+  鉴权拒绝和数据通道故障立即清理。仅服务端掌握的撤销在信令不可达时可能延迟获知，
+  最迟按窗口到期结束。ACK 原路返回，单向失效时发送端不会被困在直连上。
 - **故障半径三问**：① 故障层级是单个 peer 的直连通道(通道关闭、写入失败、发送缓冲
   在一个可靠重试基准期内没有下降，或已发出的帧过了自适应 ACK 基准期仍未确认)；直连
   判活不乘 relay 的大消息字节退避，单条大结果也能及时回退；缓冲仍有进展时
@@ -198,6 +267,15 @@ relay 以 close 1013 `inbound backpressure` 主动断连，此时任何「立即
   `packages/device-link/src/__tests__/client.test.ts`「直连优先、中继兜底」：两个控制端
   共用同一被控端，其中一个的直连静默，断言命令只执行一次、结果经 relay 送达，另一个
   控制端仍走直连、在途请求与 relay 连接不受影响。
+- **接上时接管 relay 上的未确认帧**（2026-11-04）：累计 ACK 只能按序推进。直连接上时
+  relay 上若还有未确认的旧帧，经直连送达的新帧在接收端只能缓存、拿不到确认，过了直连
+  ACK 基准期就被误判 `ack-timeout` 撤下。实测两台局域网电脑在持续的远程 Agent 流量下，
+  直连每次接上 8–10 秒即撤下(一小时 34 次)，流量全压回慢的 relay，最终整轮工具超时。
+  故障半径三问：① 单个 peer 直连接上的时刻，relay 上已写出、仍未确认的可靠帧；② 只把
+  这一台设备的这些帧恢复为未发送，按既有单趟预算改经直连重发，接收端按 seq 去重、
+  只执行一次；不重连 relay、不重建链路、不改 wire，直连随后真的失效仍按上一条撤下并经
+  relay 补发；③ 回归见 `client.test.ts`「keeps a new direct path when older relay frames
+  hold back the ACK」，覆盖单条及超过单趟预算的多条旧帧，断言每条只执行一次、直连不撤下。
 - **接入**：Desktop 复用 `DesktopCaptureWindow` 的隔离数据进程(`mode=direct`)，Mobile
   使用 `DirectLinkTransport.tsx` 的隔离 WebView；二者共用 `directRtcRuntime.ts` 与
   `directRuntimeBridge.ts`。只收集 host ICE candidates（不请求 STUN/TURN），局域网不可达
@@ -205,8 +283,20 @@ relay 以 close 1013 `inbound backpressure` 主动断连，此时任何「立即
   复用同一条数据路径。手机退后台、WebView 崩溃、账号/区域切换立即释放旧通道。
 - **兼容**：双方都声明 `direct-link-v1` 才尝试。信令以既有 relay push 承载，绑定两端
   当前 stream；旧端、平台尚未就绪或协商失败均继续使用 relay。每对设备只有字典序较小的
-  deviceId 发起 offer，失败按 5–60 秒退避；最多 16 个 peer，单次协商 15 秒。
-  relay 断线仍复位链路，直连暂不独立维持；不新增服务端依赖或 Mobile 原生依赖/配置。
+  deviceId 发起 offer，失败按 5–60 秒退避；单次协商 15 秒。桌面共享数据进程预算 64，
+  同账号设备与分享各预留 8；手机维持 16。满额继续 relay、释放后按公平队列补建；
+  候选、等待 offer、失败重试与压力下空闲回收的边界见
+  [`protocol-compatibility/device-link-lan-first-direct.md`](protocol-compatibility/device-link-lan-first-direct.md)。
+  两端均支持并启用保留、已完成认证与可靠握手且数据通道健康时，才可跨信令断线维持原有路径。
+  新版 Mobile 仅在前台保留，退后台释放；未支持或未启用保留的旧端沿用原有断线复位。
+  仅保留 RPC 数据通道，不承诺独立文件或远程桌面通道存活。
+  不新增服务端依赖、wire 字段或 Mobile 原生依赖/配置。
+- **容量恢复的故障半径三问**：① 单 peer 的直连准入满额／协商失败；② 仅该 peer 排队、
+  释放直连资源并改用既有 relay，不重开控制 link、不重连共享 socket、不改任务分配或授权；
+  只有无在途工作且长期无活动的通道才可在容量压力下让位；③ `directRuntimeBridge.test.ts`
+  覆盖共享预算、分类公平、迟到 offer、撤权与回收，`client.test.ts` 验证满额期间请求仍只执行
+  一次、名额释放后自动升级且不新建 socket。真实浏览器 `--capacity` 同时验证第 65 个等待者
+  补建时其余 63 条通道不被替换；自建 relay 互通验证签名、加入与重连不受影响。
 - **验证**：`client.test.ts` 的自动协商矩阵覆盖新旧端、平台不可用、远程 Agent 调用和两个
   控制端隔离回退；`directRuntimeBridge.test.ts` 覆盖桥接背压、迟到事件与流代次；
   `scripts/direct-link-smoke.mjs <Chrome路径>` 运行真实 WebRTC 与手机静态 runtime，验证
@@ -217,12 +307,34 @@ relay 以 close 1013 `inbound backpressure` 主动断连，此时任何「立即
 
 ## 远程 Agent 的拉取与恢复(`maker:remote-agent:v1`)
 
+控制端载荷交付（2026-11-10）：512KiB 上传块经 base64 后约 683KiB，慢中转链路收齐分片可能超过
+单次 invoke 的 30 秒期限；大内联 JSON 也有相同问题。`RemoteAgentRunClient.payload` 按 UTF-8 字节
+控制内联大小，超过 64KiB 先 gzip，普通载荷以 64KiB 压缩数据为一块顺序上传。每块确认后再发下一块，
+让同链路的其它请求能在块间推进；不延长通道超时、不自动重放上传、`open` 或 `call`。
+为保留原容量，大载荷会增大块大小以符合旧接收端最多 128 块、每块 512KiB、总共 64MiB 的合同；
+这些数值仍是接收上限，不能因发送偏好变小而拒收旧端的大块。既有取消检查继续覆盖压缩与各块之间。
+`abort` / `requestGracefulStop` 还会使此前尚在准备或上传的 `send` / `steer` 失效；
+压缩后、块间及最终调用前检查同一发送代次，以 `AbortError` 收口，不让停止之后再启动旧消息。
+停止请求不排在上传之后，也不关闭连接；停止之后的新消息仍可正常发送。
+Session 准备期柔性停止的 `SendOptions.signal` 由本机代理传到同一守卫，不序列化进协议；
+已经发出的业务调用保留原结果语义，不能把远端已接收的消息事后改报为未发送。
+故障半径：仅改变当前载荷的编码与分块，不重建 link、不重连共享 relay、不改授权或其它 peer 的状态。
+回归为 `runClientReply.test.ts` 的有界慢链路完整交付，以及 `roundtrip.test.ts` 的上传中取消。
+协议兼容与中转边界见 [远程 Agent 协议](protocol-compatibility/remote-agent.md)。
+
 供应商进程重启（2026-10-29）：已打开的 run 收到 `missing`、`provider-restarting` 或旧端的
 `aborted` 时只释放这条远程连接，保留本机执行器和 MCP 身份。空闲任务下次发送再接回；进行中的
 一轮通过现有供应商组恢复租约、五次有界探测和输入队列自动续跑一次，未归组的供应商也适用。
 原生会话 ID 必须接回，设置必须重放完成，才能发送续跑；不重发原消息或结果不明的方法调用。
 权限、Plan 和自动动作来源沿用原轮次；Stop、新输入、归档／删除使恢复失效。持续不可达、撤权或
 接不回原生会话保留原错误与人工恢复入口。伙伴、目标模式与共享任务沿用既有自动恢复归属检查。
+
+托管 Claude Code 的工具连接（2026-11-04）：设备托管时 Cindy 工具都是经隧道回到任务所在电脑的
+HTTP MCP，每次握手都要跨机往返。Claude Code 默认 `MCP_TIMEOUT` 只等 30s，到点即判连接失败，
+这一轮没有任何工具（实测中转变慢时 91 个工具全部被判断开，Agent 只能回复连不上）。托管会话启动时
+把它设为 `DEVICE_HOSTED_MCP_TIMEOUT_MS`（120s，与下文拉取的 2 分钟不可达窗口一致），用户自己
+设过的值优先。故障半径：只作用于这一个任务的 Claude Code 进程；不重试、不重放工具调用，不动 link
+与其它任务，本机任务保持 Claude Code 默认值。回归见 `claude-code/__tests__/device-hosted-guest.test.ts`。
 
 正常退出先经 device-link 同步 quit 回调走 `dropAllControllers('shutdown') → abortAll('app-quit')`；
 `host.dispose()` 来自 Maker 重置，不是常规退出必经路径。两条入口共用闲置／忙碌判断，重叠时等待
@@ -251,14 +363,23 @@ M 仍保存但已撤权的 run 明确收尾为 `access-revoked`，不以 `missin
 preparing，本机 Session 可正常关闭，下一条显式消息按原生会话 ID 重建；不依赖离线电脑确认才能
 解除队列占用。回归同时覆盖远程通知失败与本机清理失败，不能把两者混为一谈。
 
-协议见 [`protocol-compatibility.md`](protocol-compatibility.md)「远程 Agent」。恢复策略按故障半径三问：
+协议见 [`protocol-compatibility/remote-agent.md`](protocol-compatibility/remote-agent.md)「远程 Agent」。恢复策略按故障半径三问：
 
 1. **故障层级**：只处理同一台被控端的事件拉取。`poll` 遇到 peer reset、超时、背压或链路暂断时，
    用同样的游标重拉(0.5s 起指数退避，上限 5s；另一个在途 poll 成功即提前恢复)；连续 2 分钟拉不到
-   才结束这台被控端上的任务并提示对方不可达。单个任务的流数据与游标对不上时只结束那一个任务。
+   才结束这台被控端上的任务并提示对方不可达。本机「目标设备无响应」熔断打开后的快速失败
+   (`DEVICE_UNRESPONSIVE`)同样按链路暂断重拉：它不发网络请求，熔断按自己的单飞探测恢复，
+   不能绕过两分钟窗口直接结束任务（2026-11-04：一次 1–2 分钟的出口抖动让后台 PR 跟进轮次
+   当场失败）。单个任务的流数据与游标对不上时只结束那一个任务。
    打开或连回 Agent 前的只读 `caps` 查询复用共享瞬态重试策略（最多 6 次），等待启动建连或拥堵冷却
    结束；授权拒绝、旧端不支持等非瞬态错误立即结束。只重读这台电脑的能力，不重建 link、不重启 relay，
    不重放 `open`、上传或发送。回归见 `remote-agent/__tests__/connectionPool.test.ts`。其余 op 不自动重放。
+   设备熔断的 `DEVICE_UNRESPONSIVE` 也属于瞬态错误：`poll` 保留原游标与原两分钟窗口，
+   等底层既有单飞探测恢复；注销 run 取消后续重试。共享判据同时让 `reply` / `push` 在原有
+   交付次数上限内重试，复用原 requestId／载荷或 seq／帧，不重新执行工具或重放 `open` / `call`。
+   首次授权拒绝仍立即结束，断链后分享临时拒绝沿用上文既有窗口。回归见 `poll.test.ts`
+   （两控制端共用被控端，一侧熔断、另一侧继续拉取）及 `runClientReply.test.ts`。
+   此分类不改变帧、授权、选路或中转实现，官方与自建中转都沿用既有 `poll` / `reply` / `push` 转发。
 2. **动作层级**：与故障同半径——只影响这台被控端的拉取器，不重建 link、不断开 relay、不影响其它
    被控端和普通远控请求。被控端侧对无人拉取的任务按任务超时(3 分钟)收尾，不波及其它任务。
 3. **多 peer**：被控端按 `(控制端, runId)` 隔离任务；默认每台控制设备最多 16 个任务、整机最多 64 个，
@@ -282,7 +403,7 @@ preparing，本机 Session 可正常关闭，下一条显式消息按原生会�
 本机与 SSH PI 的账号边界保护不变。实现见 `remote-agent/controller/{proxyHandle,startRemote}.ts`，
 不改变 wire、授权检查或跨端版本要求（#6921）。
 
-**控制端连接池的让出与连回**(2026-10-17，协议见 [`protocol-compatibility.md`](protocol-compatibility.md)「控制端连接池」)：
+**控制端连接池的让出与连回**(2026-10-17，协议见 [`protocol-compatibility/remote-agent.md`](protocol-compatibility/remote-agent.md)「控制端连接池」)：
 
 1. **故障层级**：B 的单设备名额(`caps.maxRuns`)快满或已满，或 B 以名额类 `REMOTE_AGENT_BUSY` 拒绝一次 open；只涉及这台 A 在
    这台 B 上的连接。
@@ -360,7 +481,7 @@ preparing，本机 Session 可正常关闭，下一条显式消息按原生会�
 
 ## 协同远端 Worker 的轮询与恢复
 
-协议见 [`protocol-compatibility.md`](protocol-compatibility.md)「协同远端 Worker」，实现见
+协议见 [`protocol-compatibility/orca-remote-worker.md`](protocol-compatibility/orca-remote-worker.md)「协同远端 Worker」，实现见
 `apps/desktop/src/main/maker-ipc/orcaRemoteWorkerRuntime.ts`。按故障半径三问：
 
 1. **故障层级**：单台运行设备的单个请求。轮询或派活失败只把这台设备标为「暂时无法获取状态」，
@@ -688,7 +809,42 @@ Mobile 伙伴任务卡的列表外补读由 `companionTaskReads.ts` 按账号、
 每批最多 8 个、批次串行；同组共享刷新时钟，旧端单条回退同样串行。焦点或账号切换后
 不发送已失效的排队读取，不缓存已完成批次；卡片优先使用普通任务列表中的更新结果。
 
-Debug 日志区分两层耗时：
+远程卡顿的默认 INFO 证据使用 `device-link diagnostic`，不要求用户先开 Debug 再复现。
+记录只观察，不改变并发、超时、重试、选路、授权或 wire：
+
+- `admission`：本机准入满额、过期或等待超过 1 秒时，记录运行中与排队中的数量、
+  最老请求的通道／来源／优先级／年龄，以及可靠传输现场。两组各保留前三类，
+  `omittedGroups` 明示省略数量；队列满不等于网络慢。
+- `request`：请求超时、往返超过 1 秒或回复至少 256 KiB 时，记录同一个 request 前八位、
+  准入等待、首次写出前等待、写出后等待、回复字节数。`firstWriteWaitMs=null` 表示尚未写出。
+  `elapsedMs` 用本机单调时钟，`wallElapsedMs` 用墙钟；不能相减两台设备的时间戳当网络耗时。
+- `execution`（`device-link:execution-diagnostics`）：被控端执行超过 1 秒时记录授权、handler、
+  持久化和投影耗时；5 秒仍未结束时先记当前执行阶段，不等请求完成才留证。
+- `send`：大帧入队及大帧／慢帧收到 ACK 时记录字节数、序号、路径与等待。
+  `queueToAckMs` 覆盖全部排队／重传，`currentAttemptToAckMs` 仅覆盖当前重传轮。
+  `encode` / `decode` / `receive` 补充至少 250 毫秒的编码、解码、分片组装及按序等待。
+- `path` / `ack`：直连因 ACK、缓冲或写出故障撤下、或可靠层超时时，**在清理现场之前**记录
+  ACK 位置、前三个队头的 request／seq／字节／路径／年龄／发送闸门、接收缺口，以及共享
+  socket 上其它 peer 的积压（前三名及省略数）。少量大帧和旧 relay 前缀也能留下证据，
+  不依赖队列达到 48 条才触发。直连接上、把仍未确认的中继帧改走直连之前也记录一次同样的
+  队头现场（`send` / `moved-to-direct`，独立分桶，不占撤链证据的采样名额）；否则撤链时
+  只能看到「已搬走、还没写出」，无法判断原本哪条中继帧挡住了后续直连帧的累计 ACK。
+
+按 request 前八位关联两端；同一现场拆行时用 `instance + event + part` 拼回，`parts` 用于检查是否缺片。
+各阶段（准入原因、请求／执行／发送结果分桶）每 30 秒保留前四次，随后汇总 `suppressed`；
+直连故障不会被普通慢请求耗尽采样名额。单行小于上传器的 2,000 字符上限。
+只有固定通道／操作枚举、短标识、数量、字节和时长，不记录参数、回复、路径、SQL、凭证或错误正文。
+Desktop 的 `device-link`、`device-link:ipc-diagnostics`、`device-link:execution-diagnostics`、
+`device-link-transfer` 精确 scope 可经现有采集与脱敏导出；不开放其它子 scope。
+
+判断时要区分证据：运行槽被慢 handler 占满、发送闸门挡住大回复、以及旧 relay 队头阻止
+后续 direct 帧的累计 ACK，是不同原因。单端日志缺少对端阶段时只能定位等待区间，不能
+把“写出后等待”断言成网络慢；采样缺失、上报裁剪及旧版对端同样必须明确。
+共享传输层的记录仍使用各平台注入的 logger，本项不改变 Mobile 的日志持久化／上报策略。
+`node scripts/remote-stall-diagnostics-smoke.mjs` 用隔离 Electron、真实回环 WebSocket、正式
+INFO writer 与收集器验证上述四类故障，并保留 `collected.json`，不向云端上传。
+
+Debug 仍可追加两层细节：
 
 - `remote invoke slow execution`（至少 300 毫秒）包含 `stagesMs`：调用前授权、业务 handler、
   调用后授权、设置持久化、返回投影。总耗时还包含调度和序列化，不等于 SQL 执行时间。
@@ -852,6 +1008,13 @@ WebSocket 写入成功）与 `afterFirstWriteMs`（首次写入到结束）；�
 在途期间只保留最新一次补读；失效立即推进已有代次，旧结果不提交。整组读取结束
 （包括失败后的其它成员）才释放刷新位置。账号切换或远程断连后的新代次独立刷新，
 不等待旧请求超时；已经取消的补读不重新打开连接。该合并不引入结果缓存或定时重试。
+同账号桌面远控的目录刷新须同时处理 `maker:provider:changed`、`maker:agents:changed`
+和 `provider-group:changed`：Main 对三者都会作废目标的在途元数据读取，Renderer 若漏接
+其中一种，迟到的 `Metadata scope changed` 就可能让模型选择器停在失败状态。收到这些
+事件时沿用上述合并刷新，只推进对应设备的代次；剩余信任时间为零的通知仍只清除目录，
+不发起补读。保护账号／撤权边界的 Main 校验不变，也不重建共享链路或 relay。
+回归见 Desktop `deviceLinkRemoteRecovery.test.tsx` 与 `remoteCatalogSnapshot.test.ts`。
+
 
 ## PR 门禁
 

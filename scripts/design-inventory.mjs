@@ -2,31 +2,30 @@
 /**
  * 生成 / 校验 docs/design-rules/design-inventory.md 的 GENERATED 区块。
  *
- * 台账是混合文件：机器事实与人工决策物理分开（治理合同 §2.1）。
+ * 台账是混合文件：登记事实与人工决策物理分开（治理合同 §2.1）。
  * 本脚本只重写 BEGIN/END GENERATED: surface-facts；人工区原样保留。
- * --check 只比对 GENERATED 区块，并报告孤儿人工行（只报告不删除）。
+ * --check 校验登记结构与 GENERATED 区块，并报告孤儿人工行（只报告不删除）。
+ * 可达组件、样式来源与 Token / 裸值统计不入库，由 --report 按需输出到 tmp/。
  *
  * 用法:
- *   node scripts/design-inventory.mjs          # 生成（root: pnpm design:inventory）
- *   node scripts/design-inventory.mjs --check  # 只校验 GENERATED 是否最新，不写盘
+ *   node scripts/design-inventory.mjs           # 生成（root: pnpm design:inventory）
+ *   node scripts/design-inventory.mjs --check   # 只校验，不写盘
+ *   node scripts/design-inventory.mjs --report  # 统计报告（root: pnpm design:inventory:report）
  *   CINDY_INVENTORY_DOC=<path> 覆盖台账写读路径（测试用：指向临时目录拷贝，
  *   不改真实 docs/design-rules/design-inventory.md）
  */
-import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
-  BARE_RADIUS_RE,
   mobileRouteCoverage,
-  createBareRadiusRe,
   INVENTORY_REL_PATH,
   MAIN_ENTRY_REL_PATH,
   RENDERER_INDEX_REL_PATH,
+  REPORT_REL_PATH,
   ROUTER_REL_PATH,
   buildGeneratedSurfaces,
-  stripJsComments,
   catalogSurfaces,
   compareGenerated,
   defaultHumanSeed,
@@ -40,6 +39,7 @@ import {
   normalizeDocEol,
   productionRouterCoverage,
   renderGeneratedBlock,
+  renderStatsReport,
   splitInventoryDocument,
 } from './shared/design-inventory.mjs';
 
@@ -52,14 +52,10 @@ const DOC_PATH =
 const ROUTER_PATH = path.join(repoRoot, ...ROUTER_REL_PATH.split('/'));
 const MAIN_ENTRY_PATH = path.join(repoRoot, ...MAIN_ENTRY_REL_PATH.split('/'));
 const RENDERER_INDEX_PATH = path.join(repoRoot, ...RENDERER_INDEX_REL_PATH.split('/'));
-
-/**
- * GENERATED 区块不写生成日期：它只取决于源码树，跨日重新生成字节一致，
- * 不同日期各自重新生成的分支也不会在日期行上合并冲突。事实变化时间以 git 历史为准。
- */
-const GENERATE_COMMAND = 'pnpm design:inventory';
+const REPORT_PATH = path.join(repoRoot, ...REPORT_REL_PATH.split('/'));
 
 const checkOnly = process.argv.includes('--check');
+const reportOnly = process.argv.includes('--report');
 
 function readExisting() {
   return fs.existsSync(DOC_PATH) ? fs.readFileSync(DOC_PATH, 'utf8') : '';
@@ -78,7 +74,6 @@ function buildGenerated() {
     throw new Error('Mobile route inventory mismatch: ' + JSON.stringify(mobileCoverage));
   }
   const generated = renderGeneratedBlock(surfaces, {
-    generateCommand: GENERATE_COMMAND,
     routerCoverage,
     redirects,
     mobileCoverage,
@@ -238,54 +233,32 @@ if (danglingExtraStyleRoots.length > 0) {
 if (checkOnly) {
   const comparison = compareGenerated(existing, generated);
   if (!comparison.equal) {
-    // 报告差异细节：跨平台排查（ICU/EOL/大小写/文件集）需要看到 diff 本身。
-    // 逐 surface 对比主表行,打印每个分歧 surface 的统计三元组与来源文件数——
-    // 统计数字或文件集的分歧一眼可见,不再被长 styleSources 列表淹没。
+    // 逐 surface 打印分歧行，跨平台排查（ICU/EOL/大小写）需要看到差异本身。
     const rowRe = /^\| `([^`]+)` \|/;
-    const currentRows = new Map();
-    for (const line of normalizeDocEol(comparison.current).split('\n')) {
-      const m = rowRe.exec(line);
-      if (m) currentRows.set(m[1], line);
-    }
-    const nextRows = new Map();
-    for (const line of normalizeDocEol(comparison.next).split('\n')) {
-      const m = rowRe.exec(line);
-      if (m) nextRows.set(m[1], line);
-    }
-    const diffLines = [];
-    for (const [id, nextLine] of nextRows) {
-      const currentLine = currentRows.get(id);
-      if (currentLine === nextLine) continue;
-      const statsOf = (line) => {
-        const cells = line.split('|').map((c) => c.trim());
-        // | ID | 平台 | 标题 | 生产入口 | 可达组件 | 样式来源 | Token | 裸色 | 圆角 |
-        const sources = (cells[6] ?? '').split(',').filter(Boolean);
-        return `tokens=${cells[7]} colors=${cells[8]} radii=${cells[9]} files=${sources.length}`;
-      };
-      diffLines.push(`  - ${id}:`);
-      diffLines.push(`    文件: ${currentLine ? statsOf(currentLine) : '(缺行)'}`);
-      diffLines.push(`    重算: ${statsOf(nextLine)}`);
-      // 逐文件计数表：定位跨平台分歧到具体文件（CI 日志与本地表逐行对比）。
-      // 每行带文件内容 sha256 前 12 位——若 CI 读到的文件与本仓 git blob 不同，
-      // 哈希会直接分叉，不再需要猜测内容差异。
-      const surface = surfaces.find((s) => s.id === id);
-      if (surface) {
-        const perFile = surface.styleSources.map((file) => {
-          const raw = fs.readFileSync(path.join(repoRoot, ...file.split('/')));
-          const scan = stripJsComments(raw.toString('utf8'));
-          const re = createBareRadiusRe();
-          const matches = [...scan.matchAll(re)];
-          const sha = createHash('sha256').update(raw).digest('hex').slice(0, 12);
-          return `    ${matches.length} ${sha} ${file}`;
-        });
-        diffLines.push(...perFile);
+    const rowsOf = (text) => {
+      const rows = new Map();
+      for (const line of normalizeDocEol(text).split('\n')) {
+        const m = rowRe.exec(line);
+        if (m) rows.set(m[1], line);
       }
+      return rows;
+    };
+    const currentRows = rowsOf(comparison.current);
+    const nextRows = rowsOf(comparison.next);
+    const diffLines = [];
+    for (const id of new Set([...currentRows.keys(), ...nextRows.keys()])) {
+      const currentLine = currentRows.get(id);
+      const nextLine = nextRows.get(id);
+      if (currentLine === nextLine) continue;
+      diffLines.push(`  - ${id}:`);
+      diffLines.push(`    文件: ${currentLine ?? '(缺行)'}`);
+      diffLines.push(`    重算: ${nextLine ?? '(已移除)'}`);
     }
     console.error(
       '[design-inventory] ❌ GENERATED 区块与源码不同步。\n' +
         '  运行 pnpm design:inventory 重新生成。\n' +
-        '  分歧 surface 统计对比:\n' +
-        (diffLines.length > 0 ? diffLines.join('\n') : '  (主表行一致,差异在其他段落)'),
+        '  分歧行:\n' +
+        (diffLines.length > 0 ? diffLines.join('\n') : '  (表格行一致,差异在其他段落)'),
     );
     if (orphanReport) console.error(orphanReport);
     process.exit(1);
@@ -296,6 +269,16 @@ if (checkOnly) {
   }
   console.log(
     `[design-inventory] ✅ GENERATED 区块最新（${surfaces.length} 个 surface）`,
+  );
+  process.exit(0);
+}
+
+if (reportOnly) {
+  fs.mkdirSync(path.dirname(REPORT_PATH), { recursive: true });
+  fs.writeFileSync(REPORT_PATH, renderStatsReport(surfaces), 'utf8');
+  console.log(
+    `[design-inventory] ✅ 统计报告已写入 ${REPORT_REL_PATH}` +
+      `（${surfaces.length} 个 surface；不入库，台账未改动）`,
   );
   process.exit(0);
 }

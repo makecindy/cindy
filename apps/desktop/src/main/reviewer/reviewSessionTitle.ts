@@ -1,4 +1,4 @@
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 
 const MAX_REVIEW_SESSION_TITLE_LENGTH = 120;
 

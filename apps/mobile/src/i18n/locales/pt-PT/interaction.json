@@ -1,5 +1,7 @@
 {
   "permission": {
+    "mcpComplete": "Concluído",
+    "mcpCancel": "Cancelar",
     "mode": {
       "default": "Permissões predefinidas",
       "acceptEdits": "Permitir edições",
@@ -27,6 +29,13 @@
       "description": "O acesso total desativa a sandbox do espaço de trabalho e dispensa as aprovações de rotina. {{appName}} pode modificar ficheiros fora do espaço de trabalho e executar comandos de rede sem perguntar; as operações de alto risco integradas continuarão a exigir confirmação.",
       "confirm": "Ativar acesso total",
       "cancel": "Manter permissões atuais"
+    },
+    "description": {
+      "default": "Aprova as ações quando necessário.",
+      "acceptEdits": "As edições de ficheiros são permitidas diretamente; aprova as outras ações quando necessário.",
+      "auto": "Um modelo de IA aprova as ações, o que pode exigir mais espera; confirma quando necessário.",
+      "bypass": "As ações habituais são permitidas diretamente, incluindo ficheiros fora do espaço de trabalho e comandos de rede.",
+      "plan": "Analisa e planeia sem alterar ficheiros."
     }
   },
   "planMode": {
@@ -34,6 +43,10 @@
     "exit": "Sair do modo de planeamento"
   },
   "panel": {
+    "questionUnanswered": "Sem resposta",
+    "questionWithdrawn": "Já não precisa de resposta",
+    "withdrawnDraft": "Esta pergunta já não precisa de resposta.\n{{reason}}\nO rascunho foi guardado e pode ser enviado como complemento.",
+    "sendSupplement": "Enviar complemento",
     "readOnlyKind": "Pendente",
     "readOnlyTitle": "A aguardar confirmação no seu computador",
     "pendingRequests": "Pedidos pendentes",
@@ -98,7 +111,14 @@
     "planFeedbackPlaceholder": "Dizer ao Claude o que fazer",
     "planFeedbackRequired": "Introduza comentários antes de submeter.",
     "planFeedbackSubmit": "Submeter comentários ao plano",
-    "planFeedbackAccessibility": "Dar comentários para alterar o plano"
+    "planFeedbackAccessibility": "Dar comentários para alterar o plano",
+    "validation": {
+      "required": "Preencha este campo obrigatório.",
+      "choice": "Escolha uma das opções apresentadas.",
+      "tooShort": "Introduza pelo menos {{count}} caracteres.",
+      "tooLong": "Introduza no máximo {{count}} caracteres."
+    },
+    "askRestrictedMetaCaption": "{{options}} · {{mode}}"
   },
   "kinds": {
     "permission": {
@@ -173,6 +193,7 @@
     "fromLead": "Mensagem do Lead",
     "fromWorkerNamed": "Mensagem do Worker «{{role}}»",
     "fromWorker": "Mensagem do Worker",
+    "fromWorkerBatch": "Relatório do sistema: {{count}} resultados de Worker",
     "emptyMessageBody": "(Mensagem vazia)"
   },
   "contextSheet": {
@@ -299,6 +320,8 @@
       "picture": "Mostrar ecrã",
       "backToForm": "Voltar ao formulário",
       "liveView": "Vista em direto",
+      "openRemoteDesktop": "Abrir ambiente de trabalho remoto",
+      "useForm": "Usar o formulário",
       "fill": "Preencher",
       "skip": "Ignorar",
       "continue": "Continuar",
@@ -306,6 +329,9 @@
       "showPassword": "Mostrar palavra-passe",
       "hidePassword": "Ocultar palavra-passe",
       "scan": "Ler código"
+    },
+    "directSignIn": {
+      "hint": "Inicie sessão diretamente na janela. Ao terminar, tudo continua automaticamente."
     },
     "remoteUnavailable": "Este computador não pode receber dados remotamente. Conclua este passo no computador anfitrião e depois devolva o controlo ao Agent.",
     "unnamedField": "Campo",
@@ -384,6 +410,8 @@
       "submitting": "A enviar"
     },
     "permission": {
+      "titleStdin": "Permitir entrada neste terminal?",
+      "titleMcpUrl": "Concluir o pedido de {{server}}",
       "highRiskTitle": "Uma permissão de alto risco requer confirmação",
       "highRiskDetail": "Reveja o comando e confirme novamente para o permitir. Recuse se tiver dúvidas.",
       "sessionAllowTitle": "Permitir uma vez ou permitir sempre para esta tarefa",
@@ -438,5 +466,39 @@
       "ghost_id": "Plugin",
       "tool": "Ferramenta"
     }
+  },
+  "issueConfirm": {
+    "title": "Confirmar envio de feedback para {{appName}}",
+    "typeBug": "Erro",
+    "typeFeature": "Funcionalidade",
+    "titleLabel": "Título",
+    "bodyLabel": "Corpo (Markdown)",
+    "privacyHint": "O título e o corpo da ocorrência serão públicos e poderão ser pesquisáveis ou guardados em cache. A ocultação automática abrange apenas alguns padrões comuns e não consegue detetar todo o contexto sensível.",
+    "relatedLogsHint": "Este envio inclui os registos do cliente relacionados apresentados acima. São filtrados, expurgados e limitados em extensão antes da publicação.",
+    "privacyConfirm": "Revi o conteúdo público acima e não contém informação pessoal, de conversas ou empresarial que deva permanecer privada",
+    "submissionMethodLabel": "Identidade de envio",
+    "identityGithubUser": "A minha conta GitHub @{{login}}",
+    "identityGithubUserHint": "Será o autor no GitHub e poderá editar ou fechar esta ocorrência no GitHub",
+    "identityPlatform": "Bot oficial do Cindy @{{login}} (predefinição)",
+    "identityPlatformHint": "Não é necessário configurar uma conta GitHub. O bot oficial cria a ocorrência e pode adicionar uma atribuição pública no corpo",
+    "publicNameLabel": "Atribuição pública",
+    "publicNameHint": "Esta atribuição aparecerá publicamente no corpo da ocorrência",
+    "anonymous": "Anónimo",
+    "useAnonymous": "Usar atribuição anónima",
+    "envLine": "Ambiente do cliente de envio (anexado automaticamente ao enviar): cliente {{appVersion}} · {{platform}} {{arch}} ({{osVersion}}) · Idioma da interface {{uiLanguage}}",
+    "runtimeLine": "Harness {{harness}} · ID do modelo {{modelId}} (esta sessão)",
+    "regionLine": "Região da compilação: {{region}}",
+    "regionCodeCn": "CN",
+    "regionCodeDev": "Dev",
+    "submit": "Enviar feedback",
+    "cancel": "Cancelar",
+    "previewLabel": "GitHub · Feedback público",
+    "edit": "Editar",
+    "doneEditing": "Concluir edição",
+    "publicSubmit": "Enviar publicamente",
+    "publicationNotice": "O conteúdo e o seu nome ficarão públicos no GitHub.",
+    "attribution": "Por {{name}}",
+    "environment": "Ambiente incluído",
+    "identitySettings": "Nome e conta"
   }
 }

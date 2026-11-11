@@ -121,9 +121,13 @@ import {
   useOpeningCollection,
 } from './AttachmentCollection';
 import {
+  PREVIEW_PANEL_CLASS,
+  PREVIEW_PANEL_STYLE,
   PreviewHeader,
   PreviewFooter,
   PreviewButton as LightboxToolbarButton,
+  PreviewScrim,
+  previewPanelSize,
 } from './PreviewChrome';
 import { previewAdjacentIndex, previewSourceName } from '@cindy/maker-shared/attachment-preview';
 
@@ -472,10 +476,9 @@ function ImageLightboxContent({
   const [naturalSize, setNaturalSize] = useState<{ src: string; w: number; h: number } | null>(
     null,
   );
-  const [viewportSize, setViewportSize] = useState(() => ({
-    width: window.innerWidth,
-    height: window.innerHeight,
-  }));
+  const [viewportSize, setViewportSize] = useState(() =>
+    previewPanelSize({ width: window.innerWidth, height: window.innerHeight }),
+  );
   const imgRef = useRef<HTMLImageElement>(null);
   // once-bound keydown handler 需要读到最新标注态,与 viewportRef 同一模式。
   const isAnnotatingRef = useRef(false);
@@ -492,7 +495,7 @@ function ImageLightboxContent({
 
   useEffect(() => {
     const updateViewportSize = () => {
-      setViewportSize({ width: window.innerWidth, height: window.innerHeight });
+      setViewportSize(previewPanelSize({ width: window.innerWidth, height: window.innerHeight }));
     };
     window.addEventListener('resize', updateViewportSize);
     return () => window.removeEventListener('resize', updateViewportSize);
@@ -1409,6 +1412,17 @@ function ImageLightboxContent({
     }
   }
 
+  // 点预览窗外的遮罩与点窗内空白背景同一套守卫:菜单刚关、标注中、拖拽平移松手都不关。
+  const closeFromBackdrop = () => {
+    if (performance.now() - lastMenuCloseAt.current < 150) return;
+    if (isAnnotating) return;
+    if (dragMovedRef.current) {
+      dragMovedRef.current = false;
+      return;
+    }
+    handleClose();
+  };
+
   // 遮罩颜色走统一 token，不再按 Light / Dark 分支判断。
   const overlay = (
     // FocusScope(trapped+loop):键盘打开后焦点进入弹窗并圈禁在内,Tab 不再
@@ -1417,6 +1431,8 @@ function ImageLightboxContent({
     // Tab 依次到达工具栏/翻页按钮;卸载时 FocusScope 默认把焦点还给打开前
     // 的元素(ChatImageView 键盘路径 = 预览触发器,与 onClose 里的显式恢复
     // 指向同一元素)。
+    <>
+    <PreviewScrim onClose={closeFromBackdrop} />
     <FocusScope
       onUnmountAutoFocus={restorePreviewFocus}
       asChild
@@ -1431,33 +1447,22 @@ function ImageLightboxContent({
     <div
       ref={overlayRef}
       data-lightbox-layer
+      className={PREVIEW_PANEL_CLASS}
       style={{
-        position: 'fixed',
-        inset: 0,
+        ...PREVIEW_PANEL_STYLE,
         zIndex: 9999,
-        background: 'var(--surface)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
         transition: 'opacity 200ms ease',
         opacity: isVisible ? 1 : 0,
         cursor: 'default',
-        // 放大后的图片可能超出视口,裁掉溢出部分避免出现滚动条。
-        overflow: 'hidden',
       }}
       onClick={(e) => {
-        // 右键菜单刚关闭时，吞掉同一次手势带来的 overlay click。
-        if (performance.now() - lastMenuCloseAt.current < 150) return;
-        // 标注模式中背景点击不关闭,防误触丢笔迹;放弃走 X 按钮或 Esc。
-        if (isAnnotating) return;
-        // 拖拽平移松手落在背景上时,同一手势的 click 不能顺带关闭。
-        if (dragMovedRef.current) {
-          dragMovedRef.current = false;
-          return;
-        }
-        // 只有点在黑色背景上才关闭;点在图片(或其它子元素)上不关,给双击缩放让路。
+        // 右键菜单刚关闭、标注模式(防误触丢笔迹)、拖拽平移松手时都不关闭;
+        // 只有点在空白背景上才关闭,点在图片(或其它子元素)上不关,给双击缩放让路。
         if (e.target !== e.currentTarget) return;
-        handleClose();
+        closeFromBackdrop();
       }}
     >
         <PreviewHeader
@@ -1565,8 +1570,8 @@ function ImageLightboxContent({
             // onLoad 后写入 contain 结果，同时让标注层与真实图片盒严格同尺寸。
             width: fittedImageSize?.width,
             height: fittedImageSize?.height,
-            maxWidth: 'calc(100vw - 80px)',
-            maxHeight: 'calc(100vh - 160px)',
+            maxWidth: 'calc(var(--preview-width) - 80px)',
+            maxHeight: 'calc(var(--preview-height) - 160px)',
             objectFit: 'contain',
             userSelect: 'none',
           }}
@@ -1863,6 +1868,7 @@ function ImageLightboxContent({
         </PreviewFooter>
       </div>
     </FocusScope>
+    </>
   );
 
   return createPortal(overlay, document.body);

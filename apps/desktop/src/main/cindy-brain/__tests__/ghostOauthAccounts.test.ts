@@ -15,6 +15,7 @@ import {
   type GhostOauthDecl,
   type GhostOauthVault,
 } from '../ghostOauthAccounts.js';
+import type { GhostOauthAvatarHop } from '../ghostOauthFlow.js';
 
 /** invalid_grant 路径的即时延时假体(不注入会真等 2 秒拖慢用例)。 */
 const instantSleep = async (): Promise<void> => {};
@@ -32,8 +33,12 @@ const DECL: GhostOauthDecl = {
 /** §4.4: 特权不再随官方前缀默认放行，测试夹具显式授予。 */
 const FIRST_PARTY_HOST = {
   isTokenBrokerAuthorized: () => true,
-  isHostPrimitiveAuthorized: () => true,
 } as const;
+
+/** 把测试 fetch 适配成头像下载的受防护单跳通道(生产注入 guardedOutboundFetch)。 */
+const avatarHopVia = (
+  fetchImpl: (input: string, init?: RequestInit) => Promise<Response>,
+): GhostOauthAvatarHop => async (url, init) => ({ response: await fetchImpl(url, init), release: async () => {} });
 
 function memoryVault(
   seed?: Record<string, string>,
@@ -987,7 +992,7 @@ describe('connectAccount', () => {
     expect(mgr.listAccounts(GHOST, KEY)).toHaveLength(0);
   });
 
-  it('端口回收器只对第一方官方意识放行(第三方 redirectPort 不许借刀杀进程)', async () => {
+  it('所有插件都进入宿主端口确认流程，拒绝确认仍然 LISTEN_FAILED', async () => {
     const blocker = http.createServer();
     const heldPort = await new Promise<number>((resolve) => {
       blocker.listen(0, '127.0.0.1', () => {
@@ -1004,26 +1009,25 @@ describe('connectAccount', () => {
         redirectPort: heldPort,
       };
       const reclaimPort = vi.fn(async () => false);
-      const mkMgr = (hostPrimitive: boolean): GhostOauthAccountManager =>
+      const mkMgr = (): GhostOauthAccountManager =>
         new GhostOauthAccountManager({
           vault: memoryVault(),
           fetchImpl: vi.fn() as unknown as typeof fetch,
           openExternal: vi.fn(),
           reclaimPort,
-          isHostPrimitiveAuthorized: () => hostPrimitive,
         });
       // 第三方 id:门控挡住,占用直接报错,回收器(杀进程)绝不能被调用。
-      await expect(mkMgr(false).connectAccount('evil-tools', KEY, decl)).resolves.toMatchObject({
-        ok: false,
-        error: 'LISTEN_FAILED',
-      });
-      expect(reclaimPort).not.toHaveBeenCalled();
-      // 经第一方宿主原语授权后才调用回收器(此处回收失败仍 LISTEN_FAILED,只验门控)。
-      await expect(mkMgr(true).connectAccount('cindy-google', KEY, decl)).resolves.toMatchObject({
+      await expect(mkMgr().connectAccount('evil-tools', KEY, decl)).resolves.toMatchObject({
         ok: false,
         error: 'LISTEN_FAILED',
       });
       expect(reclaimPort).toHaveBeenCalledTimes(1);
+      // 经第一方宿主原语授权后才调用回收器(此处回收失败仍 LISTEN_FAILED,只验门控)。
+      await expect(mkMgr().connectAccount('cindy-google', KEY, decl)).resolves.toMatchObject({
+        ok: false,
+        error: 'LISTEN_FAILED',
+      });
+      expect(reclaimPort).toHaveBeenCalledTimes(2);
     } finally {
       await new Promise((r) => blocker.close(r));
     }
@@ -1149,6 +1153,7 @@ describe('connectAccount', () => {
       fetchImpl: fetchImpl as unknown as typeof fetch,
       openExternal: autoBrowser(),
       ...FIRST_PARTY_HOST,
+      fetchAvatarHop: avatarHopVia(fetchImpl),
     });
 
     const result = await mgr.connectAccount(GHOST, KEY, avatarDecl);
@@ -1163,9 +1168,10 @@ describe('connectAccount', () => {
     expect(vault.read(GHOST, `${KEY}-avatar-${result.account.id}`)).toBeNull();
   });
 
-  it('第三方意识声明 avatarPath → 不触发头像下载(SSRF 门控,恒无头像)', async () => {
-    // client 凭证内置在详单里(memoryVault 的种子键挂在 GHOST 命名空间下,
-    // 第三方 ghostId 读不到)。
+  it('任何插件声明 avatarPath → 头像只经受防护通道下载;未注入通道则不下载', async () => {
+    // 2026-11-02 去特权:头像不再只给官方插件,改为所有插件统一走受防护单跳通道
+    // (拦截内网/回环、逐跳复核)。普通 fetchImpl 绝不能代发头像地址,否则身份
+    // 响应里的任意 https 就成了主机代发的 SSRF 读原语。
     const avatarDecl: GhostOauthDecl = {
       ...DECL,
       clientId: 'cid-baked',
@@ -1175,32 +1181,38 @@ describe('connectAccount', () => {
         avatarPath: 'picture',
       },
     };
+    const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
     const fetchImpl = vi.fn(async (input: string | URL | Request) => {
       const url = String(input);
       if (url === DECL.tokenUrl) {
         return jsonResponse({ access_token: 'at-1', refresh_token: 'rt-1', expires_in: 3600 });
       }
       if (url === 'https://api.example.com/userinfo') {
-        return jsonResponse({
-          email: 'user@example.com',
-          picture: 'https://internal.example/secret.png',
-        });
+        return jsonResponse({ email: 'user@example.com', picture: 'https://cdn.example.com/a.png' });
       }
       throw new Error(`unexpected fetch ${url}`);
     });
-    const mgr = new GhostOauthAccountManager({
-      vault: memoryVault(),
-      fetchImpl: fetchImpl as unknown as typeof fetch,
-      openExternal: autoBrowser(),
-    });
-    const result = await mgr.connectAccount('evil-tools', KEY, avatarDecl);
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.account.avatarDataUrl).toBeNull();
-    // 头像地址从未被主机请求过(fetch 只打过 token 与身份端点)。
-    expect(fetchImpl.mock.calls.map((c) => String(c[0]))).not.toContain(
-      'https://internal.example/secret.png',
-    );
+    const hop = vi.fn<GhostOauthAvatarHop>(async () => ({
+      response: new Response(new Uint8Array(pngBytes), { status: 200, headers: { 'Content-Type': 'image/png' } }),
+      release: async () => {},
+    }));
+    for (const [fetchAvatarHop, expected] of [
+      [hop, `data:image/png;base64,${pngBytes.toString('base64')}`],
+      [undefined, null],
+    ] as const) {
+      const mgr = new GhostOauthAccountManager({
+        vault: memoryVault(),
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+        openExternal: autoBrowser(),
+        ...(fetchAvatarHop ? { fetchAvatarHop } : {}),
+      });
+      const result = await mgr.connectAccount('evil-tools', KEY, avatarDecl);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.account.avatarDataUrl).toBe(expected);
+    }
+    expect(hop.mock.calls.map((c) => c[0])).toEqual(['https://cdn.example.com/a.png']);
+    expect(fetchImpl.mock.calls.map((c) => String(c[0]))).not.toContain('https://cdn.example.com/a.png');
   });
 
   it('头像下载失败 → 连接照常成功,avatarDataUrl 为 null(best-effort)', async () => {
@@ -1230,6 +1242,7 @@ describe('connectAccount', () => {
       fetchImpl: fetchImpl as unknown as typeof fetch,
       openExternal: autoBrowser(),
       ...FIRST_PARTY_HOST,
+      fetchAvatarHop: avatarHopVia(fetchImpl),
     });
     const result = await mgr.connectAccount(GHOST, KEY, avatarDecl);
     expect(result.ok).toBe(true);
@@ -2743,11 +2756,13 @@ describe('identity.avatarPath 头像回填', () => {
 
   it('老账号回填:令牌刷新成功后 best-effort 补头像(不用重连)', async () => {
     const vault = legacyVault();
+    const fetchImpl = avatarFetch();
     const mgr = new GhostOauthAccountManager({
       vault,
-      fetchImpl: avatarFetch() as unknown as typeof fetch,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
       openExternal: vi.fn(),
       ...FIRST_PARTY_HOST,
+      fetchAvatarHop: avatarHopVia(fetchImpl),
     });
     await expect(mgr.getFreshAccessToken(GHOST, KEY, AVATAR_DECL)).resolves.toMatchObject({
       ok: true,
@@ -2759,17 +2774,8 @@ describe('identity.avatarPath 头像回填', () => {
     expect(mgr.listAccounts(GHOST, KEY)[0]?.avatarDataUrl).toBe(PNG_DATA_URL);
   });
 
-  it('第三方意识回填不下载头像(SSRF 门控与 connect 同口径)', async () => {
-    // displayTemplate 让第三方的回填仍会拉一次身份端点(展示名回填不设官方门),
-    // 但身份响应里的头像地址绝不能被主机请求。
-    // 模板刻意渲染出与种子 label 不同的值:waitFor 锚在"displayLabel 确已
-    // 回填"上才不恒真——patchAccount(同步)之后若门被删,cdn fetch 在同一
-    // 同步段内已发生,下面的负断言是确定性的,不与 backfill 微任务链竞态。
-    const decl: GhostOauthDecl = {
-      ...AVATAR_DECL,
-      clientId: 'cid-baked',
-      identity: { ...AVATAR_DECL.identity!, displayTemplate: '{email}·bf' },
-    };
+  it('第三方插件回填头像同样只经受防护通道(与 connect 同口径)', async () => {
+    const decl: GhostOauthDecl = { ...AVATAR_DECL, clientId: 'cid-baked' };
     const vault = memoryVault();
     vault.store(
       'evil-tools',
@@ -2781,22 +2787,24 @@ describe('identity.avatarPath 头像回填', () => {
     );
     vault.store('evil-tools', `${KEY}-rt-acc-1`, 'rt-old');
     const fetchImpl = avatarFetch();
+    const hop = vi.fn<GhostOauthAvatarHop>(async () => ({
+      response: new Response(new Uint8Array(PNG_BYTES), { status: 200, headers: { 'Content-Type': 'image/png' } }),
+      release: async () => {},
+    }));
     const mgr = new GhostOauthAccountManager({
       vault,
       fetchImpl: fetchImpl as unknown as typeof fetch,
       openExternal: vi.fn(),
+      fetchAvatarHop: hop,
     });
     await expect(mgr.getFreshAccessToken('evil-tools', KEY, decl)).resolves.toMatchObject({
       ok: true,
     });
-    // 等展示名回填落库,证明身份端点确实拉过了(而不是回填整体没跑)。
     await vi.waitFor(() => {
-      expect(mgr.listAccounts('evil-tools', KEY)[0]?.label).toBe('user@example.com·bf');
+      expect(vault.read('evil-tools', `${KEY}-avatar-acc-1`)).toBe(PNG_DATA_URL);
     });
-    expect(fetchImpl.mock.calls.map((c) => String(c[0]))).not.toContain(
-      'https://cdn.example.com/a.png',
-    );
-    expect(vault.read('evil-tools', `${KEY}-avatar-acc-1`)).toBeNull();
+    expect(hop.mock.calls.map((c) => c[0])).toEqual(['https://cdn.example.com/a.png']);
+    expect(fetchImpl.mock.calls.map((c) => String(c[0]))).not.toContain('https://cdn.example.com/a.png');
   });
 
   it('头像下载期间账号被断开 → 不写孤儿头像键', async () => {
@@ -2833,6 +2841,7 @@ describe('identity.avatarPath 头像回填', () => {
       fetchImpl: fetchImpl as unknown as typeof fetch,
       openExternal: vi.fn(),
       ...FIRST_PARTY_HOST,
+      fetchAvatarHop: avatarHopVia(fetchImpl),
     });
     await expect(mgr.getFreshAccessToken(GHOST, KEY, AVATAR_DECL)).resolves.toMatchObject({
       ok: true,

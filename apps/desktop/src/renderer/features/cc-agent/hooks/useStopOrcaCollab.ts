@@ -6,12 +6,13 @@
  *   - WorkdirBrowseRoute 内嵌 OrcaSplitView 的 Worker pane ×
  *
  * 流程:二次确认弹窗 → disableOrca IPC → sessionsStore 刷新 →
- * navigate 回单 session 路由(可选, navigateOnSuccess=false 时不跳, 让调用方自己决定)。
+ * navigate 回单 session 路由(可选, navigateOnSuccess=false 时不跳, 让调用方自己决定;
+ * 请求完成时用户已不在该 Lead 的聊天路由也不跳)。
  *
  * 失败:toast 提示, 不抛错(swallowed), busy 状态自动复位。
  */
 import { useCallback, useState } from 'react';
-import { useNavigate, type NavigateFunction } from 'react-router-dom';
+import { matchPath, useNavigate, type NavigateFunction } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
@@ -21,6 +22,15 @@ import { createLogger } from '@/lib/logger';
 import { makerApiForSticky } from '@/lib/makerTransport';
 
 const log = createLogger('useStopOrcaCollab');
+const LEAD_CHAT_ROUTES = ['/cc-agent/:sessionId', '/cc-agent/orca/:sessionId'] as const;
+
+// 读取实时地址；删除/归档判据还包含同一任务的文件页，结束协同不能把用户从那里拉回。
+function isLeadChatRouteCurrent(leadSessionId: string): boolean {
+  const pathname = window.location.hash.slice(1).split(/[?#]/, 1)[0];
+  return LEAD_CHAT_ROUTES.some(
+    (path) => matchPath(path, pathname)?.params.sessionId === leadSessionId,
+  );
+}
 
 export interface UseStopOrcaCollabOptions {
   /** Lead session id —— 没有(尚未创建)时 hook 返回的 requestStop 直接 no-op。 */
@@ -65,7 +75,10 @@ function useStopOrcaCollabCore(
       // 销毁一个不存在的 team、或撞上同 id 的本机会话,而远端的协同其实还开着。
       await makerApiForSticky(leadSessionId).disableOrca(leadSessionId);
       void sessionsStore.forceRefresh('active');
-      if (navigateOnSuccess && navigate) {
+      // disableOrca 要等 Worker 归档与 worktree 回收，可能持续数秒；用户这期间切走、新建或删除了
+      // Lead 时，不能把当前页面 replace 回 Lead。读 HashRouter 的实时地址，发起视图已卸载或
+      // 被复用到别的任务也成立。
+      if (navigateOnSuccess && navigate && isLeadChatRouteCurrent(leadSessionId)) {
         navigate(`/cc-agent/${leadSessionId}`, { replace: true });
       }
       return true;

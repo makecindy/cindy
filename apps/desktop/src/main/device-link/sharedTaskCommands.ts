@@ -1,4 +1,4 @@
-import type { SharedTaskApi, SharedTaskCloseResult, SharedTaskHostState, SharedTaskOwnedItem } from '@cindy/device-link';
+import type { SharedTaskApi, SharedTaskCloseResult, SharedTaskHostCommand, SharedTaskHostState, SharedTaskOwnedItem } from '@cindy/device-link';
 import type { SharedTaskHost } from './sharedTaskHost.js';
 import { requireString, throwIpcError } from '../utils/ipcValidate.js';
 
@@ -13,6 +13,44 @@ function id(value: unknown): string {
 }
 
 /** Owner management is never exposed through guest task invoke permissions. */
+export function captureSharedTaskAgentCommand(sessionId: string, assertCaller: () => void, deps: {
+  ready(): Promise<void>; online(): boolean; available(): boolean; host(): SharedTaskHost | null;
+  runScoped<T>(assertCurrent: () => void, work: () => Promise<T>): Promise<T>;
+}): (command: SharedTaskHostCommand) => Promise<unknown> {
+  assertCaller();
+  // Host acquisition can restart a background reconciler. It must happen outside
+  // the tool's async scope, and before any authorization/relay wait, so an owner's
+  // intervening closure cannot become permission to open sharing again.
+  const host = deps.host();
+  const assertHost = host?.captureManagementScope(sessionId);
+  const previousId = host?.activeSharedTaskIds().find(id => host.detail(id)?.sessionId === sessionId);
+  let previousShareChanged = false;
+  const assertCurrent = () => { assertCaller(); assertHost?.(); };
+  return async command => {
+    await deps.ready();
+    assertCurrent();
+    if (!deps.online()) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Shared task relay is offline');
+    if (deps.available() && !host) throwIpcError('PRECONDITION_FAILED', 'Shared task host changed; query again');
+    return deps.runScoped(assertCurrent, async () => {
+      assertCurrent();
+      let result: unknown;
+      if (command.action === 'state') {
+        const available = !!host && deps.available();
+        const detail = available ? await host!.readState(sessionId) : null;
+        // A known share disappearing/replaced while preparing an invitation must
+        // not turn the old request into permission to open a new share.
+        if (previousId && detail?.sharedTaskId !== previousId) previousShareChanged = true;
+        result = { available, detail };
+      } else {
+        if (previousShareChanged) throw new Error('Shared task management changed');
+        result = await executeSharedTaskHostCommand(command, { available: () => !!host && deps.available(), host: () => host! });
+      }
+      assertCurrent();
+      return result;
+    });
+  };
+}
+
 export async function executeSharedTaskHostCommand(raw: unknown, deps: {
   available(): boolean; host(): SharedTaskHost;
 }): Promise<unknown> {

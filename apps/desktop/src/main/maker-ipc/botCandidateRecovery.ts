@@ -1,6 +1,6 @@
 import { isNetworkishErrorMessage, isOverloadErrorMessage } from '@cindy/maker-core';
 import { matchesDeterministicUsageExhaustionText } from '@cindy/maker-shared/error-redaction';
-import type { InterruptedTurnErrorSignals } from './interruptedTurnAutoResume.js';
+import { isRemoteAgentRouteLostReason, type InterruptedTurnErrorSignals } from './interruptedTurnAutoResume.js';
 
 /** A failed provider may be replaced, even when retrying that provider is forbidden. */
 export function isBotCandidateUnavailable(signals: InterruptedTurnErrorSignals): boolean {
@@ -9,6 +9,9 @@ export function isBotCandidateUnavailable(signals: InterruptedTurnErrorSignals):
   // only hides the real cause. Reuse the shared deterministic signal that the
   // Codex terminal retry, Cindy AI search and the error banner already honour.
   if (matchesDeterministicUsageExhaustionText(signals.message ?? '')) return false;
+  // The agent serving this route on another computer is gone; another candidate route can still run the
+  // turn. An owner disconnect is `user-revoked`, not this.
+  if (isRemoteAgentRouteLostReason(signals.reason)) return true;
   const reason = signals.reason ?? '';
   // Explicit product/control failures must never be reinterpreted from their text.
   if (reason && ![
@@ -37,9 +40,17 @@ export interface RuntimeFallbackResult<T> {
   outcome: 'unchanged' | 'switched' | 'exhausted' | 'failed' | 'superseded';
 }
 
+/**
+ * `unchanged` under a required route change means no other route exists at all
+ * (single-route chain or explicit routine model): an ordinarily retryable failure
+ * then keeps the same-route resume an ordinary task would get. `exhausted` means
+ * other routes were configured and tried, so the failed route is not retried.
+ */
 export function canResumeAfterRuntimeFallback(
   requireRouteChange: boolean,
   result: RuntimeFallbackResult<unknown>,
+  sameRouteRetryable = false,
 ): boolean {
-  return result.outcome !== 'superseded' && (!requireRouteChange || result.outcome === 'switched');
+  return result.outcome !== 'superseded' && (!requireRouteChange || result.outcome === 'switched'
+    || (sameRouteRetryable && result.outcome === 'unchanged'));
 }

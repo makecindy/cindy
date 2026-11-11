@@ -1,12 +1,10 @@
-import { useCallback, useContext, useEffect, useMemo, useRef, type Dispatch, type SetStateAction } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useRef } from 'react';
 import type { StyleProp, TextStyle } from 'react-native';
-import { useRecyclingState } from '@legendapp/list/react-native';
 import { Text } from '@/components/AppText';
 import { canOpenChatPathChip, resolveChatAbsPath, toWorkdirRel, type ChatPathCandidate } from '@/session/chatPathCandidate';
 import { ChatFilePathContext, type ChatFilePathTarget } from '@/session/chatFilePathContext';
+import { useRowStateHook, type RowStateHook } from '@/session/listRowState';
 import { peekRemotePathVerdict, peekRemotePathVerdictForRender, remotePathVerdictKey, subscribeRemotePathVerdictChange, verifyRemotePathCached, type RemotePathVerdict } from '@/session/remotePathVerdict';
-
-type PathStateHook = <T>(initial: T | (() => T)) => readonly [T, Dispatch<SetStateAction<T>>];
 
 /**
  * 文件/目录路径 chip 的共享执行体(远程会话文件交互,对齐桌面 #631 的 chip 点亮
@@ -26,7 +24,7 @@ export function ChatPathChipSpan({
   SpanText,
   streaming,
   explicitLink = false,
-  usePathState = useRecyclingState,
+  usePathState: usePathStateOverride,
 }: {
   candidate: ChatPathCandidate | null;
   chipStyle: StyleProp<TextStyle>;
@@ -37,9 +35,11 @@ export function ChatPathChipSpan({
   streaming?: boolean;
   /** Authored Markdown links retain an open action even when the file is missing. */
   explicitLink?: boolean;
-  /** Composer cards live outside LegendList, whose state setters require a list item. */
-  usePathState?: PathStateHook;
+  /** Explicit state hook; defaults to recycling state only inside a LegendList message row. */
+  usePathState?: RowStateHook;
 }) {
+  const rowStateHook = useRowStateHook();
+  const usePathState = usePathStateOverride ?? rowStateHook;
   const ctx = useContext(ChatFilePathContext);
   // workdir 外候选不再一票否决:relPath 为 null 表示 workdir 外,文件仍可经
   // absPath 通道打开,可开性由 canOpenChatPathChip 在 verdict 定 kind 后裁决。

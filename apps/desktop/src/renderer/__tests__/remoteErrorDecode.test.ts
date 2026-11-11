@@ -1,9 +1,43 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import { decodeRemoteErrorMessage, remoteErrorMessageForBanner } from '@/lib/makerChatStore';
+import { decodeRemoteErrorMessage, remoteErrorMessageForBanner, makerChatStore } from '@/lib/makerChatStore';
+import { sharedTaskRecoveryError, sharedTaskRecoveryFor } from '../../shared/sharedTaskRecovery';
 import { i18n } from '@/i18n';
 
 describe('decodeRemoteErrorMessage', () => {
+  // Unit: a real lazy-create rejection must retain the account code and reset
+  // metadata until the banner translates them in its active locale.
+  it('preserves subscription guidance through the actual enqueue rejection', async () => {
+    const raw = 'LAZY_CREATE_FAILED: [SUBSCRIPTION_ACCOUNT_LIMITED] waiting for reset\nresetAtMs=1900000000000';
+    const enqueue = vi.fn().mockRejectedValue(new Error(raw));
+    vi.stubGlobal('window', { dispatchEvent: vi.fn(), electronAPI: { maker: { input: { enqueue },
+      autoTitle: vi.fn().mockResolvedValue({ applied: true, done: true }) } } });
+    try {
+      const id = 'local-task-subscription-reject';
+      expect(await makerChatStore.sendMessage(id, 'continue', 'test-model', 'medium', 'auto', '/test')).toBe(false);
+      expect(makerChatStore.getSnapshot(id).error).toBe(raw);
+      expect(decodeRemoteErrorMessage(raw)).toBe(i18n.t('chat.subscriptionAccountError.limitedUntil', {
+        resetAt: new Intl.DateTimeFormat(i18n.language, { dateStyle: 'medium', timeStyle: 'short' }).format(1900000000000),
+      }));
+    } finally { vi.unstubAllGlobals(); }
+  });
+
+  // Unit: local task storage can run a shared provider through main. Its
+  // lazy-create rejection does not use the device-link optimistic outbox.
+  it('preserves recovery reason and stage through the actual enqueue rejection', async () => {
+    const error = sharedTaskRecoveryError('capability', 'unsupported');
+    const enqueue = vi.fn().mockRejectedValue(error);
+    vi.stubGlobal('window', { dispatchEvent: vi.fn(), electronAPI: { maker: { input: { enqueue },
+      autoTitle: vi.fn().mockResolvedValue({ applied: true, done: true }) } } });
+    try {
+      const id = 'local-task-shared-provider-reject';
+      expect(await makerChatStore.sendMessage(id, 'continue', 'test-model', 'medium', 'auto', '/test')).toBe(false);
+      expect(enqueue).toHaveBeenCalledTimes(1);
+      const message = makerChatStore.getSnapshot(id).error!;
+      expect(message).toBe(error.message);
+      expect(sharedTaskRecoveryFor(message, 'share:provider')).toBe('unsupported');
+    } finally { vi.unstubAllGlobals(); }
+  });
   it.each([
     ['MCP_APPROVAL_AUTO_BLOCKED', 'Automatic approval review blocked this tool call. No manual rejection was received.'],
     ['MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'The permission request timed out without a confirmed decision. A timeout does not show whether you clicked a button.'],
@@ -51,6 +85,15 @@ describe('decodeRemoteErrorMessage', () => {
     const raw = '[REMOTE_LOCAL_ONLY_PROVIDER] use a different provider';
     expect(remoteErrorMessageForBanner(raw)).toBe(raw);
     expect(decodeRemoteErrorMessage(raw)).not.toBe(raw);
+  });
+
+  // #8963: first send may reject from the host lazy-create boundary. The
+  // wrapper must retain the known provider code so the live banner can show
+  // the actionable remote-host guidance instead of "reply failed".
+  it('keeps actionable guidance for lazy-create remote provider failures', () => {
+    const raw = 'LAZY_CREATE_FAILED: [REMOTE_COMPAT_MODE_UNSUPPORTED] local provider';
+    expect(remoteErrorMessageForBanner(raw)).toBe(raw);
+    expect(decodeRemoteErrorMessage(raw)).toBe(i18n.t('chat.remoteError.REMOTE_COMPAT_MODE_UNSUPPORTED'));
   });
 
   it('maps a missing auto-review confirmation to i18n text, not a user rejection', () => {

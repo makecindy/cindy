@@ -34,6 +34,17 @@ interface WindowControlsProps {
 
 const DEFAULT_ICON_CLASS = 'text-titlebar-icon';
 
+/**
+ * True when this renderer is served by `cindy-host` into a browser tab.
+ *
+ * A tab already has the browser's own chrome, so drawing minimize/maximize/close
+ * here would duplicate those buttons and target a window that does not exist.
+ * The flag is set by the host shim before the app module runs.
+ */
+function isHostServedWebClient(): boolean {
+  return Boolean((window as unknown as { __CINDY_HOST_WEB__?: boolean }).__CINDY_HOST_WEB__);
+}
+
 export function WindowControls({
   iconClassName = DEFAULT_ICON_CLASS,
   onMinimize,
@@ -220,6 +231,9 @@ export function WindowControls({
   const keepRunningBehavior: Exclude<DesktopCloseBehavior, 'quit'> =
     window.electronAPI.platform === 'linux' ? 'minimize' : 'tray';
 
+  // Browser tab: no desktop window chrome to control (see isHostServedWebClient).
+  if (isHostServedWebClient()) return null;
+
   return (
     <>
       <div className="flex gap-0.5">
@@ -340,7 +354,7 @@ function ClosingOverlay({ visible }: { visible: boolean }) {
       aria-label={t('titleBar.closing.title')}
     >
       <div
-        className="flex items-center gap-2 rounded-full border border-[var(--border-default)] px-4 py-2 shadow-sm"
+        className="flex items-center gap-2 rounded-full border border-[var(--border-default)] px-4 py-2 shadow-[shadow:var(--shadow-menu)]"
         style={{ background: 'var(--surface-elevated)' }}
       >
         <Spinner size={16} className="text-[var(--text-primary)]" />

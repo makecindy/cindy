@@ -151,26 +151,24 @@ it('edits a skill with the host body limit and removes it through a destructive 
   await press(row); expect(h.sheet.title).toBe('Remove?');
 });
 
-// Skill layers (cindy-bots-runtime.md §6「伙伴技能分层」): the host titles the system and learned lists and marks a
+// Skill layers (cindy-bots-runtime.md §6「伙伴技能分层」): the host titles the learned list and marks a
 // turned-off Skill with a subtitle. Before, every entry fell into one untitled group without state.
-// Minimal input: the host's skills page (an untitled core list, two titled lists); unit, parsed by the real reader.
+// Minimal input: the host's skills page (an untitled core list, a titled list); unit, parsed by the real reader.
 it('groups a host editor list under its block titles and shows entry subtitles, as iOS does', async () => {
   const id = 'settings:bot/skills';
   const raw = { ref: { ...ref, id }, revision: 'r1', display: { title: 'Skills' }, links: [], blocks: [
     { id: 'core', primitive: 'list', fallbackMarkdown: '', data: { entries: [{ id: 'core', title: 'Core Skill', subtitle: 'Shared by every teammate', resourceId: `${id}/_core` }] } },
-    { id: 'system', title: 'System Skills', primitive: 'list', fallbackMarkdown: '', data: { entries: [
-      { id: 'todo', title: 'Todos', resourceId: `${id}/_todo` }, { id: 'routine', title: 'Routines', subtitle: 'Off', resourceId: `${id}/_routine` }] } },
-    { id: 'skills', title: 'Personal Skills', primitive: 'list', fallbackMarkdown: '', data: { entries: [{ id: 'learned', title: 'Write briefs', resourceId: `${id}/learned` }] } },
+    { id: 'skills', title: 'Personal Skills', primitive: 'list', fallbackMarkdown: '', data: { entries: [{ id: 'learned', title: 'Write briefs', subtitle: 'Off', resourceId: `${id}/learned` }] } },
   ] };
   const root = () => ({ ...home(), panels: home().panels.map(item => item.id === 'skills' ? { id: 'skills', values: {}, entries: [{ id: 'skills', title: 'Skills', resourceId: id }] } : item) });
   h.read.mockImplementation(async (_invoke: unknown, _device: string, target: { id: string }) => target.id === id ? parseCompanionProfileData(raw, { ...ref, id }) : root());
   await render(); await press(byTest('companionProfile.skills')); await press(byTest('companionProfile.personalSkills'));
   const headers = [...container.querySelectorAll('span')].map(node => node.textContent).filter(text => text?.endsWith('Skills'));
-  expect(headers).toEqual(['System Skills', 'Personal Skills']);
+  expect(headers).toEqual(['Personal Skills']);
   expect(buttons().filter(node => node.dataset.detail !== undefined).map(node => [node.textContent, node.dataset.detail]))
-    .toEqual([['Core Skill', 'Shared by every teammate'], ['Routines', 'Off']]);
-  await press(byText('Routines'));
-  expect(h.read).toHaveBeenLastCalledWith(h.invoke, 'host', { ...ref, id: `${id}/_routine` }, 'en');
+    .toEqual([['Core Skill', 'Shared by every teammate'], ['Write briefs', 'Off']]);
+  await press(byText('Write briefs'));
+  expect(h.read).toHaveBeenLastCalledWith(h.invoke, 'host', { ...ref, id: `${id}/learned` }, 'en');
 });
 
 it('shows a spinner, not loading text, while an editor loads', async () => {
@@ -260,6 +258,29 @@ async function renderModels() {
   expect(h.sheet.trailingAction).toBeUndefined();
   await press(byTest('companionProfile.models'));
 }
+it.each([true, false])('handles Android unchanged primary selection with host support=%s', async supported => {
+  const route = { harness: 'pi', model: 'saved', providerId: 'provider', effort: '', fastMode: false };
+  const values = { modelChain: JSON.stringify([route]), followsDefault: false };
+  const data = home();
+  data.panels.push({ ...form('models', [{ id: 'modelChain', kind: 'multiline' }, { id: 'followsDefault', kind: 'toggle' }], values), ...(supported ? { acceptsModelSelection: true } : {}) });
+  h.read.mockResolvedValue(data);
+  await render(); await press(byTest('companionProfile.models'));
+  expect(h.sheet.trailingAction.disabled).toBe(true);
+  await act(async () => h.model.onChange({ ...values }));
+  expect(h.sheet.trailingAction.disabled).toBe(false);
+  await act(async () => h.sheet.trailingAction.onPress());
+  if (!supported) {
+    expect(h.invoke).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('devices.companionProfile.hostUpgrade');
+    expect(h.sheet.preventDismiss).toBe(true);
+    await act(async () => h.sheet.onBack());
+    expect(h.alert).toHaveBeenCalledOnce();
+    return;
+  }
+  expect(h.invoke.mock.calls[0][2]).toMatchObject({ actionId: 'models-grant', input: values });
+  expect(h.sheet.trailingAction.disabled).toBe(true);
+});
+
 // Model-page Save placement and controller guards were not covered together on Android.
 it('keeps Android model Save in the header and submits the same draft action', async () => {
   await renderModels();

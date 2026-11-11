@@ -7,13 +7,16 @@
  * 读取时只留那台电脑开了「允许被远程调用」的供应商(`remoteInvocationEnabled === true`)：
  * 换模型、协同 Worker、定时任务的默认来源都只能落在这些供应商上。
  */
-import { CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2 } from '@cindy/device-link';
+import { CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2, readProviderMetadataContinuity, scrubSharedProvider } from '@cindy/device-link';
 import { effectiveSourceIdForModel, getModel, isModelSelectableForNewRoute, isModelVisible, remoteInvocationModels, type ProviderView, type AgentKind } from '@cindy/model-providers';
+
+import { isProviderShareAgentDeviceId } from '../../../shared/providerShare.js';
 
 type RemoteInvoke = (
   deviceId: string,
   channel: string,
   args: unknown[],
+  options?: { liveProviderMetadata?: true },
 ) => Promise<{ ok: boolean; result?: unknown; error?: { code?: string; message?: string } }>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -48,26 +51,61 @@ export function parseDeviceProviderViews(value: unknown): ProviderView[] {
   });
 }
 
-/** 读那台电脑允许被远程调用的供应商视图。 */
-export async function readDeviceProviderViews(invoke: RemoteInvoke, deviceId: string, options: { visibleOnly?: boolean } = {}): Promise<ProviderView[]> {
-  const result = await invoke(deviceId, 'maker:provider:list', [
+/**
+ * 读那台电脑允许被远程调用的供应商视图。
+ *
+ * 分享来的供应商与控制端直读(device-link/ipc.ts)用同一份受邀者投影：用户直接选中的分享组按组判断，不看组所在
+ * 电脑本机是否登录(provider-sharing.md §5.1)。`groupMember` 给供应商组读组内电脑用，保留那台本机的状态：
+ * 组分过去的任务带 groupAssigned，在那台直接运行，不再分给它自己组里的电脑。
+ * 同时带出 Main 的 stale 标记；纯数组调用方使用下面的 readDeviceProviderViews。
+ */
+export interface DeviceProviderCatalogRead {
+  views: ProviderView[];
+  /** True when the reply is a stale continuity fallback, not a current live directory. */
+  stale: boolean;
+  /** Remaining source budget; absent for legacy replies without a continuity stamp. */
+  remainingMs?: number;
+}
+
+export async function readDeviceProviderCatalog(
+  invoke: RemoteInvoke,
+  deviceId: string,
+  options: { visibleOnly?: boolean; groupMember?: boolean; live?: boolean } = {},
+): Promise<DeviceProviderCatalogRead> {
+  const args = [
     { capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2] },
-  ]);
+  ];
+  const result = options.live
+    ? await invoke(deviceId, 'maker:provider:list', args, { liveProviderMetadata: true })
+    : await invoke(deviceId, 'maker:provider:list', args);
   if (!result.ok) {
     throw Object.assign(new Error(result.error?.message ?? 'provider list unavailable'), { code: result.error?.code });
   }
-  const providers = parseDeviceProviderViews(result.result).filter((view) => view.remoteInvocationEnabled === true).map(remoteInvocationModels);
-  if (!options.visibleOnly) return providers;
+  const continuity = readProviderMetadataContinuity(result.result);
+  const stale = continuity?.stale === true;
+  const remainingMs = continuity?.remainingMs;
+  const offered = parseDeviceProviderViews(result.result).filter((view) => view.remoteInvocationEnabled === true).map(remoteInvocationModels);
+  const providers = isProviderShareAgentDeviceId(deviceId) && !options.groupMember ? offered.map(scrubSharedProvider) : offered;
+  if (!options.visibleOnly) return { views: providers, stale, ...(remainingMs !== undefined ? { remainingMs } : {}) };
   const visibility = isRecord(result.result) && isRecord(result.result.modelVisibilityOverrides)
     ? result.result.modelVisibilityOverrides : {};
-  return providers.map((provider) => ({ ...provider, models: {
+  return { views: providers.map((provider) => ({ ...provider, models: {
     ...provider.models,
     ...Object.fromEntries(provider.agents.map((agent) => [agent,
       (provider.models[agent] ?? []).filter((model) => {
         const override = visibility[`${agent}:${provider.id}:${model.id}`];
         return isModelVisible(typeof override === 'boolean' ? override : undefined, model.defaultEnabled);
       }).map((model) => ({ ...model, defaultEnabled: true }))])),
-  } }));
+  } })), stale, ...(remainingMs !== undefined ? { remainingMs } : {}) };
+}
+
+/** Array-only compatibility wrapper; callers that must distinguish a stale snapshot use readDeviceProviderCatalog. */
+export async function readDeviceProviderViews(
+  invoke: RemoteInvoke,
+  deviceId: string,
+  options: { visibleOnly?: boolean; groupMember?: boolean; live?: boolean } = {},
+): Promise<ProviderView[]> {
+  return (await readDeviceProviderCatalog(invoke, deviceId, options)).views;
 }
 
 /** 与普通任务共用授权目录；失败不回落到本机的同名供应商。 */

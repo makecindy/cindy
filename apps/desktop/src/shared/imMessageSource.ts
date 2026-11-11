@@ -40,6 +40,7 @@ const IM_CHANNEL_DISPLAY_NAMES: Record<string, string> = {
   wecom: '企业微信',
   dingtalk: '钉钉',
   discord: 'Discord',
+  imessage: 'iMessage',
   slack: 'Slack',
   x: 'X',
 };

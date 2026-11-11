@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { createElement } from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-i18next', () => ({
@@ -891,6 +891,46 @@ describe('PlainUnifiedDiff inline diff helpers', () => {
     rerender(createElement(PlainUnifiedDiff, { diff, viewMode: 'split' }));
     expect(container.querySelector('[data-review-inline-diff="delete"]')?.textContent).toBe('old');
     expect(container.querySelector('[data-review-inline-diff="add"]')?.textContent).toBe('new');
+  });
+
+  // Unit regression: an unchanged review refresh must preserve highlighted DOM
+  // and text selection. Replacing these nodes flooded Windows accessibility
+  // notifications; existing coverage only checked the resulting text/markup.
+  // Code semantics also retain a parent in the AX tree for newly highlighted
+  // tokens instead of promoting every token to the row (native SHOW-event flood).
+  it.each(['unified', 'split'] as const)('preserves highlighted nodes and selection on unchanged %s refresh', (viewMode) => {
+    const diff = fileDiff({
+      hunks: [{
+        ...hunk(0, 1, 1),
+        lines: [
+          line(0, 'delete', 'const label = "old";', 1, null),
+          line(1, 'add', 'const label = "new";', null, 1),
+        ],
+      }],
+    });
+    const { container, rerender } = render(createElement(PlainUnifiedDiff, { diff, viewMode }));
+    expect(within(container).getAllByRole('code').map((code) => code.textContent)).toEqual([
+      'const label = "old";',
+      'const label = "new";',
+    ]);
+    const highlighted = container.querySelector('[data-review-inline-diff="add"]')!;
+    const selection = window.getSelection()!;
+    const range = document.createRange();
+    range.selectNodeContents(highlighted);
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    // A refreshed response has new object identities but identical content.
+    const refreshed = structuredClone(diff);
+    rerender(createElement(PlainUnifiedDiff, { diff: refreshed, viewMode, wordWrap: true }));
+    expect(container.querySelector('[data-review-inline-diff="add"]')).toBe(highlighted);
+    expect(selection.toString()).toBe('new');
+
+    refreshed.hunks[0].lines[1] = line(1, 'add', 'const label = "updated";', null, 1);
+    rerender(createElement(PlainUnifiedDiff, { diff: structuredClone(refreshed), viewMode, wordWrap: true }));
+    expect(container.textContent).toContain('const label = "updated";');
+    expect(container.textContent).not.toContain('const label = "new";');
+    selection.removeAllRanges();
   });
 
   it('skips inline emphasis when word diffs are disabled', () => {

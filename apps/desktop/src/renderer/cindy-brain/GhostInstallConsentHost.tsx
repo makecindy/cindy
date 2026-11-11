@@ -231,7 +231,8 @@ export function GhostInstallConsentHost() {
                   {(!request.trust || request.trust === 'unverified') && (facts.kind === 'install' ? facts.permissions : facts.added).some(item => item.key === 'ui:pages') &&
                     <p className="mb-3 text-13 font-medium text-[var(--confirm-title)]">{t('mcpApps.pluginTrust.unverified')}</p>}
                   {request.target && <div className="mb-3 space-y-2 text-13 leading-5 text-[var(--confirm-desc)]">
-                    <p>{t('settings.ghosts.installConsent.targetIdentity', { name: request.target.namespace || t('settings.ghosts.installConsent.personalTarget') })}</p>
+                    <p>{t('settings.ghosts.installConsent.targetIdentity', { name: request.target.namespace === 'local' ? t('settings.ghosts.installConsent.localTarget') : request.target.namespace || t('settings.ghosts.installConsent.personalTarget') })}</p>
+                    {request.target.organizationIdentityUnavailable && <p>{t('settings.ghosts.installConsent.localOidcUnavailable')}</p>}
                     {request.target.sourceChanged && !replacement && <p>{t('settings.ghosts.installConsent.sourceChanged')}</p>}
                     {request.target.otherCopies > 0 && <p>{t('settings.ghosts.installConsent.otherCopies', { count: request.target.otherCopies })}</p>}
                   </div>}

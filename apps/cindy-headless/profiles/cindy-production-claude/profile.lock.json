@@ -6,9 +6,9 @@
     "cindy-production-cc"
   ],
   "profileFile": "profile.example.json",
-  "profileFileSha256": "a8349afe1d7750f746ed5f07ca08f5cab58e48b81032787891404024d46386e2",
-  "profileDigest": "f754c3bf868e244282870866d35abd29c43b8ffd4408f88bb5d51fffdf04cecd",
-  "systemPromptDigest": "5f50596ae53529f5daed3d7b8ad157b9d02cbcd74336e9f3a4997ed3b0a5a83f",
-  "agentBinaryVersion": "2.1.312",
+  "profileFileSha256": "0466924862e54b06151284c297b0a00aaaff9519818b974b8fb09f947c7cc63a",
+  "profileDigest": "520406aaeb598897f013abda3ded9c3d91b779c5b8bb85bd923663c784e450f9",
+  "systemPromptDigest": "15004bc0708ff6c960384d6214356abe4d32678d91bf9cab7f6e4a21b4d25da4",
+  "agentBinaryVersion": "2.1.321",
   "cindyUpstreamCommit": "fa3fc88d37d205ea993a67d85612fa9a5436fae5"
 }

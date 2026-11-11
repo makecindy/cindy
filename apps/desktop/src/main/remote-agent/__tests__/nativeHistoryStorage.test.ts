@@ -6,13 +6,15 @@ import { nativeHistoryStorage } from '../nativeHistoryStorage';
 import { nativeHistoryDigest, type NativeHistoryManifest } from '../nativeHistoryTransfer';
 
 const mocks = vi.hoisted(() => ({ root: '', find: vi.fn(), dump: vi.fn(), importThread: vi.fn(), removeThread: vi.fn() }));
+const boundDir = vi.hoisted(() => vi.fn<(_nativeId: string) => string | undefined>());
+vi.mock('../../subscription-accounts/store.js', () => ({ readBoundClaudeConfigDir: boundDir }));
 vi.mock('@cindy/maker-core', () => ({ findClaudeSessionJsonl: mocks.find, sanitizeClaudeProjectKey: () => '-target-project' }));
 vi.mock('../../maker-orchestration/claudeTranscriptAnchors', () => ({ defaultClaudeConfigDirCandidates: () => [mocks.root] }));
 vi.mock('../controller/projectFiles', () => ({ claudeConfigDir: () => mocks.root }));
 vi.mock('../../maker-host/codex-thread-storage', () => ({ readCodexThreadStorageReadOnly: async () => undefined }));
 vi.mock('../../maker-host/codex-local-sessions', () => ({ dumpCodexThreadStateRows: mocks.dump, importSharedCodexThread: mocks.importThread, removeSharedCodexThread: mocks.removeThread }));
 const nativeId = '11111111-1111-4111-8111-111111111111';
-beforeEach(async () => { vi.clearAllMocks(); mocks.root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-native-storage-test-')); });
+beforeEach(async () => { vi.clearAllMocks(); boundDir.mockReset(); mocks.root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-native-storage-test-')); });
 afterEach(async () => { await fs.rm(mocks.root, { recursive: true, force: true }); });
 async function fixture(kind: NativeHistoryManifest['kind'], content: string): Promise<{ file: string; manifest: NativeHistoryManifest }> {
   const file = path.join(mocks.root, 'source.jsonl');
@@ -20,7 +22,8 @@ async function fixture(kind: NativeHistoryManifest['kind'], content: string): Pr
   return { file, manifest: { kind, nativeId, bytes: Buffer.byteLength(content), sha256: await nativeHistoryDigest(file) } };
 }
 
-it('restores Claude messages, compaction and tool output under a new native identity without changing the source', async () => {
+// Standard regression: native-history transfer must locate a secondary profile before restoring it.
+it.each([false, true])('restores Claude messages, compaction and tool output under a new native identity without changing the source (secondary=%s)', async (secondary) => {
   const rows = [
     { type: 'user', sessionId: nativeId, uuid: 'user-message', message: { content: 'Keep the exact original requirements' } },
     { type: 'system', sessionId: nativeId, subtype: 'compact_boundary', compactMetadata: { trigger: 'auto' } },
@@ -28,7 +31,9 @@ it('restores Claude messages, compaction and tool output under a new native iden
   ];
   const content = rows.map(row => JSON.stringify(row)).join('\n') + '\n';
   const { file, manifest } = await fixture('claude-code', content);
-  mocks.find.mockResolvedValue(file);
+  const configDir = secondary ? path.join(mocks.root, 'second-profile') : mocks.root;
+  if (secondary) boundDir.mockReturnValue(configDir);
+  mocks.find.mockImplementation(async (_id, _cwd, root) => root === path.join(configDir, 'projects') ? file : null);
   const storage = nativeHistoryStorage(mocks.root);
   expect(await storage.locate('claude-code', nativeId)).toEqual({ file });
   const restored = await storage.restore(file, manifest, '/target/project', () => {});

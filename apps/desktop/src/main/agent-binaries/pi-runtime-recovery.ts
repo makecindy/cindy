@@ -1,15 +1,39 @@
 import type { PrepareResult } from './types.js';
 
+/** Startup preparation is optional; an unavailable Pi must not block the other agents. */
+export async function prepareOptionalPiRuntime(options: {
+  prepare: () => Promise<PrepareResult>;
+  /** True when Pi is registered, or registration can wait for Maker construction. */
+  register: () => boolean;
+}): Promise<{ status: 'passed' | 'failed'; path?: string; error?: string }> {
+  try {
+    const result = await options.prepare();
+    if (!result.ready || !result.path) {
+      return { status: 'failed', error: result.error ?? 'pi binary not available' };
+    }
+    // IM or plugins may have constructed Maker before Pi became ready. Reuse
+    // the idempotent registration path; if Maker does not exist yet, its normal
+    // construction will pick up the prepared binary instead.
+    if (!options.register()) {
+      return { status: 'failed', error: 'registration_failed' };
+    }
+    return { status: 'passed', path: result.path };
+  } catch (error) {
+    return { status: 'failed', error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 /** Timer delays after consecutive optional Pi runtime recovery failures. */
 export const PI_RUNTIME_RECOVERY_RETRY_DELAYS_MS = [30_000, 60_000, 120_000, 300_000] as const;
 
-/** Only errors that may change when connectivity returns are worth retrying. */
+/** Retry transient prepare errors and registration failures after successful prepare. */
 export function isRetryablePiPrepareError(error?: string): boolean {
   return (
     error === 'manifest_failed' ||
     error === 'NETWORK' ||
     error === 'HTTP_5XX' ||
-    error === 'ABORTED'
+    error === 'ABORTED' ||
+    error === 'registration_failed'
   );
 }
 

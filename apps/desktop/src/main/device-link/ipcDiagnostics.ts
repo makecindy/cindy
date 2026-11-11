@@ -191,8 +191,7 @@ export function createDeviceLinkIpcDiagnostics(
         ...deps,
         openLink: (peer) => observe(windowId, peer, 'open-link', '', () => deps.openLink(peer)),
         invoke: (peer, channel, args, options) =>
-          observe(windowId, peer, 'invoke', channel, () => options
-            ? deps.invoke(peer, channel, args, options) : deps.invoke(peer, channel, args)),
+          observe(windowId, peer, 'invoke', channel, () => deps.invoke(peer, channel, args, { ...options, diagnosticSource: 'renderer' })),
         subscribe: (peer, topics) =>
           observe(windowId, peer, 'subscribe', '', () => deps.subscribe(peer, topics)),
         unsubscribe: (peer, topics) =>

@@ -1,3 +1,7 @@
+export function getComposerModifierShortcutLabel(platform: string | undefined): string {
+  return platform === 'darwin' ? '⌘+Enter' : 'Ctrl+Enter';
+}
+
 export function hasComposerModifier(
   event: Pick<KeyboardEvent, 'metaKey' | 'ctrlKey'>,
   platform: string | undefined,

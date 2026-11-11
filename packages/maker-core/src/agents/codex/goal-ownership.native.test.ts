@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { createServer, type ServerResponse } from "node:http";
 import { expect, it } from "vitest";
+import { CodexAgent } from "./index.js";
 import { AppServerHost } from "./app-server/host.js";
 import { createStdioTransport } from "./app-server/stdioTransport.js";
 import type { Logger } from "../../interfaces/logger.js";
@@ -22,18 +23,19 @@ const logger: Logger = {
 };
 
 it.skipIf(!binaryPath)(
-  "disables native goal tools and continuation even when resuming a persisted active goal",
+  "disables native Goal execution in cold resumes and auxiliary oneShot calls",
   async () => {
     const root = await fs.mkdtemp(
       path.join(os.tmpdir(), "cindy-goal-ownership-"),
     );
     const requests: Array<{
-      body: { input: Array<{ role?: string; content?: unknown }> };
+      body: { input: Array<{ role?: string; content?: unknown; call_id?: string; output?: unknown }> };
       response: ServerResponse;
     }> = [];
     let replyAutomatically = false;
+    let pendingOutputs: Array<Array<Record<string, unknown>>> = [];
     const reply = (response: ServerResponse) => {
-      const output = [
+      const output = pendingOutputs.shift() ?? [
         {
           type: "message",
           id: "answer",
@@ -49,6 +51,9 @@ it.skipIf(!binaryPath)(
         },
       ];
       response.writeHead(200, { "Content-Type": "text/event-stream" });
+      for (const [output_index, item] of output.entries()) {
+        response.write(`data: ${JSON.stringify({ type: "response.output_item.done", output_index, item })}\n\n`);
+      }
       response.end(
         `event: response.completed\ndata: ${JSON.stringify({
           type: "response.completed",
@@ -71,6 +76,37 @@ it.skipIf(!binaryPath)(
       requests.push({ body: JSON.parse(body), response });
       if (replyAutomatically) reply(response);
     });
+    // A 0.166 resumed request can retain obsolete tool descriptions in history.
+    // Probe the live registry and execution instead of searching that history.
+    const goalCalls = [
+      { name: "get_goal", args: {} },
+      { name: "update_goal", args: { status: "paused" } },
+      { name: "create_goal", args: { objective: "Must not be created", token_budget: 1000 } },
+    ];
+    const queueGoalProbes = (label: string) => {
+      pendingOutputs = goalCalls.flatMap(({ name, args }) => [
+        [{ type: "function_call", name, call_id: `${label}-${name}-direct`, arguments: JSON.stringify(args) }],
+        [{ type: "custom_tool_call", name: "exec", call_id: `${label}-${name}-exec`, input:
+          `text(ALL_TOOLS.filter(t => /^(get_goal|update_goal|create_goal)$/.test(t.name)).map(t => t.name)); ` +
+          `try { text(await tools.${name}(${JSON.stringify(args)})); } catch (error) { text(String(error)); }`,
+        }],
+      ]);
+    };
+    const expectGoalProbesRejected = (start: number, label: string) => {
+      // Six tool responses plus one final answer, with no Goal-owned extra turn.
+      expect(requests).toHaveLength(start + 7);
+      const input = requests.at(-1)!.body.input.filter(item => item.output !== undefined);
+      for (const { name } of goalCalls) {
+        expect(input.find(item => item.call_id === `${label}-${name}-direct`)?.output)
+          .toBe(`unsupported call: ${name}`);
+        expect(input.find(item => item.call_id === `${label}-${name}-exec`)?.output)
+          .toEqual(expect.arrayContaining([
+            { type: "input_text", text: "[]" },
+            { type: "input_text", text: `TypeError: tools.${name} is not a function` },
+          ]));
+      }
+      expect(pendingOutputs).toHaveLength(0);
+    };
     const hosts: AppServerHost[] = [];
     try {
       await new Promise<void>((resolve) =>
@@ -178,9 +214,6 @@ it.skipIf(!binaryPath)(
           await expect.poll(() => completed, { timeout: 15_000 }).toBe(step);
           await new Promise((resolve) => setTimeout(resolve, 500));
           expect(requests).toHaveLength(2 + step);
-          expect(JSON.stringify(requests[1 + step]!.body)).not.toContain(
-            "create_goal",
-          );
           expect(completed).toBe(step);
         }
         // Stable system/developer content across Host sends; no per-turn
@@ -190,9 +223,50 @@ it.skipIf(!binaryPath)(
             (item) => item.role === "system" || item.role === "developer",
           ).map((item) => ({ role: item.role, content: item.content }));
         expect(prefix(3)).toEqual(prefix(2));
+
+        const probeStart = requests.length;
+        queueGoalProbes("resumed");
+        await resumed.request("turn/start", {
+          threadId: thread.id,
+          input: [{ type: "text", text: "Probe disabled Goal tools." }],
+        });
+        await expect.poll(() => completed, { timeout: 15_000 }).toBe(3);
+        // real-wait: Observe the real app-server after turn completion for an unwanted Goal-owned request.
+        await new Promise(resolve => setTimeout(resolve, 500));
+        expectGoalProbesRejected(probeStart, "resumed");
+        expect(await resumed.request("thread/goal/get", { threadId: thread.id })).toEqual(goal);
+
       } finally {
         await subscription.release();
       }
+
+      // Exercise the production oneShot thread/start, not a duplicate of its config.
+      // Only the host acquisition is injected to keep native auth/model I/O isolated.
+      const utilityHost = makeHost();
+      const agent = new CodexAgent({
+        runtimeConfig: {},
+        logger,
+        binaryPath: binaryPath!,
+        auth: {
+          getState: async () => ({ authenticated: true }),
+          triggerLogin: async () => ({ authenticated: true }),
+          logout: async () => {},
+          getAuthEnv: async () => ({}),
+        },
+      });
+      const utilityHosts = Reflect.get(agent, "hosts") as Map<string, AppServerHost>;
+      utilityHosts.set("goal-test-utility", utilityHost);
+      Object.defineProperty(agent, "getUtilityHost", {
+        value: async () => ({ key: "goal-test-utility", host: utilityHost }),
+      });
+      const probeStart = requests.length;
+      queueGoalProbes("oneShot");
+      expect(await agent.oneShot("Produce a bounded title or summary.", {
+        model: "gpt-6-astra", timeoutMs: 15_000,
+      })).toBe("One step completed.");
+      // real-wait: Observe the native oneShot host after release for an unwanted Goal continuation.
+      await new Promise(resolve => setTimeout(resolve, 500));
+      expectGoalProbesRejected(probeStart, "oneShot");
     } finally {
       for (const host of hosts) await host.retire("native goal test complete");
       await new Promise<void>((resolve) => {
@@ -202,5 +276,5 @@ it.skipIf(!binaryPath)(
       await fs.rm(root, { recursive: true, force: true });
     }
   },
-  45_000,
+  60_000,
 );

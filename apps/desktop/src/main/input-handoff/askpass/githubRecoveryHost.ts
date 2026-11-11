@@ -6,11 +6,11 @@ import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
 import { getSessionFsSnapshot } from '../../localDb/ipc/sessions.js';
 import { getSharedGhCliTokenSource } from '../../git-context/ghCliTokenSource.js';
 import { githubConnection } from '../../git-context/githubConnection.js';
-import { outboundFetch } from '../../maker-host/outbound-fetch.js';
+import { outboundFetch } from '../../maker-host/outbound-fetch.desktop.js';
 import { readGhostSecret } from '../../secrets/providerSecretStore.js';
 import { createGithubAuthRecovery } from './githubRecovery.js';
 
-/** Reuse the official plugin's gh-cli -> same-instance PAT credential precedence. */
+/** Reuse each approved plugin's gh-cli -> same-instance PAT credential precedence. */
 export const resolveGithubAuthRecovery = createGithubAuthRecovery({
   ownerKey: () => {
     const owner = getActiveAppSession();

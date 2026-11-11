@@ -40,6 +40,7 @@
 import { app, crashReporter } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
+import { isRunningUnderArm64Translation } from './arm64Translation';
 import { createLogger } from './logger';
 import { readProcessStartTimes } from './processIdentity';
 
@@ -60,6 +61,12 @@ const PID_REUSE_QUERY_TIMEOUT_MS = 10_000;
 const DUMP_SCAN_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
 /** dump 清单最多列几个(按 mtime 降序),防日志刷屏。 */
 const DUMP_LIST_CAP = 10;
+
+/**
+ * Windows 结束会话(关机 / 重启 / 注销)时 lifecycle 写入的 shutdownReason。系统随后几秒内
+ * 就会终止进程,标记常停在 shutdown-begin;下次启动据此认作系统行为而非崩溃(issue #9600)。
+ */
+export const WINDOWS_SESSION_END_REASON = 'session-end';
 
 export type RunMarkerState = 'running' | 'shutdown-begin' | 'exited';
 
@@ -403,6 +410,13 @@ function logPreviousRunReports(reports: PreviousRunReport[]): boolean {
         );
         break;
       case 'shutdown-incomplete': {
+        if (m!.shutdownReason === WINDOWS_SESSION_END_REASON) {
+          log.info(
+            `[exit-diagnosis] previous run ended with the Windows session (shutdown / restart / sign-out): ` +
+              `pid=${m!.pid} v=${m!.version} shutdownAt=${m!.shutdownAt ?? '?'} lastHeartbeatAt=${m!.heartbeatAt}`,
+          );
+          break;
+        }
         hadAbnormal = true;
         const disposersCompleted = m!.disposedAt ? 'yes' : 'no';
         const detail = m!.disposedAt
@@ -509,6 +523,18 @@ export function initStartupDiagnostics(): void {
     log.info(`crashReporter started (local-only), dumps dir: ${app.getPath('crashDumps')}`);
   } catch (err) {
     log.warn('crashReporter.start failed (non-fatal)', err);
+  }
+  // 1.5) 架构转译：Apple 芯片上跑 x64 包时整体慢一个数量级，日志里只有 arch=x64
+  //      看不出来(NZWG-9FC9 曾因此被当作功能卡顿排查)。直接写明，免得再靠推断。
+  try {
+    if (isRunningUnderArm64Translation()) {
+      log.warn(
+        `[arch] ${process.platform}-${process.arch} build is running under ARM64 translation ` +
+          '(Rosetta on macOS) — startup and CPU use will be much worse than the native arm64 build',
+      );
+    }
+  } catch (err) {
+    log.warn('arm64 translation check failed (non-fatal)', err);
   }
   // 2) run marker 尸检 + 本实例标记 + 心跳。
   try {

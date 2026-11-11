@@ -4,7 +4,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { ProviderGroupBinding } from '../bindings';
+import type { ProviderGroupBinding } from '../bindings.desktop';
 import {
   createProviderGroupLeaseReporter,
   PROVIDER_GROUP_LEASE_DEBOUNCE_MS,

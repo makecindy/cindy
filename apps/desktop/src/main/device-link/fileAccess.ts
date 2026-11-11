@@ -14,7 +14,7 @@ import path from 'node:path';
 import { tryPeerFile, copyReceivedFile } from './filePeer';
 import { activeOwnerScopeKey } from '../appSessionState';
 import { captureFilePeerScope } from './filePeerScope';
-import { downloadToFile, removeRemote } from './mediaTransfer';
+import { downloadToFile, removeRemote } from './mediaTransfer.desktop';
 import { captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent } from './broadcast-tap';
 import { captureRemoteMediaCacheValidity } from './remoteMediaPersistentCache';
 

@@ -24,10 +24,12 @@ import {
   updateScriptForKind,
 } from './ensure-agent-binaries.mjs';
 import { fixNodePtyExecutables } from './fix-node-pty-perms.mjs';
+import { buildDesktopBlur } from '../apps/desktop/native/desktop-blur/build.mjs';
 import { buildTrackpad } from '../apps/desktop/native/trackpad/build.mjs';
 
 const ROOT = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 if (process.platform === 'darwin') {
+  buildDesktopBlur(path.join(ROOT, 'apps/desktop/resources/tools/desktop-blur/cindy-desktop-blur.node'));
   buildTrackpad(path.join(ROOT, 'apps/desktop/resources/tools/trackpad/cindy-trackpad.node'));
 }
 const LFS_POINTER_HEADER = 'version https://git-lfs.github.com/spec/v1';

@@ -478,7 +478,8 @@ export function validateStructure(layers: BuiltLayers): StructureIssue[] {
   return [
     ...validateDtcgSyntax(layers.reference, 'reference'),
     ...validateDtcgSyntax(layers.semantic, 'semantic'),
-    ...validateDtcgSyntax(layers.component, 'component'),
+    // Component roles are optional: button states are derived at runtime and register-only (§3.4).
+    ...(fileLeaves(layers.component).length ? validateDtcgSyntax(layers.component, 'component') : []),
     ...validateDualModes(layers.semantic),
     ...validateDualModes(layers.component),
     ...validateAliasDirection(layers),

@@ -1,4 +1,31 @@
 {
+  "pushDiagnostics": {
+    "title": "推送诊断",
+    "read": "读取推送状态",
+    "busy": "读取中…",
+    "failed": "无法读取推送状态，请重试。",
+    "copyFailed": "无法复制令牌。",
+    "copied": "令牌已复制。",
+    "bundle": "应用 ID",
+    "build": "构建号",
+    "environment": "APNs 环境",
+    "permission": "系统权限",
+    "alerts": "横幅提醒",
+    "lockScreen": "锁定屏幕",
+    "notificationCenter": "通知中心",
+    "copy": "复制 APNs 令牌",
+    "hide": "隐藏结果",
+    "unknown": "未知",
+    "on": "已开启",
+    "off": "已关闭",
+    "hint": "仅点击后读取。APNs 令牌只在本页显示，不写入诊断记录，也不由此工具上传；离开页面或切到后台后隐藏。复制仅用于 Apple 推送控制台；已复制的内容仍留在剪贴板。",
+    "permissions": {
+      "granted": "已允许",
+      "denied": "已拒绝",
+      "undetermined": "尚未请求",
+      "provisional": "静默送达"
+    }
+  },
   "localLogs": {
     "upload": "上呈日志",
     "uploadResult": {
@@ -135,11 +162,16 @@
     "permissionDenied": "告之权柄未开，请于系统设置中允许 Cindy 发送通知。",
     "unregisterQueued": "已阖，连网后自动完成注销。",
     "preview": "示讯之先览",
-    "background": "于背景保持讯之连接",
+    "background": "后台通知",
     "backgroundActive": "方于背景收讯",
     "backgroundStop": "止收",
-    "backgroundHint": "背景连接不依赖 Google，将示常驻之告；可随时于通知栏止之。",
-    "googleUnavailable": "Google 推播暂不可用。可启背景讯之连接以收讯。"
+    "backgroundHint": "Google 推播或不可用时，Cindy 自维后台之连，连通时常驻示之。",
+    "googleUnavailable": "Google 推播暂不可用，将依通知之设维后台之连。",
+    "backgroundModes": {
+      "auto": "自动",
+      "on": "常启",
+      "off": "关闭"
+    }
   },
   "about": {
     "sectionTitle": "关于此手机",
@@ -351,5 +383,44 @@
     "title": "开发者",
     "identity": "标识信息",
     "updateInfo": "更新之讯"
+  },
+  "handheld": {
+    "sectionTitle": "掌机",
+    "label": "掌机之式",
+    "entryHint": "于游戏掌机上以手柄驭 Cindy，长按语音键即可言。",
+    "on": "已启",
+    "off": "未启",
+    "openAccessibility": "启「掌机之式」之设",
+    "title": "掌机之式",
+    "hint": "启之，则可独以手柄驭之：十字键或左摇杆移焦点，A 为准，B 为返。",
+    "saveFailed": "此设未能存，然此番使用中仍有效。",
+    "reset": "复预设",
+    "voiceKey": {
+      "title": "语音键",
+      "hint": "长按此键始言，释之则止，所言之字留于输入框。于首页长按，则径开新务。若择 A、B、L1、R1，则其本有之准、返、翻页皆为所占。",
+      "capture": "按手柄之键以设之",
+      "capturing": "请按欲用之键…"
+    },
+    "display": {
+      "title": "屏",
+      "secondary": "示于副屏",
+      "hint": "启之，则 Cindy 移至副屏（如双屏掌机之下屏）；罢掌机之式，则归主屏。",
+      "none": "此设备唯一屏，Cindy 自适其尺寸。",
+      "current": "今之屏",
+      "single": "主屏"
+    },
+    "controls": {
+      "title": "手柄之用",
+      "gamepad": "手柄",
+      "noGamepad": "未察得",
+      "moveKeys": "十字键 / 左摇杆",
+      "move": "移焦点",
+      "confirm": "准",
+      "back": "返",
+      "voice": "长按而言",
+      "scrollKeys": "右摇杆",
+      "scroll": "卷动",
+      "page": "翻页"
+    }
   }
 }
