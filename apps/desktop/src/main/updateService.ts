@@ -79,7 +79,7 @@ import {
 import { throwIpcError } from './utils/ipcValidate';
 import { noteExpectedExit } from './startup-diagnostics';
 import { buildMacOSUpdateScript } from './updateScriptMacOS';
-import { buildLinuxUpdateScript, normalizeLinuxDebSha256 } from './updateScriptLinux';
+import { buildLinuxUpdateScript, linuxRelaunchDisplayArgs, normalizeLinuxDebSha256 } from './updateScriptLinux';
 import {
   checkDebianManagedInstallation,
   findLinuxUserInstallation,
@@ -1897,7 +1897,10 @@ function executeUpdateLinux(debPath: string, installation: LinuxUserInstallation
     script = buildLinuxUpdateScript({
       pid, debPath, sha256, sizeBytes, exePath, lockFilePath, logPath,
       userInstallation: installation ? { ...installation, version: readyVersion! } : undefined,
-      relaunchArgs: linuxPasswordStoreRelaunchArgs(app.commandLine?.getSwitchValue('password-store') ?? ''),
+      relaunchArgs: [
+        ...linuxRelaunchDisplayArgs(process.argv),
+        ...linuxPasswordStoreRelaunchArgs(app.commandLine?.getSwitchValue('password-store') ?? ''),
+      ],
     });
   } catch (err) {
     log.error('failed to build Linux update script:', err);
