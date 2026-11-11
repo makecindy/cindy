@@ -848,11 +848,12 @@ function hasRetainedTool(
       ))) return true;
     }
   }
-  // A child of this turn's inline catalog is advertised under a Chat name; a bare selector
-  // answers that declaration even when another namespace owns the same child name.
+  // A declaration this turn catalogued answers a bare selector even when another namespace owns
+  // the same child name. The advertised entry may keep the bare name (a loaded `web_search`
+  // function does), so test the catalog rather than assuming the name was rewritten.
   if (namespace === undefined && context.chatTools !== undefined) {
     const resolved = context.chatNameForToolChoice(name, undefined, kind);
-    if (resolved !== name && context.lookupChatName(resolved) !== undefined) return true;
+    if (context.lookupChatName(resolved) !== undefined) return true;
   }
   return false;
 }

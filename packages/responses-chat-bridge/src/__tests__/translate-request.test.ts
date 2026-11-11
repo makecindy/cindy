@@ -991,6 +991,23 @@ describe('translateResponsesRequest', () => {
     expect(out.tools?.map(tool => (tool as { function: { name: string } }).function.name)).toEqual(['writer']);
   });
 
+  it('keeps a tool_search-loaded web_search function when the built-in is dropped (#9715)', () => {
+    const out = translateResponsesRequest(base({
+      tools: [{ type: 'web_search' }],
+      input: [
+        {
+          type: 'tool_search_output',
+          tools: [{ type: 'function', name: 'web_search', parameters: { type: 'object' } }],
+        },
+        { type: 'message', role: 'user', content: 'hello' },
+      ],
+      tool_choice: { type: 'function', name: 'web_search' },
+    }));
+
+    // The loaded function keeps the bare name, so it must still count as retained.
+    expect(out.tool_choice).toEqual({ type: 'function', function: { name: 'web_search' } });
+  });
+
   it('keeps a namespaced web_search function when search itself is dropped (#9715)', () => {
     const out = translateResponsesRequest(base({
       tools: [{ type: 'web_search' }],
