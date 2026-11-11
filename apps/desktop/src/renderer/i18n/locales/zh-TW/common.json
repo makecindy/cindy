@@ -19705,12 +19705,6 @@
       "from": "來自「{{name}}」的遷移",
       "closeChecklist": "關閉清單"
     },
-    "suggestion": {
-      "title": "用遷移助理從「{{name}}」遷移？",
-      "description": "可以把那台電腦上的插件、技能、設定和連線搬到這台電腦。需要在這台電腦上重新登入或授權的內容會列成清單。之後也可以在「設定 → 通用 → 遷移助理」中開啟。",
-      "confirm": "開啟遷移助理",
-      "later": "以後再說"
-    },
     "walkthrough": {
       "progress": "遷移清單 {{current}} / {{total}}",
       "open": "開啟",
@@ -19732,6 +19726,103 @@
         "allow": "允許",
         "deny": "拒絕"
       }
+    }
+  },
+  "firstRunGuide": {
+    "title": {
+      "new": "歡迎使用 Cindy",
+      "returning": "歡迎回來"
+    },
+    "stepsLabel": "引導步驟",
+    "close": "關閉引導",
+    "next": "下一步",
+    "skip": "略過",
+    "preparing": "正在準備…",
+    "steps": {
+      "legacy": "舊版資料",
+      "intro": "認識 Cindy",
+      "migration": "從舊電腦遷移",
+      "models": "連線模型",
+      "import": "匯入已有內容",
+      "finish": "完成"
+    },
+    "legacy": {
+      "title": "舊版本的資料已經帶過來了",
+      "body": "歷史任務、媒體檔案和 Agent 瀏覽器的登入狀態已遷到新版本，可以接著用。",
+      "note": "已授權的第三方金鑰與憑證不隨資料遷移，需要在設定中重新授權或填寫。"
+    },
+    "intro": {
+      "lead": "Cindy 是助你心想事成的 AI 助手。",
+      "work": {
+        "title": "把事情交給它做",
+        "body": "它在你的資料夾和應用程式裡直接完成工作，不只是回答問題。"
+      },
+      "connect": {
+        "title": "用你已有的模型和工具",
+        "body": "接上自己的訂閱或 API Key，插件和技能按需新增。"
+      },
+      "continue": {
+        "title": "在哪都能接著做",
+        "body": "在手機上發起、查看和繼續電腦上的任務。"
+      },
+      "start": "開始",
+      "next": "接下來"
+    },
+    "migration": {
+      "title": "把另一台電腦上的 Cindy 搬過來",
+      "body": "你的帳號下有一台電腦已經設定好了。遷移助理會把它的插件、技能、設定和連線複製到這台電腦；金鑰只在你在那台電腦上點「允許」後複製。",
+      "manualBody": "在另一台電腦上用過 Cindy 的話，遷移助理可以把它的插件、技能、設定和連線複製到這台電腦。",
+      "done": "已從「{{name}}」遷移",
+      "from": "舊電腦",
+      "to": "這台電腦"
+    },
+    "models": {
+      "title": "給 Cindy 接上模型",
+      "body": "下面兩種方式可以一起用。",
+      "cindy": {
+        "badge": "官方服務",
+        "body": "Cindy 官方提供的模型服務，登入後自帶，不需要開通。新帳號有免費贈送的餘額，用來試用；付費後幾乎所有模型都可以用，不付費時可用的模型範圍會受限。",
+        "active": "已包含在你的帳號裡，可以直接使用",
+        "freeBalance": "免費贈送的金額，歡迎試用"
+      },
+      "own": {
+        "title": "用你自己的方案",
+        "badge": "更加實惠",
+        "body": "已有 Claude、ChatGPT 等訂閱或 API Key？非常推薦接進來搭配使用，這樣體驗最好。",
+        "more": "其他供應商與 API Key",
+        "connected": "已連線"
+      }
+    },
+    "import": {
+      "title": "把這台電腦上已有的內容帶進來",
+      "body": "下面是在這台電腦的其他 AI 工具裡找到的內容。只讀取原始記錄，不會改動它們。",
+      "empty": "這台電腦上沒有找到可以匯入的內容。",
+      "tasksHeading": "任務",
+      "tasksHint": "勾選工具，把其中的任務接到 Cindy 接著做。",
+      "pick": "逐個挑選",
+      "started": "已開始在背景匯入，可在「設定 → 任務匯入」查看進度。",
+      "startFailed": "匯入沒有開始。可在「設定 → 任務匯入」重新匯入。",
+      "teammatesHeading": "夥伴",
+      "teammatesHint": "把其他工具裡的 Agent 連同記憶、技能和自動化匯入成夥伴。",
+      "importTeammate": "匯入成夥伴"
+    },
+    "finish": {
+      "title": "準備好了",
+      "legacy": "舊版本的資料已遷到新版本",
+      "modelReady": "模型已連線",
+      "modelMissing": "還沒有連線模型。新建任務時可以隨時連線。",
+      "importStarted": "其他工具的任務正在背景匯入",
+      "native": "你在 Claude Code、Codex 裡的技能和 MCP 可以直接使用，不需要匯入。",
+      "start": "開始第一個任務"
+    },
+    "resume": {
+      "label": "引導進行中 · {{step}}",
+      "back": "回到引導"
+    },
+    "settings": {
+      "title": "開始引導",
+      "description": "重新查看認識 Cindy、從舊電腦遷移、連線模型和匯入已有內容的引導。",
+      "open": "開啟引導"
     }
   },
   "forwardedRequest": {

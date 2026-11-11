@@ -19777,12 +19777,6 @@
       "from": "Übernommen von „{{name}}“",
       "closeChecklist": "Liste schließen"
     },
-    "suggestion": {
-      "title": "Mit dem Migrationsassistenten von „{{name}}“ übernehmen?",
-      "description": "Du kannst diesen Computer mit den Plugins, Skills, Einstellungen und Verbindungen des anderen einrichten. Was hier eine neue Anmeldung oder Berechtigung braucht, wird für dich aufgelistet. Du kannst ihn auch später unter Einstellungen → Allgemein → Migrationsassistent öffnen.",
-      "confirm": "Migrationsassistent öffnen",
-      "later": "Nicht jetzt"
-    },
     "walkthrough": {
       "progress": "Einrichtungsliste {{current}} / {{total}}",
       "open": "Öffnen",
@@ -19804,6 +19798,103 @@
         "allow": "Erlauben",
         "deny": "Ablehnen"
       }
+    }
+  },
+  "firstRunGuide": {
+    "title": {
+      "new": "Willkommen bei Cindy",
+      "returning": "Willkommen zurück"
+    },
+    "stepsLabel": "Schritte der Einführung",
+    "close": "Einführung schließen",
+    "next": "Weiter",
+    "skip": "Überspringen",
+    "preparing": "Wird vorbereitet …",
+    "steps": {
+      "legacy": "Frühere Daten",
+      "intro": "Cindy kennenlernen",
+      "migration": "Migrieren",
+      "models": "Modell verbinden",
+      "import": "Vorhandenes übernehmen",
+      "finish": "Fertig"
+    },
+    "legacy": {
+      "title": "Deine Daten aus der vorherigen Version sind da",
+      "body": "Frühere Sitzungen, Mediendateien und die Anmeldungen des Agent-Browsers wurden in diese Version übernommen und sind einsatzbereit.",
+      "note": "Von dir autorisierte Schlüssel und Zugangsdaten von Drittanbietern werden nicht mit den Daten übernommen. Autorisiere sie in den Einstellungen erneut oder gib sie erneut ein."
+    },
+    "intro": {
+      "lead": "Cindy ist der KI-Assistent, der dir hilft, Wirklichkeit werden zu lassen, was du dir vornimmst.",
+      "work": {
+        "title": "Arbeit abgeben",
+        "body": "Cindy arbeitet direkt in deinen Ordnern und Apps, statt nur Fragen zu beantworten."
+      },
+      "connect": {
+        "title": "Vorhandene Modelle und Werkzeuge nutzen",
+        "body": "Verbinde dein eigenes Abo oder deinen API-Schlüssel und füge Plugins und Skills bei Bedarf hinzu."
+      },
+      "continue": {
+        "title": "Überall weitermachen",
+        "body": "Starte, prüfe und setze Sitzungen auf deinem Computer vom Smartphone aus fort."
+      },
+      "start": "Loslegen",
+      "next": "Als Nächstes"
+    },
+    "migration": {
+      "title": "Cindy von deinem anderen Computer übernehmen",
+      "body": "Ein anderer Computer in deinem Konto ist bereits eingerichtet. Der Migrationsassistent kopiert dessen Plugins, Skills, Einstellungen und Verbindungen auf diesen Computer; Schlüssel werden erst kopiert, nachdem du auf dem anderen Computer „Erlauben“ gewählt hast.",
+      "manualBody": "Wenn du Cindy auf einem anderen Computer verwendet hast, kann der Migrationsassistent dessen Plugins, Skills, Einstellungen und Verbindungen auf diesen Computer kopieren.",
+      "done": "Von „{{name}}“ migriert",
+      "from": "Alter Computer",
+      "to": "Dieser Computer"
+    },
+    "models": {
+      "title": "Cindy ein Modell geben",
+      "body": "Beide Möglichkeiten lassen sich zusammen nutzen.",
+      "cindy": {
+        "badge": "Offizieller Dienst",
+        "body": "Der von Cindy bereitgestellte Modelldienst. Er ist in deinem Konto enthalten und muss nicht aktiviert werden. Neue Konten erhalten ein kostenloses Guthaben zum Ausprobieren; nach der Bezahlung stehen fast alle Modelle zur Verfügung, ohne Bezahlung ist die Modellauswahl kleiner.",
+        "active": "In deinem Konto enthalten und sofort nutzbar",
+        "freeBalance": "Geschenkter Betrag – probier es gern aus"
+      },
+      "own": {
+        "title": "Eigenen Tarif nutzen",
+        "badge": "Günstiger",
+        "body": "Du hast bereits ein Claude- oder ChatGPT-Abo oder einen API-Schlüssel? Wir empfehlen dringend, es zu verbinden und zusammen mit Cindy AI zu nutzen – so ist das Erlebnis am besten.",
+        "more": "Weitere Anbieter und API-Schlüssel",
+        "connected": "Verbunden"
+      }
+    },
+    "import": {
+      "title": "Vorhandenes von diesem Computer übernehmen",
+      "body": "Das hat Cindy in anderen KI-Werkzeugen auf diesem Computer gefunden. Cindy liest die Originale nur und verändert sie nicht.",
+      "empty": "Auf diesem Computer wurde nichts zum Importieren gefunden.",
+      "tasksHeading": "Sitzungen",
+      "tasksHint": "Wähle Werkzeuge aus, um ihre Sitzungen in Cindy zu übernehmen und weiterzuarbeiten.",
+      "pick": "Einzeln auswählen",
+      "started": "Der Import läuft im Hintergrund. Den Fortschritt findest du unter Einstellungen → Sitzungsimport.",
+      "startFailed": "Der Import wurde nicht gestartet. Importiere erneut unter Einstellungen → Sitzungsimport.",
+      "teammatesHeading": "Teammitglieder",
+      "teammatesHint": "Importiere einen Agent aus einem anderen Werkzeug als Teammitglied, mit seinen Erinnerungen, Skills und Automatisierungen.",
+      "importTeammate": "Als Teammitglied importieren"
+    },
+    "finish": {
+      "title": "Alles bereit",
+      "legacy": "Die Daten aus der vorherigen Version wurden in diese Version übernommen",
+      "modelReady": "Ein Modell ist verbunden",
+      "modelMissing": "Es ist noch kein Modell verbunden. Du kannst jederzeit eines verbinden, wenn du eine Sitzung startest.",
+      "importStarted": "Sitzungen aus anderen Werkzeugen werden im Hintergrund importiert",
+      "native": "Deine Skills und MCP-Server aus Claude Code und Codex funktionieren hier direkt; es gibt nichts zu importieren.",
+      "start": "Erste Sitzung starten"
+    },
+    "resume": {
+      "label": "Einführung läuft · {{step}}",
+      "back": "Zurück zur Einführung"
+    },
+    "settings": {
+      "title": "Einführung",
+      "description": "Sieh dir noch einmal an, wie du Cindy kennenlernst, von einem anderen Computer migrierst, ein Modell verbindest und Vorhandenes übernimmst.",
+      "open": "Einführung öffnen"
     }
   },
   "forwardedRequest": {

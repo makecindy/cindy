@@ -1,14 +1,16 @@
 # Electron 客户端模式（阶段 5 进行中）
 
-默认行为：**本机有 Host 在跑时自动进入客户端模式**（Host 在启动时写 `host-endpoint.json`，
-Desktop 校验 pid 存活即接管），无需任何环境变量；`CINDY_HOST_API` 仍可显式指定目标。
-Host 未运行时回退到内嵌 Runtime；`pnpm dev:host` 会先确保 Host 在跑（复用或拉起），
-打包版的常驻由 systemd unit 负责。
+默认 Desktop 不发现或自动接管 Host。只有显式设置 `CINDY_HOST_API` 才进入客户端模式；
+`pnpm dev:host` 会验证并复用或启动 profile 的后台 Host，再为子窗口注入地址与
+`CINDY_HOST_INSTANCE`。窗口或启动终端退出不停止后台。
+
+本次后台生命周期、平台 RPC 与换窗合同见[窗口交接地基](client-handoff-foundation.md)。
+整机迁移声明保持 `ready: false`，不能由窗口测试推断完整桌面功能已经迁移。
 
 Host 也可不指定 owner：profile 内只有一个 `cindy-<owner>.db` 时自动采用该账号，
 多账号 profile 会明确拒绝猜测（`CINDY_HOST_OWNER` 仍可显式指定）。
 
-设置 `CINDY_HOST_API`（或自动发现）后，Desktop 不再装配自己的 Runtime，而是把已迁移的 renderer
+设置 `CINDY_HOST_API` 后，Desktop 不再装配自己的 Runtime，而是把已迁移的 renderer
 通道转发到 `cindy-host`，并把宿主的事件流回灌到同一 push 通道。
 
 ```bash
@@ -16,6 +18,7 @@ Host 也可不指定 owner：profile 内只有一个 `cindy-<owner>.db` 时自�
 CINDY_HOST_DATA_DIR=<profile> CINDY_HOST_OWNER=<owner> pnpm start-host
 # 2) Desktop 以客户端模式启动
 CINDY_HOST_API=http://127.0.0.1:3456 pnpm --filter desktop dev
+# 上例兼容 HTTP/SSE，不启用平台 RPC；需电脑/浏览器执行时使用 pnpm dev:host。
 ```
 
 启动日志会打印 `client mode: delegating to …` 与已接管通道列表。
