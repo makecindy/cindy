@@ -1213,8 +1213,6 @@ describe('远程交互接线不变式', () => {
     expect(src).not.toContain(
       'await window.electronAPI.maker.setPermissionMode(sessionId, previousMode);',
     );
-    expect(src).toContain('requiresFullAccessConfirmation(previousMode, newMode)');
-    expect(src).toContain('if (!confirmed) return;');
     expect(src).toContain("toast.error(t('newChat.chatInput.permissionSwitchFailed'))");
   });
 

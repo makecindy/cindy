@@ -41,7 +41,7 @@ import {
 } from '@cindy/device-link';
 import { isMobilePlatform } from '@cindy/maker-shared/device-list';
 import { ServerApiError } from '../serverApiClient.desktop';
-import { deviceLinkApiFetch, resolveDeviceLinkApiBase } from './deviceLinkApi.js';
+import { deviceLinkApiFetch, resolveDeviceLinkApiBase } from './deviceLinkApi.desktop.js';
 import {
   __resetDirectoryThrottleForTests,
   clearDirectoryRetryDeadline,

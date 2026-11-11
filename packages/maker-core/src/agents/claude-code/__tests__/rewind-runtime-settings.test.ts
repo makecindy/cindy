@@ -218,6 +218,7 @@ async function startRewindableSession(
     resolveModelCompactionPct?: AgentDeps['resolveModelCompactionPct'];
     resolveModelEfforts?: AgentDeps['resolveModelEfforts'];
     shouldHandoffAfterContextAssessment?: (tokens: number, window: number) => boolean;
+    stream?: ReturnType<typeof createControlledStream>;
   } = {},
 ) {
   const configDir = await makeTempDir();
@@ -226,7 +227,7 @@ async function startRewindableSession(
   process.env.XDT_CC_SSE_IDLE_TIMEOUT_MS = String(options.idleTimeoutMs ?? 0);
   const workingDir = await makeTempDir();
 
-  const firstQuery = createFakeQuery();
+  const firstQuery = createFakeQuery(options.stream);
   sdkMock.query.mockReturnValue(firstQuery);
   const remoteStartParams: Array<Record<string, unknown>> = [];
   const remoteCcQueryFactory = options.remoteHostId
@@ -267,7 +268,7 @@ async function startRewindableSession(
     ...(options.remoteHostId ? { remoteHostId: options.remoteHostId } : {}),
   });
 
-  return { agent, handle, firstQuery, infoCalls, remoteStartParams };
+  return { agent, handle, firstQuery, infoCalls, remoteStartParams, workingDir };
 }
 
 afterEach(async () => {
@@ -289,6 +290,61 @@ afterEach(async () => {
 });
 
 describe('ClaudeCodeAgent runtime settings during rewind window', () => {
+  it.each([false, true])('fences an in-flight rewind preview and releases the fence on completion (failure: %s)', async (fail) => {
+    const { agent, handle, firstQuery, workingDir } = await startRewindableSession();
+    let finish!: () => void;
+    const gate = new Promise<void>(resolve => { finish = resolve; });
+    firstQuery.rewindFiles.mockImplementationOnce(async () => {
+      await gate;
+      if (fail) throw new Error('preview failed');
+      return { canRewind: true, filesChanged: [], insertions: 0, deletions: 0 };
+    });
+    const session = new Session({ id: 'preview-idle-release', agentKind: 'claude-code',
+      workDir: workingDir, handle, capabilities: agent.capabilities,
+      logger: createNoopLogger(), turnStallMs: 0 });
+    try {
+      const preview = session.previewRewindFiles('preview-user');
+      await vi.waitFor(() => expect(firstQuery.rewindFiles).toHaveBeenCalledOnce());
+      expect(session.hasPendingHostOperation()).toBe(true);
+      await expect(session.closeIfIdle()).resolves.toBe(false);
+      expect(firstQuery.close).not.toHaveBeenCalled();
+      finish();
+      expect((await preview).canRewind).toBe(!fail);
+      expect(session.hasPendingHostOperation()).toBe(false);
+      await expect(session.closeIfIdle()).resolves.toBe(true);
+    } finally { finish(); await session.close(); }
+  });
+
+  // Idle release must retain the controller's deferred rewind point. Re-enter
+  // the production Session close guard, then verify the next send still forks
+  // at that point on native Claude and a non-Anthropic model route. Unit tier.
+  it.each(['claude-opus-4-6', 'gpt-5.6-sol'])(
+    'keeps a pending rewind through idle close and applies it on next send (%s)', async (model) => {
+      const { agent, handle, firstQuery, workingDir } = await startRewindableSession({
+        model,
+        availableModels: [...TEST_MODELS, { id: 'gpt-5.6-sol', displayName: 'GPT fixture',
+          contextWindow: 256_000, efforts: ['high'], defaultEffort: 'high' }],
+      });
+      const session = new Session({ id: 'rewind-idle-release', agentKind: 'claude-code',
+        workDir: workingDir, handle, capabilities: agent.capabilities,
+        logger: createNoopLogger(), turnStallMs: 0 });
+      try {
+        expect(session.hasPendingHostOperation()).toBe(false);
+        await session.commitRewindFiles('user-before-rewind', 'assistant-rewind-point');
+        expect(firstQuery.close).toHaveBeenCalledOnce();
+        expect(session.isTurnRunning()).toBe(false);
+        await expect(session.closeIfIdle()).resolves.toBe(false);
+        expect(session.getStatus()).toBe('active');
+
+        sdkMock.query.mockReturnValue(createFakeQuery());
+        await session.send('continue after the idle scan');
+        const rebuilt = sdkMock.query.mock.calls[1][0].options;
+        expect(rebuilt.resumeSessionAt).toBe('assistant-rewind-point');
+        expect(rebuilt.forkSession).toBe(true);
+      } finally { await session.close(); }
+    },
+  );
+
   // Regression: connection metadata reached the catalog, but never the Claude spawn.
   // Existing window tests do not exercise output limits. Unit SDK-boundary assertions
   // cover two same-name routes, refresh/removal and the settings-file precedence layer.
@@ -542,6 +598,77 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
         process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = originalCompactPctOverride;
       }
     }
+  });
+
+  it('keeps a long Claude model catalog off the Windows command line (#9753)', async () => {
+    // Windows CreateProcess rejects a command line over 32767 characters. The SDK
+    // turns an inline settings object into one `--settings <json>` argument, so a
+    // catalog of ~1000 model ids (measured at ~34000 chars) fails spawn with
+    // ENAMETOOLONG before the session starts. A file path stays well under the cap;
+    // the file must carry the same allowlist the inline object would have.
+    const availableModels = Array.from({ length: 1000 }, (_, index) => ({
+      id: `vendor/model-${String(index).padStart(4, '0')}-gateway-route`,
+      displayName: `Model ${index}`,
+      contextWindow: 128_000,
+      efforts: ['high' as const],
+      defaultEffort: 'high' as const,
+    }));
+    const { handle } = await startRewindableSession({
+      model: availableModels[0].id,
+      availableModels,
+    });
+
+    const startArgs = sdkMock.query.mock.calls[0]?.[0] as {
+      options: { settings?: string | { availableModels?: string[] } };
+    };
+    const settings = startArgs.options.settings;
+    expect(typeof settings).toBe('string');
+    const settingsPath = settings as string;
+    expect(settingsPath.length).toBeLessThan(1024);
+    const parsed = JSON.parse(await fs.readFile(settingsPath, 'utf8')) as {
+      availableModels?: string[];
+      apiKeyHelper?: string;
+    };
+    expect(parsed.availableModels).toHaveLength(1000);
+    expect(parsed.availableModels?.[0]).toBe(availableModels[0].id);
+    expect(parsed.availableModels).toContain(availableModels[999].id);
+    expect(parsed.apiKeyHelper).toBe('');
+
+    await handle.close();
+    await vi.waitFor(async () => {
+      await expect(fs.stat(settingsPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+  });
+
+  it('removes the long-catalog settings file when the handle dies without close() (#9753)', async () => {
+    // teardownDeadHandle() sets closed = true before close() is ever called, and
+    // close() returns early in that state — so the dead-handle path has to drop the
+    // temp settings file itself, or every crashed run leaves one behind.
+    const availableModels = Array.from({ length: 1000 }, (_, index) => ({
+      id: `vendor/model-${String(index).padStart(4, '0')}-gateway-route`,
+      displayName: `Model ${index}`,
+      contextWindow: 128_000,
+      efforts: ['high' as const],
+      defaultEffort: 'high' as const,
+    }));
+    const stream = createControlledStream();
+    const { handle } = await startRewindableSession({
+      model: availableModels[0].id,
+      availableModels,
+      stream,
+    });
+    const startArgs = sdkMock.query.mock.calls[0]?.[0] as { options: { settings?: string | object } };
+    const settingsPath = startArgs.options.settings as string;
+    expect(typeof settingsPath).toBe('string');
+    await expect(fs.stat(settingsPath)).resolves.toBeTruthy();
+
+    stream.fail(new Error('transport crashed'));
+
+    await vi.waitFor(async () => {
+      await expect(fs.stat(settingsPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+    // 死亡路径已经删过一次, 宿主后来补的 close() 再删一遍必须是安全的空操作。
+    await expect(handle.close()).resolves.toBeUndefined();
   });
 
   it('keeps the selected and catalog Claude wire models available for a live model switch', async () => {

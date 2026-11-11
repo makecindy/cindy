@@ -143,6 +143,7 @@ import {
   workspaceSettingsOverrideMessage,
 } from './workspace-settings-guard.js';
 import { buildClaudeFlagSettings } from './flag-settings.js';
+import { materializeClaudeFlagSettings } from './flag-settings-file.js';
 import {
   buildClaudeAskUserQuestionCallerProvenanceHooks,
   buildClaudeDisallowedTools,
@@ -2991,10 +2992,11 @@ export class ClaudeCodeAgent extends BaseAgent {
         settings.disableSkillShellExecution = true;
         const excludes = deviceHostedGuestClaudeMdExcludes(hosted);
         if (excludes.length > 0) settings.claudeMdExcludes = [...(settings.claudeMdExcludes ?? []), ...excludes];
-        // 路由令牌请求头在最高优先级的设置层再写一次：会话中途出现的项目设置不能把它改掉。
-        if (guestRouteHeader && env.ANTHROPIC_CUSTOM_HEADERS) {
-          settings.env = { ...settings.env, ANTHROPIC_CUSTOM_HEADERS: env.ANTHROPIC_CUSTOM_HEADERS };
-        }
+        // 路由令牌只走子进程 env.ANTHROPIC_CUSTOM_HEADERS（上方 guestRouteHeader 的唯一写入点，
+        // SDK 把 options.env 当 CLI 进程环境）。不写进 settings：flag settings 超过命令行上限时
+        // 会整份序列化落盘，明文令牌不能进那份文件。会话中途的项目设置也改不掉它：
+        // 受邀者不走订阅直连，env 里有 CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST，CLI 会从所有
+        // settings 来源的 env 里剥掉 ANTHROPIC_CUSTOM_HEADERS（见 env-builder 第三道防线）。
       }
       if (!reviewMode) return settings;
       return {
@@ -3748,6 +3750,19 @@ export class ClaudeCodeAgent extends BaseAgent {
     // /clear 等价于开新 session → 重建 handle → 状态自然清零, 无需额外重置。
     const oneShotTipState: OneShotState = { displayed: new Map(), pity: new Map() };
 
+    // 模型白名单过长时, 本地 flag settings 落到这份临时文件, 避免 `--settings`
+    // 内联 JSON 撑破 Windows 命令行上限 (spawn ENAMETOOLONG, #9753)。短设置不建
+    // 文件。声明在 buildQuery 之外, 让 handle.close 也能删掉它。
+    let flagSettingsFile: { kind: 'file'; settingsPath: string; dispose: () => Promise<void> } | null = null;
+    const releaseFlagSettingsFile = () => {
+      const current = flagSettingsFile;
+      if (!current) return;
+      flagSettingsFile = null;
+      void current.dispose().catch((error) => {
+        log.warn('claude flag settings file cleanup failed', { error: String(error) });
+      });
+    };
+
     // ── sdkQuery 装配 (可被 rewind 重复调用) ──────────────────────────────────
     // 三件套 (resume + resumeSessionAt + forkSession) 通过 extra 注入。
     // startSession 首次调 buildQuery() 不传 extra, 走 vendorOptions.resumeSessionAt /
@@ -4454,6 +4469,30 @@ export class ClaudeCodeAgent extends BaseAgent {
         ? await prepareManagedSkillPlugins(allowedManagedSkills, (name) => {
           log.warn('managed skill disappeared before Query startup; skipping', { skill: name });
         }) : undefined;
+      // 设置对象的落盘时间放在 spawn 前: 内容要跟着本次 Query 的输出上限 / 白名单快照,
+      // 提前算会把上一代的 env 与模型清单写进文件。见 createLocalQueryArgs 处。
+      let localClaudeSettingsOption: () => string | Settings = () => buildSettings();
+      const prepareFlagSettings = async (): Promise<void> => {
+        // 短设置仍内联, 与既有行为逐字节一致。超限才写临时文件。同一会话复用一份
+        // 文件, 重建时按当前设置重写 (热切白名单另走 applyFlagSettings, 不依赖它)。
+        // 落盘失败时托管技能插件已经铺好暂存目录, 而此刻启动清理 try 都还没进来 ——
+        // 必须在这里先把它拆掉, 否则整份暂存目录会残留。
+        const flagSettingsDelivery = await materializeClaudeFlagSettings(
+          buildSettings(),
+          flagSettingsFile ?? undefined,
+        ).catch(async (error: unknown) => {
+          if (managedPlugins) {
+            await managedPlugins.dispose().catch((cleanupError) => {
+              log.warn('managed skill plugin cleanup failed', { error: String(cleanupError) });
+            });
+          }
+          throw error;
+        });
+        if (flagSettingsDelivery.kind === 'file') flagSettingsFile = flagSettingsDelivery;
+        localClaudeSettingsOption = () => (flagSettingsDelivery.kind === 'inline'
+          ? flagSettingsDelivery.settings
+          : flagSettingsDelivery.settingsPath);
+      };
       const releaseManagedPlugins = () => {
         void managedPlugins?.dispose().catch((error) => log.warn('managed skill plugin cleanup failed', { error: String(error) }));
       };
@@ -4615,8 +4654,10 @@ export class ClaudeCodeAgent extends BaseAgent {
           //  - showThinkingSummaries        : reasoning summary 展示开关
           //  - autoMemoryEnabled / autoDream: memory 联动 (host 通过 runtimeConfig.memoryEnabled 或
           //    BaseAgent.setMemory 控制; this.memoryOverride === undefined 时不传, 让 SDK 走默认)
-          // **同一对象远端分支也透传 (extraOptions.settings)**, 别在两边漂移。
-          settings: buildSettings(),
+          // 内容与远端 extraOptions.settings 同源。本地 SDK 会把内联对象序列化成
+          // `--settings <json>` 命令行参数; 模型白名单超过 Windows 命令行上限时改传
+          // 临时文件路径 (#9753)。远端 daemon 读不到这份本机文件, 仍传对象。
+          settings: localClaudeSettingsOption(),
           allowDangerouslySkipPermissions:
             !reviewMode,
           stderr: vo.onStderrLine as ((line: string) => void) | undefined,
@@ -4646,6 +4687,12 @@ export class ClaudeCodeAgent extends BaseAgent {
         companionEnvironment?.assertCurrent?.();
         if (managedPlugins && querySignal.aborted) throw new Error('Claude session closed before skill plugins were loaded');
         activeQueryModelEnvGeneration = applyModelOutputEnv();
+        // 必须紧跟输出上限 / 模型 env 的快照之后再序列化设置: 设置层里的
+        // CLAUDE_CODE_MAX_OUTPUT_TOKENS 与模型白名单都要反映这一次 spawn 的值。
+        await prepareFlagSettings();
+        // 落盘是异步的：等它回来期间账号可能被换掉、伙伴可能被删。围栏要在
+        // 真正拉起 SDK 之前再验一次，失效的启动走下面 catch 的清理路径。
+        companionEnvironment?.assertCurrent?.();
         const queryArgs = createLocalQueryArgs();
         if (newSdkSessionId) sdkSessionId = newSdkSessionId;
         onRuntimeStartAttempted();
@@ -4654,7 +4701,19 @@ export class ClaudeCodeAgent extends BaseAgent {
         if (sdkSessionId === newSdkSessionId) sdkSessionId = previousSdkSessionId;
         querySignal.removeEventListener('abort', releaseManagedPlugins);
         if (managedPlugins) await managedPlugins.dispose();
+        if (flagSettingsFile) await flagSettingsFile.dispose();
+        flagSettingsFile = null;
         throw error;
+      }
+      if (closed) {
+        // 关闭在准备阶段赢了这个竞态 (close 已删过旧文件并提前返回, 不会再来收这一份)。
+        // 调用方建完这个 query 会立刻关掉它, 借着那次 close 一并把文件删掉 —— 不在这里
+        // 直接删, 免得抢在 CLI 读 settings 之前。
+        const closeQueryAfterHandleClose = query.close.bind(query);
+        query.close = () => {
+          try { return closeQueryAfterHandleClose(); }
+          finally { releaseFlagSettingsFile(); }
+        };
       }
       if (newSdkSessionId && finalFork && resumeSdkSid) {
         unacceptedForks.add(query);
@@ -4754,6 +4813,9 @@ export class ClaudeCodeAgent extends BaseAgent {
       try { abortController.abort(); } catch (e) {
         log.warn(`${logLabel}: abortController.abort threw`, { error: String(e) });
       }
+      // 这里已经把 closed 置 true, 之后宿主再调 close() 会提前返回, 走不到那边
+      // 的清理 —— 长模型目录落下的临时设置文件必须在死亡路径上自己删掉。
+      releaseFlagSettingsFile();
       // remoteQuery.close 是 async + 可能已经死了 (RpcClient closed), 调它会走
       // 兜底 catch (best-effort)。fire-and-forget 不 await — startForwardLoop
       // 里同步路径不能阻塞 finally。
@@ -6427,6 +6489,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     let idleResumeRebuildGate: Promise<void> | null = null;
     // Idle-resume recovery and cancelled-continuation rebuilds have independent gates.
     let cancellationRebuildGate: Promise<void> | null = null;
+    let rewindOperationsInFlight = 0;
     // runtime control request 可写性判定: commitRewindFiles 后旧 Query 已 close、新 Query
     // 等下一次 send 重建;或 bridge Stop/watchdog 已 close 当前 Query、等待下一次
     // send 从同一 rewind point 重建。这些窗口里对 q 发 control request 会抛
@@ -7540,6 +7603,9 @@ export class ClaudeCodeAgent extends BaseAgent {
           // close 会终结 CLI 子进程(本地)/ 远端 session,后台任务随之死亡。
           runningBackgroundTasks.clear();
           terminalBackgroundTaskIds.clear();
+          // 启动中途关闭由 startSession 的 catch 删文件; Query 已经建起来之后再关闭
+          // 走这里, 覆盖 SDK close 不会再回到那个 catch 的路径。
+          releaseFlagSettingsFile();
         } catch (e) {
           log.warn('close threw', { error: String(e) });
         }
@@ -8063,6 +8129,14 @@ export class ClaudeCodeAgent extends BaseAgent {
 
       isPreparingUserTurn: bridgeStateActive,
 
+      hasPendingHostOperation(): boolean {
+        // Rewind closes the CLI before the next send applies its in-memory
+        // resume point. Keep this lightweight controller until that send has
+        // rebuilt the Query; closing it would resume the unrewound transcript.
+        return rewindOperationsInFlight > 0 || controlRequestsBlocked() || cancellationRebuildGate !== null ||
+          activeBridgeRewindResumeAt !== undefined;
+      },
+
       isTurnRunning(): boolean {
         // 前台 result/done 到后台 wake 任务自动续 turn 之间，SDK 会短暂把
         // turnInFlight 清成 false，但从产品/Session 视角 Agent 仍未执行结束。
@@ -8072,42 +8146,47 @@ export class ClaudeCodeAgent extends BaseAgent {
       },
 
       async previewRewindFiles(userUuid: string): Promise<RewindFilesResult> {
-        // invalid-resume 重建期间 q 是死掉/半替换的旧 query:与 send 同款等待门禁,
-        // 替换 query 就绪后再操作(dryRun 在全新会话上自然返回 canRewind:false 软拒绝)。
-        while (idleResumeRebuildGate) {
-          await idleResumeRebuildGate;
-        }
-        if (continuationCancellationRequiresQueryRebuild) {
-          // Stop may have already closed the old Query while leaving the
-          // cancellation rebuild tombstone for the next explicit turn. A
-          // rewind preview is also a valid next control action: install an
-          // isolated fresh Query first, but do not inject the send-only
-          // /compact bridge or start a product turn.
-          await rebuildCancelledContinuationQuery(undefined, { queueCompactBridge: false });
-        }
-        log.info('previewRewindFiles', { userUuid, sdkSessionId });
+        rewindOperationsInFlight++;
         try {
-          const result = await q.rewindFiles(userUuid, { dryRun: true });
-          log.info('previewRewindFiles result', {
-            canRewind: result.canRewind,
-            filesCount: result.filesChanged?.length ?? 0,
-            insertions: result.insertions,
-            deletions: result.deletions,
-            error: result.error ?? null,
-          });
-          return result;
-        } catch (err) {
-          // SDK 抛错 (老 session 没开 checkpointing 等) 包成软拒绝, UI 走 Empty/Error 态。
-          // 业务层 (Dialog) 仍可让用户继续 commit, 由 forkSession=true 兜底。
-          const errMsg = err instanceof Error ? err.message : String(err);
-          log.warn('previewRewindFiles SDK threw', { error: errMsg });
-          return {
-            canRewind: false,
-            error: errMsg,
-            filesChanged: [],
-            insertions: 0,
-            deletions: 0,
-          };
+          // invalid-resume 重建期间 q 是死掉/半替换的旧 query:与 send 同款等待门禁,
+          // 替换 query 就绪后再操作(dryRun 在全新会话上自然返回 canRewind:false 软拒绝)。
+          while (idleResumeRebuildGate) {
+            await idleResumeRebuildGate;
+          }
+          if (continuationCancellationRequiresQueryRebuild) {
+            // Stop may have already closed the old Query while leaving the
+            // cancellation rebuild tombstone for the next explicit turn. A
+            // rewind preview is also a valid next control action: install an
+            // isolated fresh Query first, but do not inject the send-only
+            // /compact bridge or start a product turn.
+            await rebuildCancelledContinuationQuery(undefined, { queueCompactBridge: false });
+          }
+          log.info('previewRewindFiles', { userUuid, sdkSessionId });
+          try {
+            const result = await q.rewindFiles(userUuid, { dryRun: true });
+            log.info('previewRewindFiles result', {
+              canRewind: result.canRewind,
+              filesCount: result.filesChanged?.length ?? 0,
+              insertions: result.insertions,
+              deletions: result.deletions,
+              error: result.error ?? null,
+            });
+            return result;
+          } catch (err) {
+            // SDK 抛错 (老 session 没开 checkpointing 等) 包成软拒绝, UI 走 Empty/Error 态。
+            // 业务层 (Dialog) 仍可让用户继续 commit, 由 forkSession=true 兜底。
+            const errMsg = err instanceof Error ? err.message : String(err);
+            log.warn('previewRewindFiles SDK threw', { error: errMsg });
+            return {
+              canRewind: false,
+              error: errMsg,
+              filesChanged: [],
+              insertions: 0,
+              deletions: 0,
+            };
+          }
+        } finally {
+          rewindOperationsInFlight--;
         }
       },
 
@@ -8116,66 +8195,71 @@ export class ClaudeCodeAgent extends BaseAgent {
         priorAssistantUuid: string,
         rewindOpts?: RewindCommitOptions,
       ): Promise<undefined> {
-        // 同 previewRewindFiles:重建窗口内不得对死掉/半替换的 q 做 rewindFiles/close,
-        // 否则 pendingRewindTo 会指向一个已不存在的会话时点。等替换 query 就绪再走。
-        while (idleResumeRebuildGate) {
-          await idleResumeRebuildGate;
-        }
-        if (continuationCancellationRequiresQueryRebuild) {
-          // See previewRewindFiles: rebuild the fenced Query without the
-          // compact bridge so rewindFiles retains its checkpoint semantics.
-          await rebuildCancelledContinuationQuery(undefined, { queueCompactBridge: false });
-        }
-        log.info('commitRewindFiles ▶', { userUuid, priorAssistantUuid, sdkSessionId });
-        // ① 立即把文件回滚到 target 时点 (失败 warn + 继续, forkSession=true 兜底)
+        rewindOperationsInFlight++;
         try {
-          await q.rewindFiles(userUuid, { dryRun: false });
-          log.debug('commitRewindFiles: SDK rewindFiles ok');
-        } catch (err) {
-          if (rewindOpts?.rewindsToNativeThreadStart) {
-            // 只回滚文件的路径没有下一次 send 的 forkSession 兜底重试,吞掉错误会让
-            // 宿主继续关闭会话、软删消息,用户看到回退成功但文件没恢复。
-            log.warn('commitRewindFiles: rewindFiles failed on files-only rewind', {
+          // 同 previewRewindFiles:重建窗口内不得对死掉/半替换的 q 做 rewindFiles/close,
+          // 否则 pendingRewindTo 会指向一个已不存在的会话时点。等替换 query 就绪再走。
+          while (idleResumeRebuildGate) {
+            await idleResumeRebuildGate;
+          }
+          if (continuationCancellationRequiresQueryRebuild) {
+            // See previewRewindFiles: rebuild the fenced Query without the
+            // compact bridge so rewindFiles retains its checkpoint semantics.
+            await rebuildCancelledContinuationQuery(undefined, { queueCompactBridge: false });
+          }
+          log.info('commitRewindFiles ▶', { userUuid, priorAssistantUuid, sdkSessionId });
+          // ① 立即把文件回滚到 target 时点 (失败 warn + 继续, forkSession=true 兜底)
+          try {
+            await q.rewindFiles(userUuid, { dryRun: false });
+            log.debug('commitRewindFiles: SDK rewindFiles ok');
+          } catch (err) {
+            if (rewindOpts?.rewindsToNativeThreadStart) {
+              // 只回滚文件的路径没有下一次 send 的 forkSession 兜底重试,吞掉错误会让
+              // 宿主继续关闭会话、软删消息,用户看到回退成功但文件没恢复。
+              log.warn('commitRewindFiles: rewindFiles failed on files-only rewind', {
+                error: err instanceof Error ? err.message : String(err),
+              });
+              throw err;
+            }
+            log.warn('commitRewindFiles: rewindFiles failed, continuing (forkSession on next send will retry)', {
               error: err instanceof Error ? err.message : String(err),
             });
-            throw err;
           }
-          log.warn('commitRewindFiles: rewindFiles failed, continuing (forkSession on next send will retry)', {
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-        if (rewindOpts?.rewindsToNativeThreadStart) {
-          // 目标之前没有可续接的 assistant:不设续接点,由宿主关闭会话并清掉原生
-          // 会话 id,下次发送开全新原生会话。
-          log.info('commitRewindFiles ◀ files only; host restarts the native session');
+          if (rewindOpts?.rewindsToNativeThreadStart) {
+            // 目标之前没有可续接的 assistant:不设续接点,由宿主关闭会话并清掉原生
+            // 会话 id,下次发送开全新原生会话。
+            log.info('commitRewindFiles ◀ files only; host restarts the native session');
+            return undefined;
+          }
+          // ② **先**设 rewind transition 再 close —— q.close() 会让正在跑的 forward loop
+          //    for-await 抛 "Claude Code process aborted by user", 这是预期行为不是错误。
+          //    pendingRewindTo 是共享标记,会在新 q 接管后清掉;因此还要把当前 q 放进
+          //    per-query transition 集合,确保旧 forward loop 迟到退出时仍静音,不误关新 q。
+          //    顺序很重要 —— catch 是 microtask, q.close() 同步触发, 标记必须先设上。
+          pendingRewindTo = priorAssistantUuid;
+          rewindTransitionQueries.add(q);
+          try {
+            q.close();
+            log.debug('commitRewindFiles: q.close() ok');
+          } catch (err) {
+            log.warn('commitRewindFiles: q.close() threw', {
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+          // turn 没在跑了, 清守卫标记 (rewind 必然在 idle 时调, 但兜底一把)
+          turnInFlight = false;
+          // close 会连 CLI 子进程一起杀,后台任务(含后台命令)随之终止:与其它 close 路径同口径立即清表。
+          // 不等下次 send 换 Query 时清,否则宿主在这段空窗里读到的快照仍带着已死的任务。
+          runningBackgroundTasks.clear();
+          terminalBackgroundTaskIds.clear();
+          // bridge counter 兜底: rewind idle 时应该已经归零, 但如果上一轮 bridge 中途异常
+          // (SDK 崩 / abort 未 drain result) counter 可能残留, 会污染 rebuild 后的第一 turn。
+          clearBridgeState();
+          log.info('commitRewindFiles ◀ pendingRewindTo set, awaiting next send to rebuild');
           return undefined;
+        } finally {
+          rewindOperationsInFlight--;
         }
-        // ② **先**设 rewind transition 再 close —— q.close() 会让正在跑的 forward loop
-        //    for-await 抛 "Claude Code process aborted by user", 这是预期行为不是错误。
-        //    pendingRewindTo 是共享标记,会在新 q 接管后清掉;因此还要把当前 q 放进
-        //    per-query transition 集合,确保旧 forward loop 迟到退出时仍静音,不误关新 q。
-        //    顺序很重要 —— catch 是 microtask, q.close() 同步触发, 标记必须先设上。
-        pendingRewindTo = priorAssistantUuid;
-        rewindTransitionQueries.add(q);
-        try {
-          q.close();
-          log.debug('commitRewindFiles: q.close() ok');
-        } catch (err) {
-          log.warn('commitRewindFiles: q.close() threw', {
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-        // turn 没在跑了, 清守卫标记 (rewind 必然在 idle 时调, 但兜底一把)
-        turnInFlight = false;
-        // close 会连 CLI 子进程一起杀,后台任务(含后台命令)随之终止:与其它 close 路径同口径立即清表。
-        // 不等下次 send 换 Query 时清,否则宿主在这段空窗里读到的快照仍带着已死的任务。
-        runningBackgroundTasks.clear();
-        terminalBackgroundTaskIds.clear();
-        // bridge counter 兜底: rewind idle 时应该已经归零, 但如果上一轮 bridge 中途异常
-        // (SDK 崩 / abort 未 drain result) counter 可能残留, 会污染 rebuild 后的第一 turn。
-        clearBridgeState();
-        log.info('commitRewindFiles ◀ pendingRewindTo set, awaiting next send to rebuild');
-        return undefined;
       },
     };
 

@@ -4,7 +4,7 @@ export default {
   name: 'provider-group-accounts',
   entry: './fixture.tsx',
   viewport: { width: 900, height: 620 },
-  real: 'ProviderGroupSection, GroupMemberQuota, GroupMemberAccountList, QuotaHoverCard shared columns, translations and themes',
+  real: 'ProviderGroupSection, RemoteProviderGroupMembers, GroupMemberQuota, GroupMemberAccountList, QuotaHoverCard shared columns, translations and themes',
   notCovered:
     'Real subscription reads, sign-in and other computers over device link. Accounts and usage are fixture data.',
   stubs: {
@@ -49,8 +49,23 @@ export default {
       about: 'One added account needs login and never borrows the unused default quota',
       data: { singleAdded: 'signed-out' },
     },
+    // 2026-11-11: jsdom and settled screenshots missed an empty quota block
+    // shrinking the clicked row. Hold the real account read and sample browser
+    // geometry on every animation frame, through opening, loading and completion.
+    'pending-accounts': {
+      about: 'The local row never shrinks while its account list is pending',
+      data: { pending: true },
+    },
+    'pending-remote-accounts': {
+      about: 'The remote row keeps its height through mouse and keyboard expansion',
+      data: { pending: true, remote: true },
+    },
   },
   async ready(page) {
+    if (await page.locator('main[data-pending-accounts]').count()) {
+      await page.locator('[data-member-state="available"]').first().waitFor();
+      return;
+    }
     await page.getByTestId('provider-group-member').first().waitFor();
     await page
       .locator('[data-testid="provider-group-member"] button[aria-expanded="false"]')
@@ -67,6 +82,65 @@ export default {
       await page.locator('main').evaluate((element) => element.scrollWidth <= element.clientWidth),
       true,
     );
+    if (ui.data.pending) {
+      const rowSelector = ui.data.remote
+        ? '[data-testid="remote-provider-group-member"]'
+        : '[data-testid="provider-group-member"]';
+      const row = page.locator(rowSelector).first();
+      const button = row.locator('button[aria-expanded]').first();
+      for (const interaction of ['mouse', 'keyboard']) {
+        await row.evaluate((element) => {
+          const button = element.querySelector('button[aria-expanded]');
+          const probe = {
+            initial: element.getBoundingClientRect().height,
+            initialContainer: element.parentElement.getBoundingClientRect().height,
+            samples: [], running: true,
+          };
+          window.__quotaHeightProbe = probe;
+          const sample = () => {
+            probe.samples.push({
+              height: element.getBoundingClientRect().height,
+              container: element.parentElement.getBoundingClientRect().height,
+              button: button.getBoundingClientRect().height,
+              accounts: element.querySelectorAll('[data-testid="provider-group-member-account"]').length,
+              bars: element.querySelectorAll('[role="progressbar"]').length,
+            });
+            if (probe.running) requestAnimationFrame(sample);
+          };
+          sample();
+        });
+        if (interaction === 'mouse') await button.click();
+        else { await button.focus(); await button.press('Enter'); }
+        await page.evaluate(() => new Promise(resolve => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        }));
+        await ui.capture(`${interaction}-opening`);
+        await row.getByText(await ui.t('providerGroup.member.quota.loading'), { exact: true }).waitFor();
+        await ui.capture(`${interaction}-loading`);
+        await ui.emit('accountsReady', null);
+        await row.getByTestId('provider-group-member-account').nth(1).waitFor();
+        await ui.capture(`${interaction}-loaded`);
+        const probe = await page.evaluate(() => {
+          window.__quotaHeightProbe.running = false;
+          return window.__quotaHeightProbe;
+        });
+        assert.ok(probe.samples.length > 2, 'sampled intermediate browser frames');
+        const minimum = Math.min(...probe.samples.map(sample => sample.height));
+        assert.ok(minimum >= probe.initial - 0.5,
+          `${interaction} row shrank from ${probe.initial}px to ${minimum}px`);
+        const minimumContainer = Math.min(...probe.samples.map(sample => sample.container));
+        assert.ok(minimumContainer >= probe.initialContainer - 0.5,
+          `${interaction} cell border shrank from ${probe.initialContainer}px to ${minimumContainer}px`);
+        assert.ok(probe.samples.every(sample => Math.abs(sample.button - probe.samples[0].button) < 0.5),
+          `${interaction} changed the header height`);
+        assert.ok(probe.samples.every(sample => sample.bars === 0 || sample.accounts === 2),
+          'never paints a standalone default card before the account list');
+        await button.click();
+        await row.locator('button[aria-expanded="false"]').first().waitFor();
+        assert.equal((await row.boundingBox()).height, probe.initial);
+      }
+      return;
+    }
     const accounts = page.getByTestId('provider-group-member-account');
     if (ui.case === 'single') {
       await page.waitForTimeout(150);

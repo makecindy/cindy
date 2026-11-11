@@ -110,8 +110,11 @@ describe('Cindy managed skill catalog', () => {
     skills = await listCindyManagedSkills();
     expect(skills.map(skill => skill.cindyOfficial)).toEqual([true, true]);
     const source = skills[1]!.path!;
-    const alias = path.join(state.root, 'alias.md');
-    await fs.symlink(source, alias);
+    // Real skill-directory aliases must retain their lexical identity. Windows
+    // junctions exercise the same resolution without file-symlink privileges.
+    const aliasDir = path.join(state.root, 'alias');
+    await fs.symlink(path.dirname(source), aliasDir, process.platform === 'win32' ? 'junction' : 'dir');
+    const alias = path.join(aliasDir, path.basename(source));
     const foreign = path.join(state.root, 'personal.md');
     await fs.writeFile(foreign, '---\nname: pr\ncindyOfficial: true\n---');
     const catalog = [{ name: 'pr', path: alias }, { name: 'pr', path: foreign, cindyOfficial: true }];

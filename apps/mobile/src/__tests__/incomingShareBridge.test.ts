@@ -144,6 +144,18 @@ it('refreshes only when an account switch settles in foreground', async () => {
   expect(mock.receive).toHaveBeenCalledTimes(2);
 });
 
+// Bug (App Store crash logs, 2026-11): iOS ends a background-launched app with 0xdead10cc when it
+// is suspended while the native inbox read holds the App Group file lock. Minimal input: the
+// bridge mounts while AppState is 'background'. The read must wait for the foreground event.
+it('defers the first native read of a background launch until the app is foreground', async () => {
+  mock.appState = 'background';
+  await render();
+  expect(mock.cleanup).not.toHaveBeenCalled();
+  expect(mock.receive).not.toHaveBeenCalled();
+  mock.appState = 'active'; mock.foreground!('active'); await flush();
+  expect(mock.receive).toHaveBeenCalledOnce();
+});
+
 it('ignores unrelated links and retries a native read on a later share notification', async () => {
   mock.receive.mockRejectedValueOnce(new Error('temporarily unavailable'));
   await render();

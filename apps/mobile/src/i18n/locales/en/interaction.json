@@ -29,6 +29,13 @@
       "description": "Full access disables the workspace sandbox and skips routine approvals. {{appName}} can modify files outside the workspace and run network commands without asking; built-in high-risk operations will still require confirmation.",
       "confirm": "Enable Full access",
       "cancel": "Keep current permissions"
+    },
+    "description": {
+      "default": "You approve actions when needed.",
+      "acceptEdits": "File edits are allowed directly; you approve other actions when needed.",
+      "auto": "An AI model approves actions, which may take extra time; you confirm when needed.",
+      "bypass": "Routine actions are allowed directly, including files outside the workspace and network commands.",
+      "plan": "Analyzes and plans without changing files."
     }
   },
   "planMode": {
@@ -186,6 +193,7 @@
     "fromLead": "Message from Lead",
     "fromWorkerNamed": "Message from Worker “{{role}}”",
     "fromWorker": "Message from Worker",
+    "fromWorkerBatch": "System report: {{count}} Worker results",
     "emptyMessageBody": "(Empty message)"
   },
   "contextSheet": {

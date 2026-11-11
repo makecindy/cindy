@@ -418,7 +418,6 @@ import { QuoteCapsule } from '@/session/QuoteCapsule';
 import { formatQuotesForSend, stripChatQuoteMarkerLines } from '@cindy/maker-shared/chat-quotes';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
-import { confirmFullAccessChange } from '@/session/fullAccessConfirmation';
 import {
   confirmAgentLocationForPick,
   confirmMobileSessionAgentSwitch,
@@ -8838,14 +8837,13 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       : (runtimeOptions?.permissionOptions.find((option) => option.id !== 'plan')?.id ?? 'ask')
     : (currentSession?.permissionMode ?? 'ask');
   // 权限模式独立浮窗(2026-07-29 用户裁决,对齐 Codex 与新建页):composer 左侧图标钮
-  // 点开;选择走既有 confirmFullAccessChange + maker:set-permission-mode 链路。
+  // 点开;选择走既有 maker:set-permission-mode 链路。
   const displayPermissionLabel =
     runtimeOptions?.permissionOptions.find((option) => option.id === displayPermissionMode)?.label
       ?? displayPermissionMode;
   const selectSessionPermissionMode = useCallback((mode: string) => {
     void (async () => {
       if (!currentSession) return;
-      if (!(await confirmFullAccessChange(currentSession.permissionMode, mode))) return;
       await runControlAction(
         () => maker.setPermissionMode(sessionId, mode),
         { permissionMode: mode },
@@ -10802,6 +10800,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         <MountOnFirstOpen open={modelSheetOpen && canConfigureSessionModel}>{() =>
               currentSession && canConfigureSessionModel && runtimeOptions && modelSheetSelection && modelSheetRuntimeOptions ? (
           <ModelPickerSheet
+            subscriptionTaskId={sessionId}
             unified={{
               currentSelection: { agentKind: sessionAgentKind, activeModelId: currentSession.model, selectedProviderId: currentSession.providerId ?? null, selectedEffort: currentSession.effort ?? '', selectedFastMode: currentSession.fastMode ?? false,
                     },
@@ -10937,7 +10936,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           />
         ) : null}</MountOnFirstOpen>
         {/* 权限模式独立浮窗(composer 权限图标钮点开)。两端同一语义:点选先关浮窗,关闭完成后
-            再走 confirmFullAccessChange + maker:set-permission-mode。 */}
+            再走 maker:set-permission-mode。 */}
         {currentSession && runtimeOptions ? (
           <NativePermissionSheet
             visible={permissionSheetOpen && canUseRemoteSessionControls}

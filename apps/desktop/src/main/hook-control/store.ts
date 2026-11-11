@@ -39,11 +39,12 @@ export interface HookBindingCacheEntry {
  * 稳定展示(字段与 provider.bind.* 协议词汇对齐; Telegram / X 存储槽使用)。
  */
 export interface ProviderBindingCacheEntry {
+  tenantKey?: string | null;
   bindingId: string;
   principalId: string;
   principalName: string | null;
   scopeId: string;
-  scopeName: string;
+  scopeName: string | null;
 }
 
 /** 持久化的单配置(不含任何凭证)。 */
@@ -72,6 +73,7 @@ export interface SlackHookConfigState {
   telegramBindingCache: ProviderBindingCacheEntry | null;
   xBindingCache: ProviderBindingCacheEntry | null;
   feishuBindingCache: ProviderBindingCacheEntry | null;
+  feishuBindingsCache?: ProviderBindingCacheEntry[];
   /**
    * 该 provider 派发任务时使用的默认工作目录别名; null = 用内置「对话」伪目录。
    * 生效顺序恒为 **会话显式映射 > 默认工作目录 > 「对话」**(判定在 hook server)。
@@ -187,6 +189,7 @@ export interface SlackHookStore {
   /** (multi-team)覆写本地绑定缓存(bind.state / 绑定行变化后由 manager 调用)。 */
   setBindingsCache(entries: HookBindingCacheEntry[]): SlackHookConfigState;
   setLifecycleAnnouncementOverride(enabled: boolean | null): SlackHookConfigState;
+  setFeishuBindingsCache(entries: ProviderBindingCacheEntry[]): SlackHookConfigState;
   /** provider-neutral(Telegram / X / 飞书)confirmed 绑定的本地影子写入。 */
   setProviderBindingCache(
     provider: 'telegram' | 'x' | 'feishu',
@@ -228,6 +231,7 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
     feishu: {
       enabled: boolean;
       bindingCache: ProviderBindingCacheEntry | null;
+      bindingsCache?: ProviderBindingCacheEntry[];
       defaultWorkspace: string | null;
     };
   }
@@ -341,12 +345,12 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
       !row.principalId ||
       typeof row.scopeId !== 'string' ||
       !row.scopeId ||
-      typeof row.scopeName !== 'string' ||
-      !row.scopeName
+      (row.scopeName !== null && (typeof row.scopeName !== 'string' || !row.scopeName))
     ) {
       return null;
     }
     return {
+      ...(typeof row.tenantKey === 'string' ? { tenantKey: row.tenantKey } : {}),
       bindingId: row.bindingId,
       principalId: row.principalId,
       principalName: typeof row.principalName === 'string' ? row.principalName : null,
@@ -403,6 +407,8 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
       feishu: {
         enabled: feishu.enabled === true,
         bindingCache: parseProviderBindingCache(feishu.bindingCache),
+        ...(Array.isArray(feishu.bindingsCache) ? { bindingsCache: feishu.bindingsCache.map(parseProviderBindingCache)
+          .filter((row): row is ProviderBindingCacheEntry => row !== null) } : {}),
         // 同 x: 成员关系留给 viewOf 复核。
         defaultWorkspace:
           typeof feishu.defaultWorkspace === 'string' ? feishu.defaultWorkspace : null,
@@ -593,6 +599,7 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
       feishuBindingCache: account.feishu.bindingCache
         ? { ...account.feishu.bindingCache }
         : null,
+      ...(account.feishu.bindingsCache === undefined ? {} : { feishuBindingsCache: account.feishu.bindingsCache.map((row) => ({ ...row })) }),
       // 读侧兜底: 正常路径上 setWorkspaces 已把失效别名从存档里删了, 这里只兜
       // 手改配置文件、或将来新增了别的清单写入口的情况。代价不对称 —— 漏兜的
       // 后果是 hello 带上清单外别名被协议拒收, **该 provider 的连接**断在握手上
@@ -658,9 +665,16 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
         account.slack.lifecycleAnnouncementOverride = enabled;
       });
     },
+    setFeishuBindingsCache(entries) {
+      return mutateAccount((account) => {
+        account.feishu.bindingsCache = entries.map((row) => ({ ...row }));
+        account.feishu.bindingCache = entries[0] ? { ...entries[0] } : null;
+      });
+    },
     setProviderBindingCache(provider, entry) {
       return mutateAccount((account) => {
         account[provider].bindingCache = entry ? { ...entry } : null;
+        if (provider === 'feishu') delete account.feishu.bindingsCache;
       });
     },
     setProviderDefaultWorkspace(provider, alias) {
