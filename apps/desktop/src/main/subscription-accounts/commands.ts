@@ -78,6 +78,8 @@ export function parseSubscriptionAccountCommand(raw: unknown): SubscriptionAccou
       ['limit', 16],
       ['weight', 100],
     ] as const) {
+      // limit: null clears the setting (unlimited concurrency).
+      if (key === 'limit' && value.limit === null) continue;
       if (
         value[key] !== undefined &&
         (!Number.isInteger(value[key]) ||
