@@ -571,6 +571,8 @@ export async function readSubscriptionPool(
 
 export interface SubscriptionAccountLease {
   account: NativeSubscriptionAccount;
+  /** New turns must not reuse an account explicitly disabled by the user. */
+  assertDispatchable(): void;
   changeModel(model: string, apply: () => Promise<void>): Promise<void>;
   bind(keys: string[]): Promise<void>;
   running(active: boolean): void;
@@ -588,7 +590,12 @@ export async function acquireSubscriptionAccount(
   if (!pool) return null;
   if (pool.disconnected) throw new Error('Subscription provider was disconnected');
   const state = currentRuntime();
-  const binding = keys.map((key) => readAccountBinding(key, provider)).find(Boolean);
+  const bindings = keys.map((key) => readAccountBinding(key, provider)).filter(Boolean);
+  const binding = bindings[0];
+  // A stale caller may still carry the pre-switch native id. Never resume it in
+  // the newly bound task account's home or overwrite its historical ownership.
+  if (bindings.some(entry => entry?.accountId !== binding?.accountId))
+    throw new Error('The task subscription account changed');
   const snapshots = await Promise.all(pool.accounts.map((a) => snapshot(state, provider, a.id)));
   // Remote access stores also wire share lifecycle dependencies. Load them only
   // for actual OpenAI selection, not while unrelated catalogs initialize.
@@ -633,7 +640,7 @@ export async function acquireSubscriptionAccount(
       lastPicked: state.lastPicked.get(provider),
     });
   const member = members.find((a) => a.id === selected);
-  if (!selected || !member || !member.usable)
+  if (!selected || !member || !member.usable || (!control && member.paused))
     throw new Error(
       pinned
         ? 'The task subscription account requires login or quota reset'
@@ -665,6 +672,11 @@ export async function acquireSubscriptionAccount(
       throw new Error(options.remote ? 'Subscription account remote access was revoked' : 'Subscription account does not allow this model');
   };
   return {
+    assertDispatchable: () => {
+      assertCurrent();
+      if (readPool(provider)?.accounts.find(a => a.id === selected)?.paused)
+        throw new Error('The task subscription account is disabled; retry to switch accounts');
+    },
     account: {
       id: `${accountOwnerPrefix()}:${provider}:${selected}`,
       configDir: directoryFor(provider, selected),
