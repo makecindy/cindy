@@ -10165,7 +10165,7 @@ export function ChatInput({
                     // 已建会话按实际路由口径解析当前来源(含停用拷贝,跟真实扣费路由);
                     // 草稿是新路由选择,保持准入口径(PR #744 review 第十轮)。
                     actualRoute={!!sessionId}
-            previewSubscriptionPool={!sessionId}
+                    subscriptionTaskId={sessionId ?? undefined}
                     // 有过 Agent 回复 = 供应商组已为这个任务选好电脑,组那一项的用量按那台显示。
                     taskStarted={taskStarted}
                     onProviderChange={(providerId, modelId, effort, fast) =>

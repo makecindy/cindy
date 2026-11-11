@@ -20055,7 +20055,12 @@
     "openDirectory": "Ouvrir le dossier du compte",
     "openDirectoryFailed": "Impossible d’ouvrir le dossier du compte. Il a peut-être été déplacé ou supprimé.",
     "loginAgain": "Se reconnecter",
-    "login": "Se connecter"
+    "login": "Se connecter",
+    "quotaAverage": "Restant moyen {{percent}} %",
+    "quotaUpdating": "Quota en attente de mise à jour",
+    "quotaResetSoon": "Réinitialisation proche",
+    "quotaAverageHint": "Quota hebdomadaire · Poids égal par compte",
+    "quotaResetHint": "Au rythme actuel, du quota pourrait rester à la réinitialisation : jaune sous 24 heures, rouge sous 6 heures."
   },
   "sessionNotify": {
     "finished": "Cette tâche a terminé son tour. Sa réponse finale :",

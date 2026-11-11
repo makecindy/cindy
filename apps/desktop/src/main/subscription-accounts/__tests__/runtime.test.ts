@@ -108,6 +108,19 @@ beforeEach(() => {
 });
 
 describe('native account assignment on the executing computer', () => {
+  it('projects the task binding without selecting, reserving or unpausing an account', async () => {
+    h.pools.anthropic!.accounts[0].paused = true;
+    h.bindings.set('task:existing', { providerId: 'anthropic', accountId: 'default' });
+    const bound = await readSubscriptionPool('anthropic', false, 'existing');
+    expect(bound.boundAccountId).toBe('default');
+    expect(bound.accounts[0]).toMatchObject({ paused: true, running: 0 });
+    expect((await readSubscriptionPool('anthropic', false, 'new-task')).boundAccountId).toBeNull();
+    expect(await readSubscriptionPool('anthropic')).not.toHaveProperty('boundAccountId');
+    h.pools.anthropic!.accounts = [account('second')];
+    expect((await readSubscriptionPool('anthropic', false, 'existing')).boundAccountId).toBe('default');
+    expect(h.bindings.size).toBe(1);
+  });
+
   // #9517 review, unit: Add must recover both bound and unbound managed defaults.
   // A disconnected pool and a first Add bypassed the bound-default fallback.
   it.each([

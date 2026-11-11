@@ -19868,7 +19868,12 @@
     "openDirectory": "Open account folder",
     "openDirectoryFailed": "Couldn’t open the account folder. It may have been moved or deleted.",
     "loginAgain": "Sign in again",
-    "login": "Sign in"
+    "login": "Sign in",
+    "quotaAverage": "Average remaining {{percent}}%",
+    "quotaUpdating": "Quota updating",
+    "quotaResetSoon": "Resets soon",
+    "quotaAverageHint": "Weekly quota · Equal weight per account",
+    "quotaResetHint": "At the current pace, quota may remain at reset: yellow within 24 hours, red within 6 hours."
   },
   "sessionNotify": {
     "finished": "This task finished its turn. Its final answer:",

@@ -19868,7 +19868,12 @@
     "openDirectory": "Kontoordner öffnen",
     "openDirectoryFailed": "Der Kontoordner konnte nicht geöffnet werden. Er wurde möglicherweise verschoben oder gelöscht.",
     "loginAgain": "Erneut anmelden",
-    "login": "Anmelden"
+    "login": "Anmelden",
+    "quotaAverage": "Ø verbleibend {{percent}} %",
+    "quotaUpdating": "Kontingent wird aktualisiert",
+    "quotaResetSoon": "Bald zurückgesetzt",
+    "quotaAverageHint": "Wochenkontingent · Konten gleich gewichtet",
+    "quotaResetHint": "Beim aktuellen Verbrauch bleibt beim Zurücksetzen voraussichtlich Kontingent übrig: gelb innerhalb von 24 Stunden, rot innerhalb von 6 Stunden."
   },
   "sessionNotify": {
     "finished": "Diese Aufgabe hat ihren Durchgang abgeschlossen. Ihre endgültige Antwort:",
