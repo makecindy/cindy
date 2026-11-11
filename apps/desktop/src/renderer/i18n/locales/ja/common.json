@@ -11657,6 +11657,8 @@
       "takeOverConflict": "{{name}} はすでに「{{device}}」に移っています",
       "takeOverOffline": "サーバーに接続できないため、今はこのパソコンで続けられません",
       "takeOverFailed": "このパソコンで {{name}} を引き継げませんでした",
+      "localCindyConflict": "引き継ぎ先のコンピューターには別の Cindy がいます。その Cindy の設定で管理するか、別のメインコンピューターを選んでください",
+      "localCindyConflictAction": "このコンピューターの Cindy の設定を開く",
       "notEnabled": "このサーバーはメインのパソコンの変更に対応していません",
       "readOnlyNote": "クラウドに保存された会話です。閲覧のみできます",
       "empty": "クラウドの会話はまだありません",

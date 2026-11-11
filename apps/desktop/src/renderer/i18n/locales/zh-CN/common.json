@@ -11657,6 +11657,8 @@
       "takeOverConflict": "{{name}} 已经换到「{{device}}」继续了",
       "takeOverOffline": "连不上服务器，暂时无法在这台电脑继续",
       "takeOverFailed": "未能在这台电脑上接手 {{name}}",
+      "localCindyConflict": "接手的电脑上已有另一位 Cindy。请先在那位 Cindy 的设置中处理，或选择其他主力电脑",
+      "localCindyConflictAction": "查看本机 Cindy 设置",
       "notEnabled": "当前服务器不支持更换主力电脑",
       "readOnlyNote": "这里是云端保存的对话，只能查看",
       "empty": "还没有云端对话",
