@@ -1,6 +1,8 @@
 import type { ProviderView } from '@cindy/model-providers';
 import { mountPage, subscription, forbid } from '../../ui-page/harness';
-import { createElement } from 'react';
+import { createElement, useState } from 'react';
+import { GhostCardModelSelect } from '../../../src/renderer/components/chat/GhostCardModelSelect';
+import { ConfirmDialog } from '../../../src/renderer/components/ui/confirm-dialog';
 import {
   PluginModelPickerDialog,
   PluginModelPickerPopover,
@@ -42,6 +44,45 @@ const snapshot = {
 };
 commitProvidersSnapshot(beginProvidersRefresh(), snapshot);
 
+function CardPicker({ inDialog }: { inDialog: boolean }) {
+  const [open, setOpen] = useState(false);
+  const content = (
+    <div className="relative h-20">
+      <button type="button" onClick={() => setOpen(true)}>
+        Demo Model
+      </button>
+      {open && (
+        <GhostCardModelSelect
+          inDialog={inDialog}
+          rect={{ top: 0, left: 0, width: 160, height: 28 }}
+          initial={{
+            agentKind: 'codex',
+            providerId: 'example',
+            model: 'demo',
+            effort: 'medium',
+            fastMode: false,
+          }}
+          onSelect={() => {}}
+          onClose={() => setOpen(false)}
+        />
+      )}
+    </div>
+  );
+  return inDialog ? (
+    <ConfirmDialog
+      open
+      title="PR"
+      maxWidth={420}
+      content={content}
+      onConfirm={() => {}}
+      onCancel={() => {}}
+      onOpenChange={() => {}}
+    />
+  ) : (
+    <div className="p-6">{content}</div>
+  );
+}
+
 void mountPage({
   host: {
     safeStorageRead: async () => null,
@@ -70,7 +111,9 @@ void mountPage({
     },
   },
   render: (ctx) =>
-    ctx.case.startsWith('page-popover') ? (
+    ctx.case.startsWith('card-') ? (
+      <CardPicker inDialog={ctx.case === 'card-dialog-config'} />
+    ) : ctx.case.startsWith('page-popover') ? (
       <>
         {/* Geometry fixture only: no native guest transport is simulated as tested here. */}
         {createElement('webview', {

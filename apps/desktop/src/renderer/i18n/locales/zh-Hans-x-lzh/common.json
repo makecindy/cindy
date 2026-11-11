@@ -12573,47 +12573,47 @@
         "claude-code": {
           "ask": {
             "label": "预设权柄",
-            "description": "许于工作区内读写；需更高权柄、联网或访问工作区外路径时，再询问君。"
+            "description": "操作须批者，由君裁可。"
           },
           "acceptEdits": {
             "label": "许修改",
-            "description": "自动接受卷之修改请求，以减反复确认；涉更高风险之命令或权柄，仍依底层权柄策略处理。"
+            "description": "编辑文件径许，余事按需请君裁可。"
           },
           "auto": {
             "label": "自审",
-            "description": "许于工作区内读写，并自动审批提权请求；高风险之举或遭拒或须确认。可减打断，然有误判之险。"
+            "description": "操作由 AI 模型裁可，审之或须多候；必要时仍请君确认。"
           },
           "bypassPermissions": {
             "label": "完全访问",
-            "description": "许修改任意卷并运行联网命令，不再确认。风险最高，仅宜可信之差事，慎之。"
+            "description": "常规操作径许，可访工作区外文件、联网执行命令。"
           }
         },
         "codex": {
           "ask": {
             "label": "预设权柄",
-            "description": "许于工作区内读写；需更高权柄、联网或访问工作区外路径时，再询问君。"
+            "description": "操作须批者，由君裁可。"
           },
           "auto": {
             "label": "自审",
-            "description": "于受保护之工作区沙箱内自动运行命令；需越沙箱边界之举交自动审查器判之，高风险之举或遭拒或须确认。"
+            "description": "操作由 AI 模型裁可，审之或须多候；必要时仍请君确认。"
           },
           "bypassPermissions": {
             "label": "完全访问",
-            "description": "许修改任意卷并运行联网命令，不再确认。风险最高，仅宜可信之差事，慎之。"
+            "description": "常规操作径许，可访工作区外文件、联网执行命令。"
           }
         },
         "pi": {
           "ask": {
             "label": "预设权柄",
-            "description": "唯读器具直接运行；写卷、跑命令与 MCP 器具，每次皆询问。"
+            "description": "操作须批者，由君裁可。"
           },
           "auto": {
             "label": "自审",
-            "description": "工作区内写卷与安全命令自动运行；越界之写、危险命令与 MCP 器具仍将询问。"
+            "description": "操作由 AI 模型裁可，审之或须多候；必要时仍请君确认。"
           },
           "bypassPermissions": {
             "label": "完全访问",
-            "description": "许修改任意卷并运行联网命令，不再确认。风险最高，仅宜可信之差事，慎之。"
+            "description": "常规操作径许，可访工作区外文件、联网执行命令。"
           }
         }
       }
@@ -13478,8 +13478,8 @@
       "dismissTitle": "阖往昔未成之示"
     },
     "worktreeRestoreBanner": {
-      "text": "此差事之 worktree 已被收回（目录不存）。",
-      "textPendingSnapshot": "此差事有一份未施之更改快照。",
+      "text": "此差事之 worktree「{{name}}」已被收回（目录不存）。",
+      "textPendingSnapshot": "此差事之 worktree「{{name}}」有一份未施之更改快照。",
       "restoreAction": "复 worktree",
       "applySnapshotAction": "复更改",
       "restoring": "方复…",
@@ -14071,7 +14071,7 @@
       "errors": {
         "noPriorAssistantPreview": "请于 AI 答复之后所问处 rewind（此前无 assistant 之答）",
         "sessionRunning": "候差事止息逾时，请再回退",
-        "noLiveQuery": "Agent 会话未启——请先遣一讯（纵一句\"ok\"亦可）令 SDK 起，再 rewind",
+        "noLiveQuery": "任务未能复启，回退未成。",
         "noPriorAssistantCommit": "请于 AI 答复之后所问处 rewind",
         "commitGeneric": "rewind 未成，请再试",
         "remoteNotSupported": "远方 Claude Code 差事暂不支持 rewind"

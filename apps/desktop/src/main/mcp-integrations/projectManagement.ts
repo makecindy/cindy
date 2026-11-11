@@ -107,7 +107,7 @@ async function nearestVisibleProject(
 
 /** Selecting a task's project is read-only: never register or restore a directory. */
 export async function resolveSessionProject(params: {
-  callerSessionId: string;
+  callerSessionId?: string;
   /** undefined inherits the persisted source; null explicitly creates a dialogue. */
   projectDir?: string | null;
   /**
@@ -119,7 +119,8 @@ export async function resolveSessionProject(params: {
   return withLocalProjectContext(params.callerSessionId, async (context) => {
     let selected = params.projectDir;
     if (selected === undefined) {
-      const source = await readCurrentSessionProject(params.callerSessionId);
+      const source = params.callerSessionId ? await readCurrentSessionProject(params.callerSessionId)
+        : { workspaceKind: "dialogue", projectDir: null };
       context.assertCurrent();
       if (source.workspaceKind === 'dialogue') {
         const containing = params.workingDir
@@ -197,7 +198,7 @@ export async function resolveProjectsRoot(
 }
 
 export async function listProjects(params: {
-  callerSessionId: string;
+  callerSessionId?: string;
   includeHidden: boolean;
   offset: number;
   limit: number;

@@ -6655,6 +6655,9 @@ export class PiAgent extends BaseAgent {
           resumeFileExists = false;
         }
         if (!resumeFileExists) {
+          if (opts.vendorOptions?._cindyRequireNativeResume === true) {
+            throw new Error('Native Pi history is unavailable; refusing an empty replacement');
+          }
           // 轮 25 CRITICAL:session 文件缺失 = 历史数据已不存在, fresh 是唯一
           // 合理选择 —— 不因 onInvalidResumeSession 的 CAS 结果(防并发覆盖的
           // claude 语义)拒绝 fallback。CAS 仍执行(清 DB 残留 id), 但返回值
@@ -6670,6 +6673,9 @@ export class PiAgent extends BaseAgent {
             sessionPath: opts.resumeSessionId,
           }, { timeoutMs: PI_RESUME_TIMEOUT_MS });
           if (!switched.success) {
+            if (opts.vendorOptions?._cindyRequireNativeResume === true) {
+              throw new Error(`Native Pi history could not be restored: ${switched.error ?? 'switch_session failed'}`);
+            }
             // 轮 25 CRITICAL:switch 失败也允许 fallback(同文件缺失理由)——
             // CAS 结果不作门禁, fresh 比卡死强。CAS 仍执行清 DB 残留。
             // 轮 42 P2(codex-connector):fresh fallback 前**必须**检查 CAS 结果

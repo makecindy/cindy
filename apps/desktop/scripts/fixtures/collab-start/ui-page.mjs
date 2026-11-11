@@ -94,7 +94,12 @@ export default {
     const permission = page.getByTestId('worker-permission-mode').getByRole('button');
     await permission.click();
     await ui.capture('permission-menu');
-    await page.getByRole('option').first().click();
+    const fullAccess = await ui.t('newChat.permissionSelector.modes.claude-code.bypassPermissions.label');
+    await page.getByRole('option', { name: fullAccess, exact: true }).click();
+    await page.getByRole('listbox').waitFor({ state: 'hidden' });
+    assert.equal(await page.getByRole('dialog').count(), 1, 'switching to Full access opens no extra dialog');
+    assert.ok((await permission.getAttribute('aria-label')).endsWith(fullAccess));
+    await ui.capture('full-access-collapsed');
 
     await more.click();
     await page.getByRole('combobox', { name: await ui.t('orca.createWorker.executionDeviceLabel') }).waitFor();
@@ -106,7 +111,7 @@ export default {
     const form = await page.evaluate(() => globalThis.collabStart.submitted());
     assert.equal(form.role, 'researcher');
     assert.equal(form.initialTask, 'Check the login flow only');
-    assert.equal(form.workerPermissionMode, 'auto');
+    assert.equal(form.workerPermissionMode, 'bypassPermissions');
 
     // 再次打开：自定义角色留在这一排并被选中，带回上次的文字和权限。
     await page.getByRole('button', { name: 'Reopen', exact: true }).click();
