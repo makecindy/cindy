@@ -10,7 +10,7 @@
  * 调用先连回同一个会话；只改设置的调用(换模型、权限档、计划模式、目录等)只记在本机，连回来时带上。
  */
 import fsp from 'node:fs/promises';
-import { isTerminalAgentErrorEvent, MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
+import { markSessionSendTerminal, readSessionSendTerminalStatus, MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
 
 import type { RemoteAgentMethod, RemoteAgentReply, RemoteAgentReverseRequest, RemoteAgentTeardownReason } from '@cindy/device-link';
 import type {
@@ -35,7 +35,7 @@ import { isProviderShareCredentialSessionApproval } from '../../../shared/provid
 import { encodeSendOptions, encodeUserMessage } from '../wire';
 import { RemoteAgentRemoteError, type RemoteAgentRunClient } from './runClient';
 import { localPlanReview, RemoteEventProjection } from './eventProjection';
-import { startsRemoteProductTurn } from '../turnLifecycle';
+import { RemoteTurnTerminalOwnership, startsRemoteProductTurn } from '../turnLifecycle';
 
 const MAX_REMEMBERED_SEND_CALLBACKS = 64;
 
@@ -97,6 +97,7 @@ class EventQueue implements AsyncIterable<AgentEvent> {
   private readonly items: AgentEvent[] = [];
   private waiter: (() => void) | null = null;
   private ended = false;
+  private finalEvent: (() => AgentEvent | undefined) | undefined;
 
   push(event: AgentEvent): void {
     if (this.ended) return;
@@ -105,7 +106,8 @@ class EventQueue implements AsyncIterable<AgentEvent> {
     this.waiter = null;
   }
 
-  end(): void {
+  end(finalEvent?: () => AgentEvent | undefined): void {
+    this.finalEvent = finalEvent;
     this.ended = true;
     this.waiter?.();
     this.waiter = null;
@@ -117,7 +119,13 @@ class EventQueue implements AsyncIterable<AgentEvent> {
         yield this.items.shift()!;
         continue;
       }
-      if (this.ended) return;
+      if (this.ended) {
+        // The consumer has now attributed every preceding provider event.
+        const event = this.finalEvent?.();
+        this.finalEvent = undefined;
+        if (event) yield event;
+        return;
+      }
       await new Promise<void>((resolve) => {
         this.waiter = resolve;
       });
@@ -297,18 +305,24 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
   let rewindPending = false;
   // A delivered product terminal owns the turn. Transport teardown must not
   // replace its outcome (including provider errors and quota reset details).
+  let terminalOwnership = new RemoteTurnTerminalOwnership();
+  let sendOwnerOptions: SendOptions | undefined;
   let terminalEventDelivered = false;
   let abortRequested = false;
   let activeTurn = state.turnRunning === true;
   let interruption = 0;
 
-  const dispose = (): Promise<void> => {
+  const hasActiveProductTurn = () => !abortRequested
+    && (readSessionSendTerminalStatus(sendOwnerOptions) === 'unsettled' || activeTurn);
+
+  const dispose = (finalEvent?: () => AgentEvent | undefined): Promise<void> => {
     if (disposal) return disposal;
     disposed = true;
+    sendOwnerOptions = undefined;
     activeTurn = false;
     state = { ...state, turnRunning: false, preparing: false };
     for (const projected of projection.flush()) queue.push(projected);
-    queue.end();
+    queue.end(finalEvent);
     // onClosed can start cleanup before close/detach reaches it. Every caller
     // must await the same result, including a failure, before releasing the owner.
     disposal = Promise.resolve().then(() => deps.dispose());
@@ -412,7 +426,10 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
     projectMessage(wireMessage);
     if (encoded.wire.cindy?.autoReviewSourceContent) projectMessage(encoded.wire.cindy.autoReviewSourceContent);
     const beforeInterruption = interruption;
+    const previousOwnerOptions = sendOwnerOptions;
     if (method === 'send') {
+      terminalOwnership.beginSend(activeTurn || abortRequested);
+      sendOwnerOptions = opts;
       abortRequested = false;
       terminalEventDelivered = false;
       activeTurn = true;
@@ -424,7 +441,10 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       // The ordered error/done below already settles this send. Do not race it with
       // a second send rejection that can replace the host-owned recovery receipt.
       if (method !== 'send' || beforeInterruption === interruption) {
-        if (method === 'send') activeTurn = false;
+        if (method === 'send') {
+          activeTurn = false;
+          sendOwnerOptions = previousOwnerOptions;
+        }
         throw error;
       }
     }
@@ -608,18 +628,19 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       if (disposed) return;
       if (!event || typeof event !== 'object' || typeof (event as AgentEvent).type !== 'string') return;
       let typed = event as AgentEvent;
+      const currentTerminal = terminalOwnership.observe(typed);
       if (terminalEventDelivered && startsRemoteProductTurn(typed)) {
         abortRequested = false;
         terminalEventDelivered = false;
         activeTurn = true;
       }
-      if (typed.turnScope !== 'background' && (typed.type === 'done' || isTerminalAgentErrorEvent(typed))) terminalEventDelivered = true;
+      if (currentTerminal) terminalEventDelivered = true;
       if (typed.type === 'image' && typed.source === 'codex'
         && (typed.data as { kind?: unknown } | null)?.kind === 'generation') {
         typed = { ...typed, data: { ...(typed.data as object), pathOrigin: 'remote-agent' } };
       }
-      if (typed.turnScope !== 'background' && (typed.type === 'done' || isTerminalAgentErrorEvent(typed))) activeTurn = false;
-      if (typed.type === 'done') rewindPending = false;
+      if (currentTerminal) activeTurn = false;
+      if (currentTerminal && typed.type === 'done') rewindPending = false;
       for (const projected of projection.project(deps.mapEvent ? deps.mapEvent(typed) : typed)) queue.push(projected);
     },
     onState(next) {
@@ -635,12 +656,13 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       }
     },
     readState: () => state,
-    isQuiet: () => !activeTurn && !rewindPending
+    isQuiet: () => !hasActiveProductTurn() && !rewindPending
       && state.turnRunning !== true
       && state.preparing !== true
       && !(Array.isArray(state.backgroundTasks) && state.backgroundTasks.length > 0)
       && !(typeof state.pendingWake === 'number' && state.pendingWake > 0),
     onReconnected(next) {
+      terminalOwnership = new RemoteTurnTerminalOwnership();
       imessageSendContext = next.imessageSendContext === true;
       const previousUsage = state.usage;
       state = { ...state, ...next.state };
@@ -695,20 +717,20 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
         && isProviderShareCredentialSessionApproval(decision.permissionUpdates)) return 'session';
       return true;
     },
-    hasActiveTurn: () => activeTurn,
+    hasActiveTurn: hasActiveProductTurn,
     onInterrupted() {
       if (disposed) return;
-      const running = activeTurn && !terminalEventDelivered;
+      const running = hasActiveProductTurn();
       activeTurn = false;
       state = { ...state, turnRunning: false, preparing: false };
       if (!running) return;
       interruption += 1;
       terminalEventDelivered = true;
       for (const projected of projection.flush()) queue.push(projected);
-      queue.push({ type: 'error', source: started.agentKind, data: {
+      queue.push(markSessionSendTerminal(sendOwnerOptions, { type: 'error', source: started.agentKind, data: {
         message: '[REMOTE_AGENT_UNAVAILABLE] The provider process stopped; reconnecting to the original conversation.',
         reason: 'remote_agent_restarted', isTerminal: true,
-      } });
+      } }));
       // Drain the failed provider turn without ending the event iterator or disposing
       // the executor. The coordinator owns cancellation, provenance and continuation.
       queue.push({ type: 'done', source: started.agentKind, data: { reason: 'remote_agent_restarted' } });
@@ -716,32 +738,43 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
     onClosed(reason, message, runId) {
       if (disposed) return;
       for (const projected of projection.flush()) queue.push(projected);
-      const normalClose = reason === 'closed' || reason === 'detached' || reason === 'ended';
-      // Replacement cancels the old product turn; EOF by itself never completes it.
-      if (!teardownRequested && activeTurn && !terminalEventDelivered && reason === 'superseded') {
-        queue.push({ type: 'done', source: started.agentKind, data: { status: 'cancelled', reason,
-          remoteCloseReason: reason, ...(runId ? { remoteRunId: runId } : {}) } });
-      } else if (!teardownRequested && !terminalEventDelivered && reason !== 'superseded'
-        && (activeTurn || !normalClose)) {
-        queue.push({
-          type: 'error',
-          data: {
-            message: message ?? `[REMOTE_AGENT_UNAVAILABLE] The agent on the other computer stopped (${reason}).`,
-            isTerminal: true,
-            remoteCloseReason: reason,
-            ...(runId ? { remoteRunId: runId } : {}),
-            sdkError: `Remote agent stream closed (${reason})${runId ? `; runId: ${runId}` : ''}`,
-            // 拉不到那台(连续 2 分钟)只说明连接断了，那台本身可能没事：供应商组先等它恢复、恢复了留在原电脑继续；
-            // 其余(对方出错收尾、撤权、流不可信等)是那台那边的问题(provider-group/failurePolicy)。
-            // An explicit provider-owner disconnect is a user decision, not an
-            // outage; the existing recovery/group policy must not undo it.
-            reason: reason === 'controller-disconnected' ? 'user-revoked'
-              : reason === 'unreachable' ? 'remote_agent_lost' : 'remote_agent_closed',
-          },
-          source: started.agentKind,
-        });
-      }
-      void dispose().catch((error) => {
+      const ownerOptions = sendOwnerOptions;
+      const wasActive = activeTurn;
+      const wasTerminal = terminalEventDelivered;
+      const wasAborted = abortRequested;
+      const intentional = teardownRequested;
+      const finalEvent = (): AgentEvent | undefined => {
+        const observed = readSessionSendTerminalStatus(ownerOptions);
+        const unfinished = !wasAborted && (observed === 'unsettled' || (observed === undefined && wasActive));
+        const settled = observed === 'settled' || (observed === undefined && wasTerminal);
+        const normalClose = reason === 'closed' || reason === 'detached' || reason === 'ended';
+        // Replacement cancels the old product turn; EOF by itself never completes it.
+        if (!intentional && unfinished && !settled && reason === 'superseded') {
+          return markSessionSendTerminal(ownerOptions, { type: 'done', source: started.agentKind, data: { status: 'cancelled', reason,
+            remoteCloseReason: reason, ...(runId ? { remoteRunId: runId } : {}) } });
+        } else if (!intentional && !settled && reason !== 'superseded'
+          && (unfinished || !normalClose)) {
+          return markSessionSendTerminal(ownerOptions, {
+            type: 'error',
+            data: {
+              message: message ?? `[REMOTE_AGENT_UNAVAILABLE] The agent on the other computer stopped (${reason}).`,
+              isTerminal: true,
+              remoteCloseReason: reason,
+              ...(runId ? { remoteRunId: runId } : {}),
+              sdkError: `Remote agent stream closed (${reason})${runId ? `; runId: ${runId}` : ''}`,
+              // 拉不到那台(连续 2 分钟)只说明连接断了，那台本身可能没事：供应商组先等它恢复、恢复了留在原电脑继续；
+              // 其余(对方出错收尾、撤权、流不可信等)是那台那边的问题(provider-group/failurePolicy)。
+              // An explicit provider-owner disconnect is a user decision, not an
+              // outage; the existing recovery/group policy must not undo it.
+              reason: reason === 'controller-disconnected' ? 'user-revoked'
+                : reason === 'unreachable' ? 'remote_agent_lost' : 'remote_agent_closed',
+            },
+            source: started.agentKind,
+          });
+        }
+        return undefined;
+      };
+      void dispose(finalEvent).catch((error) => {
         deps.log?.warn('remote agent: local resource cleanup failed', { error: String(error) });
       });
     },

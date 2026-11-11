@@ -2189,6 +2189,26 @@ describe('provider group "switch to another computer" for shared users', () => {
       } finally { await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose(); }
     });
 
+  it.each(['local', 'member'] as const)('keeps a prior done from settling a new %s send', async placement => {
+    const env = setup({ plans: [placement === 'local' ? { kind: 'local' } : { kind: 'member', ...MEMBER_MINI },
+      { kind: 'member', ...MEMBER_STUDIO }] });
+    const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+    try {
+      await guest.client.call('send', [{ content: 'first', attachments: [] }, {}]);
+      const record = placement === 'local' ? env.ownerStarted[0] : env.memberStarted.mini[0];
+      record.emit({ type: 'text', source: 'claude-code', data: { text: 'first progress' } } as AgentEvent);
+      await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'text'));
+      await guest.client.call('send', [{ content: 'second', attachments: [] }, {}]);
+      record.emit({ type: 'done', source: 'claude-code', data: { reason: 'prior tail' } } as AgentEvent);
+      await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'done'));
+      record.end();
+      await waitFor(() => guest.isClosed());
+      expect(env.relay.noteRunFailure).toHaveBeenCalledOnce();
+      expect(switchTokenIn(guest.stream)).toBeDefined();
+      expect(record.sends).toHaveLength(2);
+    } finally { await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose(); }
+  });
+
   it.each(['done', 'abort', 'new-send', 'provider-start'])('uses product terminals rather than late busy snapshots after %s', async mode => {
     const env = setup({ plans: [{ kind: 'member', ...MEMBER_MINI }, { kind: 'member', ...MEMBER_STUDIO }] });
     const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));

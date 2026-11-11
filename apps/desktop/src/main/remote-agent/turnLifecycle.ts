@@ -1,7 +1,7 @@
 /** Product activity which can open an automatic turn after a remote terminal.
  * Match Session's provider-initiated turn boundary, rather than busy snapshots.
  */
-import type { AgentEvent } from '@cindy/maker-core';
+import { isTerminalAgentErrorEvent, type AgentEvent } from '@cindy/maker-core';
 
 export function startsRemoteProductTurn(event: AgentEvent): boolean {
   if (event.turnScope === 'background') return false;
@@ -13,4 +13,49 @@ export function startsRemoteProductTurn(event: AgentEvent): boolean {
   }
   return event.type === 'text' || event.type === 'thinking' || event.type === 'image'
     || event.type === 'tool_use' || event.type === 'tool_result' || event.type === 'tool_result_full';
+}
+
+/** Own terminals by send generation without changing the provider event or wire.
+ * An unresolved prior turn may drain one done/idle tail after the next send.
+ * Progress proves the new owner; silent-stop and real start errors remain valid.
+ */
+export class RemoteTurnTerminalOwnership {
+  private generation = 0;
+  private priorGeneration: number | null = null;
+  private priorIdle = false;
+  private terminalKind: 'done' | 'error' | null = null;
+
+  beginSend(unsettled: boolean): void {
+    this.priorGeneration = this.generation > 0 && (unsettled || this.terminalKind === 'error')
+      ? this.generation : null;
+    this.generation += 1;
+    this.priorIdle = false;
+    this.terminalKind = null;
+  }
+
+  observe(event: AgentEvent): boolean {
+    if (event.turnScope === 'background') return false;
+    if (startsRemoteProductTurn(event)) {
+      this.priorGeneration = null;
+      this.priorIdle = false;
+    }
+    const data = event.data as { isRunning?: unknown; silentStop?: unknown } | null;
+    if (event.type === 'status' && !event.agentMeta?.parentUuid && this.priorGeneration !== null) {
+      if (data?.isRunning === false) this.priorIdle = true;
+      else if (data?.isRunning === true && this.priorIdle) {
+        this.priorGeneration = null;
+        this.priorIdle = false;
+      }
+    }
+    if (event.type !== 'done' && !isTerminalAgentErrorEvent(event)) return false;
+    if (event.type === 'done' && data?.silentStop !== true && this.priorGeneration !== null) {
+      this.priorGeneration = null;
+      this.priorIdle = false;
+      return false;
+    }
+    this.terminalKind = event.type === 'done' ? 'done' : 'error';
+    this.priorGeneration = null;
+    this.priorIdle = false;
+    return true;
+  }
 }

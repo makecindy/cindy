@@ -107,6 +107,51 @@ describe('remote stream close settles the product turn', () => {
     } finally { await f.session.close(); }
   });
 
+  it.each([{ reason: 'ended', tail: 'done' }, { reason: 'error', tail: 'done' }, { reason: 'ended', tail: false },
+    { reason: 'error', tail: 'error' }, { reason: 'ended', tail: 'done', immediate: true }])(
+    'keeps the new send close after an unsettled prior turn ($reason, tail=$tail)', async ({ reason, tail, immediate }) => {
+    const f = fixture();
+    try {
+      await f.session.send('first');
+      f.deliver({ t: 'event', event: { type: 'text', source: 'codex', data: { text: 'first progress' } } });
+      await vi.waitFor(() => expect(f.seen.some(e => e.type === 'text')).toBe(true));
+      f.deliver({ t: 'state', state: { turnRunning: false } });
+      expect(await f.session.send('second')).toMatchObject({ accepted: true });
+      if (tail) f.deliver({ t: 'event', event: { type: tail === 'error' ? 'error' : 'done', source: 'codex',
+        data: { reason: 'prior tail', ...(tail === 'error' ? { message: 'old failure', isTerminal: true } : {}) } } });
+      if (!immediate) await new Promise<void>(resolve => setImmediate(resolve));
+      expect(f.session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+      f.deliver({ t: 'closed', reason });
+      await f.finish();
+      expect(f.seen.filter(e => e.type === 'error')).toEqual([
+        expect.objectContaining({ data: expect.objectContaining({ reason: 'remote_agent_closed',
+          remoteCloseReason: reason, remoteRunId: f.client.runId }) }),
+      ]);
+    } finally { await f.session.close(); }
+  });
+
+  it.each(['completed-prior', 'silent-stop'])('keeps a zero-output current done valid (%s)', async mode => {
+    const f = fixture();
+    try {
+      await f.session.send('first');
+      f.deliver({ t: 'event', event: { type: 'text', source: 'codex', data: { text: 'first progress' } } });
+      await vi.waitFor(() => expect(f.seen.some(e => e.type === 'text')).toBe(true));
+      if (mode === 'completed-prior') {
+        f.deliver({ t: 'event', event: { type: 'done', source: 'codex', data: {} } });
+        await vi.waitFor(() => expect(f.seen.some(e => e.type === 'done')).toBe(true));
+      }
+      f.deliver({ t: 'state', state: { turnRunning: false } });
+      expect(await f.session.send('second')).toMatchObject({ accepted: true });
+      f.deliver({ t: 'event', event: { type: 'status', source: 'codex', data: { isRunning: true } } });
+      f.deliver({ t: 'event', event: { type: 'done', source: 'codex',
+        data: mode === 'silent-stop' ? { silentStop: true } : {} } });
+      await vi.waitFor(() => expect(f.session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'done', generation: 2 }));
+      f.deliver({ t: 'closed', reason: 'error' });
+      await f.finish();
+      expect(f.seen.filter(e => e.type === 'error')).toEqual([]);
+    } finally { await f.session.close(); }
+  });
+
   it('ignores background terminals and nonterminal errors when deciding whether EOF is expected', async () => {
     const f = fixture();
     try {
@@ -125,6 +170,7 @@ describe('remote stream close settles the product turn', () => {
     try {
       await f.session.send('work');
       f.deliver({ t: 'event', event: { type: 'done', data: { status: 'completed' }, source: 'codex' } });
+      await vi.waitFor(() => expect(f.seen.some(e => e.type === 'done')).toBe(true));
       f.deliver({ t: 'event', event: { type: 'text', turnScope: 'background', data: { text: 'background output' }, source: 'codex' } });
       f.deliver({ t: 'event', event: { type: 'text', agentMeta: { parentUuid: 'child-task' }, data: { text: 'child output' }, source: 'codex' } });
       f.deliver({ t: 'state', state: { turnRunning: true } });

@@ -1,6 +1,6 @@
 import type { GeneratedImageUpstream } from '../../cindy-media/generatedImageJournal';
 import { remoteAgentStartupTiming } from '../startupTiming';
-import { startsRemoteProductTurn } from '../turnLifecycle';
+import { RemoteTurnTerminalOwnership, startsRemoteProductTurn } from '../turnLifecycle';
 import { parseProviderSharePeer, providerShareGuestPeer } from '@cindy/device-link';
 import { DEFAULT_REMOTE_AGENT_LIMITS, type RemoteAgentLimits, type RemoteAgentLimitUsage } from '../../../shared/remoteAgentLimits.js';
 /**
@@ -55,7 +55,7 @@ import {
   type RemoteAgentReverseRequest,
   type RemoteAgentTeardownReason,
 } from '@cindy/device-link';
-import { isTerminalAgentErrorEvent, type AgentEvent, type AgentSessionHandle, type DeviceHostedLinkActivity, type InteractionRequest, type ForkSdkSessionOptions, type ForkSdkSessionResult } from '@cindy/maker-core';
+import { type AgentEvent, type AgentSessionHandle, type DeviceHostedLinkActivity, type InteractionRequest, type ForkSdkSessionOptions, type ForkSdkSessionResult } from '@cindy/maker-core';
 
 import { EXEC_SERVER_WS_PATH } from '../controller/execServerRelay';
 import { RemoteAgentRunClient, type RemoteAgentInvoke, type RemoteAgentPoller } from '../controller/runClient';
@@ -523,6 +523,7 @@ interface Run {
   localWs?: Set<string>;
   /** Product turn awaiting done/terminal error; shared by local and relayed execution. */
   activeTurn?: boolean;
+  terminalOwnership?: RemoteTurnTerminalOwnership;
   /** Stop fences queued foreground output until its terminal or a new send. */
   abortRequested?: boolean;
   /** 本机 Agent 上一次报来的「正在运行一轮」。 */
@@ -1715,6 +1716,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         return;
       }
       run.handle = handle;
+      run.terminalOwnership = new RemoteTurnTerminalOwnership();
       if (run.trust === 'guest' || run.forkWorkspaceIds.length) {
         await timing.measure('session-registration', () =>
           recordGuestSession(run.controller, run.relayKey, hostSessionId, [handle.id, handle.requestSessionId], undefined, run.forkWorkspaceIds),
@@ -1816,7 +1818,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       for await (const event of handle.events()) {
         if (run.closing) break;
         if (!run.abortRequested && startsRemoteProductTurn(event)) run.activeTurn = true;
-        if (event.turnScope !== 'background' && (event.type === 'done' || isTerminalAgentErrorEvent(event))) {
+        if ((run.terminalOwnership ??= new RemoteTurnTerminalOwnership()).observe(event)) {
           run.activeTurn = false;
           run.abortRequested = false;
         }
@@ -2114,6 +2116,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       run.activeTurn = false;
     }
     if (method === 'send') {
+      (run.terminalOwnership ??= new RemoteTurnTerminalOwnership()).beginSend(run.activeTurn === true || run.abortRequested === true);
       run.abortRequested = false;
       run.activeTurn = true;
       run.quotaFailure = undefined;
@@ -2283,7 +2286,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           const failure = relayRunFailureOf(event);
           const typed = event as AgentEvent;
           if (!run.abortRequested && startsRemoteProductTurn(typed)) run.activeTurn = true;
-          if (typed.turnScope !== 'background' && (typed.type === 'done' || failure)) {
+          if ((run.terminalOwnership ??= new RemoteTurnTerminalOwnership()).observe(typed)) {
             run.activeTurn = false;
             run.abortRequested = false;
           }
@@ -2368,6 +2371,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         holdsRemote: () => run.heldAt !== undefined && now() - run.heldAt < REMOTE_HOLD_FRESH_MS,
       }, randomUUID, deps.log);
       run.relay = backend;
+      run.terminalOwnership = new RemoteTurnTerminalOwnership();
       try {
         const caps = await RemoteAgentRunClient.caps(connection.invoke);
         backend.modelAccess = caps.relayModelAccess === true && !!deps.providerAccess?.models;
