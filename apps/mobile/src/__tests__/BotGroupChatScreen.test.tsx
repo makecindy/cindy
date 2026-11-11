@@ -2751,7 +2751,7 @@ it.each([
     { clientId: 'seal', role: 'assistant', content: 'Final answer', agentMeta: { turnCompleted: true } }]);
   h.chat.server = true;
   await render(data, 'ready', threadRootId, '');
-  expect(h.processRead).toHaveBeenCalledWith(deviceId ?? 'owner-mac', 'local-db:messages:around-client-id', ['lane', 'source', { radius: 80 }], { background: true });
+  expect(h.processRead).toHaveBeenCalledWith(deviceId ?? 'owner-mac', 'local-db:messages:around-client-id', ['lane', 'source', { radius: 80 }], { background: true, preSend: expect.any(Function) });
   expect(node.textContent).toContain('Progress note');
   const record = [...node.querySelectorAll('section')].find(section => section.textContent?.includes('Progress note'))!;
   expect(record.textContent).not.toContain('Final answer');
