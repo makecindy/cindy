@@ -18,11 +18,18 @@ const mock = vi.hoisted(() => ({
     getPresenceAvailability: vi.fn((_deviceId: string) => true),
     getSubscriptionIdentity: vi.fn((_deviceId: string): string | null => 'acknowledged'),
   },
+  appState: { currentState: "active" },
+  appStateListeners: new Set<(state: string) => void>(),
   t: (key: string) => key,
 }));
 vi.mock('react-native', () => ({
   Platform: { OS: 'ios' },
-  AppState: { currentState: 'active', addEventListener: () => ({ remove() {} }) },
+  AppState: Object.assign(mock.appState, {
+    addEventListener: (_event: string, listener: (state: string) => void) => {
+      mock.appStateListeners.add(listener);
+      return { remove: () => mock.appStateListeners.delete(listener) };
+    },
+  }),
 }));
 vi.mock('expo-modules-core', () => ({ requireOptionalNativeModule: (name: string) => name === 'ExpoApplication'
   ? { getPushNotificationServiceEnvironmentAsync: async () => 'development' } : mock.native }));
@@ -44,6 +51,8 @@ let container: HTMLDivElement;
 beforeEach(() => {
   vi.useFakeTimers();
   vi.clearAllMocks();
+  mock.appState.currentState = "active";
+  mock.appStateListeners.clear();
   remoteSessionStore.clear();
   mock.auth = { initialized: true, isAuthenticated: true, user: { id: 'account-a' }, accountGeneration: 1, getAccessToken: async () => 'test-token' };
   delete mock.native.configureAccount; delete mock.native.getPushRegistration;
@@ -200,3 +209,50 @@ it.each(['connection', 'presence', 'subscription'] as const)(
     expect(mock.native.setState).toHaveBeenLastCalledWith(null);
   },
 );
+
+// Unit: lock-screen disconnects previously expired or ended the last confirmed
+// activity immediately. Mount the production bridge: a queued write, background
+// store events and foreground resume must all respect the same lifecycle gate.
+it('retains the last confirmed activity through background disconnects and verifies it on resume', async () => {
+  const row: RemoteSession = {
+    id: 'background-task', userId: '', title: 'Long task', workingDir: '/example', workspaceKind: 'project',
+    model: 'claude', effort: 'medium', permissionMode: 'default', fastMode: false,
+    status: 'active', agentKind: 'cc', userSendAt: null,
+    createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+  };
+  remoteSessionStore.setDeviceSessions('desktop', 'Example Mac', [row]);
+  remoteSessionStore.applyRemotePush('desktop', SESSION_ACTIVITY_CHANNEL, {
+    sessionId: row.id, phase: 'running', attention: false,
+  });
+  await act(() => root.render(createElement(AgentActivityBridge)));
+  expect(JSON.parse(mock.native.setState.mock.calls.at(-1)![0]).state.status).toBe('running');
+  mock.native.setState.mockClear();
+  // Queue an update immediately before locking; it must not later renew stale data.
+  remoteSessionStore.applyRemotePush('desktop', SESSION_ACTIVITY_CHANNEL, {
+    sessionId: row.id, phase: 'needs-interaction', attention: true,
+  });
+  await act(() => {
+    mock.appState.currentState = 'background';
+    for (const listener of mock.appStateListeners) listener('background');
+    vi.advanceTimersByTime(1_000);
+  });
+  expect(mock.native.setState).not.toHaveBeenCalled();
+  mock.link.getConnectionState.mockImplementation(() => ({ status: 'offline' }));
+  remoteSessionStore.applyRemotePush('desktop', SESSION_ACTIVITY_CHANNEL, {
+    sessionId: row.id, phase: 'completed', attention: false,
+  });
+  await act(() => vi.advanceTimersByTime(60_000));
+  expect(mock.native.markStale).not.toHaveBeenCalled();
+  expect(mock.native.setState).not.toHaveBeenCalled();
+  await act(() => {
+    mock.appState.currentState = 'active';
+    for (const listener of mock.appStateListeners) listener('active');
+  });
+  expect(mock.native.markStale).toHaveBeenCalledTimes(1);
+  expect(mock.native.setState).not.toHaveBeenCalled();
+  // Once the foreground connection attests that the task is read, end it.
+  mock.link.getConnectionState.mockImplementation(() => ({ status: 'online' }));
+  mock.link.presenceVersion++;
+  await act(() => root.render(createElement(AgentActivityBridge)));
+  expect(mock.native.setState).toHaveBeenLastCalledWith(null);
+});

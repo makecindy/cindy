@@ -271,7 +271,7 @@ export async function openLocalAgentRuntime(
   let executionRoute: LocalAgentExecutionRoute;
   // Only stable public remote codes cross the API, never peer diagnostics.
   const remoteFailure = (error: unknown): never => {
-    const code = error instanceof Error ? /^\[(REMOTE_AGENT_PEER_TOO_OLD|REMOTE_AGENT_SHARE_PAUSED|REMOTE_AGENT_SHARE_REMOVED|REMOTE_AGENT_PROVIDER_NOT_ALLOWED|REMOTE_AGENT_UNAVAILABLE)\]/.exec(error.message)?.[1] : undefined;
+    const code = error instanceof Error ? /^\[(REMOTE_AGENT_PEER_TOO_OLD|REMOTE_AGENT_SHARE_PAUSED|REMOTE_AGENT_SHARE_REMOVED|REMOTE_AGENT_SHARE_LEGACY_DISABLED|REMOTE_AGENT_PROVIDER_NOT_ALLOWED|REMOTE_AGENT_UNAVAILABLE)\]/.exec(error.message)?.[1] : undefined;
     if (code) throw new LocalAgentError(code, localize(code, '远程供应商暂不可用，请在 Cindy 中检查连接或更新远端版本。'));
     throw error;
   };

@@ -68,6 +68,7 @@ export function workerAgentDeviceErrorMessage(err: unknown, t: TFunction): strin
     case 'REMOTE_AGENT_SHARE_PAUSED':
     case 'REMOTE_AGENT_SHARE_REMOVED':
     case 'REMOTE_AGENT_SHARE_UNAVAILABLE':
+    case 'REMOTE_AGENT_SHARE_LEGACY_DISABLED':
       return t(`chat.remoteError.${code}`);
     default:
       return null;

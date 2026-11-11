@@ -23,6 +23,7 @@ import {
   prepareScheduledModelPreferencesUnderLock,
   recordDispatchedModel,
   broadcastSessionCreated,
+  bootstrapScheduledSession,
   cancelSchedulerAutoResume,
   enqueueSchedulerPrompt,
   ensureSchedulerQueueRestored,
@@ -74,6 +75,7 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
     });
     const promptRunner = new MakerScheduleRunner({
       maker: deps.maker,
+      bootstrapSession: bootstrapScheduledSession,
       getDb: deps.getDb,
       notifier,
       logger: deps.logger,

@@ -20,6 +20,8 @@
 
 ## 新建任务的项目归属（2026-10-30）
 
+2026-11-11：`device` 指向另一台电脑时，项目、目录及默认模型在目标电脑解析；不继承来源电脑的项目路径。用 `list_projects(device)` 选目标项目；未选项目时仅按目标 `working_dir` 匹配已有项目，否则不绑项目。下述来源继承规则适用于本机创建。
+
 Agent 新建普通独立任务（`send_to_session` create；伙伴专用的 `start_session_task` 已于 2026-11-08 移除）省略
 `project_path` 时继承来源任务的项目。来源不绑项目时（伙伴的对话都属于这一类），
 `working_dir` 落在某个已登记、可见且目录存在的项目里，就归到最近的那个项目，否则新任务
@@ -82,8 +84,8 @@ Agent 新建普通独立任务（`send_to_session` create；伙伴专用的 `sta
 | GitHub | 查询明确 PR 的 CI、评审和变化；明确关联、移除、恢复、固定、排序 | 有（桌面与手机关联管理） | 有：helper `github` 类目，同账号跨电脑；脚本 `github.read` |
 | 机器     | 看账号下的电脑与 SSH 主机及实时资源（`list_machines`，[规则](cindy-machines.md)） | 有（含 SSH 普通任务） | 有（2026-11-02） |
 | 任务     | 给既有任务发消息（隐藏群专线不是群聊收件地址，返回不支持且说明未送达） | 有 | 有（2026-10-14；接收电脑执行同一判定，隐藏目标仍优先遵守可见性检查） |
-| 任务     | 新建任务（继承项目、选择已有项目或不绑项目；来源不绑项目时按执行目录所在的已登记可见项目归属，2026-11-10） | 有   | 无               |
-| 任务     | 新建任务时选择 Agent 所在电脑（`send_to_session` create 的 `agent_device_id`，取 `list_available_models` 的 `locations[]`；只换 Agent 用的远程或分享供应商，任务与文件仍在本机） | 有 | 有（2026-11-07；SSH 任务不支持；那台没有所需模型或连不上返回 `PROVIDER_ROUTE_UNAVAILABLE`，不自动换电脑） |
+| 任务     | 新建任务（继承项目、选择已有项目或不绑项目；来源不绑项目时按执行目录所在的已登记可见项目归属，2026-11-10） | 有 | 有（2026-11-11，`device` 指定任务电脑；项目与默认模型在目标解析，不继承本机路径）               |
+| 任务     | 新建任务时选择 Agent 所在电脑（`send_to_session` create 的 `provider_device_id`（兼容 `agent_device_id`），取 `list_available_models` 的 `locations[]`；只换 Agent 用的远程或分享供应商，任务与文件仍在 `device` 指定的电脑） | 有 | 有（2026-11-07；SSH 任务不支持；那台没有所需模型或连不上返回 `PROVIDER_ROUTE_UNAVAILABLE`，不自动换电脑） |
 | 任务     | 归档 / 取消归档                                             | 有   | 有（2026-10-16） |
 | 共享任务 | 为当前原任务生成原生邀请、查询共享状态（`create_shared_task_invitation` / `get_shared_task_state`） | 有（房主；沿用任务权限，Plan 只读） | 手机或同账号其他电脑控制当前任务时在任务宿主执行；不支持指定其他任务 |
 | 任务     | 改名、移动、标签                                            | 有   | 无               |
@@ -96,16 +98,17 @@ Agent 新建普通独立任务（`send_to_session` create；伙伴专用的 `sta
 | 协同 / Worker | 为 Worker 新建 worktree、指定源分支、归档时回收 | 有 | 无 |
 | 协同 / Worker | 单个／批量创建默认跟随本机手动面板已提交路线，返回实际路线与回退原因 | 有（按当前账号本机 scope；旧逐 Agent 偏好不算选择） | 运行设备与 SSH 保持原策略；远程供应商路线可记忆 |
 | 协同 / Worker | 其他仓库的新 worktree 默认使用主任务记住的源分支，失效回退当前分支 | 有（返回实际源分支与原因；显式参数优先） | 无 |
-| 定时任务 | 列出、详情、运行记录、修改、暂停、恢复、删除、立即运行     | 有   | 有（2026-10-14） |
+| 定时任务 | 列出、详情、运行记录、修改、暂停、恢复、删除、立即运行     | 有   | 有（V1 / V2 各自实时名册判断可用；仅加密连接不依赖 V1 在线状态） |
 | 定时任务 | 选择远程／分享供应商模型（运行位置、引擎、模型与速度）及清除覆盖恢复跟随；绑定任务或持续模式切回本机须保留完整引擎／模型选择 | 有   | 有（设置或清除模型选择均核验目标电脑的 `supportsScheduleAgentDeviceSelection`） |
 | 定时任务 | 新建（可指定目标电脑）                                     | 有 | 有（2026-11-01；目标电脑须支持远程创建） |
 | 定时任务 | 安装检查脚本                                               | 有（绑定远程 Agent 时由本机辅助模型生成脚本） | 无 |
 | 定时任务 | 查可选运行位置与模型；设每次新建任务的 Agent 运行位置（其他电脑 / 分享来的供应商） | 有（2026-10-22） | 无 |
 | 定时任务 | 删除单条运行记录、标记已读                                 | 无   | 无               |
 | 项目     | 列出、登记、改名、移除；工作目录列表                       | 有   | 无               |
+| 项目     | 查询远程已有项目（`list_projects(device)`，复用目标项目目录与可见性） | 有 | 有（2026-11-11） |
 | 项目     | 查询新项目存放位置（`list_projects.projects_root`，含来源） | 有（只读；修改该设置暂无 Agent 工具，按 #8259 维护者初审意见保留为缺口） | 无 |
 | 任务导入 | 扫描其他 AI 编程工具的任务、开始导入、查进度与结果（与设置 → 任务导入同一实现） | 有（2026-10-30） | 无 |
-| 伙伴     | 发现伙伴（`list_agents` 返回各伙伴主对话 `session_id`，另一台电脑上为 `deviceId::sessionId`），用 `send_to_session` 给它发消息；V1 的 `send_to_agent` / `check_agent_message` 已于 2026-11-08 移除 | 有   | 有               |
+| 伙伴     | 发现伙伴（普通任务与伙伴任务均可用 `list_agents`，返回各伙伴主对话 `session_id`，另一台电脑上为 `deviceId::sessionId`），用 `send_to_session` 给它发消息；V1 的 `send_to_agent` / `check_agent_message` 已于 2026-11-08 移除 | 有   | 有               |
 | 伙伴     | 自身关联项目：列出、添加与移除（原有文件工具按需读资料） | 有 | 无（远程设置界面可管理） |
 | 伙伴     | 资料、能力（待办与 V1 后台任务已于 2026-11-08 移除；开任务见上面的 `send_to_session`） | 有 | 无 |
 | 伙伴     | 项目规则、技能与自动化：伙伴项目的 `AGENTS.md`、`.agents/skills`、`.cindy/automations/schedules.json`（原有文件工具与 `schedule_*`；伙伴项目的自动化免导入确认） | 有（2026-11-08） | 无（随云端伙伴迁到新主力电脑） |
@@ -140,9 +143,10 @@ Worker 工具省略 working_dir 时保持继承 Lead 任务记录目录，不跟
   `apps/desktop/src/main/scheduler-host/runner.ts`（按那台电脑的已授权目录解析，不回落本机同名来源）。
 - 跨电脑定时任务：`packages/lizi-mcps/src/scheduler/_devices.ts`、
   `apps/desktop/src/main/mcp-integrations/schedulerDevices.ts`。
+- 跨电脑新建普通任务：`device` + `apps/desktop/src/main/maker-ipc/remoteSessionCreation.ts`，复用 `openSession` 与普通消息队列；不建立协同或自动回传关系。
 - 跨电脑发消息：`apps/desktop/src/main/mcp-integrations/sessionHandoffRemote.ts`、
   `apps/desktop/src/main/maker-ipc/sessionHandoffIpc.ts`。
-- 新建任务的 Agent 所在电脑：`packages/lizi-mcps/src/xdt-helper/send_to_session.ts` 的 `agent_device_id`，
+- 新建任务的 Agent 所在电脑：`packages/lizi-mcps/src/xdt-helper/send_to_session.ts` 的 `provider_device_id`（兼容 `agent_device_id`），
   host 侧解析见 `apps/desktop/src/main/maker-ipc/sendToSessionExecutionConfig.ts`
   （`resolveSendToSessionCreateRoute`）。
 - 任务摘要（`get_task_digest`）：`packages/lizi-mcps/src/xdt-helper/get_task_digest.ts`（输出合同 ≤2KB）、

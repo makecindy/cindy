@@ -73,6 +73,7 @@ import type { AgentCredentialMode } from '../../interfaces/auth-adapter.js';
 import { NATIVE_SUBSCRIPTION_ACCOUNT, type NativeSubscriptionAccount } from '../../interfaces/auth-adapter.js';
 import type {
   Capabilities,
+  ManualCompactResult,
   EffortDescriptor,
   PermissionModeDescriptor,
 } from '../../types/capabilities.js';
@@ -1233,6 +1234,7 @@ const CAPABILITIES: Capabilities = {
   // 产品的“代码 + 对话”回退由 Git rollback 负责代码部分，再调用此能力裁剪对话。
   rewind: { supported: true },
   abort: { supported: true },
+  manualCompact: { supported: true },
   sameTurnSteer: { supported: true },
   memory: {
     supported: { supported: true },
@@ -1727,6 +1729,9 @@ function composeTurnDiffBlocks(
 }
 
 // ── Agent 实现 ────────────────────────────────────────────────────────────────
+
+const isLikelyValidThreadId = (id: string | undefined): id is string =>
+  typeof id === 'string' && id.length > 0 && !id.startsWith('<') && /^[0-9a-fA-F-]+$/.test(id);
 
 export class CodexAgent extends BaseAgent {
   readonly kind = 'codex' as const;
@@ -3421,11 +3426,16 @@ assertRouteCurrent();
    * Phase 4: oneShot 也走 host (临时 thread, 跑完 release subscription, server 端 thread state
    * 自然 GC)。不再依赖 @openai/codex-sdk。
    *
-   * 用 gpt-5.4-mini + tmpdir + sandbox readOnly + approvalPolicy never (起标题不能弹审批)。
+   * 用 tmpdir + sandbox readOnly + approvalPolicy never (起标题不能弹审批)。
+   *
+   * 模型: 调用方传了 `opts.model` 就用它; 没传则 thread/start 不带 model, 由 app-server
+   * 按当前账号与配置选默认模型。这里不写死型号 —— 写死的型号一旦在上游下线, 所有不带
+   * model 的兜底调用会一起失败。实际选中的模型从 thread/start 响应读回, 交给第二次
+   * `beforeDispatch`, 让宿主能在 prompt 发出前按具体模型做停用裁决。
    *
    * 失败语义: 跟 claude-code/oneShot 对齐, 抛 OneShotError (timeout/malformed),
-   * 调用方按 reason 决定 catch/swallow。OneShotOptions 中 model/maxTokens 字段当前忽略
-   * (Codex host 协议没暴露 max_tokens; model 走 thread/start 那已是默认 mini), signal 接通。
+   * 调用方按 reason 决定 catch/swallow。OneShotOptions 中 maxTokens 字段当前忽略
+   * (Codex host 协议没暴露 max_tokens), signal 接通。
    */
   async oneShot(prompt: string, opts?: OneShotOptions): Promise<string> {
     const log = this.deps.logger.child('codex/oneShot');
@@ -3462,7 +3472,7 @@ assertRouteCurrent();
       // 创建临时 thread (跟主 session 共享 server 但 thread state 隔离)
       const startResp = await host.request<ThreadStartResponse>(Method.ThreadStart, {
         cwd: os.tmpdir(),
-        model: opts?.model ?? 'gpt-5.4-mini',
+        ...(opts?.model ? { model: opts.model } : {}),
         approvalPolicy: 'never',
         sandbox: 'read-only', // kebab-case (v2.rs SandboxMode)
         // Auxiliary title/summary calls must not start a native Goal loop either.
@@ -3470,6 +3480,9 @@ assertRouteCurrent();
         ...(developerInstructions ? { developerInstructions } : {}),
       } as ThreadStartParams);
       const threadId = startResp.thread.id;
+      const dispatchModel = typeof startResp.model === 'string' && startResp.model
+        ? startResp.model
+        : opts?.model;
 
       // 等首条 agentMessage.completed 文本; 出 error 通知用 sentinel object 区分超时/正常
       type OneShotResult = { kind: 'text'; text: string } | { kind: 'empty' } | { kind: 'error'; message: string };
@@ -3519,7 +3532,7 @@ assertRouteCurrent();
 
       // thread/start 创建了临时 thread 后,到 turn/start 之间仍可能发生 owner 切换。
       // 再次复核并在拒绝时释放订阅,避免把旧 owner 的 prompt 发进已创建的 thread。
-      if (opts?.beforeDispatch && !(await opts.beforeDispatch())) {
+      if (opts?.beforeDispatch && !(await opts.beforeDispatch(dispatchModel ? { model: dispatchModel } : undefined))) {
         const pendingSubscription = subscription;
         subscription = null;
         try {
@@ -3585,6 +3598,10 @@ assertRouteCurrent();
   }
 
   async startSession(opts: StartSessionOptions): Promise<AgentSessionHandle> {
+    if (opts.vendorOptions?._cindyRequireNativeResume === true && opts.resumeSessionId
+      && !isLikelyValidThreadId(opts.resumeSessionId)) {
+      throw new AgentStartupStoppedError(new Error('Native history requires a valid Codex thread id'));
+    }
     const signal = this.routeResolutionAbort.signal;
     for (let attempt = 0; ; attempt++) {
       const startup = {
@@ -4682,6 +4699,54 @@ assertRouteCurrent();
     }
 
     let closed = false;
+    // A compact ACK only accepts the operation; its own native turn owns completion.
+    // Keep it separate from user-send recovery so a failed compact cannot replay a
+    // previous prompt or latch a context rollover.
+    let manualCompact: {
+      turnId: string | null;
+      boundarySeen: boolean;
+      cancelled: boolean;
+      error?: Error;
+      tokensBefore: number;
+      estimatedTokensAfter?: number;
+      resolve: (result: ManualCompactResult) => void;
+      reject: (error: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    } | null = null;
+    function ownsManualCompact(turnId: string): boolean {
+      if (!manualCompact || !turnId || completedTurnIds.has(turnId) || terminalErroredTurnIds.has(turnId)) return false;
+      manualCompact.turnId ??= turnId;
+      return manualCompact.turnId === turnId;
+    }
+    function finishManualCompact(error?: Error): void {
+      const operation = manualCompact;
+      if (!operation) return;
+      manualCompact = null;
+      clearTimeout(operation.timer);
+      if (operation.turnId) {
+        completedTurnIds.add(operation.turnId);
+        compactingTurnIds.delete(operation.turnId);
+        finalizeCodexGenerationTurn(translatorRt, operation.turnId);
+      }
+      isTurnInFlight = false;
+      currentTurnId = null;
+      resetUpstreamIdleForTurnEnd();
+      clearReconnectStall();
+      translatorRt.tokenSpeed.stop();
+      usageTracker.endTurn();
+      eventQueue.push({ type: 'status', data: { status: 'Done', ...usageTracker.snapshot(), isRunning: false }, source: 'codex' });
+      if (error) operation.reject(error);
+      else operation.resolve(operation.boundarySeen ? {
+        tokensBefore: operation.tokensBefore,
+        estimatedTokensAfter: operation.estimatedTokensAfter,
+      } : { noop: true });
+    }
+    function retireManualCompact(error: Error): void {
+      finishManualCompact(error);
+      void closeSessionHandle().catch((cleanupError: unknown) => {
+        log.warn('failed to release Codex compact subscription', { error: String(cleanupError) });
+      });
+    }
     let subscriptionInvalidatedByTransport = false;
     let sessionHostForceRetired = false;
     let subscription: ThreadSubscription | null = null;
@@ -6853,8 +6918,6 @@ assertRouteCurrent();
       }
     };
 
-    const isLikelyValidThreadId = (id: string | undefined): id is string =>
-      typeof id === 'string' && id.length > 0 && !id.startsWith('<') && /^[0-9a-fA-F-]+$/.test(id);
     // Resolve the canonical history before asking a new account host about a thread
     // it has not loaded yet. The same path must be used for metadata and resume.
     let preparedResumePath: string | void = undefined;
@@ -7353,7 +7416,8 @@ assertRouteCurrent();
       } catch (e) {
         if (!startup.threadDispatched && (e instanceof CodexRouteSelectionChangedError || startup.signal.aborted)) throw e;
         let freshThreadStarted = false;
-        if (!preparedResumePath && (!indexedRolloutMissing || indexedThreadAbsent)
+        if (opts.vendorOptions?._cindyRequireNativeResume !== true
+          && !preparedResumePath && (!indexedRolloutMissing || indexedThreadAbsent)
           && isExactNoRolloutThreadResumeError(e, opts.resumeSessionId)) {
           // For indexed threads, both native metadata and rollout must be absent.
           // A no-rollout error alone also occurs after persisted history is lost.
@@ -12302,6 +12366,17 @@ assertRouteCurrent();
       },
       descendantNotification: handleDescendantNotification,
       turnStarted: (params) => {
+        if (ownsManualCompact(params.turn.id)) {
+          currentTurnId = params.turn.id;
+          isTurnInFlight = true;
+          threadMayHaveRollout = true;
+          beginCodexGenerationTurn(translatorRt, params.turn.id);
+          if (manualCompact?.cancelled) {
+            void host.request(Method.TurnInterrupt, { threadId, turnId: params.turn.id })
+              .catch((error: unknown) => retireManualCompact(error instanceof Error ? error : new Error(String(error))));
+          }
+          return;
+        }
         // turn/start RPC 已失败(超时/拒绝)但 daemon 实际已建 turn — 迟到的孤儿
         // turnStarted 不得重新激活已报终态错误的会话 (greptile P1): 立墓碑 +
         // 补 interrupt 让 daemon 停掉这个没人消费的 turn。分支先于 stale 闸
@@ -12445,6 +12520,14 @@ assertRouteCurrent();
           cacheWrite > 0 ||
           last.outputTokens > 0 ||
           last.reasoningOutputTokens > 0;
+        // Native compact emits a context-only frame: cumulative billing is
+        // unchanged, all breakdown fields are zero, and last.totalTokens is
+        // the new context estimate. Refresh the gauge without charging it again.
+        if (!hasBillableLast && ownsManualCompact(params.turnId)
+          && Number.isFinite(last.totalTokens) && last.totalTokens > 0) {
+          manualCompact!.estimatedTokensAfter = last.totalTokens;
+          usageTracker.setContextTokensAfterCompact(last.totalTokens);
+        }
         // A lower cursor can be an out-of-order frame, so it is not sufficient
         // evidence of a new execution generation. A genuinely new thread gets
         // a distinct threadId and therefore a fresh map entry. Same-thread
@@ -12549,6 +12632,13 @@ assertRouteCurrent();
         publishTurnDiff(threadId, params.turnId, params.diff);
       },
       turnCompleted: (params) => {
+        if (ownsManualCompact(params.turn.id)) {
+          const error = params.turn.status === 'completed'
+            ? undefined
+            : new Error(params.turn.error?.message ?? manualCompact?.error?.message ?? `Codex compact ${params.turn.status}`);
+          finishManualCompact(error);
+          return;
+        }
         // buffered turn 的终态同样进队列等对账 (greptile R11 P1 + codex R12 P1):
         // 合法 → 激活后按序重放, handleTurnCompleted 自然收口 send; 孤儿 →
         // 整队丢弃。直接处理会让孤儿 completed 提前收口在飞 send
@@ -12706,6 +12796,7 @@ assertRouteCurrent();
         if (collabTerminalKey) handledCollabTerminalItemIds.add(collabTerminalKey);
         if (params.item.type === 'contextCompaction') {
           compactingTurnIds.delete(params.turnId);
+          if (ownsManualCompact(params.turnId)) manualCompact!.boundarySeen = true;
           if (threadModelProvider === localSummaryProvider && overloadRetry?.automaticRecoveryAttempted) {
             completedSummaryRecoveryTurnIds.add(params.turnId);
           }
@@ -12755,6 +12846,7 @@ assertRouteCurrent();
           rt: translatorRt,
           log,
           approvalDenialReason,
+          compactTrigger: manualCompact?.turnId === params.turnId ? 'manual' : 'auto',
           onCompactBoundary: handleCompactBoundary,
         });
         // A late V1 spawn completion is the spawn tool closing, not necessarily
@@ -12906,6 +12998,15 @@ assertRouteCurrent();
         }
       },
       error: (params) => {
+        if (manualCompact && (params.scope === 'transport' || !params.turnId || ownsManualCompact(params.turnId))) {
+          manualCompact.error = new Error(params.error?.message ?? 'Codex compact failed');
+          if (params.scope === 'transport') {
+            subscriptionInvalidatedByTransport = true;
+            retireManualCompact(manualCompact.error);
+          }
+          // A retryable error isn't a terminal; wait for the native turn result.
+          return;
+        }
         // buffered turn 的 error (含终态) 同样进队列等对账 (greptile R11 P1 +
         // codex R12 P1): 合法 → 激活后重放走正常终端路径收口 send; 孤儿 →
         // 丢弃, 不得让孤儿 error 终结合法 send。
@@ -13244,6 +13345,7 @@ assertRouteCurrent();
     ): Promise<void> {
       if (closed) return;
       closed = true;
+      finishManualCompact(new Error('Codex session closed during compaction'));
       cancelInteractionContinuation('session_closed', true);
       translatorRt.samplingSegments.clear();
       resetCodexGenerationTiming(translatorRt);
@@ -13342,6 +13444,7 @@ assertRouteCurrent();
       },
 
       async send(message: UserMessage, sendOpts?: SendOptions) {
+        if (manualCompact) throw new Error('Cannot send while Codex is compacting');
         if (rejectClosedOrCancelledSend(sendOpts, 'before start')) {
           return;
         }
@@ -14108,6 +14211,7 @@ assertRouteCurrent();
       },
 
       async steer(message: UserMessage, sendOpts?: SendOptions) {
+        if (manualCompact) throw new Error('Cannot steer while Codex is compacting');
         rejectIfCancelled(sendOpts, 'steer');
         assertCurrentHost('turn/steer');
         if (closed) {
@@ -14373,6 +14477,13 @@ assertRouteCurrent();
       },
 
       async abort() {
+        if (manualCompact) {
+          manualCompact.cancelled = true;
+          if (manualCompact.turnId) {
+            await host.request(Method.TurnInterrupt, { threadId, turnId: manualCompact.turnId });
+          }
+          return;
+        }
         const cancelledInteraction = cancelInteractionContinuation('turn_interrupted', true);
         if (cancelledInteraction) dismissAllPendingUserInput('turn_interrupted');
         const cancelledYield = cancelActiveYieldContinuation('aborted');
@@ -14486,11 +14597,14 @@ assertRouteCurrent();
         newModel: string,
         setOpts?: { providerId?: string | null; contextWindowBudget?: number | null },
       ) {
+        if (manualCompact) throw new Error('Cannot switch models while Codex is compacting');
         if (reviewMode) return;
         if (setOpts?.contextWindowBudget !== undefined) {
           mutableContextWindowBudget = setOpts.contextWindowBudget;
         }
-        if (await modelSwitchRequiresRebuild(newModel, setOpts)) {
+        const requiresRebuild = await modelSwitchRequiresRebuild(newModel, setOpts);
+        if (manualCompact) throw new Error('Cannot switch models while Codex is compacting');
+        if (requiresRebuild) {
           const error = new Error(
             'Codex model switch requires rebuilding the current session handle',
           );
@@ -14930,6 +15044,45 @@ assertRouteCurrent();
         return sdkSessionId ? { sdkSessionId } : {};
       },
 
+      compactSession(instructions?: string): Promise<ManualCompactResult> {
+        if (closed) return Promise.reject(new Error('Codex session is closed'));
+        if (instructions?.trim()) return Promise.reject(new Error('Codex native compaction does not support custom instructions'));
+        if (handle.isTurnRunning?.() || isTurnStartPending || inFlightStarts.size > 0) {
+          return Promise.reject(new Error('Cannot compact while a Codex turn is active'));
+        }
+        if (turnStartFailedWithoutTurnId) {
+          return Promise.reject(new Error('Codex has an unconfirmed previous turn; resume the task before compacting'));
+        }
+        assertCurrentHost('thread/compact/start');
+        resubscribeAfterTransportErrorIfNeeded();
+        discardOverloadRetry('manual compact');
+        compactionStormTracker.reset();
+        usageTracker.beginTurn();
+        const result = new Promise<ManualCompactResult>((resolve, reject) => {
+          manualCompact = {
+            turnId: null, boundarySeen: false, cancelled: false, resolve, reject,
+            tokensBefore: usageTracker.snapshot().contextTokens ?? 0,
+            timer: setTimeout(() => {
+              // No confirmed terminal: retire this handle before accepting another send.
+              retireManualCompact(new Error('Codex compaction timed out'));
+            }, 10 * 60_000),
+          };
+        });
+        const operation = manualCompact;
+        eventQueue.push({ type: 'status', data: { status: 'Compacting context…', ...usageTracker.snapshot(), isRunning: true }, source: 'codex' });
+        void host.request(Method.ThreadCompactStart, { threadId }).catch((error: unknown) => {
+          if (manualCompact !== operation) return; // A native terminal may precede the ACK.
+          // Admission may have timed out after the server accepted it. Unsubscribe
+          // rather than letting a late compact turn become the next user's turn.
+          retireManualCompact(error instanceof Error ? error : new Error(String(error)));
+        });
+        return result;
+      },
+
+      hasPendingHostOperation() {
+        return manualCompact !== null;
+      },
+
       isTurnRunning() {
         // 本方法是 Session.send() 的 in-flight guard 判据（另见上方 turn/start
         // 失败收口处的注释）。过载重投把这一轮拆成了两段 app-server 侧「没有活着
@@ -14948,7 +15101,7 @@ assertRouteCurrent();
         //
         // yield continuation claim 把 provider turn/completed 与产品结束拆开:
         // 等 cell / 续段尚未启动时 isTurnInFlight 已是 false, 但仍是同一产品请求。
-        return isTurnInFlight
+        return manualCompact !== null || isTurnInFlight
           || overloadRetryPending()
           || yieldContinuationInFlight
           || activeYieldContinuationClaim() != null

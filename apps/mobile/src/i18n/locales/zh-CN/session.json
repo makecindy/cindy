@@ -466,6 +466,11 @@
     "worktreeCleanupPending": "上一次 worktree 仍待回收，请重新连接设备后再试。"
   },
   "menu": {
+    "moveToProject": "移动任务",
+    "moveFailed": "移动任务失败",
+    "moveRunning": "任务正在运行，结束后再移动",
+    "moveWorktree": "该任务的工作目录是 worktree，暂不支持移动到其他项目",
+    "moveUnsupported": "请更新所连接电脑上的 Cindy 后再移动任务。",
     "details": "任务详情",
     "chipPinned": "已置顶",
     "chipArchived": "已归档",
@@ -685,6 +690,7 @@
     "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "那台电脑没有允许远程调用这个供应商。请在那台电脑的「设置 → 模型供应商」里打开「允许被远程调用」，或换一个模型。",
     "REMOTE_AGENT_FORK_FAILED": "运行 Agent 的电脑没能从这里开启新任务。请重试，或换一条消息再试。",
     "REMOTE_AGENT_SHARE_PAUSED": "对方已暂停对你的分享，恢复前不能使用这些模型。可以换成其他模型继续。",
+    "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "这是旧版分享，开启「仅使用 Agent-Net」后暂时不能用。关闭这个开关就能继续，也可以换成其他模型。",
     "REMOTE_AGENT_SHARE_REMOVED": "这个分享已不可用（对方删除了分享或你已退出）。可以换成其他模型继续。",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "分享的供应商暂时不可用：对方电脑可能不在线，或对方暂时关闭了分享。可以稍后再试，或换成其他模型继续。"
   },

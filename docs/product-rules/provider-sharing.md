@@ -18,7 +18,7 @@
 
 远程供应商已经支持同账号使用：任务、项目文件和命令留在发起任务的电脑，Agent 在另一台电脑上
 用那台电脑的 Agent 程序、登录、供应商与网络运行（协议见
-`docs/dev-rules/protocol-compatibility.md`「远程 Agent」）。
+`docs/dev-rules/protocol-compatibility/remote-agent.md`「远程 Agent」）。
 
 供应商分享把这项能力开放给**其他 Cindy 账号**：分享者把自己电脑上的某个供应商分享给指定的人，
 对方在自己的任务里选用它。
@@ -179,7 +179,7 @@
 - **B 那边看到什么**：组内电脑那一行的状态写「分享的人可以用」「N 位分享的人等待 {A} 同意」或「{A} 未同意 N 位分享的人」；
   展开这一行逐人列出。A 的 Cindy 太旧给不出同意时写「{A} 的 Cindy 更新后才能同意给分享的人用」，这台不分给分享的人。
   C 在「分享给我的供应商」的匿名状态里看到这台「暂不可用」(或「需要更新」)，与实际分配一致。
-- 协议见 `docs/dev-rules/protocol-compatibility.md`「供应商组：转分享需原主人逐人同意」；同意记录只存在 A 的电脑上
+- 协议见 `docs/dev-rules/protocol-compatibility/provider-group-reshare-owner-consent.md`「供应商组：转分享需原主人逐人同意」；同意记录只存在 A 的电脑上
   (`provider-share-reshare.json`)，不经服务端。分享来的供应商本身仍不能生成分享链接，只能经组转给别人。
   转分享名单单次最多传 256 人；超过时由支持 `reshareBatch` 的新版电脑分片发送，每片回报当前片的状态，接收端收齐后才整体替换审批名单，
   批次数不按人数设置固定上限而受接收端字节预算保护。完成片段的重发保持幂等；旧版电脑显示需要更新并保持原有名单，不发送部分名单。
@@ -631,7 +631,7 @@ Desktop「设置 → 模型供应商」的左栏(2026-10-08 用户裁决)：
 
 ## 10. 与现有规则的关系
 
-- `docs/dev-rules/protocol-compatibility.md`「远程 Agent」写明远程 Agent 通道「只进同账号
+- `docs/dev-rules/protocol-compatibility/remote-agent.md`「远程 Agent」写明远程 Agent 通道「只进同账号
   allowlist，不进共享任务清单」。本功能为它新增「供应商分享」授权范围；共享任务访客仍被拒绝。
   实现时须同步修订该节。
 - 用自己的中转时供应商分享继续可用（2026-10-31 用户裁决）：跨账号帧走官方中转，入口说明内容仍经官方中转，见 [自建中转方案 §15.6](../self-hosted-relay-plan.md)。

@@ -270,7 +270,7 @@
     "completeWithSkipped_many": "Copiado, elementos {{count}} omitidos"
   },
   "sharedTask": {
-    "officialRelayNote": "Estás usando tu propio retransmisor. El contenido de las tareas compartidas sigue pasando por el retransmisor de Cindy.",
+    "officialRelayNote": "Agent-Net usa el relé de la invitación; las funciones compartidas antiguas siguen usando el relé de Cindy.",
     "selfJoin": "Usted inició esta tarea compartida, por lo que no necesita unirse. Ábrelo desde “Compartido por mí”.",
     "manageSharing": "Gestionar el uso compartido",
     "manageMembers": "Administrar miembros…",
@@ -372,7 +372,7 @@
     "closeAllDescription": "Los invitados perderán el acceso. Se mantiene el historial de tareas."
   },
   "providerShare": {
-    "officialRelayNote": "Estás usando tu propio retransmisor. El contenido del uso compartido de proveedores sigue pasando por el retransmisor de Cindy.",
+    "officialRelayNote": "Agent-Net usa el relé de la invitación; las funciones compartidas antiguas siguen usando el relé de Cindy.",
     "owned": {
       "title": "Proveedores que comparto"
     },
@@ -878,6 +878,7 @@
       "assignLocalAria": "Permitir que {{name}} acepte nuevas tareas de otras computadoras",
       "moreAria": "Otras acciones para {{name}}",
       "remove": "Eliminar del grupo",
+      "removeLocalBlocked": "El ordenador que acoge el grupo no se puede eliminar",
       "status": {
         "checking": "Comprobando…",
         "idle": "Inactivo",
@@ -1382,6 +1383,7 @@
     "REMOTE_AGENT_SHARE_PAUSED": "El modelo no cambió: el propietario suspendió tu acceso a este proveedor compartido. Elige otro modelo.",
     "REMOTE_AGENT_SHARE_REMOVED": "Modelo no cambiado: este recurso compartido ya no está disponible (el propietario lo eliminó o usted se fue). Elige otro modelo.",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "Modelo no cambiado: el proveedor compartido no está disponible temporalmente (la computadora del propietario está desconectada o el uso compartido está desactivado por ahora). Vuelve a intentarlo más tarde o elige otro modelo.",
+    "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "Modelo no cambiado: este es un recurso compartido antiguo y no se puede usar mientras «Usar solo Agent-Net» esté activado. Desactívalo o elige otro modelo.",
     "SSH_HOST_KEY_MISMATCH": "Clave de host SSH cambiada",
     "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy no puede leer el archivo adjunto fuente; el mensaje no fue enviado. Guarde una copia en Descargas u otra carpeta accesible, elimine el archivo adjunto original y agregue la copia usando el botón de archivo adjunto antes de enviarla nuevamente."
   },
@@ -2459,12 +2461,12 @@
         "previewStarting": "Suelta el mouse y el teclado. La pantalla se cubrirá en 3 segundos; pulsa cualquier tecla para bloquearla y luego desbloquéala.",
         "previewUnavailable": "No se pudo cubrir la pantalla. Reinicia Cindy e inténtalo de nuevo.",
         "delay": {
-          "label": "Cubrir la pantalla tras",
-          "hint": "Tiempo sin tocar el teclado ni el mouse antes de que aparezca la capa. Por omisión, el mismo que el reposo de la pantalla.",
           "30": "30 s",
           "60": "1 min",
           "120": "2 min",
           "300": "5 min",
+          "label": "Cubrir la pantalla tras",
+          "hint": "Tiempo sin tocar el teclado ni el mouse antes de que aparezca la capa. Por omisión, el mismo que el reposo de la pantalla.",
           "system": "Sistema"
         }
       }
@@ -6061,7 +6063,7 @@
         "current": "En uso",
         "ownerName": "esta computadora",
         "unavailable": "Para usar tu propio retransmisor, inicia sesión en Cindy y asegúrate de que el llavero del sistema esté disponible.",
-        "limits": "Mientras uses tu propio retransmisor, las notificaciones push en el teléfono no estarán disponibles. El uso compartido de proveedores y las tareas compartidas seguirán pasando por el retransmisor de Cindy.",
+        "limits": "Las funciones compartidas de Agent-Net usan el relé indicado en la invitación. Las notificaciones del sistema requieren configurar un proveedor de envío en ese relé. Las funciones compartidas antiguas siguen usando el relé de Cindy.",
         "actions": {
           "join": "Unirse a otro retransmisor",
           "useOfficial": "Volver al retransmisor de Cindy",
@@ -6087,29 +6089,77 @@
           "cancel": "Cancelar",
           "running": "El retransmisor está en ejecución. Los otros dispositivos se conectan a {{address}}"
         },
-        "add": {
-          "intro": "Crea un enlace para que un teléfono u otra computadora puedan unirse a este retransmisor.",
-          "create": "Agregar dispositivo",
-          "hint": "Escanéalo con la cámara de tu teléfono o envía el enlace a otra computadora y pégalo en Unirse a otro retransmisor. El enlace funciona una sola vez y vence en 10 minutos.",
-          "qrAlt": "Código QR para unirse al retransmisor",
+        "share": {
+          "action": "Compartir este retransmisor",
+          "title": "Se creó el enlace para compartir «{{name}}»",
+          "description": "Envía el enlace a la otra persona. Cuando apruebes su solicitud, las computadoras y teléfonos de su cuenta podrán usar este retransmisor para conectar sus propios dispositivos.",
+          "descriptionOwn": "Envía el enlace a otra de tus computadoras o escanéalo con la cámara del teléfono. Cuando lo apruebes, ese dispositivo se unirá a este retransmisor.",
+          "fieldLabel": "Compartir enlace",
           "copy": "Copiar enlace",
-          "copied": "Enlace para unirse copiado",
-          "newLink": "Nuevo enlace",
-          "waiting": "Esperando la solicitud de un dispositivo…"
+          "copied": "Copiado",
+          "copyFailed": "No se pudo copiar el enlace. Selecciónelo y cópielo manualmente.",
+          "oneTime": "Funciona una vez",
+          "expiresIn": "Caduca en {{time}}",
+          "expired": "Caducado",
+          "regenerateHint": "Puedes crear uno nuevo después de que caduque.",
+          "generating": "Creando enlace…",
+          "scanHint": "Si lo escanean con el teléfono, se les pedirá abrirlo primero en su computadora. Cuando su computadora se una, sus teléfonos verán este retransmisor automáticamente.",
+          "scanHintOwn": "Tu teléfono puede unirse escaneando el código con la cámara.",
+          "ownAccountOnly": "Por ahora este retransmisor solo funciona con tus propios dispositivos. Para compartirlo con otras cuentas, activa primero Agent-Net (Beta) en «Conexión remota»; un retransmisor en tu servidor también necesita la última versión.",
+          "qrAlt": "Código QR para compartir el retransmisor",
+          "calloutIsolation": "Solo podrá conectarse a sus propios dispositivos y no verá los tuyos. Para que use tus agentes o modelos, compártelos por separado.",
+          "calloutPrivacy": "Las conexiones están cifradas de extremo a extremo, así que no puedes ver el contenido. Como propietario del retransmisor, sí puedes ver cuándo se comunican sus dispositivos y cuántos datos usan.",
+          "calloutOwnDevices": "Tus propios dispositivos no necesitan este enlace: al iniciar sesión con la misma cuenta, verán este retransmisor en su lista de rutas.",
+          "calloutOwnFallback": "Los dispositivos con sesión iniciada en tu cuenta suelen ver este retransmisor en la lista sin enlace. Usa este enlace cuando no se pueda contactar con el servicio de cuentas de Cindy.",
+          "done": "Listo",
+          "regenerate": "Crear nuevo enlace",
+          "regenerated": "Nuevo enlace creado"
         },
         "requests": {
-          "item": "{{name}} quiere unirse",
-          "verify": "código de emparejamiento",
-          "verifyHint": "Aprueba solo si coincide con el código de ese dispositivo.",
+          "title_one": "{{count}} solicitud pendiente",
+          "title_other": "{{count}} solicitudes pendientes",
+          "title_many": "{{count}} solicitudes pendientes",
+          "waiting": "Quiere unirse · Esperando tu respuesta",
+          "waitingAccount": "Otra cuenta · {{device}}, esperando tu respuesta",
+          "open": "Revisar"
+        },
+        "tenants": {
+          "title": "Compartido con",
+          "devices_one": "{{count}} dispositivo",
+          "devices_many": "{{count}} dispositivos",
+          "devices_other": "{{count}} dispositivos",
+          "online": "En línea",
+          "offline": "Sin conexión",
+          "revoke": "Dejar de compartir",
+          "revokeTitle": "¿Dejar de compartir con {{account}}?",
+          "revokeDescription": "Se elimina la línea de {{account}} en este retransmisor y sus dispositivos se desconectan al instante. Para que vuelva a usarlo, compártelo de nuevo."
+        },
+        "approve": {
+          "title": "{{device}} quiere unirse a «{{relay}}»",
+          "requestedAt": "Solicitado {{time}} con tu enlace para compartir",
+          "requestedViaLink": "Solicitado con tu enlace para compartir",
+          "pairingHint": "Aprueba solo si coincide con el código de emparejamiento de ese dispositivo.",
+          "unverified": "No se puede verificar esta solicitud: no coincide con un enlace para compartir de esta computadora y puede haber sido manipulado, por lo que solo se puede rechazar. Si es tu dispositivo, crea un nuevo enlace para compartir e inténtalo de nuevo.",
+          "callout": "Al aprobar, este dispositivo se une a «{{relay}}» y se conecta a través de él con tus otros dispositivos.",
           "replaces": "Este dispositivo ya se unió antes. Si lo apruebas, se revocará su credencial anterior.",
+          "calloutUnknown": "Si no reconoces este dispositivo, recházalo. Al rechazarlo, el enlace deja de ser válido.",
           "approve": "Aprobar",
-          "reject": "Rechazar",
-          "unverified": "No se puede verificar esta solicitud: no coincide con un enlace para unirse de esta computadora y puede haber sido manipulado, por lo que solo se puede rechazar. Si es tu dispositivo, crea un nuevo enlace para unirse e inténtalo de nuevo."
+          "reject": "Rechazar solicitud",
+          "later": "decidir más tarde",
+          "toastApproved": "Se aprobó que {{device}} se una a «{{relay}}»",
+          "toastRejected": "Se rechazó la solicitud de {{device}}",
+          "titleAccount": "{{account}} quiere usar «{{relay}}»",
+          "otherAccountDevice": "Otra cuenta · {{device}}",
+          "calloutAccount": "Si apruebas, esa cuenta tendrá su propia línea en «{{relay}}»: solo llega a sus propios dispositivos y no te ve ni a ti ni a tus dispositivos. Sus otros dispositivos se unirán directamente después, sin volver a pedirlo.",
+          "calloutAccountRevoke": "Puedes dejar de compartir en cualquier momento desde la página del retransmisor; sus dispositivos se desconectan al instante.",
+          "calloutUnknownAccount": "Si no reconoces esta cuenta, rechaza la solicitud. Al rechazarla, este enlace deja de ser válido.",
+          "toastApprovedAccount": "{{account}} ya puede usar «{{relay}}»",
+          "toastRejectedAccount": "Se rechazó la solicitud de {{account}}"
         },
         "join": {
           "title": "Unirse a otro retransmisor",
-          "hint": "Pega el enlace de Agregar dispositivo en la computadora del retransmisor. Cindy cambiará a ese retransmisor cuando se apruebe la solicitud.",
-          "placeholder": "Pega el enlace para unirse",
+          "hint": "Pega el enlace para compartir que recibiste. Cindy cambiará a ese retransmisor cuando se apruebe la solicitud.",
+          "placeholder": "Pega el enlace para compartir",
           "submit": "Unirse",
           "connecting": "Conectando al relé…",
           "waiting": "Solicitud enviada. En {{name}}, comprueba que estos dígitos coincidan y aprueba la solicitud:",
@@ -6125,16 +6175,18 @@
           "ownerDescription": "Los dispositivos que se hayan unido se desconectarán y recibirán un aviso de que el retransmisor se detuvo. Esta computadora volverá al retransmisor de Cindy.",
           "memberTitle": "¿Volver al retransmisor de Cindy?",
           "memberDescription": "Esta computadora abandona \"{{name}}\" y usa el retransmisor de Cindy. Para volver a unirte, solicita un nuevo enlace.",
+          "sharedOwnerTitle": "¿Volver al retransmisor de Cindy?",
+          "sharedOwnerDescription": "Esta computadora sale de «{{name}}» y usa el retransmisor de Cindy; tus dispositivos que se unieron a través de ella también se desconectan. Para volver a usarlo, pide que lo compartan de nuevo.",
           "serverTitle": "¿Volver al retransmisor de Cindy?",
           "serverDescription": "El retransmisor \"{{name}}\" sigue ejecutándose en tu servidor y los dispositivos que se hayan unido aún pueden comunicarse entre sí a través de él. Puedes volver a conectar esta computadora en cualquier momento."
         },
         "errors": {
-          "INVALID_LINK": "El enlace para unirse o la dirección no son válidos.",
+          "INVALID_LINK": "El enlace para compartir o la dirección no son válidos.",
           "UNREACHABLE": "No se puede acceder a este retransmisor. Asegúrate de que esta computadora pueda abrir la dirección del enlace.",
           "NOT_A_RELAY": "Esta dirección no corresponde a un retransmisor de Cindy.",
           "INCOMPATIBLE": "La versión de este retransmisor no es compatible. Actualiza Cindy en ambas computadoras.",
           "ACCOUNT_MISMATCH": "Este retransmisor pertenece a otra cuenta de Cindy.",
-          "CODE_INVALID": "Este enlace para unirse venció o ya se usó. Solicita uno nuevo.",
+          "CODE_INVALID": "Este enlace para compartir venció o ya se usó. Solicita uno nuevo.",
           "RATE_LIMITED": "Demasiados intentos. Vuelve a intentarlo en unos minutos.",
           "REJECTED": "Se rechazó la solicitud.",
           "EXPIRED": "Se agotó el tiempo de espera de aprobación. Vuelve a unirte.",
@@ -6157,15 +6209,21 @@
           "RELAY_MISMATCH": "El retransmisor de este servidor no se implementó desde esta computadora, por lo que Cindy no lo modifica.",
           "CERTIFICATE_FAILED": "No se pudo obtener un certificado HTTPS. Por lo general, esto ocurre porque el puerto 80 no está permitido en el grupo de seguridad de la nube o el dominio aún no apunta a este servidor. Corrígelo y vuelve a intentarlo.",
           "CA_UNREACHABLE": "El servidor no pudo conectarse con la autoridad de certificación Let's Encrypt, incluso tras reintentarlo durante unos minutos. Comprueba que el servidor pueda acceder a internet y vuelve a intentarlo más tarde.",
-          "NOT_REACHABLE": "El retransmisor está en ejecución en el servidor, pero esta computadora no puede acceder a él. Permite el puerto 443 en el grupo de seguridad de la nube.",
+          "NOT_REACHABLE": "No se pudo verificar la conexión con el retransmisor desde este equipo. Comprueba la dirección HTTPS, el certificado y el acceso al puerto 443.",
+          "AGENT_NET_START_FAILED": "El servicio Agent-Net del servidor no está listo. Comprueba sus registros y si los puertos 3348/TCP y 3479/UDP están ocupados.",
+          "AGENT_NET_VERIFY_FAILED": "HTTPS es accesible, pero no se pudieron verificar la identidad y el directorio de Agent-Net. Comprueba el servicio V2, la ruta del proxy inverso y la información de emparejamiento.",
           "BUNDLE_MISSING": "Esta versión de Cindy no incluye el retransmisor. Actualiza Cindy.",
           "DEPLOY_FAILED": "La implementación no se completó.",
-          "PAIR_PROOF_INVALID": "No se puede verificar la solicitud de este dispositivo, por lo que no se puede aprobar. Crea un nuevo enlace para unirse.",
+          "PAIR_PROOF_INVALID": "No se puede verificar la solicitud de este dispositivo, por lo que no se puede aprobar. Crea un nuevo enlace para compartir.",
           "NOT_OWNER": "Solo la computadora que implementó o inició este retransmisor puede administrarlo.",
           "BUSY": "Hay una implementación en curso. Espera.",
           "INVALID_ADDRESS": "Ingresa una IP pública o un dominio, sin http:// ni puerto.",
           "NO_DEPLOYMENT": "Aún no se ha implementado nada en un servidor.",
-          "OWNER_MISMATCH": "El retransmisor devolvió un certificado que no fue emitido por el propietario indicado en el enlace para unirse. Es posible que te hayas conectado a un retransmisor falso, por lo que se detuvo la conexión."
+          "OWNER_MISMATCH": "El retransmisor devolvió un certificado que no fue emitido por el propietario indicado en el enlace para compartir. Es posible que te hayas conectado a un retransmisor falso, por lo que se detuvo la conexión.",
+          "OWNER_UNAVAILABLE": "«{{device}}» no respondió. Comprueba que Cindy esté abierto y en línea allí, o pide un enlace para compartir.",
+          "RELAY_UNAVAILABLE": "«{{device}}» ya no usa este retransmisor.",
+          "ACCOUNT_DIRECTORY_UNAVAILABLE": "No se puede conectar con el servicio de cuentas de Cindy, así que no se pueden cargar los retransmisores de tu cuenta. Puedes pedir un enlace para compartir.",
+          "SHARE_UNSUPPORTED": "Este retransmisor pertenece a otra cuenta y todavía no se puede compartir con otras cuentas. Pide que activen Agent-Net (Beta) (un retransmisor en su servidor también necesita la última versión) y lo compartan de nuevo."
         },
         "deploy": {
           "title": "Implementar en mi servidor",
@@ -6208,7 +6266,7 @@
             "uninstall": "Eliminando el retransmisor de tu servidor…"
           },
           "done": {
-            "deploy": "Implementado. Selecciónalo en Ruta de conexión y luego podrás agregar dispositivos.",
+            "deploy": "Implementado. Selecciónalo en Ruta de conexión y tus otros dispositivos podrán verlo y unirse.",
             "upgrade": "El retransmisor de tu servidor ahora tiene la versión {{version}}.",
             "uninstall": "Retransmisor eliminado de tu servidor"
           },
@@ -6251,13 +6309,15 @@
           "removeDescription": "El relé y sus registros de dispositivos se eliminan del servidor, y los dispositivos que lo usan se desconectan. Si vuelves a implementarlo, cada dispositivo tendrá que unirse de nuevo.",
           "forget": "Eliminar solo de esta computadora",
           "forgetTitle": "¿Eliminar solo de esta computadora?",
-          "forgetDescription": "El relé sigue funcionando en el servidor, pero esta computadora deja de administrarlo y ya no puede agregarle dispositivos. Haz esto solo si ya no usas ese servidor."
+          "forgetDescription": "El relé sigue funcionando en el servidor, pero esta computadora deja de administrarlo y ya no puede compartirlo. Haz esto solo si ya no usas ese servidor."
         },
         "route": {
           "title": "Ruta de conexión",
           "hint": "El control remoto entre tus dispositivos pasa por esta ruta",
           "kindServer": "Mi servidor",
           "kindJoined": "Unido",
+          "kindComputer": "Mi computadora",
+          "kindShared": "Compartido contigo",
           "hostTitle": "Esta computadora como relé",
           "hostHint": "Los demás dispositivos deben poder acceder directamente a esta computadora. Se desconectan cuando entra en suspensión o se cierra Cindy",
           "officialHint": "No requiere configuración. Todas las funciones están disponibles",
@@ -6276,8 +6336,17 @@
           "switchTitle": "¿Cambiar a {{name}}?",
           "switchFromHost": "El relé de esta computadora se detiene y los dispositivos que se unieron a él se desconectan.",
           "switchFromMember": "Esta computadora sale de {{name}}. Para volver a unirse después, su propietario debe crear un nuevo enlace de unión.",
+          "switchFromShared": "Esta computadora sale de «{{name}}», y tus dispositivos que se unieron a través de ella también se desconectan. Para volver a usarlo, pide que lo compartan de nuevo.",
           "switchConfirm": "Cambiar",
-          "switchFromOfficial": "El control remoto entre tus dispositivos pasará por {{name}}. Las notificaciones push al teléfono no están disponibles mientras uses tu propio relé. El uso compartido de proveedores y las tareas compartidas siguen pasando por el retransmisor de Cindy."
+          "switchFromOfficial": "El control remoto entre dispositivos usará «{{name}}». Agent-Net usa el relé de la invitación; las funciones compartidas antiguas siguen usando el relé de Cindy.",
+          "switchToAccount": "Este retransmisor es de tu cuenta. «{{device}}» permitirá automáticamente que esta computadora se una, sin enlace para compartir.",
+          "accountJoining": "Uniéndose, esperando a que «{{device}}» lo permita…",
+          "accountManagedOn": "Se administra en «{{device}}»",
+          "accountJoinedOn": "Unido en «{{device}}»",
+          "sharedBy": "Compartido por {{name}}",
+          "sharedByOther": "Compartido por otra cuenta",
+          "ownDevicesHint": "Tus otras computadoras y teléfonos ven este retransmisor al iniciar sesión con la misma cuenta y pueden cambiarse a él sin enlace. Para que otra cuenta lo use, haz clic en Compartir junto al retransmisor.",
+          "sharedOwnDevicesHint": "Tus otras computadoras y teléfonos ven este retransmisor al iniciar sesión en la misma cuenta y pueden cambiar a él. Solo llegan a tus propios dispositivos."
         },
         "dialog": {
           "steps": {
@@ -6313,7 +6382,13 @@
           "remove": "Eliminar este relé",
           "deviceCount_many": "{{count}} dispositivos",
           "onlineCount_many": "{{count}} en línea",
-          "certificateDays_many": "Vence en {{count}} días"
+          "certificateDays_many": "Vence en {{count}} días",
+          "protocolsBoth": "Admite Device Link y Agent-Net",
+          "protocolsLegacy": "Solo admite Device Link",
+          "upgradeForSharing": "Actualiza para compartir con otras cuentas",
+          "connection": "Conexión de esta computadora",
+          "connectionEncrypted": "Cifrada de extremo a extremo si el otro lado también usa Agent-Net",
+          "connectionLegacy": "Sin cifrado de extremo a extremo"
         }
       },
       "title": "Conexión remota",
@@ -6624,6 +6699,82 @@
         "title": "¿Revocar el acceso?",
         "description": "Una vez revocado el acceso, este dispositivo se desconectará de inmediato y ya no podrá controlar esta computadora de forma remota. Deberás restablecer su acceso en Configuración → Conexión remota para que pueda volver a conectarse.",
         "confirm": "Revocar acceso"
+      },
+      "v2": {
+        "switch": {
+          "title": "Agent-Net (Beta)",
+          "hint": "Muestra la topología de conexiones y la actividad reciente. La conexión se cifra cuando ambos dispositivos activan Agent-Net y se han vinculado mediante Agent-Net. Los demás dispositivos usan la conexión habitual. Solo afecta a esta computadora."
+        },
+        "empty": "Aún no hay otros dispositivos. Inicia sesión con la misma cuenta en otro ordenador o teléfono y aparecerá aquí.",
+        "stats": {
+          "online": "{{online}} / {{total}} en línea",
+          "direct": "{{count}} directo",
+          "relay": "{{count}} por relé",
+          "unlinked": "{{count}} sin enlace",
+          "attention": "{{count}} por revisar",
+          "offline": "{{count}} sin conexión"
+        },
+        "node": {
+          "thisComputer": "Este ordenador"
+        },
+        "path": {
+          "direct": "Directo",
+          "relay": "Por {{name}}",
+          "unlinked": "En línea, sin enlace",
+          "offline": "Sin conexión"
+        },
+        "attention": {
+          "unresponsive": "Sin respuesta, reintentando"
+        },
+        "relay": {
+          "official": "Relé de Cindy"
+        },
+        "ms": "{{value}} ms",
+        "flow": {
+          "out": "Enviando",
+          "in": "Recibiendo",
+          "both": "Enviando y recibiendo"
+        },
+        "offlineFold": "{{count}} sin conexión",
+        "offlineShow": "Mostrar dispositivos sin conexión",
+        "offlineHide": "Ocultar dispositivos sin conexión",
+        "group": {
+          "direct": "Directo",
+          "relay": "Por relé",
+          "unlinked": "Sin enlace",
+          "attention": "Por revisar",
+          "offline": "Sin conexión"
+        },
+        "recent": {
+          "title": "Actividad reciente",
+          "online": "{{name}} se conectó",
+          "offline": "{{name}} se desconectó",
+          "empty": "Ningún dispositivo ha entrado o salido desde que se abrió esta página"
+        },
+        "popover": {
+          "status": "Estado",
+          "path": "Ruta",
+          "activity": "Mensajes",
+          "latency": "Latencia",
+          "lastSeen": "Visto por última vez",
+          "controlling": "Controlando este ordenador",
+          "rttNote": "última medición",
+          "manage": "Gestionar dispositivo…",
+          "linkStatus": "Con {{name}}",
+          "version": "Cindy {{version}}",
+          "remoteDesktopFailed": "No se pudo abrir el escritorio remoto",
+          "encryption": "Cifrado",
+          "encrypted": "Cifrado de extremo a extremo",
+          "legacyConnection": "Conexión anterior",
+          "encryptionUnknown": "Sin confirmar",
+          "legacyEncryptionHint": "La ruta por el repetidor de la conexión anterior no tiene cifrado de extremo a extremo."
+        },
+        "protocol": {
+          "agentNet": "Agent-Net",
+          "deviceLink": "Device Link"
+        },
+        "onlyEncrypted": "Usar solo Agent-Net",
+        "onlyEncryptedHint": "Los dispositivos antiguos y los recursos compartidos que usen la conexión anterior no estarán disponibles. Desactivado por defecto."
       }
     },
     "tina": {
@@ -6707,6 +6858,7 @@
         "renameFailed": "Error al cambiar el nombre",
         "deleted": "Dispositivo eliminado",
         "deleteOnline": "Este servidor aún no admite la eliminación de dispositivos en línea. Vuelva a intentarlo después de actualizar el servicio.",
+        "deleteRejectedWhileOffline": "No se pudo eliminar el dispositivo: el servidor aún lo registra como en línea, aunque aquí aparece sin conexión.",
         "deleteFailed": "Error al eliminar",
         "disconnected": "Se desconectaron todas las conexiones remotas",
         "disconnectFailed": "No se pudo desconectar la conexión remota",
@@ -12600,47 +12752,47 @@
         "claude-code": {
           "ask": {
             "label": "Permisos predeterminados",
-            "description": "Permite el acceso de lectura y escritura dentro del espacio de trabajo y pide autorización antes de usar permisos elevados, acceso a la red o rutas fuera del espacio de trabajo."
+            "description": "Tú apruebas las acciones cuando es necesario."
           },
           "acceptEdits": {
             "label": "Aceptar ediciones automáticamente",
-            "description": "Acepta automáticamente las solicitudes de edición de archivos para reducir las confirmaciones repetidas. Los comandos o permisos de mayor riesgo siguen sujetos a la política de permisos subyacente."
+            "description": "Las ediciones de archivos se permiten directamente; tú apruebas otras acciones cuando es necesario."
           },
           "auto": {
             "label": "Revisión automática",
-            "description": "Permite el acceso de lectura y escritura dentro del espacio de trabajo y revisa automáticamente las solicitudes de elevación de permisos; las acciones de alto riesgo pueden denegarse o requerir confirmación. Esto reduce las interrupciones, pero puede cometer errores."
+            "description": "Un modelo de IA aprueba las acciones, lo que puede requerir más espera; tú confirmas cuando es necesario."
           },
           "bypassPermissions": {
             "label": "Acceso completo",
-            "description": "Permite editar cualquier archivo y ejecutar comandos con acceso a la red sin otra confirmación. Riesgo máximo; úsalo solo para tareas de confianza."
+            "description": "Las acciones habituales se permiten directamente, incluidos archivos fuera del espacio de trabajo y comandos de red."
           }
         },
         "codex": {
           "ask": {
             "label": "Permisos predeterminados",
-            "description": "Permite el acceso de lectura y escritura dentro del espacio de trabajo y pide autorización antes de usar permisos elevados, acceso a la red o rutas fuera del espacio de trabajo."
+            "description": "Tú apruebas las acciones cuando es necesario."
           },
           "auto": {
             "label": "Revisión automática",
-            "description": "Ejecuta comandos automáticamente dentro del entorno aislado protegido del espacio de trabajo. Las acciones que exceden los límites del entorno aislado pasan a un revisor automático; las acciones de alto riesgo pueden denegarse o requerir confirmación."
+            "description": "Un modelo de IA aprueba las acciones, lo que puede requerir más espera; tú confirmas cuando es necesario."
           },
           "bypassPermissions": {
             "label": "Acceso completo",
-            "description": "Permite editar cualquier archivo y ejecutar comandos con acceso a la red sin otra confirmación. Riesgo máximo; úsalo solo para tareas de confianza."
+            "description": "Las acciones habituales se permiten directamente, incluidos archivos fuera del espacio de trabajo y comandos de red."
           }
         },
         "pi": {
           "ask": {
             "label": "Permisos predeterminados",
-            "description": "Las herramientas de solo lectura se ejecutan directamente; escribir archivos, ejecutar comandos y usar herramientas MCP requiere autorización cada vez."
+            "description": "Tú apruebas las acciones cuando es necesario."
           },
           "auto": {
             "label": "Revisión automática",
-            "description": "La escritura dentro del espacio de trabajo y los comandos seguros se ejecutan automáticamente; la escritura fuera del espacio de trabajo, los comandos riesgosos y las herramientas MCP siguen requiriendo autorización."
+            "description": "Un modelo de IA aprueba las acciones, lo que puede requerir más espera; tú confirmas cuando es necesario."
           },
           "bypassPermissions": {
             "label": "Acceso completo",
-            "description": "Permite editar cualquier archivo y ejecutar comandos con acceso a la red sin otra confirmación. Riesgo máximo; úsalo solo para tareas de confianza."
+            "description": "Las acciones habituales se permiten directamente, incluidos archivos fuera del espacio de trabajo y comandos de red."
           }
         }
       }
@@ -13178,11 +13330,10 @@
     "prevMessageJump": "Ir al prompt anterior: {{preview}}",
     "sessionLoading": "Cargando tarea",
     "askUserQuestion": {
-    "unanswered": "Sin respuesta",
-    "withdrawn": "Ya no necesita respuesta",
-    "withdrawnDraft": "Esta pregunta ya no necesita respuesta.\n{{reason}}\nTu borrador se conserva y puedes enviarlo como información adicional.",
-    "sendSupplement": "Enviar información adicional",
-
+      "unanswered": "Sin respuesta",
+      "withdrawn": "Ya no necesita respuesta",
+      "withdrawnDraft": "Esta pregunta ya no necesita respuesta.\n{{reason}}\nTu borrador se conserva y puedes enviarlo como información adicional.",
+      "sendSupplement": "Enviar información adicional",
       "voice": {
         "hint": "Di el número o el nombre de una opción. Para seleccionar varias, di después «confirmar selección».",
         "freeTextHint": "Di tu respuesta, revísala y luego di «confirmar selección» para enviarla.",
@@ -13512,8 +13663,8 @@
       "dismissTitle": "Descartar aviso de falla anterior"
     },
     "worktreeRestoreBanner": {
-      "text": "Se eliminó el worktree de esta sesión (falta el directorio).",
-      "textPendingSnapshot": "Esta sesión tiene una instantánea de cambios sin aplicar.",
+      "text": "Se eliminó el worktree «{{name}}» de esta sesión (falta el directorio).",
+      "textPendingSnapshot": "El worktree «{{name}}» de esta sesión tiene una instantánea de cambios sin aplicar.",
       "restoreAction": "Restaurar worktree",
       "applySnapshotAction": "Aplicar cambios",
       "restoring": "Restaurando…",
@@ -14107,7 +14258,7 @@
       "errors": {
         "noPriorAssistantPreview": "Retrocede desde una pregunta que siga a una respuesta de la IA (esta no tiene una respuesta previa del asistente)",
         "sessionRunning": "La tarea no se detuvo a tiempo. Vuelve a intentar retroceder",
-        "noLiveQuery": "La sesión está inactiva. Envía primero cualquier mensaje (incluso solo \"ok\") para activar el SDK antes de retroceder",
+        "noLiveQuery": "No se pudo restaurar el entorno de ejecución de la tarea. No se completó el retroceso.",
         "noPriorAssistantCommit": "Retrocede desde una pregunta que siga a una respuesta de la IA",
         "commitGeneric": "No se pudo retroceder. Vuelve a intentarlo",
         "remoteNotSupported": "Las sesiones remotas de Claude Code aún no permiten retroceder"
@@ -14186,6 +14337,7 @@
       "REMOTE_AGENT_SHARE_PAUSED": "El propietario ha pausado este intercambio por usted, por lo que estos modelos no se pueden usar hasta que se reanude. Cambie a otro modelo para continuar.",
       "REMOTE_AGENT_SHARE_REMOVED": "Este recurso compartido ya no está disponible (el propietario lo eliminó o usted se fue). Cambie a otro modelo para continuar.",
       "REMOTE_AGENT_SHARE_UNAVAILABLE": "El proveedor compartido no está disponible temporalmente. Es posible que la computadora del propietario esté desconectada o que el uso compartido esté desactivado por ahora. Inténtalo de nuevo más tarde o cambia a otro modelo para continuar.",
+      "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "Este es un recurso compartido antiguo y no se puede usar mientras «Usar solo Agent-Net» esté activado. Desactívelo para continuar o cambie a otro modelo.",
       "REMOTE_AGENT_GROUP_USAGE_LIMIT": "Las cuentas disponibles para este modelo han alcanzado su límite de uso. Cambie de modelo o continúe cuando se restablezca la cuota.",
       "REMOTE_AGENT_GROUP_UNAVAILABLE": "Ninguna computadora del grupo de proveedores puede ejecutar esta tarea en este momento. Es posible que estén desconectadas, pausadas, en período de espera o que no tengan este modelo. Revisa el grupo en la página Acceso remoto y uso compartido de este proveedor.",
       "REMOTE_AGENT_DEVICE_LIMIT": "Este dispositivo ha alcanzado su límite de sesión remota. Archive las sesiones no utilizadas o solicite al propietario del proveedor que aumente el límite en Remoto y compartido.",
@@ -15045,6 +15197,7 @@
         "compactSuccess": "Contexto compactado",
         "compactSuccessWithTokens": "Contexto compactado: {{before}}k → {{after}}k tokens",
         "compactFailed": "No se pudo compactar",
+        "compactResumeFirst": "Envía un mensaje para reanudar esta tarea antes de compactar su contexto.",
         "compactNothing": "Aún no hay nada que compactar",
         "sessionBranches": "Ramas de la sesión",
         "copySessionLink": "Copiar enlace de la sesión"

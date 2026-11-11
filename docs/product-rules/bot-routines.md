@@ -40,7 +40,7 @@ Bot Market 原生包的例行任务只通过原导入服务保存停用定义，
 - `@cindy/maker-scheduler`：例行任务校验、匹配、去重、串行落盘和运行状态机。纯逻辑，不依赖 Electron。
 - Desktop routines service：按当前账号保存本地文件，为每条规则创建或复用独立的伙伴任务，调用现有调度执行器。
 - 插件：第三方身份认证、长连接、消息订阅或本地采集。向宿主报告事件，不指定伙伴、指令或执行权限。
-- 桌面远程控制（2026-10-22）：控制另一台电脑上的伙伴时，桌面伙伴设置里的「例行任务」页就是本机同一个页面，列表、保存、立即运行、删除和运行历史由伙伴所在电脑的同一个管理服务执行（`management:settings` 的 `routines.*` 操作，见 [伙伴设置动作](../dev-rules/protocol-compatibility.md#伙伴设置动作-managementsettingsremote-resource2026-10-22)）；那台电脑上的例行任务变化会推送到打开着的页面重读。这是桌面入口，手机仍不提供管理。
+- 桌面远程控制（2026-10-22）：控制另一台电脑上的伙伴时，桌面伙伴设置里的「例行任务」页就是本机同一个页面，列表、保存、立即运行、删除和运行历史由伙伴所在电脑的同一个管理服务执行（`management:settings` 的 `routines.*` 操作，见 [伙伴设置动作](../dev-rules/protocol-compatibility/teammate-settings-management-action.md)）；那台电脑上的例行任务变化会推送到打开着的页面重读。这是桌面入口，手机仍不提供管理。
 - 桌面 UI / MCP / Remote Resources：共用管理服务，不能冒充事件来源。宿主保留 Remote Resources，当前手机端过滤 `routines` 集合及动作。MCP 管理仅走宿主绑定调用者身份的伙伴必备工具；通用 scheduler MCP 不提供可任意指定 botId 的例行任务入口。
 
 每条需要 Agent 执行的例行任务对应一个持久独立 Session（`bot_session_links.role = 'routine'`，`route_key = 'routine:<routineId>'`），重复触发复用，不向伙伴主任务追加执行上下文。它与原伙伴共享 Profile、Home、记忆、技能和实际权限，权限与资料更新同样同步到专线；`list_agents`、`send_to_agent`、`check_agent_message` 沿用同一伙伴身份（含远程回执核验与排队恢复），逐轮行动授权与防循环上限不变；行动身份仍按本轮来源判定，内置跟进不会因独立任务变成主人授权。

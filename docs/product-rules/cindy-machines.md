@@ -70,4 +70,4 @@
 用户点「开启远程控制」后复用现有持久设置与 presence 广播；提示说明运行任务、访问文件
 及持续有效的范围。Agent 等明确 enabled 后继续原工作，其余结果不授予权限。
 旧版／网络无响应如实报告，不猜测已批准，也不自动重复弹窗。拒绝、到期、并发请求与重复
-请求的处理见 [协议说明](../dev-rules/protocol-compatibility.md#请求开启远程控制2026-11-10未发布)。
+请求的处理见 [协议说明](../dev-rules/protocol-compatibility/device-link-remote-control-consent.md)。

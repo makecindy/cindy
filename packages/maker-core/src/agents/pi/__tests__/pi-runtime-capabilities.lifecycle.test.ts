@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -93,6 +94,9 @@ vi.mock('../rpc-client.js', () => ({
     }
     send(): void {}
     async close(): Promise<void> {
+      // The mocked Pi process has exited. Its real config-home cleanup may
+      // retry Windows file locks and must no longer run on discovery's clock.
+      vi.useRealTimers();
       this.isClosed = true;
       this.state.closed = true;
     }
@@ -165,7 +169,29 @@ describe('Pi runtime capability lifecycle', () => {
     expect(changes).toHaveLength(1);
     expect(changes[0]).toMatchObject({ status: 'loaded', commands: [{ name: 'skill:s1' }] });
     expect(captured.instances[0]?.requests.filter((request) => request.type === 'get_commands')).toHaveLength(1);
-    await handle.close();
+    // PR #9754 Windows CI, unit: discovery uses fake time, but close performs
+    // real filesystem cleanup. Existing close cases never forced its 25ms
+    // retry, so a transient lock could leave the cleanup on a frozen clock.
+    const configRoot = path.join(home, 'run-tmp');
+    const configHome = path.join(configRoot, readdirSync(configRoot)[0]!);
+    const originalRm = fs.rm;
+    let lockedOnce = false;
+    const remove = vi.spyOn(fs, 'rm').mockImplementation(async (target, options) => {
+      if (!lockedOnce && path.resolve(String(target)) === path.resolve(configHome)) {
+        lockedOnce = true;
+        throw Object.assign(new Error('transient config-home lock'), { code: 'EBUSY' });
+      }
+      return originalRm(target, options);
+    });
+    vi.useFakeTimers();
+    try {
+      await handle.close();
+      expect(lockedOnce).toBe(true);
+      expect(existsSync(configHome)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+      remove.mockRestore();
+    }
     expect(handle.getRuntimeCapabilities?.()).toBeUndefined();
     expect(changes).toHaveLength(2);
     expect(changes[0]).toMatchObject({ status: 'loaded', commands: [{ name: 'skill:s1' }] });
@@ -221,7 +247,7 @@ describe('Pi runtime capability lifecycle', () => {
   // Existing lifecycle cases only dispatched unpinned messages during discovery.
   it.each([
     { status: 'failed', error: 'discovery rejected' },
-    { status: 'unknown', error: 'unsupported command' },
+    { status: 'unknown', error: 'Unknown command: get_commands' },
   ])('waits for pinned Skill provenance after a $status discovery attempt', async ({ status, error }) => {
     vi.useFakeTimers();
     captured.runtimeFailures.add('s1');

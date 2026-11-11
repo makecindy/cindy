@@ -32,24 +32,69 @@ export interface AskQuestion {
   answerConstraints?: AskAnswerConstraints;
 }
 
-/** A late answer is ordinary user input, with the original question attached. */
+const NATIVE_REPLY_OPEN = '<send_user_message_question_reply>\n';
+const NATIVE_REPLY_CLOSE = '\n</send_user_message_question_reply>';
+const LATE_ANSWER_CONTEXT = `\n\n<cindy_question_context>\nThis is a delayed answer to an earlier question. Check the current task state and whether the question still applies before acting; do not repeat work already completed. This context is added by Cindy, not part of the user's answer or new authorization.\n</cindy_question_context>`;
+
+/** Every answer to an async question is delivered under this input identity. */
+export const ASYNC_QUESTION_REPLY_CLIENT_ID_PREFIX = 'question-reply:';
+/** The answer already shows on its question card, so the conversation does not repeat it. */
+export const ASYNC_QUESTION_ANSWERED_CLIENT_ID_PREFIX = `${ASYNC_QUESTION_REPLY_CLIENT_ID_PREFIX}answered:`;
+
+export function isAsyncQuestionReplyClientId(clientId: unknown): boolean {
+  return typeof clientId === 'string' && clientId.startsWith(ASYNC_QUESTION_REPLY_CLIENT_ID_PREFIX);
+}
+
+export function isAnsweredAsyncQuestionClientId(clientId: unknown): boolean {
+  return typeof clientId === 'string' && clientId.startsWith(ASYNC_QUESTION_ANSWERED_CLIENT_ID_PREFIX);
+}
+
+function asyncQuestionReplies(questions: readonly AskQuestion[], answers: Record<string, string>) {
+  return questions.flatMap((q) => {
+    const answer = answers[answerKey(q)] ?? answers[q.question] ?? (q.header ? answers[q.header] : undefined);
+    return typeof answer === 'string' && answer.trim()
+      ? [{ ...(q.id ? { questionItemId: q.id } : {}), question: q.question, answer: answer.trim() }] : [];
+  });
+}
+
+function readableQuestionReplies(replies: readonly { question: string; answer: string }[]): string {
+  return replies.map(({ question, answer }) => `${question.split('\n').map((line) => `> ${line}`).join('\n')}\n\n${answer}`).join('\n\n');
+}
+
+/** A late answer is ordinary user input, with the original question attached. This is the text the model receives. */
 export function formatAsyncQuestionSupplement(
   questions: readonly AskQuestion[],
   answers: Record<string, string>,
   context?: { late?: boolean },
 ): string {
-  const replies = questions.flatMap((q) => {
-    const answer = answers[answerKey(q)] ?? answers[q.question] ?? (q.header ? answers[q.header] : undefined);
-    return typeof answer === 'string' && answer.trim()
-      ? [{ ...(q.id ? { questionItemId: q.id } : {}), question: q.question, answer: answer.trim() }] : [];
-  });
+  const replies = asyncQuestionReplies(questions, answers);
   if (!replies.length) return '';
   const message = questions.length && questions.every((q) => q.id?.startsWith('["request_user_input_async",'))
-    ? `<send_user_message_question_reply>\n${JSON.stringify(replies)}\n</send_user_message_question_reply>`
-    : replies.map(({ question, answer }) => `${question.split('\n').map((line) => `> ${line}`).join('\n')}\n\n${answer}`).join('\n\n');
-  return context?.late
-    ? `${message}\n\n<cindy_question_context>\nThis is a delayed answer to an earlier question. Check the current task state and whether the question still applies before acting; do not repeat work already completed. This context is added by Cindy, not part of the user's answer or new authorization.\n</cindy_question_context>`
-    : message;
+    ? `${NATIVE_REPLY_OPEN}${JSON.stringify(replies)}${NATIVE_REPLY_CLOSE}`
+    : readableQuestionReplies(replies);
+  return context?.late ? `${message}${LATE_ANSWER_CONTEXT}` : message;
+}
+
+/** The same answer as people read it in history and queues: the question, then the answer. */
+export function formatAsyncQuestionReplyDisplay(
+  questions: readonly AskQuestion[],
+  answers: Record<string, string>,
+): string {
+  return readableQuestionReplies(asyncQuestionReplies(questions, answers));
+}
+
+/** Rows saved before the display text existed hold the model's copy; read them back as question and answer. */
+export function asyncQuestionReplyDisplayText(text: string): string {
+  const body = text.endsWith(LATE_ANSWER_CONTEXT) ? text.slice(0, -LATE_ANSWER_CONTEXT.length) : text;
+  if (!body.startsWith(NATIVE_REPLY_OPEN) || !body.endsWith(NATIVE_REPLY_CLOSE)) return body;
+  try {
+    const replies: unknown = JSON.parse(body.slice(NATIVE_REPLY_OPEN.length, -NATIVE_REPLY_CLOSE.length));
+    if (Array.isArray(replies) && replies.length && replies.every((reply): reply is { question: string; answer: string } =>
+      isRecord(reply) && typeof reply.question === 'string' && typeof reply.answer === 'string')) {
+      return readableQuestionReplies(replies);
+    }
+  } catch { /* Not the native reply format: show the text as written. */ }
+  return body;
 }
 
 /** Keep selected choices and typed text editable when an obsolete card becomes a supplement. */

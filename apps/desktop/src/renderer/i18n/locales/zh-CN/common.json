@@ -265,7 +265,7 @@
     "estimateTooManyFiles": "项目文件超过 {{limit, number}} 个，无法复制。请改为复制文件更少的项目。"
   },
   "sharedTask": {
-    "officialRelayNote": "你正在使用自己的中转，共享任务的内容仍经 Cindy 官方中转。",
+    "officialRelayNote": "Agent-Net 分享使用邀请指定的中转；旧版分享仍经 Cindy 官方中转。",
     "selfJoin": "这是你发起的共享任务，无需加入。请从“我发起的”打开",
     "manageSharing": "共享管理",
     "manageMembers": "管理成员…",
@@ -367,7 +367,7 @@
     "closeAllDescription": "所有访客将无法继续访问，任务记录保留。"
   },
   "providerShare": {
-    "officialRelayNote": "你正在使用自己的中转，供应商分享的内容仍经 Cindy 官方中转。",
+    "officialRelayNote": "Agent-Net 分享使用邀请指定的中转；旧版分享仍经 Cindy 官方中转。",
     "owned": {
       "title": "我分享的供应商"
     },
@@ -860,6 +860,7 @@
       "assignLocalAria": "允许 {{name}} 接收外部新任务",
       "moreAria": "{{name}} 的更多操作",
       "remove": "移出组",
+      "removeLocalBlocked": "组所在的电脑不能移出组",
       "status": {
         "checking": "正在检查…",
         "idle": "空闲",
@@ -1351,6 +1352,7 @@
     "REMOTE_AGENT_SHARE_PAUSED": "模型未切换：对方已暂停对你的分享。请换一个模型。",
     "REMOTE_AGENT_SHARE_REMOVED": "模型未切换：这个分享已不可用（对方删除了分享或你已退出）。请换一个模型。",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "模型未切换：分享的供应商暂时不可用（对方电脑不在线，或对方暂时关闭了分享）。请稍后再试或换一个模型。",
+    "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "模型未切换：这是旧版分享，开启「仅使用 Agent-Net」后暂时不能用。关闭这个开关，或换一个模型。",
     "SSH_HOST_KEY_MISMATCH": "SSH 主机密钥已变化",
     "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy 无法读取源附件，消息未发送。请将文件另存到“下载”或其他可访问的文件夹，移除原附件，再用附件按钮添加副本后发送。"
   },
@@ -2391,12 +2393,12 @@
         "previewStarting": "请松开鼠标和键盘，3 秒后屏幕会被遮住；按任意键即可锁屏，再解锁试试。",
         "previewUnavailable": "无法遮住屏幕，请重启 Cindy 后再试。",
         "delay": {
-          "label": "离开多久后遮住屏幕",
-          "hint": "键盘鼠标没人碰这么久后盖上遮罩。默认与系统熄屏时间一致。",
           "30": "30 秒",
           "60": "1 分钟",
           "120": "2 分钟",
           "300": "5 分钟",
+          "label": "离开多久后遮住屏幕",
+          "hint": "键盘鼠标没人碰这么久后盖上遮罩。默认与系统熄屏时间一致。",
           "system": "跟随系统"
         }
       }
@@ -5960,7 +5962,7 @@
         "current": "当前使用",
         "ownerName": "这台电脑",
         "unavailable": "登录 Cindy 账号，并且系统钥匙串可用时，才能使用自己的中转。",
-        "limits": "使用自己的中转时，手机系统推送暂不可用；供应商分享和共享任务仍经 Cindy 官方中转。",
+        "limits": "Agent-Net 分享使用邀请指定的中转；系统通知需要中转配置推送服务。旧版分享仍经 Cindy 官方中转。",
         "actions": {
           "join": "加入别的中转",
           "useOfficial": "切回官方中转",
@@ -5978,37 +5980,83 @@
           "scopeAllHint": "局域网里的设备可以直接连接。连接不加密，只建议在可信网络中使用；手机需要 https 地址才能连接。",
           "externalUrl": "其他设备访问的地址",
           "externalUrlPlaceholder": "例如 https://relay.example.com",
-          "externalUrlHintAll": "会写进加入链接。不填时使用这台电脑的局域网地址。",
-          "externalUrlHintLocal": "会写进加入链接。填你的 Proxy 或穿透服务对外的地址。",
+          "externalUrlHintAll": "会写进分享链接。不填时使用这台电脑的局域网地址。",
+          "externalUrlHintLocal": "会写进分享链接。填你的 Proxy 或穿透服务对外的地址。",
           "suggested": "这台电脑的地址：",
           "start": "开启",
           "save": "保存并重启中转",
           "cancel": "取消",
           "running": "中转运行中，其他设备访问地址：{{address}}"
         },
-        "add": {
-          "intro": "生成加入链接，让手机或另一台电脑加入这个中转。",
-          "create": "添加设备",
-          "hint": "用手机相机扫码，或把链接发给另一台电脑，在「加入别的中转」里粘贴。链接 10 分钟内有效，只能用一次。",
-          "qrAlt": "加入中转的二维码",
+        "share": {
+          "action": "分享这个中转",
+          "title": "分享「{{name}}」的链接已生成",
+          "description": "将链接发给对方，收到申请并同意后，对方账号下的电脑和手机都可以用这个中转连接自己的设备。",
+          "descriptionOwn": "把链接发给你自己的另一台电脑，或用手机相机扫码，同意后那台设备就会加入这个中转。",
+          "fieldLabel": "分享链接",
           "copy": "复制链接",
-          "copied": "已复制加入链接",
-          "newLink": "重新生成",
-          "waiting": "等待设备申请…"
+          "copied": "已复制",
+          "copyFailed": "没能复制链接，请手动选中后复制",
+          "oneTime": "只能使用一次",
+          "expiresIn": "{{time}} 后过期",
+          "expired": "已过期",
+          "regenerateHint": "过期后可以重新生成",
+          "generating": "正在生成链接…",
+          "scanHint": "对方用手机扫码时，会提示他先在电脑上打开；他的电脑加入后，手机会直接看到这个中转。",
+          "scanHintOwn": "你的手机可以直接用相机扫码加入。",
+          "ownAccountOnly": "这个中转现在只能给你自己的设备用。要分享给其他账号，需要先在「远程连接」里开启 Agent-Net (Beta)；服务器上的中转还要升级到最新版本。",
+          "qrAlt": "分享中转的二维码",
+          "calloutIsolation": "对方只能连到自己的设备，看不到你的设备；要用你的 Agent 或模型，仍需另外分享。",
+          "calloutPrivacy": "连接全程加密，你看不到内容；作为中转主人，你能看到对方设备何时通信、流量多少。",
+          "calloutOwnDevices": "你自己的设备不需要这个链接，登录同一账号后会直接在线路列表里看到这个中转。",
+          "calloutOwnFallback": "登录同一账号的设备一般会直接在线路列表里看到这个中转，不需要链接；连不上 Cindy 账号服务时再用这个链接。",
+          "done": "完成",
+          "regenerate": "重新生成链接",
+          "regenerated": "已生成新链接"
         },
         "requests": {
-          "item": "{{name}} 请求加入",
-          "verify": "配对码",
-          "verifyHint": "和对方屏幕上显示的一致再同意。",
+          "title_one": "{{count}} 个申请待处理",
+          "title_other": "{{count}} 个申请待处理",
+          "waiting": "申请加入，等你处理",
+          "waitingAccount": "其他账号 · {{device}}，等你处理",
+          "open": "处理"
+        },
+        "tenants": {
+          "title": "分享给的账号",
+          "devices_one": "{{count}} 台设备",
+          "devices_other": "{{count}} 台设备",
+          "online": "在线",
+          "offline": "不在线",
+          "revoke": "停止分享",
+          "revokeTitle": "停止分享给 {{account}}？",
+          "revokeDescription": "{{account}} 在这个中转上的线路会被删除，他的设备会立即断开。之后要再用，需要你重新分享。"
+        },
+        "approve": {
+          "title": "{{device}} 申请加入「{{relay}}」",
+          "requestedAt": "{{time}}通过你的分享链接申请",
+          "requestedViaLink": "通过你的分享链接申请",
+          "pairingHint": "和这台设备屏幕上显示的配对码一致再同意。",
+          "unverified": "无法核对这台设备：它的申请和这台电脑给出的分享链接对不上，可能被人篡改，只能拒绝。如果是你自己的设备，请重新生成分享链接再试。",
+          "callout": "同意后，这台设备会加入「{{relay}}」，经它和你的其他设备互相连接。",
           "replaces": "这台设备之前加入过，同意后它的旧凭证失效。",
+          "calloutUnknown": "如果你不认识这台设备，请拒绝；拒绝后这条链接作废。",
           "approve": "同意",
-          "reject": "拒绝",
-          "unverified": "无法核对这台设备：它的申请和这台电脑给出的加入链接对不上，可能被人篡改，只能拒绝。如果是你自己的设备，请重新生成加入链接再试。"
+          "reject": "拒绝申请",
+          "later": "稍后处理",
+          "toastApproved": "已同意 {{device}} 加入「{{relay}}」",
+          "toastRejected": "已拒绝 {{device}} 的申请",
+          "titleAccount": "{{account}} 想使用「{{relay}}」",
+          "otherAccountDevice": "其他账号 · {{device}}",
+          "calloutAccount": "同意后，对方账号在「{{relay}}」上有自己独立的线路：只能连接他自己的设备，看不到你和你的设备。他账号下的其他设备之后直接加入，不会再来申请。",
+          "calloutAccountRevoke": "你随时可以在中转页停止分享，对方的设备会立即断开。",
+          "calloutUnknownAccount": "如果你不认识这个账号，请拒绝；拒绝后这条链接作废。",
+          "toastApprovedAccount": "已同意 {{account}} 使用「{{relay}}」",
+          "toastRejectedAccount": "已拒绝 {{account}} 的申请"
         },
         "join": {
           "title": "加入别的中转",
-          "hint": "粘贴主人电脑上「添加设备」给出的加入链接，等对方同意后自动切换。",
-          "placeholder": "粘贴加入链接",
+          "hint": "粘贴对方发给你的分享链接，对方同意后自动切换。",
+          "placeholder": "粘贴分享链接",
           "submit": "加入",
           "connecting": "正在连接中转…",
           "waiting": "已发出申请。请在 {{name}} 上核对这串数字并点同意：",
@@ -6023,17 +6071,19 @@
           "ownerTitle": "停用这台电脑上的中转？",
           "ownerDescription": "已加入的设备会断开，并提示中转已停用。这台电脑切回 Cindy 官方中转。",
           "memberTitle": "切回官方中转？",
-          "memberDescription": "这台电脑会退出「{{name}}」，改用 Cindy 官方中转。之后要再加入，需要对方重新生成加入链接。",
+          "memberDescription": "这台电脑会退出「{{name}}」，改用 Cindy 官方中转。之后要再加入，需要对方重新生成分享链接。",
+          "sharedOwnerTitle": "切回官方中转？",
+          "sharedOwnerDescription": "这台电脑会离开「{{name}}」，改用 Cindy 官方中转；你账号下经它加入的设备也会一起断开。之后要再用，需要对方重新分享。",
           "serverTitle": "切回官方中转？",
           "serverDescription": "服务器上的中转「{{name}}」会继续运行，已加入的其他设备仍能通过它互相连接。这台电脑随时可以改回来。"
         },
         "errors": {
-          "INVALID_LINK": "加入链接或地址格式不正确。",
+          "INVALID_LINK": "分享链接或地址格式不正确。",
           "UNREACHABLE": "连不上这个中转。请确认这台电脑能访问链接里的地址。",
           "NOT_A_RELAY": "这个地址不是 Cindy 中转。",
           "INCOMPATIBLE": "这个中转的版本与本机不兼容，请把两边的 Cindy 都更新到最新版。",
           "ACCOUNT_MISMATCH": "这个中转属于另一个 Cindy 账号。",
-          "CODE_INVALID": "加入链接已失效或已被使用，请让对方重新生成。",
+          "CODE_INVALID": "分享链接已失效或已被使用，请让对方重新生成。",
           "RATE_LIMITED": "尝试次数太多，请过几分钟再试。",
           "REJECTED": "对方拒绝了这次加入。",
           "EXPIRED": "等待同意超时，请重新加入。",
@@ -6056,15 +6106,21 @@
           "RELAY_MISMATCH": "这台服务器上的中转不是这台电脑部署的，Cindy 不会改动它。",
           "CERTIFICATE_FAILED": "申请 HTTPS 证书失败。通常是云服务器安全组没有放行 80 端口，或域名还没解析到这台服务器。处理后点重试。",
           "CA_UNREACHABLE": "服务器连不上证书机构 Let's Encrypt，自动重试了几分钟仍没成功。请检查服务器能否访问外网，稍后再试。",
-          "NOT_REACHABLE": "服务器上的中转已经运行，但这台电脑连不上它。请在云服务器安全组里放行 443 端口。",
+          "NOT_REACHABLE": "未能从这台电脑验证中转连接。请检查 HTTPS 地址、证书和 443 端口的访问。",
+          "AGENT_NET_START_FAILED": "服务器上的 Agent-Net 服务未能就绪。请检查服务日志及 3348/TCP、3479/UDP 端口是否被占用。",
+          "AGENT_NET_VERIFY_FAILED": "HTTPS 已连通，但 Agent-Net 身份与目录校验未通过。请检查 V2 服务、反向 Proxy 路径和配对信息。",
           "BUNDLE_MISSING": "这个版本的 Cindy 没有带中转程序，请更新 Cindy。",
           "DEPLOY_FAILED": "部署没有完成。",
-          "PAIR_PROOF_INVALID": "无法核对这台设备的申请，不能同意。请重新生成加入链接。",
+          "PAIR_PROOF_INVALID": "无法核对这台设备的申请，不能同意。请重新生成分享链接。",
           "NOT_OWNER": "只有部署或开启这个中转的电脑才能管理它。",
           "BUSY": "正在部署，请稍候。",
           "INVALID_ADDRESS": "请填写公网 IP 或域名，不带 http:// 和端口。",
           "NO_DEPLOYMENT": "还没有部署到服务器。",
-          "OWNER_MISMATCH": "中转返回的证书不是加入链接里的主人签发的，可能连到了别人伪造的中转，已停止加入。"
+          "OWNER_MISMATCH": "中转返回的证书不是分享链接里的主人签发的，可能连到了别人伪造的中转，已停止加入。",
+          "OWNER_UNAVAILABLE": "「{{device}}」没有回应。请确认它开着 Cindy 并已联网，或请它分享链接给你。",
+          "RELAY_UNAVAILABLE": "「{{device}}」已经不在用这个中转了。",
+          "ACCOUNT_DIRECTORY_UNAVAILABLE": "暂时连不上 Cindy 账号服务，读不到你账号下的中转。可以请对方分享链接给你。",
+          "SHARE_UNSUPPORTED": "这个中转属于其他账号，还不能分享给其他账号使用。请对方开启 Agent-Net (Beta)（服务器上的中转需升级到最新版本）后重新分享。"
         },
         "deploy": {
           "title": "部署到我的服务器",
@@ -6107,7 +6163,7 @@
             "uninstall": "正在从服务器移除…"
           },
           "done": {
-            "deploy": "部署完成。在「连接线路」里切换到它之后，就可以添加设备。",
+            "deploy": "部署完成。在「连接线路」里切换到它之后，你的其他设备就能看到并加入它。",
             "upgrade": "服务器上的中转已升级到 {{version}}。",
             "uninstall": "已从服务器移除中转"
           },
@@ -6150,13 +6206,15 @@
           "removeDescription": "会停止并删除服务器上的中转程序和设备档案，正在用它的设备会断开。之后重新部署，所有设备都需要重新加入。",
           "forget": "只在本机移除",
           "forgetTitle": "只在这台电脑上移除？",
-          "forgetDescription": "服务器上的中转不会被删除，但这台电脑不再管理它，也不能再为它添加设备。确定不再使用那台服务器时再这样做。"
+          "forgetDescription": "服务器上的中转不会被删除，但这台电脑不再管理它，也不能再分享它。确定不再使用那台服务器时再这样做。"
         },
         "route": {
           "title": "连接线路",
           "hint": "设备之间的远程控制经由这条线路转发",
           "kindServer": "我的服务器",
           "kindJoined": "已加入",
+          "kindComputer": "我的电脑",
+          "kindShared": "他人分享",
           "hostTitle": "这台电脑当中转",
           "hostHint": "其它设备需要能直接访问到这台电脑；电脑休眠或退出 Cindy 时都会断开",
           "officialHint": "无需设置，所有功能可用",
@@ -6174,9 +6232,18 @@
           "statusOffline": "连不上",
           "switchTitle": "切换到「{{name}}」？",
           "switchFromHost": "这台电脑上的中转会停用，已加入它的设备会断开。",
-          "switchFromMember": "这台电脑会退出「{{name}}」，之后要再加入，需要对方重新生成加入链接。",
+          "switchFromMember": "这台电脑会退出「{{name}}」，之后要再加入，需要对方重新生成分享链接。",
+          "switchFromShared": "这台电脑会离开「{{name}}」，你账号下经它加入的设备也会一起断开。之后要再用，需要对方重新分享。",
           "switchConfirm": "切换",
-          "switchFromOfficial": "设备之间的远程控制会改经「{{name}}」转发。使用自己的中转时，手机系统推送暂不可用；供应商分享和共享任务仍经 Cindy 官方中转。"
+          "switchFromOfficial": "设备之间的远程控制会改经「{{name}}」转发。Agent-Net 分享使用邀请指定的中转；旧版分享仍经 Cindy 官方中转。",
+          "switchToAccount": "这是你账号下的中转，切换后由「{{device}}」放行，这台电脑自动加入，不需要分享链接。",
+          "accountJoining": "正在加入，等待「{{device}}」放行…",
+          "accountManagedOn": "在「{{device}}」上管理",
+          "accountJoinedOn": "由「{{device}}」加入",
+          "sharedBy": "{{name}} 分享",
+          "sharedByOther": "其他账号分享",
+          "ownDevicesHint": "你的其他电脑和手机登录同一账号后会直接看到这个中转，点切换即可加入，不需要链接。给其他账号用，点中转右边的分享。",
+          "sharedOwnDevicesHint": "你的其他电脑和手机登录同一账号后会直接看到这个中转，点切换即可加入。它们只能连接你自己的设备。"
         },
         "dialog": {
           "steps": {
@@ -6209,7 +6276,13 @@
           "certificateSite": "沿用网站证书",
           "version": "中转版本",
           "latest": "已是最新",
-          "remove": "移除这个中转"
+          "remove": "移除这个中转",
+          "protocolsBoth": "支持 Device Link 和 Agent-Net",
+          "protocolsLegacy": "只支持 Device Link",
+          "upgradeForSharing": "升级后可分享给其他账号",
+          "connection": "这台电脑的连接",
+          "connectionEncrypted": "对方也开启 Agent-Net 时端到端加密",
+          "connectionLegacy": "未端到端加密"
         }
       },
       "title": "远程连接",
@@ -6516,6 +6589,82 @@
         "title": "撤销访问权限？",
         "description": "撤销后，该设备会立即断开，并且无法再远程连接本机。之后需在「设置 → 远程连接」中恢复其访问权限，对方才能重新连接。",
         "confirm": "撤销访问权限"
+      },
+      "v2": {
+        "switch": {
+          "title": "Agent-Net (Beta)",
+          "hint": "显示连接拓扑和最近活动。双方都开启并完成 Agent-Net 配对时使用加密连接，其它设备沿用原有连接。只影响这台电脑。"
+        },
+        "empty": "还没有其它设备。在另一台电脑或手机上登录同一账号，它就会出现在这里。",
+        "stats": {
+          "online": "{{online}} / {{total}} 在线",
+          "direct": "{{count}} 直连",
+          "relay": "{{count}} 经中转",
+          "unlinked": "{{count}} 未建链",
+          "attention": "{{count}} 要处理",
+          "offline": "{{count}} 离线"
+        },
+        "node": {
+          "thisComputer": "这台电脑"
+        },
+        "path": {
+          "direct": "直连",
+          "relay": "经「{{name}}」中转",
+          "unlinked": "在线，未建链",
+          "offline": "离线"
+        },
+        "attention": {
+          "unresponsive": "连接无响应，正在重试"
+        },
+        "relay": {
+          "official": "Cindy 中转"
+        },
+        "ms": "{{value}} ms",
+        "flow": {
+          "out": "发送中",
+          "in": "接收中",
+          "both": "收发中"
+        },
+        "offlineFold": "{{count}} 台离线",
+        "offlineShow": "显示离线设备",
+        "offlineHide": "收起离线设备",
+        "group": {
+          "direct": "直连",
+          "relay": "经中转",
+          "unlinked": "未建链",
+          "attention": "要处理",
+          "offline": "离线"
+        },
+        "recent": {
+          "title": "最近活动",
+          "online": "{{name}} 上线",
+          "offline": "{{name}} 下线",
+          "empty": "打开这页后还没有设备上下线"
+        },
+        "popover": {
+          "status": "状态",
+          "path": "路径",
+          "activity": "消息",
+          "latency": "延迟",
+          "lastSeen": "最后在线",
+          "controlling": "正在控制这台电脑",
+          "rttNote": "最近测得",
+          "manage": "管理设备…",
+          "linkStatus": "与「{{name}}」",
+          "version": "Cindy {{version}}",
+          "remoteDesktopFailed": "打开远程桌面失败",
+          "encryption": "加密",
+          "encrypted": "端到端加密",
+          "legacyConnection": "旧版连接",
+          "encryptionUnknown": "尚未确认",
+          "legacyEncryptionHint": "旧版连接经过中转时，内容未端到端加密。"
+        },
+        "protocol": {
+          "agentNet": "Agent-Net",
+          "deviceLink": "Device Link"
+        },
+        "onlyEncrypted": "仅使用 Agent-Net",
+        "onlyEncryptedHint": "开启后，旧版设备和仍使用旧连接的分享将无法使用。默认关闭。"
       }
     },
     "tina": {
@@ -6599,6 +6748,7 @@
         "renameFailed": "重命名失败",
         "deleted": "设备已删除",
         "deleteOnline": "当前服务端尚不支持移除在线设备，请待服务升级后重试。",
+        "deleteRejectedWhileOffline": "未能删除设备：服务端仍将它记为在线，与列表中的离线状态不一致",
         "deleteFailed": "删除失败",
         "disconnected": "已断开所有远程连接",
         "disconnectFailed": "断开远程连接失败",
@@ -12456,47 +12606,47 @@
         "claude-code": {
           "ask": {
             "label": "默认权限",
-            "description": "允许在工作区内读写；需要更高权限、联网或访问工作区外路径时再询问。"
+            "description": "操作按需由你审批。"
           },
           "acceptEdits": {
             "label": "允许编辑",
-            "description": "自动接受文件编辑请求，减少反复确认；涉及更高风险的命令或权限仍按底层权限策略处理。"
+            "description": "文件编辑直接允许，其他操作按需由你审批。"
           },
           "auto": {
             "label": "自动审批",
-            "description": "允许在工作区内读写，并自动审批提权请求；高风险操作可能被拒绝或要求确认。能减少打断，但存在误判风险。"
+            "description": "操作由 AI 模型审批，可能需要额外等待；必要时由你确认。"
           },
           "bypassPermissions": {
             "label": "完全访问",
-            "description": "允许修改任意文件并运行联网命令，无需再次确认。风险最高，只适合可信任务。"
+            "description": "常规操作直接允许，可访问工作区外文件和联网执行命令。"
           }
         },
         "codex": {
           "ask": {
             "label": "默认权限",
-            "description": "允许在工作区内读写；需要更高权限、联网或访问工作区外路径时再询问。"
+            "description": "操作按需由你审批。"
           },
           "auto": {
             "label": "自动审批",
-            "description": "在受保护的工作区沙箱内自动执行命令；需要越过沙箱边界的操作交给自动审查器判断，高风险操作可能被拒绝或要求确认。"
+            "description": "操作由 AI 模型审批，可能需要额外等待；必要时由你确认。"
           },
           "bypassPermissions": {
             "label": "完全访问",
-            "description": "允许修改任意文件并运行联网命令，无需再次确认。风险最高，只适合可信任务。"
+            "description": "常规操作直接允许，可访问工作区外文件和联网执行命令。"
           }
         },
         "pi": {
           "ask": {
             "label": "默认权限",
-            "description": "只读工具直接执行；写文件、跑命令和 MCP 工具每次都询问。"
+            "description": "操作按需由你审批。"
           },
           "auto": {
             "label": "自动审批",
-            "description": "工作区内写文件与安全命令自动执行；越界写、危险命令和 MCP 工具仍会询问。"
+            "description": "操作由 AI 模型审批，可能需要额外等待；必要时由你确认。"
           },
           "bypassPermissions": {
             "label": "完全访问",
-            "description": "允许修改任意文件并运行联网命令，无需再次确认。风险最高，只适合可信任务。"
+            "description": "常规操作直接允许，可访问工作区外文件和联网执行命令。"
           }
         }
       }
@@ -13057,11 +13207,10 @@
     "prevMessageJump": "跳到上一条提问：{{preview}}",
     "sessionLoading": "正在加载任务",
     "askUserQuestion": {
-    "unanswered": "未回答",
-    "withdrawn": "无需再回答",
-    "withdrawnDraft": "这个问题已不再需要回答。\n{{reason}}\n草稿已保留，你仍可作为补充发送。",
-    "sendSupplement": "发送补充",
-
+      "unanswered": "未回答",
+      "withdrawn": "无需再回答",
+      "withdrawnDraft": "这个问题已不再需要回答。\n{{reason}}\n草稿已保留，你仍可作为补充发送。",
+      "sendSupplement": "发送补充",
       "voice": {
         "hint": "可以说“第一项”或选项名称；多选后请说“确认选择”。",
         "freeTextHint": "可以直接说出回答，检查后说“确认选择”提交。",
@@ -13371,8 +13520,8 @@
       "dismissTitle": "关闭历史失败提示"
     },
     "worktreeRestoreBanner": {
-      "text": "该任务的 worktree 已被回收（目录不存在）。",
-      "textPendingSnapshot": "该任务有一份未应用的更改快照。",
+      "text": "该任务的 worktree「{{name}}」已被回收（目录不存在）。",
+      "textPendingSnapshot": "该任务的 worktree「{{name}}」有一份未应用的更改快照。",
       "restoreAction": "恢复 worktree",
       "applySnapshotAction": "恢复更改",
       "restoring": "恢复中…",
@@ -13964,7 +14113,7 @@
       "errors": {
         "noPriorAssistantPreview": "请在 AI 回复之后的提问上 rewind（这条之前没有 assistant 回复）",
         "sessionRunning": "等待任务停止超时，请重新回退",
-        "noLiveQuery": "Agent 会话未激活——请先发送任意一条消息（哪怕一句\"ok\"）让 SDK 起来再 rewind",
+        "noLiveQuery": "未能恢复任务运行环境，回退未完成。",
         "noPriorAssistantCommit": "请在 AI 回复之后的提问上 rewind",
         "commitGeneric": "rewind 失败，请重试",
         "remoteNotSupported": "远端 Claude Code 会话暂不支持 rewind"
@@ -14043,6 +14192,7 @@
       "REMOTE_AGENT_SHARE_PAUSED": "对方已暂停对你的分享，恢复前不能使用这些模型。可以换成其他模型继续。",
       "REMOTE_AGENT_SHARE_REMOVED": "这个分享已不可用（对方删除了分享或你已退出）。可以换成其他模型继续。",
       "REMOTE_AGENT_SHARE_UNAVAILABLE": "分享的供应商暂时不可用：对方电脑可能不在线，或对方暂时关闭了分享。可以稍后再试，或换成其他模型继续。",
+      "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "这是旧版分享，开启「仅使用 Agent-Net」后暂时不能用。关闭这个开关就能继续，也可以换成其他模型。",
       "REMOTE_AGENT_GROUP_USAGE_LIMIT": "此模型的可用账号已达到用量上限。可换用其他模型，或等配额重置后继续。",
       "REMOTE_AGENT_GROUP_UNAVAILABLE": "供应商组里的电脑现在都不能运行这个任务：可能都不在线、已暂停分配、正在冷却，或没有这个模型。可以到这个供应商的「远程与分享」页查看组内电脑。",
       "REMOTE_AGENT_DEVICE_LIMIT": "这台设备保留的远程任务数已达上限。可归档暂时不用的任务，或请远程电脑的主人在“远程与分享”中提高上限。",
@@ -14835,6 +14985,7 @@
         "compactSuccess": "上下文已压缩",
         "compactSuccessWithTokens": "上下文已压缩：{{before}}k → {{after}}k tokens",
         "compactFailed": "压缩失败",
+        "compactResumeFirst": "请先发送一条消息恢复任务，再压缩上下文。",
         "compactNothing": "暂无可压缩内容",
         "sessionBranches": "任务分支",
         "copySessionLink": "复制任务链接"

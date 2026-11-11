@@ -1,0 +1,16 @@
+[
+  {
+    "test": "every_seed_delivers_an_intact_ordered_stream",
+    "code": 0,
+    "seconds": 172.16,
+    "start": 100000,
+    "count": 10000
+  },
+  {
+    "test": "recovery_policies_keep_streams_intact_and_make_progress",
+    "code": 0,
+    "seconds": 70.04,
+    "start": 100000,
+    "count": 1000
+  }
+]

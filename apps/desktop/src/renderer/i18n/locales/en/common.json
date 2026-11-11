@@ -265,7 +265,7 @@
     "estimateTooManyFiles": "The project has more than {{limit, number}} files and cannot be copied. Copy a project with fewer files instead."
   },
   "sharedTask": {
-    "officialRelayNote": "You're using your own relay. Shared task content still goes through the Cindy relay.",
+    "officialRelayNote": "Agent-Net shares use the relay specified in the invitation; legacy shares still use the Cindy relay.",
     "selfJoin": "You started this shared task, so you don’t need to join. Open it from “Shared by Me”.",
     "manageSharing": "Manage Sharing",
     "manageMembers": "Manage Members…",
@@ -367,7 +367,7 @@
     "closeAllDescription": "Guests will lose access. Task history is kept."
   },
   "providerShare": {
-    "officialRelayNote": "You're using your own relay. Provider sharing content still goes through the Cindy relay.",
+    "officialRelayNote": "Agent-Net shares use the relay specified in the invitation; legacy shares still use the Cindy relay.",
     "owned": {
       "title": "Providers I Share"
     },
@@ -868,6 +868,7 @@
       "assignLocalAria": "Allow {{name}} to accept new tasks from other computers",
       "moreAria": "More actions for {{name}}",
       "remove": "Remove from Group",
+      "removeLocalBlocked": "The computer that hosts the group can't be removed",
       "status": {
         "checking": "Checking…",
         "idle": "Idle",
@@ -1364,6 +1365,7 @@
     "REMOTE_AGENT_SHARE_PAUSED": "Model not changed: the owner has paused this share for you. Pick another model.",
     "REMOTE_AGENT_SHARE_REMOVED": "Model not changed: this share is no longer available (the owner removed it or you left). Pick another model.",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "Model not changed: the shared provider is temporarily unavailable (the owner's computer is offline or sharing is turned off for now). Try again later or pick another model.",
+    "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "Model not changed: this is a legacy share and can't be used while \"Use Only Agent-Net\" is on. Turn that switch off or pick another model.",
     "SSH_HOST_KEY_MISMATCH": "SSH Host Key Changed",
     "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy cannot read the source attachment; the message was not sent. Save a copy to Downloads or another accessible folder, remove the original attachment, and add the copy using the attachment button before sending again."
   },
@@ -2421,12 +2423,12 @@
         "previewStarting": "Take your hands off the mouse and keyboard. The screen is covered in 3 seconds; press any key to lock it, then unlock.",
         "previewUnavailable": "Couldn't cover the screen. Restart Cindy and try again.",
         "delay": {
-          "label": "Cover the screen after",
-          "hint": "How long the keyboard and mouse stay untouched before the cover goes up. By default, the same as your display sleep time.",
           "30": "30 sec",
           "60": "1 min",
           "120": "2 min",
           "300": "5 min",
+          "label": "Cover the screen after",
+          "hint": "How long the keyboard and mouse stay untouched before the cover goes up. By default, the same as your display sleep time.",
           "system": "System"
         }
       }
@@ -6003,7 +6005,7 @@
         "current": "In use",
         "ownerName": "This computer",
         "unavailable": "To use your own relay, sign in to Cindy and make sure the system keychain is available.",
-        "limits": "While you use your own relay, phone push notifications are unavailable, and provider sharing and shared tasks still go through the Cindy relay.",
+        "limits": "Agent-Net shares use the relay specified in the invitation. System notifications require a push provider on that relay. Legacy shares still use the Cindy relay.",
         "actions": {
           "join": "Join another relay",
           "useOfficial": "Switch back to Cindy relay",
@@ -6021,37 +6023,83 @@
           "scopeAllHint": "Devices on your local network can connect directly. The connection is not encrypted, so use it only on trusted networks. Phones need an https address.",
           "externalUrl": "Address other devices use",
           "externalUrlPlaceholder": "e.g. https://relay.example.com",
-          "externalUrlHintAll": "Included in join links. If empty, this computer's local network address is used.",
-          "externalUrlHintLocal": "Included in join links. Enter the public address of your proxy or tunnel.",
+          "externalUrlHintAll": "Included in share links. If empty, this computer's local network address is used.",
+          "externalUrlHintLocal": "Included in share links. Enter the public address of your proxy or tunnel.",
           "suggested": "This computer's addresses:",
           "start": "Start",
           "save": "Save and restart relay",
           "cancel": "Cancel",
           "running": "Relay is running. Other devices connect to {{address}}"
         },
-        "add": {
-          "intro": "Create a join link so a phone or another computer can join this relay.",
-          "create": "Add device",
-          "hint": "Scan it with your phone's camera, or send the link to another computer and paste it under Join another relay. The link works once and expires in 10 minutes.",
-          "qrAlt": "QR code to join the relay",
-          "copy": "Copy link",
-          "copied": "Join link copied",
-          "newLink": "New link",
-          "waiting": "Waiting for a device to ask…"
+        "share": {
+          "action": "Share this relay",
+          "title": "Share link for “{{name}}” created",
+          "description": "Send the link to the other person. Once you approve their request, the computers and phones on their account can use this relay to connect their own devices.",
+          "descriptionOwn": "Send the link to another computer of yours, or scan it with your phone’s camera. Once you approve, that device joins this relay.",
+          "fieldLabel": "Share link",
+          "copy": "Copy Link",
+          "copied": "Copied",
+          "copyFailed": "Couldn’t copy the link. Select it and copy it manually.",
+          "oneTime": "Works once",
+          "expiresIn": "Expires in {{time}}",
+          "expired": "Expired",
+          "regenerateHint": "You can create a new one after it expires",
+          "generating": "Creating link…",
+          "scanHint": "If they scan it on a phone, they’ll be asked to open it on their computer first. Once their computer joins, their phones see this relay automatically.",
+          "scanHintOwn": "Your phone can join by scanning the code with its camera.",
+          "ownAccountOnly": "Right now this relay works only for your own devices. To share it with other accounts, turn on Agent-Net (Beta) under Remote connections first; a relay on your server also needs the latest version.",
+          "qrAlt": "QR code to share the relay",
+          "calloutIsolation": "They can only reach their own devices and can’t see yours. To let them use your agents or models, share those separately.",
+          "calloutPrivacy": "Connections are end-to-end encrypted, so you can’t see the content. As the relay owner, you can see when their devices communicate and how much data they use.",
+          "calloutOwnDevices": "Your own devices don’t need this link: once signed in to the same account, they see this relay in their route list.",
+          "calloutOwnFallback": "Devices signed in to your account usually see this relay in the list without a link. Use this link when the Cindy account service can’t be reached.",
+          "done": "Done",
+          "regenerate": "Create New Link",
+          "regenerated": "New link created"
         },
         "requests": {
-          "item": "{{name}} wants to join",
-          "verify": "Pairing code",
-          "verifyHint": "Approve only if it matches the code on that device.",
+          "title_one": "{{count}} request waiting",
+          "title_other": "{{count}} requests waiting",
+          "waiting": "Wants to join · Waiting for you",
+          "waitingAccount": "Another account · {{device}}, waiting for you",
+          "open": "Review"
+        },
+        "tenants": {
+          "title": "Shared with",
+          "devices_one": "{{count}} device",
+          "devices_other": "{{count}} devices",
+          "online": "Online",
+          "offline": "Offline",
+          "revoke": "Stop sharing",
+          "revokeTitle": "Stop sharing with {{account}}?",
+          "revokeDescription": "The line {{account}} has on this relay is deleted and their devices disconnect immediately. To let them use it again, share it again."
+        },
+        "approve": {
+          "title": "{{device}} wants to join “{{relay}}”",
+          "requestedAt": "Requested {{time}} with your share link",
+          "requestedViaLink": "Requested with your share link",
+          "pairingHint": "Approve only if it matches the pairing code on that device.",
+          "unverified": "This request can't be verified: it doesn't match a share link from this computer and may have been tampered with, so it can only be declined. If it's your device, create a new share link and try again.",
+          "callout": "Once approved, this device joins “{{relay}}” and connects to your other devices through it.",
           "replaces": "This device joined before. Approving revokes its old credential.",
+          "calloutUnknown": "If you don’t recognize this device, decline. Declining voids this link.",
           "approve": "Approve",
-          "reject": "Decline",
-          "unverified": "This request can't be verified: it doesn't match a join link from this computer and may have been tampered with, so it can only be declined. If it's your device, create a new join link and try again."
+          "reject": "Decline Request",
+          "later": "Decide Later",
+          "toastApproved": "{{device}} can now join “{{relay}}”",
+          "toastRejected": "Declined the request from {{device}}",
+          "titleAccount": "{{account}} wants to use “{{relay}}”",
+          "otherAccountDevice": "Another account · {{device}}",
+          "calloutAccount": "If you approve, their account gets its own separate line on “{{relay}}”: it reaches only their own devices and can’t see you or your devices. Their other devices then join directly without asking again.",
+          "calloutAccountRevoke": "You can stop sharing at any time on the relay page; their devices disconnect immediately.",
+          "calloutUnknownAccount": "If you don’t recognize this account, reject it. Rejecting invalidates this link.",
+          "toastApprovedAccount": "{{account}} can now use “{{relay}}”",
+          "toastRejectedAccount": "Rejected the request from {{account}}"
         },
         "join": {
           "title": "Join another relay",
-          "hint": "Paste the join link from Add device on the relay's computer. Cindy switches over once it's approved.",
-          "placeholder": "Paste the join link",
+          "hint": "Paste the share link you were sent. Cindy switches over once it’s approved.",
+          "placeholder": "Paste the share link",
           "submit": "Join",
           "connecting": "Connecting to the relay…",
           "waiting": "Request sent. On {{name}}, check that these digits match and approve:",
@@ -6066,17 +6114,19 @@
           "ownerTitle": "Stop the relay on this computer?",
           "ownerDescription": "Devices that joined will disconnect and be told the relay was stopped. This computer switches back to the Cindy relay.",
           "memberTitle": "Switch back to the Cindy relay?",
-          "memberDescription": "This computer leaves \"{{name}}\" and uses the Cindy relay. To join again, ask for a new join link.",
+          "memberDescription": "This computer leaves \"{{name}}\" and uses the Cindy relay. To join again, ask for a new share link.",
+          "sharedOwnerTitle": "Switch back to the Cindy relay?",
+          "sharedOwnerDescription": "This computer leaves “{{name}}” and uses the Cindy relay; your devices that joined through it disconnect too. To use it again, ask for a new share.",
           "serverTitle": "Switch back to the Cindy relay?",
           "serverDescription": "The relay \"{{name}}\" keeps running on your server, and devices that joined can still reach each other through it. You can switch this computer back at any time."
         },
         "errors": {
-          "INVALID_LINK": "The join link or address is not valid.",
+          "INVALID_LINK": "The share link or address is not valid.",
           "UNREACHABLE": "Can't reach this relay. Make sure this computer can open the address in the link.",
           "NOT_A_RELAY": "This address is not a Cindy relay.",
           "INCOMPATIBLE": "This relay's version isn't compatible. Update Cindy on both computers.",
           "ACCOUNT_MISMATCH": "This relay belongs to another Cindy account.",
-          "CODE_INVALID": "This join link has expired or was already used. Ask for a new one.",
+          "CODE_INVALID": "This share link has expired or was already used. Ask for a new one.",
           "RATE_LIMITED": "Too many attempts. Try again in a few minutes.",
           "REJECTED": "The request was declined.",
           "EXPIRED": "Timed out waiting for approval. Join again.",
@@ -6099,15 +6149,21 @@
           "RELAY_MISMATCH": "The relay on this server wasn't deployed from this computer, so Cindy leaves it alone.",
           "CERTIFICATE_FAILED": "Couldn't get an HTTPS certificate. Usually port 80 isn't allowed in the cloud security group, or the domain doesn't point to this server yet. Fix that, then retry.",
           "CA_UNREACHABLE": "The server couldn't reach the certificate authority Let's Encrypt, even after retrying for a few minutes. Check that the server can reach the internet, then try again later.",
-          "NOT_REACHABLE": "The relay is running on the server, but this computer can't reach it. Allow port 443 in the cloud security group.",
+          "NOT_REACHABLE": "Could not verify the relay connection from this computer. Check the HTTPS address, certificate and access to port 443.",
+          "AGENT_NET_START_FAILED": "Agent-Net did not become ready on the server. Check its service logs and whether ports 3348/TCP and 3479/UDP are in use.",
+          "AGENT_NET_VERIFY_FAILED": "HTTPS is reachable, but the Agent-Net identity and directory could not be verified. Check the V2 service, reverse proxy path and pairing information.",
           "BUNDLE_MISSING": "This version of Cindy doesn't include the relay. Update Cindy.",
           "DEPLOY_FAILED": "Deployment didn't complete.",
-          "PAIR_PROOF_INVALID": "This device's request can't be verified, so it can't be approved. Create a new join link.",
+          "PAIR_PROOF_INVALID": "This device's request can't be verified, so it can't be approved. Create a new share link.",
           "NOT_OWNER": "Only the computer that deployed or started this relay can manage it.",
           "BUSY": "A deployment is in progress. Please wait.",
           "INVALID_ADDRESS": "Enter a public IP or domain, without http:// or a port.",
           "NO_DEPLOYMENT": "Nothing has been deployed to a server yet.",
-          "OWNER_MISMATCH": "The relay returned a certificate that the owner in the join link didn't issue. You may be connected to a fake relay, so joining stopped."
+          "OWNER_MISMATCH": "The relay returned a certificate that the owner in the share link didn't issue. You may be connected to a fake relay, so joining stopped.",
+          "OWNER_UNAVAILABLE": "“{{device}}” didn’t respond. Make sure Cindy is open and online there, or ask for a share link.",
+          "RELAY_UNAVAILABLE": "“{{device}}” is no longer using this relay.",
+          "ACCOUNT_DIRECTORY_UNAVAILABLE": "Can’t reach the Cindy account service right now, so your account’s relays can’t be loaded. You can ask for a share link instead.",
+          "SHARE_UNSUPPORTED": "This relay belongs to another account and can’t be shared with other accounts yet. Ask them to turn on Agent-Net (Beta) (a relay on their server also needs the latest version) and share it again."
         },
         "deploy": {
           "title": "Deploy to my server",
@@ -6150,7 +6206,7 @@
             "uninstall": "Removing the relay from your server…"
           },
           "done": {
-            "deploy": "Deployed. Switch to it under Connection Route, then you can add devices.",
+            "deploy": "Deployed. Switch to it under Connection Route, and your other devices can see and join it.",
             "upgrade": "The relay on your server is now version {{version}}.",
             "uninstall": "Relay removed from your server"
           },
@@ -6193,13 +6249,15 @@
           "removeDescription": "The relay and its device records are deleted from the server, and devices using it disconnect. If you deploy again, every device needs to join again.",
           "forget": "Remove from this computer only",
           "forgetTitle": "Remove from this computer only?",
-          "forgetDescription": "The relay keeps running on the server, but this computer stops managing it and can't add devices to it anymore. Do this only if you no longer use that server."
+          "forgetDescription": "The relay keeps running on the server, but this computer stops managing it and can’t share it anymore. Do this only if you no longer use that server."
         },
         "route": {
           "title": "Connection Route",
           "hint": "Remote control between your devices goes through this route",
           "kindServer": "My server",
           "kindJoined": "Joined",
+          "kindComputer": "My computer",
+          "kindShared": "Shared with you",
           "hostTitle": "This computer as relay",
           "hostHint": "Other devices must be able to reach this computer directly. They disconnect when it sleeps or Cindy quits",
           "officialHint": "No setup needed. Every feature works",
@@ -6217,9 +6275,18 @@
           "statusOffline": "Unreachable",
           "switchTitle": "Switch to {{name}}?",
           "switchFromHost": "The relay on this computer stops, and devices that joined it disconnect.",
-          "switchFromMember": "This computer leaves {{name}}. To join again later, its owner needs to create a new join link.",
+          "switchFromMember": "This computer leaves {{name}}. To join again later, its owner needs to create a new share link.",
+          "switchFromShared": "This computer leaves “{{name}}”, and your devices that joined through it disconnect too. To use it again, ask for a new share.",
           "switchConfirm": "Switch",
-          "switchFromOfficial": "Remote control between your devices will go through {{name}}. Phone push notifications aren't available while you use your own relay, and provider sharing and shared tasks still go through the Cindy relay."
+          "switchFromOfficial": "Remote control between devices will use “{{name}}”. Agent-Net shares use their invitation’s relay; legacy shares still use the Cindy relay.",
+          "switchToAccount": "This relay belongs to your account. “{{device}}” lets this computer in automatically, so no share link is needed.",
+          "accountJoining": "Joining, waiting for “{{device}}” to let this computer in…",
+          "accountManagedOn": "Managed on “{{device}}”",
+          "accountJoinedOn": "Joined on “{{device}}”",
+          "sharedBy": "Shared by {{name}}",
+          "sharedByOther": "Shared by another account",
+          "ownDevicesHint": "Your other computers and phones see this relay once signed in to the same account and can switch to it without a link. To let another account use it, click Share next to the relay.",
+          "sharedOwnDevicesHint": "Your other computers and phones see this relay once signed in to the same account and can switch to it. They reach only your own devices."
         },
         "dialog": {
           "steps": {
@@ -6252,7 +6319,13 @@
           "certificateSite": "Uses the site's certificate",
           "version": "Relay version",
           "latest": "Up to date",
-          "remove": "Remove This Relay"
+          "remove": "Remove This Relay",
+          "protocolsBoth": "Supports Device Link and Agent-Net",
+          "protocolsLegacy": "Supports Device Link only",
+          "upgradeForSharing": "Upgrade to share with other accounts",
+          "connection": "This computer’s connection",
+          "connectionEncrypted": "End-to-end encrypted when the other side also uses Agent-Net",
+          "connectionLegacy": "Not end-to-end encrypted"
         }
       },
       "title": "Remote Connection",
@@ -6559,6 +6632,82 @@
         "title": "Revoke access?",
         "description": "Once revoked, this device is disconnected immediately and can no longer control this machine remotely. You will need to restore its access under Settings → Remote Connection before it can reconnect.",
         "confirm": "Revoke access"
+      },
+      "v2": {
+        "switch": {
+          "title": "Agent-Net (Beta)",
+          "hint": "Shows the connection topology and recent activity. Connections are encrypted when both devices enable Agent-Net and have paired through Agent-Net. Other devices use the existing connection. Applies only to this computer."
+        },
+        "empty": "No other devices yet. Sign in to the same account on another computer or phone and it will appear here.",
+        "stats": {
+          "online": "{{online}} / {{total}} online",
+          "direct": "{{count}} direct",
+          "relay": "{{count}} via relay",
+          "unlinked": "{{count}} not linked",
+          "attention": "{{count}} need attention",
+          "offline": "{{count}} offline"
+        },
+        "node": {
+          "thisComputer": "This computer"
+        },
+        "path": {
+          "direct": "Direct",
+          "relay": "Via {{name}}",
+          "unlinked": "Online, not linked",
+          "offline": "Offline"
+        },
+        "attention": {
+          "unresponsive": "Not responding, retrying"
+        },
+        "relay": {
+          "official": "Cindy relay"
+        },
+        "ms": "{{value}} ms",
+        "flow": {
+          "out": "Sending",
+          "in": "Receiving",
+          "both": "Sending and receiving"
+        },
+        "offlineFold": "{{count}} offline",
+        "offlineShow": "Show offline devices",
+        "offlineHide": "Hide offline devices",
+        "group": {
+          "direct": "Direct",
+          "relay": "Via relay",
+          "unlinked": "Not linked",
+          "attention": "Needs attention",
+          "offline": "Offline"
+        },
+        "recent": {
+          "title": "Recent activity",
+          "online": "{{name}} came online",
+          "offline": "{{name}} went offline",
+          "empty": "No device has come or gone since this page opened"
+        },
+        "popover": {
+          "status": "Status",
+          "path": "Path",
+          "activity": "Messages",
+          "latency": "Latency",
+          "lastSeen": "Last seen",
+          "controlling": "Controlling this computer",
+          "rttNote": "last measured",
+          "manage": "Manage device…",
+          "linkStatus": "To {{name}}",
+          "version": "Cindy {{version}}",
+          "remoteDesktopFailed": "Could not open Remote Desktop",
+          "encryption": "Encryption",
+          "encrypted": "End-to-end encrypted",
+          "legacyConnection": "Older connection",
+          "encryptionUnknown": "Not confirmed",
+          "legacyEncryptionHint": "The relay path on the older connection is not end-to-end encrypted."
+        },
+        "protocol": {
+          "agentNet": "Agent-Net",
+          "deviceLink": "Device Link"
+        },
+        "onlyEncrypted": "Use Only Agent-Net",
+        "onlyEncryptedHint": "Older devices and shares still using the older connection will be unavailable. Off by default."
       }
     },
     "tina": {
@@ -6642,6 +6791,7 @@
         "renameFailed": "Rename failed",
         "deleted": "Device deleted",
         "deleteOnline": "This server does not yet support removing online devices. Retry after the service is upgraded.",
+        "deleteRejectedWhileOffline": "Couldn’t delete the device: the server still lists it as online, although it shows as offline here.",
         "deleteFailed": "Delete failed",
         "disconnected": "Disconnected all remote connections",
         "disconnectFailed": "Failed to disconnect remote connection",
@@ -12502,47 +12652,47 @@
         "claude-code": {
           "ask": {
             "label": "Default permissions",
-            "description": "Allows read/write access inside the workspace and asks before using higher permissions, network access, or paths outside the workspace."
+            "description": "You approve actions when needed."
           },
           "acceptEdits": {
             "label": "Auto accept edits",
-            "description": "Automatically accepts file edit requests to reduce repeated confirmations. Higher-risk commands or permissions still follow the underlying permission policy."
+            "description": "File edits are allowed directly; you approve other actions when needed."
           },
           "auto": {
             "label": "Auto-review",
-            "description": "Allows read/write access inside the workspace and automatically reviews escalation requests; high-risk actions may still be denied or require confirmation. This reduces interruptions, but can make mistakes."
+            "description": "An AI model approves actions, which may take extra time; you confirm when needed."
           },
           "bypassPermissions": {
             "label": "Full access",
-            "description": "Allows editing any file and running networked commands without another confirmation. Highest risk; use only for trusted tasks."
+            "description": "Routine actions are allowed directly, including files outside the workspace and network commands."
           }
         },
         "codex": {
           "ask": {
             "label": "Default permissions",
-            "description": "Allows read/write access inside the workspace and asks before using higher permissions, network access, or paths outside the workspace."
+            "description": "You approve actions when needed."
           },
           "auto": {
             "label": "Auto-review",
-            "description": "Runs commands automatically inside the protected workspace sandbox. Actions that cross the sandbox boundary go to an automatic reviewer; high-risk actions may still be denied or require confirmation."
+            "description": "An AI model approves actions, which may take extra time; you confirm when needed."
           },
           "bypassPermissions": {
             "label": "Full access",
-            "description": "Allows editing any file and running networked commands without another confirmation. Highest risk; use only for trusted tasks."
+            "description": "Routine actions are allowed directly, including files outside the workspace and network commands."
           }
         },
         "pi": {
           "ask": {
             "label": "Default permissions",
-            "description": "Read-only tools run directly; writing files, running commands, and MCP tools ask each time."
+            "description": "You approve actions when needed."
           },
           "auto": {
             "label": "Auto-review",
-            "description": "In-workspace writes and safe commands run automatically; out-of-workspace writes, risky commands, and MCP tools still ask."
+            "description": "An AI model approves actions, which may take extra time; you confirm when needed."
           },
           "bypassPermissions": {
             "label": "Full access",
-            "description": "Allows editing any file and running networked commands without another confirmation. Highest risk; use only for trusted tasks."
+            "description": "Routine actions are allowed directly, including files outside the workspace and network commands."
           }
         }
       }
@@ -13110,11 +13260,10 @@
     "prevMessageJump": "Jump to previous prompt: {{preview}}",
     "sessionLoading": "Loading task",
     "askUserQuestion": {
-    "unanswered": "Unanswered",
-    "withdrawn": "No longer needs an answer",
-    "withdrawnDraft": "This question no longer needs an answer.\n{{reason}}\nYour draft is kept; you can send it as additional information.",
-    "sendSupplement": "Send additional information",
-
+      "unanswered": "Unanswered",
+      "withdrawn": "No longer needs an answer",
+      "withdrawnDraft": "This question no longer needs an answer.\n{{reason}}\nYour draft is kept; you can send it as additional information.",
+      "sendSupplement": "Send additional information",
       "voice": {
         "hint": "Say an option number or name. For multiple choices, then say “confirm selection”.",
         "freeTextHint": "Say your answer, review it, then say “confirm selection” to submit.",
@@ -13428,8 +13577,8 @@
       "dismissTitle": "Dismiss past failure notice"
     },
     "worktreeRestoreBanner": {
-      "text": "This session's worktree has been cleaned up (directory missing).",
-      "textPendingSnapshot": "This session has an unapplied change snapshot.",
+      "text": "This session's worktree “{{name}}” has been cleaned up (directory missing).",
+      "textPendingSnapshot": "This session's worktree “{{name}}” has an unapplied change snapshot.",
       "restoreAction": "Restore worktree",
       "applySnapshotAction": "Apply changes",
       "restoring": "Restoring…",
@@ -14021,7 +14170,7 @@
       "errors": {
         "noPriorAssistantPreview": "Please rewind from a question that follows an AI reply (this one has no prior assistant reply)",
         "sessionRunning": "The task did not stop in time — retry the rewind",
-        "noLiveQuery": "Session is inactive — send any message first (even just \"ok\") to wake the SDK before rewinding",
+        "noLiveQuery": "The task runtime could not be restored, so rewind was not completed.",
         "noPriorAssistantCommit": "Please rewind from a question that follows an AI reply",
         "commitGeneric": "Rewind failed, please retry",
         "remoteNotSupported": "Remote Claude Code sessions do not support rewind yet"
@@ -14100,6 +14249,7 @@
       "REMOTE_AGENT_SHARE_PAUSED": "The owner has paused this share for you, so these models can’t be used until it’s resumed. Switch to another model to continue.",
       "REMOTE_AGENT_SHARE_REMOVED": "This share is no longer available (the owner removed it or you left). Switch to another model to continue.",
       "REMOTE_AGENT_SHARE_UNAVAILABLE": "The shared provider is temporarily unavailable. The owner's computer may be offline, or sharing is turned off for now. Try again later, or switch to another model to continue.",
+      "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "This is a legacy share, and it can't be used while \"Use Only Agent-Net\" is on. Turn that switch off to continue, or switch to another model.",
       "REMOTE_AGENT_GROUP_USAGE_LIMIT": "The available accounts for this model have reached their usage limit. Switch models or continue when the quota resets.",
       "REMOTE_AGENT_GROUP_UNAVAILABLE": "No computer in the provider group can run this task right now. They may be offline, paused, cooling down, or missing this model. Check the group on this provider’s Remote & Sharing page.",
       "REMOTE_AGENT_DEVICE_LIMIT": "This device has reached its remote session limit. Archive unused sessions or ask the provider owner to raise the limit in Remote & sharing.",
@@ -14901,6 +15051,7 @@
         "compactSuccess": "Context compacted",
         "compactSuccessWithTokens": "Context compacted: {{before}}k → {{after}}k tokens",
         "compactFailed": "Compaction failed",
+        "compactResumeFirst": "Send a message to resume this task before compacting its context.",
         "compactNothing": "Nothing to compact yet",
         "sessionBranches": "Session branches",
         "copySessionLink": "Copy session link"
