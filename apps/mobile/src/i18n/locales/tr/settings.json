@@ -396,5 +396,32 @@
       "scroll": "Kaydır",
       "page": "Sayfa yukarı / aşağı"
     }
+  },
+  "pushDiagnostics": {
+    "title": "Anlık bildirim tanılaması",
+    "read": "Anlık bildirim durumunu oku",
+    "busy": "Okunuyor…",
+    "failed": "Anlık bildirim durumu okunamadı. Lütfen tekrar deneyin.",
+    "copyFailed": "Belirteç kopyalanamadı.",
+    "copied": "Belirteç kopyalandı.",
+    "bundle": "Uygulama kimliği",
+    "build": "Derleme",
+    "environment": "APNs ortamı",
+    "permission": "Sistem izni",
+    "alerts": "Uyarılar",
+    "lockScreen": "Kilit ekranı",
+    "notificationCenter": "Bildirim Merkezi",
+    "copy": "APNs belirtecini kopyala",
+    "hide": "Sonucu gizle",
+    "unknown": "Bilinmiyor",
+    "on": "Açık",
+    "off": "Kapalı",
+    "hint": "Yalnızca istendiğinde okunur. APNs belirteci yerel olarak gösterilir; bu araç tarafından hiçbir zaman tanılama verilerine kaydedilmez veya yüklenmez. Bu ekrandan ayrıldığınızda ya da ekranı arka plana aldığınızda gizlenir. Yalnızca Apple'ın Push Notifications Console aracı için kopyalayın; kopyalanan metin panonuzda kalır.",
+    "permissions": {
+      "granted": "İzin verildi",
+      "denied": "Reddedildi",
+      "undetermined": "İstenmedi",
+      "provisional": "Sessiz iletim"
+    }
   }
 }

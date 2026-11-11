@@ -75,6 +75,10 @@
 | Active | pt-PT | ativo | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Active** | pt-BR | Ativo | 默认 |
 | Active | pt-BR | ativo | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Active** | tr | Aktif | 默认 |
+| Active | tr | aktif | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
+| **Agent** | tr | Agent | 默认 |
+| Agent | tr | agent | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Agent session** | es | Sesión de Agent | 默认 |
 | Agent session | es | sesión de Agent | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | Agent session | es | sesiones de Agent | Agent 运行时会话的复数。 |
@@ -90,12 +94,17 @@
 | Agent session | pt-BR | sessões do Agent | Agent 运行时会话的复数。 |
 | Agent session | pt-BR | sessões de Agent | 不带定冠词的 Agent 运行时会话复数。 |
 | Agent session | pt-BR | sessão Pi Agent | 指定 Pi Agent 引擎的运行时会话。 |
+| **Agent session** | tr | Agent Oturumu | 默认 |
+| Agent session | tr | agent oturumu | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
+| Agent session | tr | Agent oturum | Türkçe çekim ekleriyle Agent oturumu, oturumunda ve oturumlarına biçimlerinde kullanılır. |
 | **Author** | es | Autor | 默认 |
 | Author | es | autor | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Author** | pt-PT | Autor | 默认 |
 | Author | pt-PT | autor | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Author** | pt-BR | Autor | 默认 |
 | Author | pt-BR | autor | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Author** | tr | Yazar | 默认 |
+| Author | tr | yazar | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Automation** | zh-CN | 自动化 | 默认 |
 | Automation | zh-CN | 自动操作 | Computer Use 语境——「自动操作电脑 / 浏览器」，指代操控设备而非定时任务 |
 | **Automation** | zh-TW | 自動化 | 默认 |
@@ -106,8 +115,12 @@
 | Automation | pt-PT | automatização | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Automation** | pt-BR | Automação | 默认 |
 | Automation | pt-BR | automação | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Automation** | tr | Otomasyon | 默认 |
+| Automation | tr | otomasyon | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Balance** | es | Saldo | 默认 |
 | Balance | es | saldo | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Balance** | tr | Bakiye | 默认 |
+| Balance | tr | bakiye | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Chat** | es | Conversación | 默认 |
 | Chat | es | conversación | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | Chat | es | chat | 指聊天过程、聊天模型或聊天界面时保留西语常用词 chat；不用于产品任务。 |
@@ -115,14 +128,21 @@
 | Chat | pt-PT | conversa | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Chat** | pt-BR | Conversa | 默认 |
 | Chat | pt-BR | conversa | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Chat** | tr | Sohbet | 默认 |
+| Chat | tr | sohbet | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Collaboration** | es | Colaboración | 默认 |
 | Collaboration | es | colaboración | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Collaboration** | pt-PT | Colaboração | 默认 |
 | Collaboration | pt-PT | colaboração | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Collaboration** | pt-BR | Colaboração | 默认 |
 | Collaboration | pt-BR | colaboração | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Collaboration** | tr | İş Birliği | 默认 |
+| Collaboration | tr | iş birliği | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
+| Collaboration | tr | İş birliği | Cümle başındaki yazım; cümle içinde iş birliği kullanılır. |
 | **Collapse** | de | Einklappen | 默认 |
 | Collapse | de | einklappen | 动词位于句中或按钮的补语中。 |
+| **Collapse** | tr | Daralt | 默认 |
+| Collapse | tr | daralt | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Credits** | zh-CN | 点数 | 默认 |
 | Credits | zh-CN | credits | 指第三方服务自身的 credits（如 Codex / ChatGPT 订阅余量），保留其原生叫法 |
 | Credits | zh-CN | 重置次数 | reset credits——指可用的配额重置次数，与计费点数无关 |
@@ -139,18 +159,26 @@
 | Credits | pt-PT | créditos | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Credits** | pt-BR | Créditos | 默认 |
 | Credits | pt-BR | créditos | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Credits** | tr | Kredi | 默认 |
+| Credits | tr | kredi | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Directory** | es | Directorio | 默认 |
 | Directory | es | directorio | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Directory** | pt-PT | Diretório | 默认 |
 | Directory | pt-PT | diretório | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Directory** | pt-BR | Diretório | 默认 |
 | Directory | pt-BR | diretório | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Directory** | tr | Dizin | 默认 |
+| Directory | tr | dizin | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
+| **Dismiss** | tr | Kapat | 默认 |
+| Dismiss | tr | kapat | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Effort** | es | Intensidad de razonamiento | 默认 |
 | Effort | es | intensidad de razonamiento | 句中模型推理投入档位的名称。 |
 | **Effort** | pt-PT | Esforço de raciocínio | 默认 |
 | Effort | pt-PT | esforço de raciocínio | 句中模型推理投入档位的名称。 |
 | **Effort** | pt-BR | Esforço de raciocínio | 默认 |
 | Effort | pt-BR | esforço de raciocínio | 句中模型推理投入档位的名称。 |
+| **Effort** | tr | Akıl Yürütme Yoğunluğu | 默认 |
+| Effort | tr | akıl yürütme yoğunluğu | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Issue** | es | Incidencia | 默认 |
 | Issue | es | incidencia | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Issue** | pt-PT | Issue | 默认 |
@@ -159,20 +187,30 @@
 | Issue | pt-PT | Problema | 泛指问题的句首或状态标签，不是 GitHub Issue 类型。 |
 | **Issue** | pt-BR | Issue | 默认 |
 | Issue | pt-BR | issue | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Issue** | tr | Issue | 默认 |
+| Issue | tr | ıssue | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Message** | es | Mensaje | 默认 |
 | Message | es | mensaje | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Message** | pt-PT | Mensagem | 默认 |
 | Message | pt-PT | mensagem | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Message** | pt-BR | Mensagem | 默认 |
 | Message | pt-BR | mensagem | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Message** | tr | Mesaj | 默认 |
+| Message | tr | mesaj | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Plugin** | es | Complemento | 默认 |
 | Plugin | es | complemento | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Plugin** | tr | Eklenti | 默认 |
+| Plugin | tr | eklenti | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
+| **Privacy Policy** | tr | Gizlilik Politikası | 默认 |
+| Privacy Policy | tr | gizlilik politikası | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Project** | es | Proyecto | 默认 |
 | Project | es | proyecto | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Project** | pt-PT | Projeto | 默认 |
 | Project | pt-PT | projeto | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Project** | pt-BR | Projeto | 默认 |
 | Project | pt-BR | projeto | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Project** | tr | Proje | 默认 |
+| Project | tr | proje | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Provider** | zh-CN | 供应商 | 默认 |
 | Provider | zh-CN | 模型供应商 | 首次出现或需要消歧时用全称，如设置页标题 |
 | **Provider** | zh-TW | 供應商 | 默认 |
@@ -183,12 +221,18 @@
 | Provider | pt-PT | fornecedor | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Provider** | pt-BR | Provedor | 默认 |
 | Provider | pt-BR | provedor | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Provider** | tr | Sağlayıcı | 默认 |
+| Provider | tr | sağlayıcı | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
+| **Proxy** | tr | Proxy | 默认 |
+| Proxy | tr | proxy | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Quota** | es | Cuota | 默认 |
 | Quota | es | cuota | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Quota** | pt-PT | Quota | 默认 |
 | Quota | pt-PT | quota | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Quota** | pt-BR | Cota | 默认 |
 | Quota | pt-BR | cota | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Quota** | tr | Kota | 默认 |
+| Quota | tr | kota | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Running** | zh-CN | 运行中 | 默认 |
 | Running | zh-CN | 正在运行 | 完整句子里作谓语时（"Agent 正在运行"），不是状态标签 |
 | **Running** | zh-TW | 執行中 | 默认 |
@@ -205,6 +249,8 @@
 | Running | de | laufend | 句中形容正在运行的任务或会话，允许相应屈折变化。 |
 | Running | de | Laufend | 句首形容正在运行的任务或会话。 |
 | Running | de | laufen | 复数主语的运行状态谓语。 |
+| **Running** | tr | Çalışıyor | 默认 |
+| Running | tr | çalışıyor | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Session** | zh-CN | 任务 | 默认 |
 | Session | zh-CN | 对话 | 指任务内人与 AI 交流的过程或其内容（对话区、对话正文、对话记录、继续对话） |
 | **Session** | zh-TW | 任務 | 默认 |
@@ -215,18 +261,28 @@
 | Session | pt-PT | sessão | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Session** | pt-BR | Sessão | 默认 |
 | Session | pt-BR | sessão | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Session** | tr | Görev | 默认 |
+| Session | tr | görev | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Skill** | zh-CN | 技能 | 默认 |
 | Skill | zh-CN | Skill | 技术语境下指代具体的 skill 文件 / 目录结构时，可保留英文 |
 | **Skill** | zh-TW | 技能 | 默认 |
 | Skill | zh-TW | Skill | 技術語境下指代具體的 skill 檔案 / 目錄結構時，可保留英文 |
 | **Skill** | es | Habilidad | 默认 |
 | Skill | es | habilidad | 句中使用小写首字母；复数 habilidades 使用同一词干。 |
+| **Skill** | tr | Beceri | 默认 |
+| Skill | tr | beceri | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
+| **SkillHub** | tr | SkillHub | 默认 |
+| SkillHub | tr | skillhub | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
+| **Subagent** | tr | Subagent | 默认 |
+| Subagent | tr | subagent | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Task** | es | Tarea | 默认 |
 | Task | es | tarea | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Task** | pt-PT | Tarefa | 默认 |
 | Task | pt-PT | tarefa | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Task** | pt-BR | Tarefa | 默认 |
 | Task | pt-BR | tarefa | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Task** | tr | Görev | 默认 |
+| Task | tr | görev | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Thread** | zh-CN | 任务 | 默认 |
 | Thread | zh-CN | thread | 指 Codex 的 thread 这一外部系统概念时（导入历史、thread 上下文），保留英文 |
 | Thread | zh-CN | 评论 | 指 GitHub PR 的 review thread 时，用「review 评论」 |
@@ -239,6 +295,8 @@
 | Thread | pt-PT | tópico | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Thread** | pt-BR | Tópico | 默认 |
 | Thread | pt-BR | tópico | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Thread** | tr | Görev | 默认 |
+| Thread | tr | görev | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Turn** | es | Turno | 默认 |
 | Turn | es | turno | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Turn** | pt-PT | Turno | 默认 |
@@ -247,18 +305,26 @@
 | Turn | pt-BR | turno | 确需描述一次完整往返时使用；葡语复数 turnos、德语复数 Runden 仍属本词。 |
 | **Turn** | de | Runde | 默认 |
 | Turn | de | Runde | 确需描述一次完整往返时使用；葡语复数 turnos、德语复数 Runden 仍属本词。 |
+| **Turn** | tr | Tur | 默认 |
+| Turn | tr | tur | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Usage** | es | Uso | 默认 |
 | Usage | es | uso | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Usage** | pt-PT | Utilização | 默认 |
 | Usage | pt-PT | utilização | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Usage** | pt-BR | Uso | 默认 |
 | Usage | pt-BR | uso | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Usage** | tr | Kullanım | 默认 |
+| Usage | tr | kullanım | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
+| **Worker** | tr | Worker | 默认 |
+| Worker | tr | worker | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Working directory** | es | Directorio de trabajo | 默认 |
 | Working directory | es | directorio de trabajo | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Working directory** | pt-PT | Diretório de trabalho | 默认 |
 | Working directory | pt-PT | diretório de trabalho | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Working directory** | pt-BR | Diretório de trabalho | 默认 |
 | Working directory | pt-BR | diretório de trabalho | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Working directory** | tr | Çalışma Dizini | 默认 |
+| Working directory | tr | çalışma dizini | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Worktree** | pt-PT | Worktree | 默认 |
 | Worktree | pt-PT | worktree | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Worktree** | pt-BR | Worktree | 默认 |
@@ -326,6 +392,14 @@
 
 任务中主对话之外的额外模型费用，按模型和调用渠道汇总；用户于 2026-10-30 选定中文名称。
 
+### Agent-Net
+
+端到端加密的 V2 设备链路名称；各语言保留品牌拼写。拓扑只在已协商的实际连接上标注。
+
+### Agent network
+
+agent-net 的产品名：所有用 Cindy 登录的 App 和硬件组成的互联网络。代码与文档里的 agent-net 是工程名，不出现在 UI 文案。
+
 ### Agent Notch
 
 Cindy 在屏幕顶部显示任务的面板（原名灵动岛 / Agent Island）。苹果在新款 MacBook Pro 上推出灵动岛后改名，避免与 Apple 的灵动岛混同；中文不直译 notch（「刘海」易联想发型），用户于 2026-11-07 选定。设置页搜索保留旧名作别名。
@@ -360,7 +434,7 @@ Anthropic Messages API / wire protocol 的用户可见名称。四语统一保�
 
 ### At a glance
 
-伙伴聊天头部网格按钮打开的浮层：电脑、待办、输出内容三块（docs/product-rules/cindy-bots-runtime.md「伙伴近况」）。取代已下线的右侧栏「工作台」标签；只指这个伙伴浮层，不泛指任务列表或其它面板。先登记为 proposed，待 Chris 实机试用后再定。
+伙伴聊天头部网格按钮打开的浮层：电脑、近期任务、输出内容三块（2026-11-08 起待办块随伙伴 V2 移除；docs/product-rules/cindy-bots-runtime.md「伙伴近况」）。取代已下线的右侧栏「工作台」标签；只指这个伙伴浮层，不泛指任务列表或其它面板。先登记为 proposed，待 Chris 实机试用后再定。
 
 ### Discover Teammates
 
@@ -442,6 +516,18 @@ Cindy Make 生成的本机定制应用成品。可与原版切换并沿用同一
 
 本机应用临时连接的端点定位文本，不是授权令牌；连接仍需目标 Cindy 原生确认。
 
+### Latency
+
+远程连接拓扑与浮层里的往返时间（ms）。
+
+### Direct
+
+远程连接拓扑里两台设备之间的数据路径不经中转。只用于路径，不用于「电脑直连」（remote-desktop-direct）那种连接方式名。
+
+### Via relay
+
+远程连接拓扑里两台设备之间的数据经中转服务转发。与「中转服务」（self-hosted-relay-service）是同一个「中转」。
+
 ### Content Update
 
 指不更换 TestFlight 或商店安装包、可通过 OTA 下发的 JS 与资源更新。当前先采用四语直译并登记为待讨论术语，避免与整包更新或测试版本更新混称。
@@ -473,6 +559,10 @@ device-link 里「可以选择在哪台机器上运行」这一维度，两端�
 ### Device Code
 
 OAuth 2.0 Device Authorization Grant 中由用户在另一设备验证页输入的一次性代码。当前先采用各语言直译，作为待产品裁决术语登记，避免后续界面出现“设备代码／配对码／认证码”等多套说法。
+
+### Device Link
+
+兼容设备所用的旧版链路名称；与 Agent-Net 的协议标识并列，直连或经中转另行展示。
 
 ### Device Simulator
 
@@ -512,7 +602,7 @@ Irreversible group termination, distinct from archive, leave and personal list r
 
 ### Follow Up on All Sessions
 
-伙伴设置里的开关与工作台小标：账号里只有一位伙伴负责定时看一遍所有任务（实现里叫 scheduler / 总调度，默认 Cindy 助理）。面向用户不写「总调度」「调度员」，一律用这句；在别的伙伴上打开就移过去，关闭则没有伙伴统一跟进。session 按已裁决译法写「任务 / Session / セッション / 세션」。
+（2026-11-08 起随伙伴 V2 下线，界面不再提供；条目保留以核对存量与历史文案，新文案不要再用。）伙伴设置里的开关与工作台小标：账号里只有一位伙伴负责定时看一遍所有任务（实现里叫 scheduler / 总调度，默认 Cindy 助理）。面向用户不写「总调度」「调度员」，一律用这句；在别的伙伴上打开就移过去，关闭则没有伙伴统一跟进。session 按已裁决译法写「任务 / Session / セッション / 세션」。
 
 ### MR
 
@@ -674,13 +764,17 @@ issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mod
 
 当前登录账号向公开市场发布插件、查看发布情况与发布记录的页面，个人和组织成员均可使用；区别于本机已安装插件和旧企业我的发布。
 
+### New connection view
+
+「远程连接」页里切换到拓扑形态的开关名；按设备保存、默认关。
+
 ### New project location
 
 存储设置名称（#8259）：在任务里「新建项目…」时项目文件夹的上级目录。未设置时按已登记项目最常见的父目录推荐，否则为 ~/Projects。与「对话工作区」（不绑项目任务的工作目录分配位置）是两个设置。
 
 ### Nightly learning
 
-伙伴的内置例行任务：到点（默认每天 3:30，可改每周一 3:30）回看上次之后和主人的对话，整理伙伴自己的记忆与技能（合并、拆分、停用、把反复出现的做法转正为技能），每条改动可撤销；没有新对话时不调用模型（docs/product-rules/bot-routines.md「内置夜间学习」）。英文句中小写 nightly learning，故 checkCase 为 false。只出现过一次、等待再次出现的做法叫「在观察的做法 / approaches being watched」，不叫候选技能。先登记为 proposed，等 UI 走查后再定。
+（2026-11-08 起随伙伴 V2 下线，界面不再提供；条目保留以核对存量与历史文案，新文案不要再用。）伙伴的内置例行任务：到点（默认每天 3:30，可改每周一 3:30）回看上次之后和主人的对话，整理伙伴自己的记忆与技能（合并、拆分、停用、把反复出现的做法转正为技能），每条改动可撤销；没有新对话时不调用模型（docs/product-rules/bot-routines.md「内置夜间学习」）。英文句中小写 nightly learning，故 checkCase 为 false。只出现过一次、等待再次出现的做法叫「在观察的做法 / approaches being watched」，不叫候选技能。先登记为 proposed，等 UI 走查后再定。
 
 ### Not signed in
 
@@ -876,11 +970,11 @@ Orca Worker 创建卡上的命名字段。它只是派活用的名字，不改�
 
 ### Routine
 
-伙伴的长期指令，可由多个时间或事件条件触发；沿用 Chris 提供的 Grok Bot 界面用语。
+伙伴的长期指令，可由多个时间或事件条件触发；沿用 Chris 提供的 Grok Bot 界面用语。2026-11-08 起伙伴 V2 的定时工作改为项目里的普通自动化，例行任务的管理界面已下线；条目保留以核对存量文案与 V1 运行任务的历史显示，新文案用「自动化」。
 
 ### Trigger
 
-例行任务的时间或事件触发条件。
+例行任务的时间或事件触发条件（例行任务 2026-11-08 起随伙伴 V2 下线，见 Routine 条目）。
 
 ### Run records
 
@@ -938,19 +1032,19 @@ Codex Subagent 的可选扩展调配开关。默认关闭以保留 Codex 原生 
 
 ### Teammate
 
-Cindy 里的**持久 AI 助手实体**（原名 Bot）：有长期身份、自有记忆与技能、模型候选链，可以通过有界私信互相沟通，也可以启动独立 Cindy 任务。产品定位参照「AI teammates」，故取人称名词而非机器名词。英文用法分两层：功能名与复数用 Teammates（侧栏标题），句中单数用小写 teammate（`this teammate`、`Archive teammate`）——故 checkCase 为 false。**与 IM 平台机器人严格区分**：Telegram Bot / Discord Bot / 飞书 bot / 企业微信机器人 / @BotFather / bot token 指的是消息平台上的 bot 账号，仍写作 Bot / 机器人，不改成本词；判据是「这个词指的是 Cindy 里那个持久助手实体」才用本词。覆盖 desktop 的 bots.* 命名空间、sidebar.tabs.bots、newChat.atMention.bot 与 mobile 的 devices.json bots.*。先登记为 proposed：改名刚落地，等 UI 走查与产品评审后再定 decided，届时再决定是否把「Bot」登记为各语言的 forbidden 译法（现在不能登记——存量 IM 平台 bot 文案会被大面积误伤）。
+Cindy 里的**持久 AI 助手实体**（原名 Bot）：有长期身份、自有记忆与技能、模型候选链，可以用 send_to_session 给其它任务和伙伴发消息或新开普通 Cindy 任务（2026-11-08 起 V2：伙伴 = 一个项目 + 它的任务 + 身份，伙伴私信已下线）。产品定位参照「AI teammates」，故取人称名词而非机器名词。英文用法分两层：功能名与复数用 Teammates（侧栏标题），句中单数用小写 teammate（`this teammate`、`Archive teammate`）——故 checkCase 为 false。**与 IM 平台机器人严格区分**：Telegram Bot / Discord Bot / 飞书 bot / 企业微信机器人 / @BotFather / bot token 指的是消息平台上的 bot 账号，仍写作 Bot / 机器人，不改成本词；判据是「这个词指的是 Cindy 里那个持久助手实体」才用本词。覆盖 desktop 的 bots.* 命名空间、sidebar.tabs.bots、newChat.atMention.bot 与 mobile 的 devices.json bots.*。先登记为 proposed：改名刚落地，等 UI 走查与产品评审后再定 decided，届时再决定是否把「Bot」登记为各语言的 forbidden 译法（现在不能登记——存量 IM 平台 bot 文案会被大面积误伤）。
 
 ### Core skill
 
-伙伴能力页的第一组：所有伙伴相同、常驻、随 Cindy 更新、不能关闭或修改的编排技能（内部名 teammate-guide；docs/product-rules/cindy-bots-runtime.md §6「伙伴技能分层」）。不叫「基础技能」「基座」。先登记为 proposed，等 UI 走查后再定。
+伙伴能力页的第一组：所有伙伴相同、常驻、随 Cindy 更新、不能关闭或修改的编排技能（内部名 teammate-guide；docs/product-rules/cindy-bots-runtime.md §6「伙伴技能分层」；2026-11-08 起 V2 伙伴的主人对话不再挂载它）。不叫「基础技能」「基座」。先登记为 proposed，等 UI 走查后再定。
 
 ### System skills
 
-伙伴能力页的第二组：待办、例行任务、工作台与跟进，默认开启，主人可按伙伴单独关闭；关闭时提示词、工具与后台动作一起停（同上）。不叫「内置技能」，以免与本机内置技能混淆。先登记为 proposed。
+（2026-11-08 起随伙伴 V2 下线，界面不再提供；条目保留以核对存量与历史文案，新文案不要再用。）伙伴能力页的第二组：待办、例行任务、工作台与跟进，默认开启，主人可按伙伴单独关闭；关闭时提示词、工具与后台动作一起停（同上）。不叫「内置技能」，以免与本机内置技能混淆。先登记为 proposed。
 
 ### Todo
 
-伙伴独立事务清单，含交办与获准信息中的主动发现；项目、执行任务与PR仅可选关联。不替代Session任务生命周期。
+（2026-11-08 起随伙伴 V2 下线，界面不再提供；条目保留以核对存量与历史文案，新文案不要再用。）伙伴独立事务清单，含交办与获准信息中的主动发现；项目、执行任务与PR仅可选关联。不替代Session任务生命周期。V2 把未完成事项写进伙伴项目的 CARRYOVER.md；旧消息里的 Todo 引用照常渲染。
 
 ### Terms of Service
 

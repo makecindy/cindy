@@ -4,7 +4,7 @@ export default {
   name: 'pending-queue',
   entry: './fixture.tsx',
   viewport: { width: 880, height: 560 },
-  real: 'PendingQueueBubble, UserMessage, shared queue action rules and dropdown menu',
+  real: 'appendPendingQueueItems, PendingQueueBubble, UserMessage, shared queue action rules and dropdown menu',
   notCovered: 'Live host dispatch, remote reconnection, full MessageStream scrolling',
   stubs: companion.stubs,
   cases: {
@@ -12,6 +12,7 @@ export default {
   },
   async check(page, ui) {
     const row = (id) => page.locator(`[data-pending-queue-message="${id}"]`);
+    assert.equal(await row('question-reply:answered:fixture').count(), 0);
     const menu = () => page.getByRole('menu');
     const action = async (key) =>
       page.getByRole('menuitem', { name: await ui.t(`newChat.pendingQueue.${key}`), exact: true });

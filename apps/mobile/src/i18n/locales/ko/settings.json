@@ -1,4 +1,31 @@
 {
+  "pushDiagnostics": {
+    "title": "푸시 알림 진단",
+    "read": "푸시 상태 읽기",
+    "busy": "읽는 중…",
+    "failed": "푸시 상태를 읽을 수 없습니다. 다시 시도하세요.",
+    "copyFailed": "토큰을 복사할 수 없습니다.",
+    "copied": "토큰을 복사했습니다.",
+    "bundle": "앱 ID",
+    "build": "빌드",
+    "environment": "APNs 환경",
+    "permission": "시스템 권한",
+    "alerts": "알림 배너",
+    "lockScreen": "잠금 화면",
+    "notificationCenter": "알림 센터",
+    "copy": "APNs 토큰 복사",
+    "hide": "결과 숨기기",
+    "unknown": "알 수 없음",
+    "on": "켜짐",
+    "off": "꺼짐",
+    "hint": "버튼을 누를 때만 읽습니다. APNs 토큰은 이 화면에만 표시되며 진단 기록에 저장되거나 이 도구로 업로드되지 않습니다. 화면을 나가거나 백그라운드로 전환하면 숨겨집니다. Apple 푸시 알림 콘솔용으로만 복사하세요. 복사한 내용은 클립보드에 남습니다.",
+    "permissions": {
+      "granted": "허용됨",
+      "denied": "거부됨",
+      "undetermined": "요청하지 않음",
+      "provisional": "조용히 전달"
+    }
+  },
   "localLogs": {
     "upload": "로그 업로드",
     "uploadResult": {

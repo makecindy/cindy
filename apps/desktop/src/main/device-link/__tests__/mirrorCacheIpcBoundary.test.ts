@@ -105,6 +105,7 @@ vi.mock('../../clientEndpointsService.js', () => ({
 }));
 vi.mock('../index', () => ({
   getDeviceLinkStatus: () => 'online',
+  getDeviceLinkPeerLinks: () => ({ links: [{ deviceId: 'dev-1', path: 'relay', rttMs: 12, open: true, sentAgoMs: null, receivedAgoMs: null }], relayRttMs: 40 }),
   hasOfflineDirectPath: () => false,
   isDeviceDataPathAvailable: () => false,
   isPeerControlAvailable: () => true,
@@ -502,5 +503,26 @@ describe('local control authorization IPC boundary', () => {
     for (const channel of [...calls.map(([channel]) => channel), ...Object.values(DESKTOP_LOCAL)]) {
       expect(REMOTE_INVOKE_ALLOWLIST.has(channel), channel).toBe(false);
     }
+  });
+});
+
+// 远程连接拓扑的只读 IPC 是新增的特权读(本账号设备的链路拓扑):沿 electron-security §5 两道门,
+// 不继承 GET_STATE / LIST_DEVICES 的免校验。
+describe('peer-links IPC 授权边界', () => {
+  it('sender 不可信 → 拒绝', async () => {
+    h.trusted = false;
+    await expect(call(DEVICE_LINK_INVOKE.GET_PEER_LINKS, undefined)).rejects.toThrow(/PERMISSION_DENIED/);
+  });
+
+  it('无 device-link capability → 拒绝', async () => {
+    h.canUseDeviceLink = false;
+    await expect(call(DEVICE_LINK_INVOKE.GET_PEER_LINKS, undefined)).rejects.toThrow(/PERMISSION_DENIED/);
+  });
+
+  it('sender 可信 + 有 capability → 原样返回主进程快照', async () => {
+    await expect(call(DEVICE_LINK_INVOKE.GET_PEER_LINKS, undefined)).resolves.toEqual({
+      links: [{ deviceId: 'dev-1', path: 'relay', rttMs: 12, open: true, sentAgoMs: null, receivedAgoMs: null }],
+      relayRttMs: 40,
+    });
   });
 });

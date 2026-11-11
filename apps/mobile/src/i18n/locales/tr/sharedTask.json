@@ -1,5 +1,5 @@
 {
-  "officialRelayNote": "Kendi aktarmanızı kullanıyorsunuz. Paylaşılan görev içeriği yine de {{appName}} aktarması üzerinden iletilir.",
+  "officialRelayNote": "Agent-Net paylaşımları davette belirtilen aktarıcıyı kullanır; eski paylaşımlar hâlâ {{appName}} aktarıcısını kullanır.",
   "selfJoin": "Bu paylaşılan görevi siz başlattınız, bu nedenle katılmanıza gerek yok. “Benim Paylaştıklarım” bölümünden açın.",
   "waitingHost": "Ev sahibinin yanıt vermesi bekleniyor. Mesaj göndermeye devam edebilirsiniz.",
   "join": "Paylaşılan Göreve Katıl",

@@ -11,7 +11,7 @@ import { ErrorNotice } from '@/components/ErrorNotice';
  */
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronDown, ChevronRight } from 'lucide-react-native';
+import { ChevronDown, ChevronRight, Plus } from 'lucide-react-native';
 import {
   ActivityIndicator,
   Pressable,
@@ -23,6 +23,7 @@ import { Text, TextInput } from '@/components/AppText';
 import { MainWindowActionButton } from '@/components/MobilePrimitives';
 import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { MOBILE_COMPOSER_CONTROL_SIZE } from '@/session/composerVoiceButtonAnchor';
 import { computeContextSheetSnapHeights, type ContextSheetSnap } from '@/session/contextSheetModel';
 import { SheetModal } from '@/session/SheetModal';
 import { SheetSurface } from '@/session/SheetSurface';
@@ -401,6 +402,175 @@ export function ContextSheetChoiceRow<T extends string>({
   );
 }
 
+export interface ContextSheetChipRowProps {
+  /** 这一排的名字(读屏分组名)。 */
+  label: string;
+  chips: readonly { id: string; label: string }[];
+  /** 选中的那个；null = 都没选中(如正在添加)。 */
+  value: string | null;
+  onChange: (id: string) => void;
+  /** 长按一个 chip(如移除角色)；不传则只有点按。 */
+  onLongPress?: (id: string) => void;
+  /** 长按能做什么，读给读屏用户。 */
+  longPressHint?: string;
+  /** 末尾的加号；selected 表示正在添加。 */
+  add?: { label: string; selected: boolean; onPress: () => void };
+  disabled?: boolean;
+  testID?: string;
+}
+
+/** 一排可点的小标签(角色等)，末尾可带加号；iOS 版横向滑动，这里自动换行。 */
+export function ContextSheetChipRow({
+  label,
+  chips,
+  value,
+  onChange,
+  onLongPress,
+  longPressHint,
+  add,
+  disabled,
+  testID,
+}: ContextSheetChipRowProps) {
+  const styles = useThemedStyles(makeContextSheetStyles);
+  const { colors } = useTheme();
+  return (
+    <View accessibilityLabel={label} accessibilityRole="radiogroup" style={styles.choiceRow} testID={testID}>
+      <View style={styles.choicePills}>
+        {chips.map((chip) => {
+          const selected = chip.id === value;
+          return (
+            <Pressable
+              accessibilityHint={onLongPress ? longPressHint : undefined}
+              accessibilityLabel={chip.label}
+              accessibilityRole="radio"
+              accessibilityState={{ checked: selected, disabled }}
+              disabled={disabled}
+              key={chip.id}
+              onLongPress={onLongPress ? () => onLongPress(chip.id) : undefined}
+              onPress={() => onChange(chip.id)}
+              style={styles.choiceHitArea}
+              testID={testID ? `${testID}.${chip.id}` : undefined}
+            >
+              {({ pressed }) => (
+                <View
+                  style={[
+                    styles.choicePill,
+                    selected && styles.choicePillSelected,
+                    pressed && styles.rowPressed,
+                    disabled && styles.rowDisabled,
+                  ]}
+                >
+                  <Text numberOfLines={1} style={[styles.choicePillText, selected && styles.choicePillTextSelected]}>{chip.label}</Text>
+                </View>
+              )}
+            </Pressable>
+          );
+        })}
+        {add ? (
+          <Pressable
+            accessibilityLabel={add.label}
+            accessibilityRole="button"
+            accessibilityState={{ selected: add.selected, disabled }}
+            disabled={disabled}
+            onPress={add.onPress}
+            style={styles.choiceHitArea}
+            testID={testID ? `${testID}.add` : undefined}
+          >
+            {({ pressed }) => (
+              <View
+                style={[
+                  styles.choicePill,
+                  styles.choicePillIcon,
+                  add.selected && styles.choicePillSelected,
+                  pressed && styles.rowPressed,
+                  disabled && styles.rowDisabled,
+                ]}
+              >
+                <Plus
+                  color={add.selected ? colors.ctaText : colors.textPrimary}
+                  size={iconSize.md}
+                  strokeWidth={iconStroke.regular}
+                />
+              </View>
+            )}
+          </Pressable>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
+export interface ContextSheetToolbarRowProps {
+  /**
+   * 左侧只放图标的菜单(如权限)，对齐输入框里的权限圆钮：点开在旁边列出选项，当前项打勾。
+   * 图标与着色由调用方按当前取值给。
+   */
+  menu?: {
+    accessibilityLabel: string;
+    icon: ReactNode;
+    value: string;
+    options: readonly { id: string; label: string }[];
+    onChange: (id: string) => void;
+    testID?: string;
+  } | null;
+  /** 右侧带文字的入口(如模型)。 */
+  action: {
+    label: string;
+    accessibilityLabel: string;
+    onPress: () => void;
+    /** 先收起面板再执行(系统 sheet 不能叠开)。 */
+    dismissBeforePress?: boolean;
+    testID?: string;
+  };
+  disabled?: boolean;
+}
+
+/** 输入框里底部的一行工具：与聊天输入框同序，左边是只有图标的菜单，右边是带文字的入口。 */
+function ContextSheetToolbarRow({ menu, action, disabled }: ContextSheetToolbarRowProps) {
+  const styles = useThemedStyles(makeContextSheetStyles);
+  const { colors } = useTheme();
+  const dismiss = useContext(DismissAction);
+  const menuButton = menu ? (
+    <View style={[styles.toolbarIconButton, disabled && styles.rowDisabled]}>{menu.icon}</View>
+  ) : null;
+  return (
+    <View style={styles.toolbarRow}>
+      {menu && menuButton ? (
+        disabled ? menuButton : (
+          <AnchoredPullDownMenu
+            accessibilityLabel={menu.accessibilityLabel}
+            actions={menu.options.map((option) => ({
+              id: option.id,
+              title: option.label,
+              state: option.id === menu.value ? 'on' as const : 'off' as const,
+            }))}
+            onAction={(id) => {
+              if (menu.options.some((option) => option.id === id)) menu.onChange(id);
+            }}
+            testID={menu.testID}
+          >
+            {menuButton}
+          </AnchoredPullDownMenu>
+        )
+      ) : null}
+      <View style={styles.toolbarSpacer} />
+      <Pressable
+        accessibilityLabel={action.accessibilityLabel}
+        accessibilityRole="button"
+        accessibilityState={{ disabled }}
+        disabled={disabled}
+        hitSlop={8}
+        onPress={() => (action.dismissBeforePress ? dismiss(action.onPress) : action.onPress())}
+        style={({ pressed }) => [styles.toolbarAction, pressed && styles.rowPressed, disabled && styles.rowDisabled]}
+        testID={action.testID}
+      >
+        <Text numberOfLines={1} style={styles.toolbarActionText}>{action.label}</Text>
+        <ChevronDown color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+      </Pressable>
+    </View>
+  );
+}
+
 export interface ContextSheetTextFieldProps {
   value: string;
   onChange: (value: string) => void;
@@ -409,7 +579,11 @@ export interface ContextSheetTextFieldProps {
   multiline?: boolean;
   disabled?: boolean;
   maxLength?: number;
+  /** 出现时直接聚焦(如点加号后的角色名输入)。 */
+  autoFocus?: boolean;
   testID?: string;
+  /** 输入框里底部的一行工具(如权限与模型)，和输入框连成一块，像聊天输入框那样。 */
+  toolbar?: ContextSheetToolbarRowProps;
 }
 
 /** 文本输入(iOS 版为原生 TextField)。 */
@@ -421,23 +595,34 @@ export function ContextSheetTextField({
   multiline,
   disabled,
   maxLength,
+  autoFocus,
   testID,
+  toolbar,
 }: ContextSheetTextFieldProps) {
   const styles = useThemedStyles(makeContextSheetStyles);
   const { colors } = useTheme();
-  return (
+  const input = (
     <TextInput
       accessibilityLabel={accessibilityLabel}
+      autoFocus={autoFocus}
       editable={!disabled}
       maxLength={maxLength}
       multiline={multiline}
       onChangeText={onChange}
       placeholder={placeholder}
       placeholderTextColor={colors.textTertiary}
-      style={[styles.textField, multiline && styles.textFieldMultiline]}
+      style={[styles.textField, multiline && styles.textFieldMultiline, toolbar && styles.textFieldInBox]}
       testID={testID}
       value={value}
     />
+  );
+  if (!toolbar) return input;
+  // 边框画在外层，输入区和工具行同在一个框里。
+  return (
+    <View style={styles.textFieldBox}>
+      {input}
+      <ContextSheetToolbarRow {...toolbar} disabled={toolbar.disabled ?? disabled} />
+    </View>
   );
 }
 
@@ -552,6 +737,66 @@ function makeContextSheetStyles(colors: ThemeColors) {
     },
     choicePillTextSelected: {
       color: colors.ctaText,
+    },
+    // 只放图标的 pill(加号)：与文字 pill 同高的圆。
+    choicePillIcon: {
+      paddingHorizontal: 0,
+      width: 32,
+    },
+    textFieldBox: {
+      backgroundColor: colors.surface,
+      borderColor: colors.border,
+      borderRadius: radius.control,
+      borderWidth: StyleSheet.hairlineWidth,
+      marginVertical: spacing.sm,
+    },
+    textFieldInBox: {
+      backgroundColor: 'transparent',
+      borderWidth: 0,
+      marginVertical: 0,
+    },
+    toolbarRow: {
+      alignItems: 'center' as const,
+      flexDirection: 'row' as const,
+      gap: spacing.sm,
+      minHeight: 44,
+      paddingHorizontal: spacing.sm,
+    },
+    toolbarSpacer: {
+      flex: 1,
+    },
+    // 与输入框里的权限圆钮同款：只有图标的圆钮。
+    toolbarIconButton: {
+      alignItems: 'center' as const,
+      backgroundColor: colors.sheetActionSurface,
+      borderColor: colors.sheetActionBorder,
+      borderRadius: radius.pill,
+      borderWidth: StyleSheet.hairlineWidth,
+      height: MOBILE_COMPOSER_CONTROL_SIZE,
+      justifyContent: 'center' as const,
+      width: MOBILE_COMPOSER_CONTROL_SIZE,
+    },
+    // 与输入框里的模型 pill 同款。
+    toolbarAction: {
+      alignItems: 'center' as const,
+      backgroundColor: colors.sheetActionSurface,
+      borderColor: colors.sheetActionBorder,
+      borderRadius: radius.pill,
+      borderWidth: StyleSheet.hairlineWidth,
+      flexDirection: 'row' as const,
+      flexShrink: 1,
+      gap: spacing.xs,
+      minHeight: MOBILE_COMPOSER_CONTROL_SIZE,
+      minWidth: 0,
+      paddingHorizontal: spacing.md,
+    },
+    toolbarActionText: {
+      color: colors.textPrimary,
+      flexShrink: 1,
+      fontSize: typeScale.caption,
+      lineHeight: lineHeight.caption,
+      fontWeight: fontWeight.medium,
+      minWidth: 0,
     },
     // 单行输入按 pill,多行输入按 inner-control 8px(DESIGN.md §5)。
     textField: {

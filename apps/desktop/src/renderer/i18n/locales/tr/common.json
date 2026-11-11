@@ -132,12 +132,7 @@
   },
   "taskActionConfirmation": {
     "title": "Görev işlemini onayla",
-    "once": "Aşağıdaki hedefi, işlemi ve içeriğin tamamını inceleyin. İzin yalnızca bu işlem için bir kez geçerlidir.",
-    "remove": "Bu işlem otomasyonun alıcı adresini serbest bırakır. Hedefi kontrol edin; onay yalnızca bu işlem için geçerlidir.",
-    "permission": "Bu işlem, başka bir görevdeki izin isteğini sizin adınıza yanıtlar. İşlemi inceleyin; onay yalnızca bir kez geçerlidir.",
-    "resume": "Bu işlem, duraklatılmış yürütmeyi sürdürür. Hedefi inceleyin; onay yalnızca bir kez geçerlidir.",
-    "command": "Bu işlem, Agent araç onayının dışında bilgisayarınızda bir komut kaydeder veya çalıştırır. Komutu ve çalışma klasörünü gözden geçirin; onay yalnızca bir kez geçerlidir.",
-    "authority": "Bu işlem, gelecekteki çalıştırmaların kalıcı yetkilendirme olarak kabul edeceği otomasyon talimatları oluşturur veya değiştirir. Talimatların tamamını inceleyin; onay bu kayıt işlemi için geçerlidir."
+    "once": "Aşağıdaki hedefi, işlemi ve içeriğin tamamını inceleyin. İzin yalnızca bu işlem için bir kez geçerlidir."
   },
   "logSupport": {
     "title": "Günlükler ve Geri Bildirim",
@@ -240,7 +235,7 @@
     "estimateTooManyFiles": "Projede {{limit, number}} üzerinde dosya var ve proje kopyalanamıyor. Bunun yerine daha az dosya içeren bir projeyi kopyalayın."
   },
   "sharedTask": {
-    "officialRelayNote": "Kendi aktarıcınızı kullanıyorsunuz. Paylaşılan görev içeriği yine de Cindy aktarıcısından geçer.",
+    "officialRelayNote": "Agent-Net paylaşımları davette belirtilen aktarıcıyı kullanır; eski paylaşımlar hâlâ Cindy aktarıcısını kullanır.",
     "selfJoin": "Bu paylaşılan görevi siz başlattınız, bu nedenle katılmanıza gerek yok. “Benim Paylaştıklarım” bölümünden açın.",
     "manageSharing": "Paylaşımı Yönet",
     "manageMembers": "Üyeleri Yönet…",
@@ -342,7 +337,7 @@
     "closeAllDescription": "Konuklar erişimi kaybedecektir. Görev geçmişi korunur."
   },
   "providerShare": {
-    "officialRelayNote": "Kendi aktarıcınızı kullanıyorsunuz. Sağlayıcı paylaşımı içeriği yine de Cindy aktarıcısından geçer.",
+    "officialRelayNote": "Agent-Net paylaşımları davette belirtilen aktarıcıyı kullanır; eski paylaşımlar hâlâ Cindy aktarıcısını kullanır.",
     "owned": {
       "title": "Paylaştığım Sağlayıcılar"
     },
@@ -884,7 +879,8 @@
           "rejected": "Reddedildi",
           "unknown": "Henüz kontrol edilmedi"
         }
-      }
+      },
+      "removeLocalBlocked": "Grubun barındırıldığı bilgisayar kaldırılamaz"
     },
     "rebalance": {
       "title": "{{label}} üzerinde devam edilsin mi?",
@@ -1332,7 +1328,8 @@
     "REMOTE_AGENT_SHARE_REMOVED": "Model değiştirilmedi: bu paylaşım artık kullanılamıyor (sahibi kaldırdı veya siz ayrıldınız). Başka bir model seçin.",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "Model değiştirilmedi: paylaşılan sağlayıcı geçici olarak kullanılamıyor (sahibinin bilgisayarı çevrimdışı veya paylaşım şu an kapalı). Daha sonra yeniden deneyin veya başka bir model seçin.",
     "SSH_HOST_KEY_MISMATCH": "SSH Sunucu Anahtarı Değişti",
-    "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Medya erişimi reddedildi."
+    "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Medya erişimi reddedildi.",
+    "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "Model değiştirilmedi: bu eski bir paylaşım ve \"Yalnızca Agent-Net Kullan\" açıkken kullanılamaz. Bu anahtarı kapatın veya başka bir model seçin."
   },
   "providerError": {
     "AUTH_INVALID": "Bu arayüz için kimlik doğrulama başarısız oldu. Adresi, anahtarı ve kimlik doğrulama yöntemini kontrol edin.",
@@ -2261,7 +2258,8 @@
         "desktopBlurHint": "Pencerenin arkasındaki masaüstünü bulanıklaştırın. 0 kapatır; daha yüksek değerler bulanıklığı artırır. Ayarlanabilir bulanıklığı olmayan sistemler varsayılan efektini kullanır.",
         "desktopBlurLabel": "Masaüstü Bulanıklığı",
         "desktopVisibilityHint": "Cindy'nin arkasındaki masaüstünü ve pencereleri gösterin. Metin ve kontroller net kalır.",
-        "desktopVisibilityLabel": "Masaüstü Saydamlığı"
+        "desktopVisibilityLabel": "Masaüstü Saydamlığı",
+        "desktopBlurSwitchHint": "Windows sistem efektini kullanarak pencerenin arkasındaki masaüstünü bulanıklaştırın. Windows 11 sürüm 22H2 veya üzeri gerekir."
       },
       "layout": {
         "label": "Panel düzeni",
@@ -3594,6 +3592,36 @@
           "invalid": "Önizleme kullanılamıyor; yapılandırmayı kontrol edin veya dosyayı tekrar seçin",
           "skipped": "Atlandı; bu kaydı içe aktarmak için dosyayı tekrar seçin",
           "authorizationPending": "Bağlantı eklendi; Sağlayıcı ayarlarından yetkilendirmeyi tamamlayın"
+        },
+        "local": {
+          "title": "Yerel uygulamalardan içe aktar",
+          "note": "Kaynak uygulamalarda değişiklik yapmadan bu bilgisayarda kayıtlı API yapılandırmalarını okuyun. Claude Code: CLAUDE_CONFIG_DIR dahil, yalnızca kullanıcı settings.json dosyası okunur. Kabuk değişkenleri, proje ayarları ve yönetilen ayarlar okunmaz.",
+          "review": "İncele ve içe aktar ({{count}})",
+          "scanning": "Kayıtlı yapılandırmalar okunuyor…",
+          "empty": "Kayıtlı API yapılandırması bulunamadı.",
+          "failed": "Okuma tamamlanamadı. Lütfen yeniden deneyin.",
+          "edit": "Düzenle",
+          "editFailed": "URL'yi, protokolü ve anahtarı kontrol edip yeniden deneyin.",
+          "editNote": "Kayıtlı kimlik bilgisini korumak için anahtarı boş bırakın. URL veya protokol değiştirildiğinde yeni bir anahtar gerekir.",
+          "name": "Görünen ad",
+          "baseUrl": "Temel URL",
+          "protocol": "API protokolü",
+          "chooseProtocol": "Bir protokol seçin",
+          "apiKey": "API anahtarı",
+          "keepKey": "Kayıtlı anahtarı korumak için boş bırakın",
+          "missingUrl": "URL gerekli",
+          "status": {
+            "missing": "Yapılandırma bulunamadı",
+            "readFailed": "Okunamadı; izinleri kontrol edin veya yeniden deneyin",
+            "invalid": "Biçim tanınmadı; yapılandırmayı kontrol edin veya düzenleyin",
+            "limit": "Sınıra ulaşıldı; bu kaynak tamamen okunamadı",
+            "unsupported": "Bu yapılandırma otomatik olarak içe aktarılamaz. Komutlar ve apiKeyHelper çalıştırılmaz; API yapılandırmasını elle ekleyin.",
+            "needsInput": "Yapılandırmanın tamamlanması gerekiyor",
+            "changed": "Kaynak değişti; yeniden tarayın",
+            "duplicate": "Aynı bağlantı zaten mevcut"
+          },
+          "rescan": "Yeniden tara",
+          "sourceDisabled": "Kaynak uygulamada kapatılmış"
         }
       },
       "order": {
@@ -3764,7 +3792,7 @@
           "runtimeSupportsImageGenerationPermissionsTitle": "Erişim ve hatalar",
           "runtimeSupportsImageGenerationPermissions": "Geçerli API anahtarı, hesap veya kullanıcı grubunun görsel modeline erişimi olmalıdır. Bu anahtar yalnızca ağ geçidinin yeteneğini belirtir, üst hizmette erişim hakkı vermez. Bir istek başarısız olursa Cindy üst hizmetin gerçek hatasını gösterir ve başka bir görsel hizmetine geçmez.",
           "modelSupportsReasoning": "Akıl yürütmeyi destekler",
-          "modelSupportsReasoningHelp": "Yalnızca model Akıl yürütme yoğunluğunu kabul ediyorsa etkinleştirin ve desteklenen tüm düzeyleri seçin. Değişiklikler sonraki Pi Agent Görevinde uygulanır.",
+          "modelSupportsReasoningHelp": "Yalnızca model Akıl yürütme yoğunluğunu kabul ediyorsa etkinleştirin ve desteklenen tüm düzeyleri seçin. Değişiklikler sonraki Pi Agent oturumunda uygulanır.",
           "modelReasoningEfforts": "Desteklenen Akıl yürütme yoğunluğu düzeyleri",
           "addModel": "Model ekle",
           "headers": "Üstbilgiler (isteğe bağlı)",
@@ -4508,8 +4536,7 @@
     },
     "experimental": {
       "title": "Deneysel",
-      "toggleAria": "Deneysel özelliği aç/kapat: {{title}}",
-      "features": {}
+      "toggleAria": "Deneysel özelliği aç/kapat: {{title}}"
     },
     "lspMode": {
       "cell": {
@@ -4716,7 +4743,7 @@
     },
     "discordBot": {
       "title": "Discord botu",
-      "description": "{{appName}} uygulamasını Discord özel mesajlarından kullanmak için kendi Discord botunuzu bağlayın.",
+      "description": "{{appName}} uygulamasını Discord özel mesajlarından ve seçtiğiniz sunucu kanallarından kullanmak için kendi Discord botunuzu bağlayın.",
       "statusAria": "Discord botu durumu: {{status}}",
       "status": {
         "needsConfig": "Yapılandırma gerekli",
@@ -4776,15 +4803,73 @@
         },
         "step2": {
           "title": "Ayrıcalıklı intent",
-          "body": "P1 özel mesajları için ayrıcalıklı intent gerekmez."
+          "body": "Privileged Intent gerekmez (Message Content kapalı kalsın). Sunucularda bot yalnızca kendisinden @ ile bahsedilen mesajları alır."
         },
         "step3": {
           "title": "Botu davet edin",
-          "body": "OAuth2 URL Generator'da bot kapsamını seçip Send Messages, Read Message History ve Attach Files izinlerini verin. Botu bulunduğunuz herhangi bir sunucuya davet edin; özel mesajlaşma için botla ortak bir sunucuda olmanız gerekir."
+          "body": "OAuth2 URL Generator'da bot kapsamını seçip View Channels, Send Messages, Send Messages in Threads, Embed Links, Attach Files, Read Message History ve Add Reactions izinlerini verin. Botu bulunduğunuz herhangi bir sunucuya davet edin; özel mesajlaşma için botla ortak bir sunucuda olmanız gerekir."
         },
         "step4": {
           "title": "Kullanıcı kimliğinizi kopyalayın",
           "body": "Discord kullanıcı ayarlarında Geliştirici Modu'nu etkinleştirin, ardından avatarınıza sağ tıklayıp Kullanıcı Kimliğini Kopyala'yı seçin."
+        }
+      },
+      "channels": {
+        "title": "Sunucu kanalları",
+        "summary": {
+          "unknown": "Kontrol ediliyor…",
+          "off": "Kapalı",
+          "on": "Etkin sunucular: {{count}}"
+        },
+        "hint": "Varsayılan olarak kapalıdır. Bir sunucuyu etkinleştirin, ardından botu çağırmak için o sunucunun metin kanallarında @ ile etiketleyin. Her kanal ve her ileti dizisi kendi ayrı bağlamını korur; bot yalnızca kendisinin @ ile etiketlendiği mesajları alır.",
+        "ownerOnly": "Şimdilik yalnızca siz çağırabilirsiniz.",
+        "offline": "Bot bağlı değil. Kanalları seçmek için botu bağlayın; önceden etkinleştirilmiş kanallar etkin kalır.",
+        "members": {
+          "label": "Kanal üyelerine izin ver",
+          "notice": "Kanal üyelerine varsayılan olarak izin verilmez. İzin verdiğinizde, botu @ ile etiketleyen üyeler {{name}} için zaten mevcut olan araçları kullanır ve {{name}} belleğini paylaşır. İzinler, {{name}} için belirlenen izin ayarına tabidir; komutları ise yalnızca botun sahibi kullanabilir.",
+          "aria": "#{{channel}} üyelerine izin ver",
+          "guildAria": "{{guild}} üyelerine izin ver"
+        },
+        "loading": "Botunuzun bulunduğu sunucular okunuyor…",
+        "refresh": "Yenile",
+        "empty": "Bot henüz hiçbir sunucuda değil. Discord Developer Portal üzerinden davet edin, ardından yenileyin.",
+        "noTextChannels": "Metin kanalı yok",
+        "toggleAria": "{{guild}} #{{channel}} kanalını etkinleştir",
+        "error": {
+          "load": "Sunucularınız yüklenemedi.",
+          "save": "Bu değişiklik kaydedilemedi. Şu anda kayıtlı olan durum gösteriliyor.",
+          "unsupported": "Bu bilgisayarda, sunucu kanallarının buradan yönetilmesini desteklemeyen eski bir Cindy sürümü çalışıyor. Önce o bilgisayardaki Cindy'yi güncelleyin."
+        },
+        "permission": {
+          "cannotSend": "Bot bu kanaldaki mesajları görüntüleyemiyor veya bu kanala mesaj gönderemiyor",
+          "limited": "Eksik izinler: {{list}}",
+          "separator": ", ",
+          "readHistory": "Mesaj Geçmişini Oku",
+          "embed": "Bağlantıları Göm",
+          "attachFiles": "Dosya Ekle",
+          "sendInThreads": "İleti Dizilerinde Mesaj Gönder"
+        },
+        "unavailable": {
+          "title": "Kullanılamayan sunucular veya kanallar",
+          "hint": "Bunlar silinmiş veya bot artık sunucuda değil. Bunları listeden kaldırabilirsiniz.",
+          "remove": "Kaldır"
+        },
+        "ownerOnlyCardNotice": "Bu düğmeyi yalnızca bu botun sahibi kullanabilir.",
+        "guild": {
+          "summary": {
+            "off": "Kapalı",
+            "all": "Tüm kanallar",
+            "selected": "{{count}} kanal seçildi",
+            "none": "Hiçbir kanal seçilmedi"
+          },
+          "toggleAria": "{{guild}} sunucusunu etkinleştir",
+          "more": "Daha fazla",
+          "modeAria": "{{guild}} sunucusunda kapsanan kanallar",
+          "mode": {
+            "all": "Tüm kanallar",
+            "selected": "Seçili kanallar"
+          },
+          "allHint": "Sonradan eklenen metin kanalları da dahildir. Bot yalnızca mesajları görüntüleyebildiği ve mesaj gönderebildiği kanallarda yanıt verir."
         }
       }
     },
@@ -5065,7 +5150,7 @@
     },
     "memory": {
       "title": "Bellek",
-      "description": "Çalışma alanına özel belleği etkinleştirir. Ayarları değiştirdikten sonra bunların etkili olması için genellikle yeni bir Agent görevi başlatmanız gerekir. Bellek düzgün çalışmıyorsa Sıfırla'ya tıklayın veya belleği kapatın.",
+      "description": "Çalışma alanına özel belleği etkinleştirir. Ayarları değiştirdikten sonra bunların etkili olması için genellikle yeni bir Agent oturumu başlatmanız gerekir. Bellek düzgün çalışmıyorsa Sıfırla'ya tıklayın veya belleği kapatın.",
       "maker": {
         "label": "Cindy",
         "description": "Bellek, her model tarafından ayrı ayrı değil, Agent giriş noktası tarafından yönetilir. Claude Code ve Codex görevleri aynı çalışma dizininde belleği paylaşabilir.",
@@ -5107,7 +5192,7 @@
         "toast": {
           "enabled": "{{label}} belleği etkinleştirildi",
           "disabled": "{{label}} belleği devre dışı bırakıldı",
-          "takesEffectSuffix": " — bir sonraki Agent görevinde etkili olur",
+          "takesEffectSuffix": " — bir sonraki Agent oturumunda etkili olur",
           "toggleFailed": "Bellek ayarı güncellenemedi",
           "resetSuccess_one": "{{label}} anıları sıfırlandı — {{count}} kayıt kaldırıldı",
           "resetSuccess_other": "{{label}} anıları sıfırlandı — {{count}} kayıt kaldırıldı",
@@ -5502,7 +5587,7 @@
         "title": "Tarayıcı otomasyonu",
         "description": "Agent'lara özel bir tarayıcı — günlük kullandığınız Chrome'dan ayrı",
         "toggleAria": "Tarayıcı otomasyonunu aç/kapat",
-        "toggleHint": "Yalnızca yeni Agent görevlerine uygulanır.",
+        "toggleHint": "Yalnızca yeni Agent oturumlarına uygulanır.",
         "noProjectHint": "Bir proje için tarayıcı otomasyonunu açıp kapatmak üzere Ayarlar'ı o projedeki bir görevden açın.",
         "detected": "{{browser}} algılandı",
         "notDetected": "Yerel tarayıcı algılanmadı. Tarayıcı otomasyonunu kullanmak için Chrome yükleyin.",
@@ -5605,7 +5690,7 @@
         "description": "Agent'ların bağlı bir Android cihazını ADB üzerinden incelemesine ve kullanmasına izin verin",
         "toggleAria": "Android otomasyonunu aç/kapat",
         "refresh": "Yeniden kontrol et",
-        "toggleHint": "Makine genelinde, yalnızca yeni Agent görevlerine uygulanır.",
+        "toggleHint": "Makine genelinde, yalnızca yeni Agent oturumlarına uygulanır.",
         "status": {
           "checking": "ADB durumu kontrol ediliyor…",
           "disabled": "Android otomasyonu kapalı. ADB'yi ve cihazları algılamak için açın.",
@@ -5743,7 +5828,7 @@
           "windowsHint": "Windows ek sistem izinleri gerektirmez. Agent çalışırken hedef uygulamayı etkin masaüstünde görünür tutun.",
           "linuxHint": "Linux, macOS TCC izinlerini kullanmaz; mevcut masaüstü oturumunun pencere incelemesine ve girdi otomasyonuna izin verdiğinden emin olun."
         },
-        "toggleHint": "Bu anahtar yalnızca daha sonra başlatılan Agent görevleri için geçerlidir; zaten çalışmakta olan bir görevi etkilemez.",
+        "toggleHint": "Bu anahtar yalnızca daha sonra başlatılan Agent oturumları için geçerlidir; zaten çalışmakta olan bir görevi etkilemez.",
         "noProjectHint": "Bir proje için doğrudan bilgisayar kontrolünü açıp kapatmak üzere Ayarlar'ı o projedeki bir görevden açın.",
         "update": {
           "available": "Yeni v{{version}} sürümü mevcut. Güncellemeden sonra sistem izinlerini yeniden vermeniz gerekebilir.",
@@ -5902,7 +5987,7 @@
         "current": "Kullanımda",
         "ownerName": "Bu bilgisayar",
         "unavailable": "Kendi aktarıcınızı kullanmak için Cindy'ye giriş yapın ve sistem anahtar zincirinin kullanılabilir olduğundan emin olun.",
-        "limits": "Kendi aktarıcınızı kullanırken telefon anlık bildirimleri kullanılamaz; sağlayıcı paylaşımı ve paylaşılan görevler ise yine Cindy aktarıcısından geçer.",
+        "limits": "Agent-Net paylaşımları davette belirtilen aktarıcıyı kullanır. Sistem bildirimleri için bu aktarıcıda bir anlık bildirim sağlayıcısı gerekir. Eski paylaşımlar hâlâ Cindy aktarıcısını kullanır.",
         "actions": {
           "join": "Başka bir aktarıcıya katıl",
           "useOfficial": "Cindy aktarıcısına geri dön",
@@ -5920,37 +6005,25 @@
           "scopeAllHint": "Yerel ağınızdaki cihazlar doğrudan bağlanabilir. Bağlantı şifrelenmez; bu yüzden yalnızca güvenilir ağlarda kullanın. Telefonlar için bir https adresi gerekir.",
           "externalUrl": "Diğer cihazların kullandığı adres",
           "externalUrlPlaceholder": "ör. https://relay.example.com",
-          "externalUrlHintAll": "Katılım bağlantılarına eklenir. Boşsa bu bilgisayarın yerel ağ adresi kullanılır.",
-          "externalUrlHintLocal": "Katılım bağlantılarına eklenir. Proxy veya tünelinizin herkese açık adresini girin.",
+          "externalUrlHintAll": "Paylaşım bağlantılarına eklenir. Boşsa bu bilgisayarın yerel ağ adresi kullanılır.",
+          "externalUrlHintLocal": "Paylaşım bağlantılarına eklenir. Proxy veya tünelinizin herkese açık adresini girin.",
           "suggested": "Bu bilgisayarın adresleri:",
           "start": "Başlat",
           "save": "Kaydet ve aktarıcıyı yeniden başlat",
           "cancel": "İptal",
           "running": "Aktarıcı çalışıyor. Diğer cihazlar {{address}} adresine bağlanır"
         },
-        "add": {
-          "intro": "Bir telefonun veya başka bir bilgisayarın bu aktarıcıya katılması için katılım bağlantısı oluşturun.",
-          "create": "Cihaz ekle",
-          "hint": "Telefonunuzun kamerasıyla tarayın veya bağlantıyı başka bir bilgisayara gönderip Başka bir aktarıcıya katıl bölümüne yapıştırın. Bağlantı tek kullanımlıktır ve 10 dakika sonra sona erer.",
-          "qrAlt": "Aktarıcıya katılmak için QR kodu",
-          "copy": "Bağlantıyı kopyala",
-          "copied": "Katılım bağlantısı kopyalandı",
-          "newLink": "Yeni bağlantı",
-          "waiting": "Bir cihazın istek göndermesi bekleniyor…"
-        },
         "requests": {
-          "item": "{{name}} katılmak istiyor",
-          "verify": "Eşleştirme kodu",
-          "verifyHint": "Yalnızca o cihazdaki kodla eşleşiyorsa onaylayın.",
-          "replaces": "Bu cihaz daha önce katılmış. Onaylamak eski kimlik bilgisini iptal eder.",
-          "approve": "Onayla",
-          "reject": "Reddet",
-          "unverified": "Bu istek doğrulanamıyor: bu bilgisayardan oluşturulmuş bir katılım bağlantısıyla eşleşmiyor ve değiştirilmiş olabilir; bu nedenle yalnızca reddedilebilir. Cihaz size aitse yeni bir katılım bağlantısı oluşturup tekrar deneyin."
+          "title_one": "{{count}} istek bekliyor",
+          "title_other": "{{count}} istek bekliyor",
+          "waiting": "Katılmak istiyor · Sizi bekliyor",
+          "waitingAccount": "Başka bir hesap · {{device}}, sizi bekliyor",
+          "open": "İncele"
         },
         "join": {
           "title": "Başka bir aktarıcıya katıl",
-          "hint": "Aktarıcının bilgisayarındaki Cihaz ekle bölümünden alınan katılım bağlantısını yapıştırın. Onaylandığında Cindy geçiş yapar.",
-          "placeholder": "Katılım bağlantısını yapıştırın",
+          "hint": "Size gönderilen paylaşım bağlantısını yapıştırın. Onaylandığında Cindy geçiş yapar.",
+          "placeholder": "Paylaşım bağlantısını yapıştırın",
           "submit": "Katıl",
           "connecting": "Aktarmaya bağlanılıyor…",
           "waiting": "İstek gönderildi. {{name}} üzerinde bu rakamların eşleştiğini kontrol edip onaylayın:",
@@ -5965,17 +6038,19 @@
           "ownerTitle": "Bu bilgisayardaki aktarıcı durdurulsun mu?",
           "ownerDescription": "Katılan cihazların bağlantısı kesilir ve aktarıcının durdurulduğu bildirilir. Bu bilgisayar Cindy aktarıcısına geri döner.",
           "memberTitle": "Cindy aktarıcısına geri dönülsün mü?",
-          "memberDescription": "Bu bilgisayar \"{{name}}\" aktarıcısından ayrılıp Cindy aktarıcısını kullanır. Yeniden katılmak için yeni bir katılım bağlantısı isteyin.",
+          "memberDescription": "Bu bilgisayar \"{{name}}\" aktarıcısından ayrılıp Cindy aktarıcısını kullanır. Yeniden katılmak için yeni bir paylaşım bağlantısı isteyin.",
           "serverTitle": "Cindy aktarıcısına geri dönülsün mü?",
-          "serverDescription": "\"{{name}}\" aktarıcısı sunucunuzda çalışmayı sürdürür; katılan cihazlar onun üzerinden birbirlerine erişmeye devam edebilir. Bu bilgisayarı istediğiniz zaman yeniden ona geçirebilirsiniz."
+          "serverDescription": "\"{{name}}\" aktarıcısı sunucunuzda çalışmayı sürdürür; katılan cihazlar onun üzerinden birbirlerine erişmeye devam edebilir. Bu bilgisayarı istediğiniz zaman yeniden ona geçirebilirsiniz.",
+          "sharedOwnerTitle": "Cindy aktarıcısına geri dönülsün mü?",
+          "sharedOwnerDescription": "Bu bilgisayar “{{name}}” aktarıcısından ayrılır ve Cindy aktarıcısını kullanır; onun üzerinden katılan cihazlarınızın da bağlantısı kesilir. Tekrar kullanmak için yeniden paylaşılmasını isteyin."
         },
         "errors": {
-          "INVALID_LINK": "Katılım bağlantısı veya adres geçersiz.",
+          "INVALID_LINK": "Paylaşım bağlantısı veya adres geçersiz.",
           "UNREACHABLE": "Bu aktarıcıya erişilemiyor. Bu bilgisayarın bağlantıdaki adresi açabildiğinden emin olun.",
           "NOT_A_RELAY": "Bu adres bir Cindy aktarıcısı değil.",
           "INCOMPATIBLE": "Bu aktarıcının sürümü uyumlu değil. Her iki bilgisayarda da Cindy'yi güncelleyin.",
           "ACCOUNT_MISMATCH": "Bu aktarıcı başka bir Cindy hesabına ait.",
-          "CODE_INVALID": "Bu katılım bağlantısının süresi dolmuş veya zaten kullanılmış. Yenisini isteyin.",
+          "CODE_INVALID": "Bu paylaşım bağlantısının süresi dolmuş veya zaten kullanılmış. Yenisini isteyin.",
           "RATE_LIMITED": "Çok fazla deneme yapıldı. Birkaç dakika sonra tekrar deneyin.",
           "REJECTED": "İstek reddedildi.",
           "EXPIRED": "Onay beklenirken zaman aşımına uğradı. Yeniden katılın.",
@@ -5998,15 +6073,21 @@
           "RELAY_MISMATCH": "Bu sunucudaki aktarıcı bu bilgisayardan kurulmadığı için Cindy ona dokunmaz.",
           "CERTIFICATE_FAILED": "HTTPS sertifikası alınamadı. Genellikle bulut güvenlik grubunda 80 portuna izin verilmemiştir veya alan adı henüz bu sunucuyu göstermiyordur. Sorunu giderip tekrar deneyin.",
           "CA_UNREACHABLE": "Sunucu, birkaç dakika yeniden denemesine rağmen Let's Encrypt sertifika otoritesine erişemedi. Sunucunun internete erişebildiğini kontrol edip daha sonra tekrar deneyin.",
-          "NOT_REACHABLE": "Aktarıcı sunucuda çalışıyor, ancak bu bilgisayar ona erişemiyor. Bulut güvenlik grubunda 443 portuna izin verin.",
+          "NOT_REACHABLE": "Bu bilgisayardan aktarıcı bağlantısı doğrulanamadı. HTTPS adresini, sertifikayı ve 443 portuna erişimi kontrol edin.",
           "BUNDLE_MISSING": "Cindy'nin bu sürümü aktarıcıyı içermiyor. Cindy'yi güncelleyin.",
           "DEPLOY_FAILED": "Kurulum tamamlanmadı.",
-          "PAIR_PROOF_INVALID": "Bu cihazın isteği doğrulanamadığı için onaylanamaz. Yeni bir katılım bağlantısı oluşturun.",
+          "PAIR_PROOF_INVALID": "Bu cihazın isteği doğrulanamadığı için onaylanamaz. Yeni bir paylaşım bağlantısı oluşturun.",
           "NOT_OWNER": "Bu aktarıcıyı yalnızca kuran veya başlatan bilgisayar yönetebilir.",
           "BUSY": "Bir kurulum devam ediyor. Lütfen bekleyin.",
           "INVALID_ADDRESS": "http:// veya port içermeyen, herkese açık bir IP adresi veya alan adı girin.",
           "NO_DEPLOYMENT": "Henüz bir sunucuya kurulum yapılmadı.",
-          "OWNER_MISMATCH": "Aktarıcının döndürdüğü sertifika, katılım bağlantısındaki sahip tarafından verilmemiş. Sahte bir aktarıcıya bağlanmış olabileceğiniz için katılım durduruldu."
+          "OWNER_MISMATCH": "Aktarıcının döndürdüğü sertifika, paylaşım bağlantısındaki sahip tarafından verilmemiş. Sahte bir aktarıcıya bağlanmış olabileceğiniz için katılım durduruldu.",
+          "AGENT_NET_START_FAILED": "Agent-Net sunucuda hazır duruma gelemedi. Hizmet günlüklerini ve 3348/TCP ile 3479/UDP bağlantı noktalarının kullanımda olup olmadığını kontrol edin.",
+          "AGENT_NET_VERIFY_FAILED": "HTTPS erişilebilir ancak Agent-Net kimliği ve dizini doğrulanamadı. V2 hizmetini, ters Proxy yolunu ve eşleştirme bilgilerini kontrol edin.",
+          "OWNER_UNAVAILABLE": "“{{device}}” yanıt vermedi. O cihazda Cindy'nin açık ve çevrimiçi olduğundan emin olun veya bir paylaşım bağlantısı isteyin.",
+          "RELAY_UNAVAILABLE": "“{{device}}” artık bu aktarıcıyı kullanmıyor.",
+          "ACCOUNT_DIRECTORY_UNAVAILABLE": "Şu anda Cindy hesap hizmetine ulaşılamadığı için hesabınızın aktarıcıları yüklenemiyor. Bunun yerine bir paylaşım bağlantısı isteyebilirsiniz.",
+          "SHARE_UNSUPPORTED": "Bu aktarıcı başka bir hesaba ait ve henüz diğer hesaplarla paylaşılamıyor. Hesabın sahibinden Agent-Net (Beta) özelliğini açıp aktarıcıyı yeniden paylaşmasını isteyin (kendi sunucusundaki aktarıcının da en son sürümde olması gerekir)."
         },
         "deploy": {
           "title": "Sunucuma kur",
@@ -6049,7 +6130,7 @@
             "uninstall": "Aktarıcı sunucunuzdan kaldırılıyor…"
           },
           "done": {
-            "deploy": "Kuruldu. Bağlantı rotası bölümünden bu aktarıcıya geçin; ardından cihaz ekleyebilirsiniz.",
+            "deploy": "Kuruldu. Bağlantı rotası bölümünden bu aktarıcıya geçin; diğer cihazlarınız onu görüp ona katılabilir.",
             "upgrade": "Sunucunuzdaki aktarıcı artık {{version}} sürümünde.",
             "uninstall": "Aktarıcı sunucunuzdan kaldırıldı"
           },
@@ -6092,7 +6173,7 @@
           "removeDescription": "Aktarıcı ve cihaz kayıtları sunucudan silinir; onu kullanan cihazların bağlantısı kesilir. Yeniden kurarsanız her cihazın yeniden katılması gerekir.",
           "forget": "Yalnızca bu bilgisayardan kaldır",
           "forgetTitle": "Yalnızca bu bilgisayardan kaldırılsın mı?",
-          "forgetDescription": "Aktarıcı sunucuda çalışmayı sürdürür, ancak bu bilgisayar onu yönetmeyi bırakır ve artık ona cihaz ekleyemez. Bunu yalnızca o sunucuyu artık kullanmıyorsanız yapın."
+          "forgetDescription": "Aktarıcı sunucuda çalışmayı sürdürür, ancak bu bilgisayar onu yönetmeyi bırakır ve artık paylaşamaz. Bunu yalnızca o sunucuyu artık kullanmıyorsanız yapın."
         },
         "route": {
           "title": "Bağlantı rotası",
@@ -6116,9 +6197,20 @@
           "statusOffline": "Erişilemiyor",
           "switchTitle": "{{name}} aktarıcısına geçilsin mi?",
           "switchFromHost": "Bu bilgisayardaki aktarıcı durur ve katılmış cihazların bağlantısı kesilir.",
-          "switchFromMember": "Bu bilgisayar {{name}} aktarıcısından ayrılır. Daha sonra yeniden katılmak için sahibinin yeni bir katılım bağlantısı oluşturması gerekir.",
+          "switchFromMember": "Bu bilgisayar {{name}} aktarıcısından ayrılır. Daha sonra yeniden katılmak için sahibinin yeni bir paylaşım bağlantısı oluşturması gerekir.",
           "switchConfirm": "Geçiş Yap",
-          "switchFromOfficial": "Cihazlarınız arasındaki uzaktan kontrol {{name}} üzerinden gerçekleşecek. Kendi aktarıcınızı kullanırken telefon anlık bildirimleri kullanılamaz; sağlayıcı paylaşımı ve paylaşılan görevler ise yine Cindy aktarıcısından geçer."
+          "switchFromOfficial": "Cihazlar arasındaki uzaktan kontrol “{{name}}” aktarıcısını kullanacak. Agent-Net paylaşımları kendi davetlerindeki aktarıcıyı kullanır; eski paylaşımlar hâlâ Cindy aktarıcısını kullanır.",
+          "kindComputer": "Bilgisayarım",
+          "kindShared": "Sizinle paylaşılan",
+          "switchFromShared": "Bu bilgisayar “{{name}}” aktarıcısından ayrılır ve onun üzerinden katılan cihazlarınızın da bağlantısı kesilir. Tekrar kullanmak için yeniden paylaşılmasını isteyin.",
+          "switchToAccount": "Bu aktarıcı hesabınıza ait. “{{device}}” bu bilgisayarı otomatik olarak kabul eder; paylaşım bağlantısı gerekmez.",
+          "accountJoining": "Katılınıyor, “{{device}}” cihazının bu bilgisayarı kabul etmesi bekleniyor…",
+          "accountManagedOn": "“{{device}}” üzerinden yönetiliyor",
+          "accountJoinedOn": "“{{device}}” üzerinden katıldı",
+          "sharedBy": "{{name}} tarafından paylaşıldı",
+          "sharedByOther": "Başka bir hesap tarafından paylaşıldı",
+          "ownDevicesHint": "Diğer bilgisayarlarınız ve telefonlarınız, aynı hesapta oturum açtıklarında bu aktarıcıyı görür ve bağlantı gerekmeden ona geçebilir. Başka bir hesabın kullanmasına izin vermek için aktarıcının yanındaki Paylaş'a tıklayın.",
+          "sharedOwnDevicesHint": "Diğer bilgisayarlarınız ve telefonlarınız, aynı hesapta oturum açtıklarında bu aktarıcıyı görür ve ona geçebilir. Yalnızca kendi cihazlarınıza erişirler."
         },
         "dialog": {
           "steps": {
@@ -6151,7 +6243,71 @@
           "certificateSite": "Sitenin sertifikasını kullanır",
           "version": "Aktarıcı sürümü",
           "latest": "Güncel",
-          "remove": "Bu aktarıcıyı kaldır"
+          "remove": "Bu aktarıcıyı kaldır",
+          "protocolsBoth": "Device Link ve Agent-Net desteklenir",
+          "protocolsLegacy": "Yalnızca Device Link desteklenir",
+          "upgradeForSharing": "Diğer hesaplarla paylaşmak için yükseltin",
+          "connection": "Bu bilgisayarın bağlantısı",
+          "connectionEncrypted": "Diğer taraf da Agent-Net kullanıyorsa uçtan uca şifrelenir",
+          "connectionLegacy": "Uçtan uca şifrelenmemiş"
+        },
+        "share": {
+          "action": "Bu aktarıcıyı paylaş",
+          "title": "“{{name}}” için paylaşım bağlantısı oluşturuldu",
+          "description": "Bağlantıyı diğer kişiye gönderin. İsteğini onayladığınızda, hesabındaki bilgisayarlar ve telefonlar kendi cihazlarını birbirine bağlamak için bu aktarıcıyı kullanabilir.",
+          "descriptionOwn": "Bağlantıyı size ait başka bir bilgisayara gönderin veya telefonunuzun kamerasıyla tarayın. Onayladığınızda o cihaz bu aktarıcıya katılır.",
+          "fieldLabel": "Paylaşım bağlantısı",
+          "copy": "Bağlantıyı kopyala",
+          "copied": "Kopyalandı",
+          "copyFailed": "Bağlantı kopyalanamadı. Seçip elle kopyalayın.",
+          "oneTime": "Bir kez kullanılabilir",
+          "expiresIn": "{{time}} sonra süresi dolacak",
+          "expired": "Süresi doldu",
+          "regenerateHint": "Süresi dolduktan sonra yeni bir tane oluşturabilirsiniz",
+          "generating": "Bağlantı oluşturuluyor…",
+          "scanHint": "Telefonla tararlarsa önce bilgisayarlarında açmaları istenir. Bilgisayarları katıldıktan sonra telefonları bu aktarıcıyı otomatik olarak görür.",
+          "scanHintOwn": "Telefonunuz, kamerasıyla kodu tarayarak katılabilir.",
+          "ownAccountOnly": "Şu anda bu aktarıcı yalnızca kendi cihazlarınız için çalışır. Diğer hesaplarla paylaşmak için önce Uzak bağlantılar altında Agent-Net (Beta) seçeneğini açın; kendi sunucunuzdaki bir aktarıcının da en son sürümde olması gerekir.",
+          "qrAlt": "Aktarıcıyı paylaşmak için QR kodu",
+          "calloutIsolation": "Yalnızca kendi cihazlarına erişebilirler, sizinkileri göremezler. Agent'larınızı veya modellerinizi kullanmalarına izin vermek için bunları ayrıca paylaşın.",
+          "calloutPrivacy": "Bağlantılar uçtan uca şifrelendiği için içeriği göremezsiniz. Aktarıcının sahibi olarak cihazlarının ne zaman iletişim kurduğunu ve ne kadar veri kullandığını görebilirsiniz.",
+          "calloutOwnDevices": "Kendi cihazlarınızın bu bağlantıya ihtiyacı yoktur: aynı hesapta oturum açtıklarında bu aktarıcıyı rota listelerinde görürler.",
+          "calloutOwnFallback": "Hesabınızda oturum açmış cihazlar genellikle bu aktarıcıyı bağlantıya gerek kalmadan listede görür. Cindy hesap hizmetine erişilemediğinde bu bağlantıyı kullanın.",
+          "done": "Tamam",
+          "regenerate": "Yeni bağlantı oluştur",
+          "regenerated": "Yeni bağlantı oluşturuldu"
+        },
+        "tenants": {
+          "title": "Paylaşılan kişiler",
+          "devices_one": "{{count}} cihaz",
+          "devices_other": "{{count}} cihaz",
+          "online": "Çevrimiçi",
+          "offline": "Çevrimdışı",
+          "revoke": "Paylaşımı durdur",
+          "revokeTitle": "{{account}} ile paylaşım durdurulsun mu?",
+          "revokeDescription": "{{account}} hesabının bu aktarıcıdaki hattı silinir ve cihazlarının bağlantısı hemen kesilir. Tekrar kullanmasına izin vermek için yeniden paylaşın."
+        },
+        "approve": {
+          "title": "{{device}}, “{{relay}}” aktarıcısına katılmak istiyor",
+          "requestedAt": "Paylaşım bağlantınızla {{time}} tarihinde istendi",
+          "requestedViaLink": "Paylaşım bağlantınızla istendi",
+          "pairingHint": "Yalnızca o cihazdaki eşleştirme koduyla eşleşiyorsa onaylayın.",
+          "unverified": "Bu istek doğrulanamıyor: bu bilgisayardan oluşturulan bir paylaşım bağlantısıyla eşleşmiyor ve üzerinde oynanmış olabilir. Bu nedenle yalnızca reddedilebilir. Bu sizin cihazınızsa yeni bir paylaşım bağlantısı oluşturup tekrar deneyin.",
+          "callout": "Onaylandığında bu cihaz “{{relay}}” aktarıcısına katılır ve diğer cihazlarınıza onun üzerinden bağlanır.",
+          "replaces": "Bu cihaz daha önce katılmış. Onaylamak, eski kimlik bilgisini iptal eder.",
+          "calloutUnknown": "Bu cihazı tanımıyorsanız reddedin. Reddetmek bu bağlantıyı geçersiz kılar.",
+          "approve": "Onayla",
+          "reject": "İsteği reddet",
+          "later": "Daha sonra karar ver",
+          "toastApproved": "{{device}} artık “{{relay}}” aktarıcısına katılabilir",
+          "toastRejected": "{{device}} cihazından gelen istek reddedildi",
+          "titleAccount": "{{account}}, “{{relay}}” aktarıcısını kullanmak istiyor",
+          "otherAccountDevice": "Başka bir hesap · {{device}}",
+          "calloutAccount": "Onaylarsanız bu hesap “{{relay}}” üzerinde kendine ait ayrı bir hat alır: yalnızca kendi cihazlarına erişir, sizi veya cihazlarınızı göremez. Hesabın diğer cihazları bundan sonra tekrar izin istemeden doğrudan katılır.",
+          "calloutAccountRevoke": "Aktarıcı sayfasından paylaşımı istediğiniz zaman durdurabilirsiniz; bu hesabın cihazlarının bağlantısı hemen kesilir.",
+          "calloutUnknownAccount": "Bu hesabı tanımıyorsanız reddedin. Reddetmek bu bağlantıyı geçersiz kılar.",
+          "toastApprovedAccount": "{{account}} artık “{{relay}}” aktarıcısını kullanabilir",
+          "toastRejectedAccount": "{{account}} hesabından gelen istek reddedildi"
         }
       },
       "title": "Uzak bağlantı",
@@ -6458,6 +6614,82 @@
         "title": "Erişim iptal edilsin mi?",
         "description": "Erişim iptal edildiğinde bu cihazın bağlantısı hemen kesilir ve artık bu makineyi uzaktan kontrol edemez. Yeniden bağlanabilmesi için Ayarlar → Uzaktan Bağlantı bölümünden erişimini geri vermeniz gerekir.",
         "confirm": "Erişimi iptal et"
+      },
+      "v2": {
+        "switch": {
+          "title": "Agent-Net (Beta)",
+          "hint": "Bağlantı topolojisini ve son etkinlikleri gösterir. Her iki cihazda da Agent-Net etkinse ve cihazlar Agent-Net üzerinden eşleştirilmişse bağlantılar şifrelenir. Diğer cihazlar mevcut bağlantıyı kullanır. Yalnızca bu bilgisayar için geçerlidir."
+        },
+        "empty": "Henüz başka cihaz yok. Başka bir bilgisayarda veya telefonda aynı hesapta oturum açın; cihaz burada görünecektir.",
+        "stats": {
+          "online": "{{online}} / {{total}} çevrimiçi",
+          "direct": "{{count}} doğrudan",
+          "relay": "{{count}} aktarıcı üzerinden",
+          "unlinked": "{{count}} bağlantı kurulmamış",
+          "attention": "{{count}} ilgilenilmesi gereken",
+          "offline": "{{count}} çevrimdışı"
+        },
+        "node": {
+          "thisComputer": "Bu bilgisayar"
+        },
+        "path": {
+          "direct": "Doğrudan",
+          "relay": "{{name}} üzerinden",
+          "unlinked": "Çevrimiçi, bağlantı kurulmamış",
+          "offline": "Çevrimdışı"
+        },
+        "attention": {
+          "unresponsive": "Yanıt vermiyor, yeniden deneniyor"
+        },
+        "relay": {
+          "official": "Cindy aktarıcısı"
+        },
+        "ms": "{{value}} ms",
+        "flow": {
+          "out": "Gönderiliyor",
+          "in": "Alınıyor",
+          "both": "Gönderiliyor ve alınıyor"
+        },
+        "offlineFold": "{{count}} çevrimdışı",
+        "offlineShow": "Çevrimdışı cihazları göster",
+        "offlineHide": "Çevrimdışı cihazları gizle",
+        "group": {
+          "direct": "Doğrudan",
+          "relay": "Aktarıcı üzerinden",
+          "unlinked": "Bağlantı kurulmamış",
+          "attention": "İlgilenilmesi gerekiyor",
+          "offline": "Çevrimdışı"
+        },
+        "recent": {
+          "title": "Son etkinlikler",
+          "online": "{{name}} çevrimiçi oldu",
+          "offline": "{{name}} çevrimdışı oldu",
+          "empty": "Bu sayfa açıldığından beri hiçbir cihaz bağlanmadı veya ayrılmadı"
+        },
+        "popover": {
+          "status": "Durum",
+          "path": "Yol",
+          "activity": "Mesajlar",
+          "latency": "Gecikme",
+          "lastSeen": "Son görülme",
+          "controlling": "Bu bilgisayarı kontrol ediyor",
+          "rttNote": "son ölçüm",
+          "manage": "Cihazı yönet…",
+          "linkStatus": "{{name}} cihazına",
+          "version": "Cindy {{version}}",
+          "remoteDesktopFailed": "Uzak Masaüstü açılamadı",
+          "encryption": "Şifreleme",
+          "encrypted": "Uçtan uca şifrelenmiş",
+          "legacyConnection": "Eski bağlantı",
+          "encryptionUnknown": "Doğrulanmadı",
+          "legacyEncryptionHint": "Eski bağlantıdaki aktarıcı yolu uçtan uca şifrelenmez."
+        },
+        "protocol": {
+          "agentNet": "Agent-Net",
+          "deviceLink": "Device Link"
+        },
+        "onlyEncrypted": "Yalnızca Agent-Net Kullan",
+        "onlyEncryptedHint": "Eski bağlantıyı kullanmaya devam eden eski cihazlar ve paylaşımlar kullanılamaz. Varsayılan olarak kapalıdır."
       }
     },
     "tina": {
@@ -6544,7 +6776,8 @@
         "deleteFailed": "Silme başarısız oldu",
         "disconnected": "Tüm uzak bağlantılar kesildi",
         "disconnectFailed": "Uzak bağlantı kesilemedi",
-        "remoteSessionEnded": "Uzak cihaz bu görevi sonlandırdı"
+        "remoteSessionEnded": "Uzak cihaz bu görevi sonlandırdı",
+        "deleteRejectedWhileOffline": "Cihaz silinemedi: burada çevrimdışı görünmesine rağmen sunucu cihazı hâlâ çevrimiçi olarak listeliyor."
       },
       "control": "Kontrol",
       "standbyHint": "Bu bilgisayardaki başka bir Cindy örneği uzak bağlantıyı kullanıyor. Onu kapattığınızda bu örnek otomatik olarak devralır."
@@ -10260,7 +10493,6 @@
     },
     "glance": {
       "open": "Bir bakışta {{name}}",
-      "dueUnseen": "Bir yapılacak işin vadesi doldu",
       "computers": "Bilgisayarlar",
       "runningHere": "Burada çalışıyor",
       "online": "Çevrimiçi",
@@ -10268,64 +10500,15 @@
       "current": "Mevcut",
       "offlineCount_one": "{{count}} çevrimdışı",
       "offlineCount_other": "{{count}} çevrimdışı",
-      "todos": "Yapılacaklar",
       "showMore": "Daha fazla göster",
       "showLess": "Daha az göster",
       "doneCount_one": "{{count}} tamamlandı",
       "doneCount_other": "{{count}} tamamlandı",
-      "delete": "Sil",
-      "deleted": "Silindi. Tekrar eklenmeyecek.",
-      "undo": "Geri Al",
-      "undoFailed": "Geri alınamadı. Tekrar deneyin.",
-      "deleteFailed": "Silinemedi. Tekrar deneyin.",
-      "check": "Benim için kontrol et",
-      "checkMeta": "Bağlı e-postalarda ve sohbetlerde yeni yapılacak işleri arayın",
-      "checkPrompt": "Ele almam gereken yeni bir şey olup olmadığını görmek için e-posta ve mesajlar gibi bağlı kaynaklarımı kontrol et ve bunları yapılacaklar listeme ekle.",
-      "checkFailed": "Gönderilemedi. Tekrar deneyin.",
-      "dailyCheck": "Her gün kontrol et",
-      "dailyCheckMeta": "Hafta içi saat 9:00'da, yeni bir şey olmadığında sessiz",
       "recentTasks": "Son görevler",
       "unread": "Okunmamış sonuç",
-      "stopDailyCheck": "Günlük kontrolü durdur",
-      "loadFailed": "Yapılacaklar yüklenemedi. Tekrar deneyin.",
-      "dailyCheckFailed": "Kaydedilemedi. Tekrar deneyin.",
       "outputs": "Çıktılar",
       "outputMeta": "{{time}} · {{task}}",
-      "openFailed": "Dosya açılamadı",
-      "source": {
-        "conversation": "Siz sordunuz",
-        "mail": "E-postadan",
-        "feishu": "Feishu'dan",
-        "github": "GitHub'dan",
-        "community": "Topluluktan",
-        "task": "Bir görevden"
-      }
-    },
-    "autonomy": {
-      "title": "Görevlerimi Takip Et",
-      "descriptionOn": "{{name}}, görevler değiştiğinde özetleri kontrol eder ve sizi bilgilendirir.",
-      "movedFrom": "{{name}} üzerinden buraya taşındı",
-      "heldBy": "Şu anda bununla {{name}} ilgileniyor. Buraya taşımak için açın.",
-      "routineScopeHint": "Kendiniz oluşturduğunuz görevleri de dahil edin. Aşağıdaki yerleşik takip, atanmış görevlerdeki değişikliklere yanıt verir.",
-      "heldByNobody": "Etkin değil",
-      "restoreDefault": "Varsayılanı Geri Yükle ({{name}})",
-      "saveFailed": "Kaydedilemedi. Tekrar deneyin.",
-      "turnOff": {
-        "title": "Tüm görevlerin takibi durdurulsun mu?",
-        "description": "Bu kapatıldığında hiçbir ekip arkadaşı tüm görevleri takip etmez.",
-        "confirm": "Kapat",
-        "cancel": "İptal"
-      },
-      "allowSchedulerFollow": {
-        "title": "{{name}}, başlattığı görevleri takip edebilsin",
-        "description": "Varsayılan olarak {{scheduler}} yalnızca izler. Bu ayar açıkken {{name}} tarafından başlatılan bir görev bitmemişse {{scheduler}} onu da takip eder."
-      },
-      "consent": "Etkinleştirildiğinde bu bilgisayarda oluşturduğunuz görevlerin özetlerini okuyacak, ilerlemeyi değerlendirecek ve önemli değişiklikleri size bildireceğim. Bu, model kullanım hakkınızı tüketir. İstediğiniz zaman devre dışı bırakabilirsiniz.",
-      "invitation": {
-        "title": "Görevlerinizi takip etmemi ister misiniz?",
-        "start": "Takip Etmeye Başla",
-        "notNow": "Şimdi Değil"
-      }
+      "openFailed": "Dosya açılamadı"
     },
     "remoteSettings": {
       "empty": "Henüz burada bir şey yok.",
@@ -10347,9 +10530,6 @@
     },
     "creationName": "Ad",
     "settingsBack": "Ayarlara Dön",
-    "sidebar": {
-      "newTaskWith": "{{name}} ile bir görev başlat"
-    },
     "title": "Yol Arkadaşları",
     "add": "Yol arkadaşı ekle",
     "createWizard": {
@@ -10360,7 +10540,22 @@
       "description": "Ekip arkadaşı kendi belleğini ve yeniden kullanılabilir çalışma yöntemlerini yönetir. Klasörünü yalnızca bir şeyin düzeltilmesi gerektiğinde açın.",
       "contents": "SOUL.md, USER.md, system_prompt.md, skills/ ve memories/ içerir. Modeller, izinler ve bağlantılar Cindy tarafından yönetilmeye devam eder.",
       "open": "Klasörü aç",
-      "openFailed": "Ekip arkadaşı klasörü açılamadı."
+      "openFailed": "Ekip arkadaşı klasörü açılamadı.",
+      "projectMode": {
+        "memoryReviewName": "{{name}} · Belleği gözden geçir",
+        "carryover": {
+          "title": "Yükseltme öncesinden devralınanlar",
+          "intro": "Bu yardımcı yükseltildiğinde henüz tamamlanmamış olan işler. Hâlâ önemli olanlar üzerinde çalışmaya devam edin ve kalanları silin. Eski kayıtların tamamı yardımcının klasöründeki v1-archive klasöründe saklanır.",
+          "todos": "Tamamlanmamış yapılacaklar",
+          "work": "Çalışma tezgâhı öğeleri",
+          "threads": "Devam edenler",
+          "commitments": "Verilen sözler",
+          "waiting": "Beklenenler",
+          "corrections": "Yaptığınız düzeltmeler",
+          "routines": "Kontrol edilecek rutinler",
+          "upgrade": "Otomatik olarak devralınmayanlar"
+        }
+      }
     },
     "profile": {
       "title": "Profil",
@@ -10419,9 +10614,6 @@
     "model": {
       "description": "Bu ekip arkadaşının kullanacağı modelleri seçin.",
       "primary": "Birincil Model",
-      "task": "Görev Modeli",
-      "inheritPrimary": "Birincil Modeli Devral",
-      "inheritingPrimary": "Yeni arka plan görevleri için birincil modeli devralır",
       "restoreDefault": "Varsayılan modeli geri yükle"
     },
     "modelChain": {
@@ -10548,11 +10740,10 @@
       "showReplyTargetHint": "Ekip arkadaşının yanıtının üzerinde hangi mesajınızı yanıtladığını gösterin. Eski yanıtlarda bu gösterilmez."
     },
     "session": {
-      "ownedByBot": "{{name}} adlı ekip arkadaşının arka plan görevi",
+      "ownedByBot": "{{name}} tarafından açıldı",
       "backToBot": "{{name}} adlı ekip arkadaşına dön"
     },
     "collab": {
-      "deliveryFailed": "Sonuç asıl sohbete iletilemedi. Bu göreve kaydedildi.",
       "backgroundTask": "Arka plan görevi",
       "trackedTask": "Bağımsız çalışır ve sonucunu döndürür",
       "stopTask": "Görevi durdur",
@@ -10569,8 +10760,6 @@
       "actionFailed": "Bu işlem gerçekleşmedi. Tekrar deneyin.",
       "retrying": "Henüz başlamadı — yeniden deneniyor…",
       "status": {
-        "queued": "Başlanıyor",
-        "waiting": "Girdi bekleniyor",
         "running": "Üzerinde çalışıyor",
         "completed": "Bitti",
         "failed": "Başarısız",
@@ -10586,13 +10775,6 @@
       },
       "viewResult": "Sonucu Görüntüle",
       "noWrittenResult": "Yazılı bir sonuç yok.",
-      "addNote": "Not ekle",
-      "addNotePlaceholder": "Arka plan görevine söyleyin… göndermek için Enter'a basın",
-      "addNoteSent": "Arka plan görevine gönderildi",
-      "stop": "Durdur",
-      "lookAt": "Göz at",
-      "awaitingConfirm": "Sizi bekliyor: {{summary}}",
-      "awaitingConfirmGeneric": "Sizi bekliyor",
       "elapsed": "Şimdiye kadar {{duration}}",
       "tookTime": "{{duration}} sürdü",
       "expandResult": "Sonucu göster",
@@ -10976,7 +11158,6 @@
         "planning": "İş bölüştürülüyor…"
       },
       "task": {
-        "label": "Görev",
         "state": {
           "started": "Devam ediyor",
           "waiting": "Onayınız bekleniyor",
@@ -11332,30 +11513,6 @@
           }
         }
       },
-      "system": {
-        "group": "Sistem becerileri",
-        "meta": "{{total}} beceriden {{on}} tanesi açık",
-        "pageMeta": "Sistem becerisi · Cindy ile güncellenir",
-        "use": "Bu ekip arkadaşı için etkinleştir",
-        "whenOff": "Kapalıyken",
-        "items": {
-          "todo": {
-            "name": "Yapılacaklar",
-            "hint": "İsteklerinizi ve fark ettiklerini kaydeder, zamanı geldiğinde hatırlatır.",
-            "off": "Yapılacakları kaydetmeyi, düzenlemeyi ve hatırlatmayı durdurur. Mevcut yapılacaklar korunur ve bunu yeniden açtığınızda takipleri devam eder."
-          },
-          "routine": {
-            "name": "Rutinler",
-            "hint": "Bir programa göre çalışan rutinleri kurar ve yönetir.",
-            "off": "Rutin oluşturmayı veya değiştirmeyi durdurur. Mevcut rutinler çalışmaya devam eder ve Rutinler sayfasından yönetilebilir."
-          },
-          "follow": {
-            "name": "Çalışma tezgâhı ve takip",
-            "hint": "Tüm görevlerinizin gidişatını izler ve kendisine devrettiklerinizi takip eder.",
-            "off": "Görevlerinizi kendiliğinden kontrol etmeyi ve takip etmeyi durdurur. Sohbette yine de isteyebilirsiniz."
-          }
-        }
-      },
       "learned": {
         "group": "Öğrenilen beceriler",
         "empty": "Henüz öğrenilmiş beceri yok. Gece öğrenmesi sık tekrarlanan yaklaşımları beceri olarak kaydeder; sohbette bir yöntemi hatırlamasını da isteyebilirsiniz.",
@@ -11390,11 +11547,8 @@
       "toolSettings": "Araç ayarları",
       "notTurnedOn": "Bu bilgisayar için açık değil",
       "turnOn": "Etkinleştir",
-      "permissions": "İzinler"
-    },
-    "systemSkills": {
-      "followOffHint": "{{name}} adlı ekip arkadaşının Çalışma tezgâhı ve takip sistem becerisi kapalı. Bunu kullanmak için Yetenekler bölümünden yeniden açın.",
-      "offHint": "{{skill}} sistem becerisi kapalı. Yetenekler bölümünden yeniden açtığınızda tekrar çalışır."
+      "permissions": "İzinler",
+      "officialInherited": "Cindy resmî · Bu bilgisayarın ayarlarını izler"
     },
     "guided": {
       "title": "Ekip arkadaşı oluştur",
@@ -11568,7 +11722,7 @@
       "mergeLabel": "Yinelenen Cindy'leri Birleştir",
       "mergeHint": "{{count}} Cindy'niz var: {{devices}}",
       "mergeTitle": "{{count}} Cindy tek bir Cindy'de birleştirilsin mi?",
-      "mergeDescription": "Yalnızca bir Cindy kalır. Diğerlerinin sohbet geçmişi, anıları, becerileri, yapılacakları ve rutinleri beraberinde gelir; aynı adı taşıyan ancak içeriği farklı olan anı veya beceri ikinci bir kopya olarak korunur, asla üzerine yazılmaz. Diğer Cindy'ler kapatılır; verileri bulutta ve kendi bilgisayarlarında kalır.",
+      "mergeDescription": "Yalnızca bir Cindy kalır. Diğerlerinin sohbet geçmişi, anıları, becerileri ve rutinleri beraberinde gelir; aynı adı taşıyan ancak içeriği farklı olan anı veya beceri ikinci bir kopya olarak korunur, asla üzerine yazılmaz. Diğer Cindy'ler kapatılır; verileri bulutta ve kendi bilgisayarlarında kalır.",
       "mergeKeep": "Adı, kişiliği ve ayarları korunacak Cindy",
       "mergeAction": "Birleştir",
       "merged": "{{count}} Cindy tek bir Cindy'de birleştirildi, {{messages}} mesaj taşındı",
@@ -11587,7 +11741,11 @@
       "transferred": "{{name}}, “{{device}}” cihazına taşındı",
       "transferConflict": "{{name}} yol arkadaşının ana bilgisayarı zaten değişti, bu yüzden taşınmadı",
       "transferOffline": "Sunucuya ulaşılamıyor. {{name}} bu bilgisayarda çalışmaya devam ediyor",
-      "transferFailed": "{{name}}, “{{device}}” cihazına taşınamadı"
+      "transferFailed": "{{name}}, “{{device}}” cihazına taşınamadı",
+      "targetOutdated": "“{{device}}”, henüz {{name}} çalıştıramayan eski bir Cindy sürümü kullanıyor. Önce o cihazdaki Cindy'yi güncelleyin",
+      "targetOutdatedItem": "“{{device}}” cihazına taşı · eski Cindy",
+      "targetOutdatedMeta": "Eski Cindy",
+      "olderTargetNote": "“{{device}}” eski bir Cindy sürümü kullanıyor. Bu nedenle {{name}} orada eski yöntemle çalışır: sohbet geçmişi eşitlenmeye devam eder, ancak proje kuralları ve otomasyonlar orada uygulanmaz."
     },
     "market": {
       "heading": "Ekip Arkadaşlarını Keşfet",
@@ -11954,7 +12112,16 @@
       "failed": "Projeler güncellenemedi. Kaydedilmiş durumu kontrol etmek için yeniden yükleyin.",
       "noAvailable": "Önce proje listesinden daha fazla proje ekleyin."
     },
-    "profileSaveOffline": "Takım arkadaşının bilgisayarına bağlanılamıyor. Yeniden bağlanın ve ardından tekrar kaydedin."
+    "profileSaveOffline": "Takım arkadaşının bilgisayarına bağlanılamıyor. Yeniden bağlanın ve ardından tekrar kaydedin.",
+    "automations": {
+      "title": "Otomasyonlar",
+      "description": "{{name}} adlı yardımcının projesindeki otomasyonlar. Bunları burada açıp kapatabilir, Otomasyonlar bölümünde düzenleyebilirsiniz.",
+      "empty": "{{name}} adlı yardımcının henüz otomasyonu yok.",
+      "failed": "Otomasyonlar yüklenemedi.",
+      "toggle": "“{{name}}” otomasyonunu aç",
+      "manage": "Otomasyonlar bölümünde yönet",
+      "create": "Otomasyonlar bölümünde oluştur"
+    }
   },
   "common": {
     "dismiss": "Kapat"
@@ -12007,7 +12174,6 @@
     "outboundAttachmentsIncomplete": "⚠️ Eklerin teslimi tamamlanamadı: {{count}} ek gönderilemedi ({{names}}).",
     "unnamedAttachment": "Adsız ek"
   },
-  "markdown": {},
   "diffPanel": {
     "shell": {
       "resizeHandleAria": "Panel genişliğini yeniden boyutlandır",
@@ -12510,47 +12676,47 @@
         "claude-code": {
           "ask": {
             "label": "Varsayılan izinler",
-            "description": "Çalışma alanı içinde okuma/yazma erişimine izin verir; daha yüksek izinler, ağ erişimi veya çalışma alanı dışındaki yollar kullanılmadan önce sorar."
+            "description": "Gerektiğinde işlemleri siz onaylarsınız."
           },
           "acceptEdits": {
             "label": "Düzenlemeleri otomatik kabul et",
-            "description": "Tekrarlanan onayları azaltmak için dosya düzenleme isteklerini otomatik olarak kabul eder. Daha yüksek riskli komutlar veya izinler, temel izin politikasına tabi olmaya devam eder."
+            "description": "Dosya düzenlemelerine doğrudan izin verilir; diğer işlemleri gerektiğinde siz onaylarsınız."
           },
           "auto": {
             "label": "Otomatik onayla",
-            "description": "Çalışma alanı içinde okuma/yazma erişimine izin verir ve yetki yükseltme isteklerini otomatik olarak inceler; yüksek riskli işlemler yine de reddedilebilir veya onay gerektirebilir. Bu, kesintileri azaltır ancak hatalı kararlar verebilir."
+            "description": "İşlemleri bir yapay zekâ modeli onaylar; bu, ek zaman alabilir. Gerektiğinde siz onay verirsiniz."
           },
           "bypassPermissions": {
             "label": "Tam erişim",
-            "description": "Herhangi bir dosyayı düzenlemeye ve ağ kullanan komutları ek onay olmadan çalıştırmaya izin verir. En yüksek risk düzeyidir; yalnızca güvenilir görevlerde kullanın."
+            "description": "Çalışma alanı dışındaki dosyalarla ilgili işlemler ve ağ komutları dahil olmak üzere rutin işlemlere doğrudan izin verilir."
           }
         },
         "codex": {
           "ask": {
             "label": "Varsayılan izinler",
-            "description": "Çalışma alanı içinde okuma/yazma erişimine izin verir; daha yüksek izinler, ağ erişimi veya çalışma alanı dışındaki yollar kullanılmadan önce sorar."
+            "description": "Gerektiğinde işlemleri siz onaylarsınız."
           },
           "auto": {
             "label": "Otomatik onayla",
-            "description": "Korunan çalışma alanı sanal alanında komutları otomatik olarak çalıştırır. Sanal alan sınırını aşan işlemler otomatik incelemeye gönderilir; yüksek riskli işlemler yine de reddedilebilir veya onay gerektirebilir."
+            "description": "İşlemleri bir yapay zekâ modeli onaylar; bu, ek zaman alabilir. Gerektiğinde siz onay verirsiniz."
           },
           "bypassPermissions": {
             "label": "Tam erişim",
-            "description": "Herhangi bir dosyayı düzenlemeye ve ağ kullanan komutları ek onay olmadan çalıştırmaya izin verir. En yüksek risk düzeyidir; yalnızca güvenilir görevlerde kullanın."
+            "description": "Çalışma alanı dışındaki dosyalarla ilgili işlemler ve ağ komutları dahil olmak üzere rutin işlemlere doğrudan izin verilir."
           }
         },
         "pi": {
           "ask": {
             "label": "Varsayılan izinler",
-            "description": "Salt okunur araçlar doğrudan çalışır; dosya yazma, komut çalıştırma ve MCP araçları her seferinde onay ister."
+            "description": "Gerektiğinde işlemleri siz onaylarsınız."
           },
           "auto": {
             "label": "Otomatik onayla",
-            "description": "Çalışma alanı içindeki yazma işlemleri ve güvenli komutlar otomatik çalışır; çalışma alanı dışındaki yazma işlemleri, riskli komutlar ve MCP araçları yine onay ister."
+            "description": "İşlemleri bir yapay zekâ modeli onaylar; bu, ek zaman alabilir. Gerektiğinde siz onay verirsiniz."
           },
           "bypassPermissions": {
             "label": "Tam erişim",
-            "description": "Herhangi bir dosyayı düzenlemeye ve ağ kullanan komutları ek onay olmadan çalıştırmaya izin verir. En yüksek risk düzeyidir; yalnızca güvenilir görevlerde kullanın."
+            "description": "Çalışma alanı dışındaki dosyalarla ilgili işlemler ve ağ komutları dahil olmak üzere rutin işlemlere doğrudan izin verilir."
           }
         }
       }
@@ -13383,20 +13549,22 @@
       "piManagerUnavailable": "Uzak Pi yöneticisi hazır değil. Kısa süre sonra tekrar deneyin; sorun sürerse Ayarlar → Uzak makineler bölümünden Pi'yi yeniden yükleyin.",
       "piBundledNodeMissing": "Uzak sunucuda çalışma zamanı (Node.js) eksik. Ayarlar → Uzak makineler bölümünden sunucuyu genişletip önce Claude Code veya Codex için Yükle'ye tıklayın (Node.js ile birlikte gelirler), ardından bir Pi görevi başlatın.",
       "remoteCompactEncryptedContent": "Uzak şifreli içerik sıkıştırıldı",
-      "contextOverflow": "Bu mesajın kendisi modelin bağlam penceresini aşıyor; bu nedenle Cindy onu yeni bir Agent görevinde sürdüremiyor. Girdiyi kısaltın veya büyük bir eki kaldırıp yeniden deneyin.",
+      "contextOverflow": "Bu mesajın kendisi modelin bağlam penceresini aşıyor; bu nedenle Cindy onu yeni bir Agent oturumunda sürdüremiyor. Girdiyi kısaltın veya büyük bir eki kaldırıp yeniden deneyin.",
       "attachmentAccessDeniedTitle": "Cindy kaynak eki okuyamıyor; mesaj gönderilmedi.",
       "attachmentAccessDeniedRecovery": "İndirilenler'e veya erişilebilir başka bir klasöre bir kopya kaydedin, asıl eki kaldırın ve tekrar göndermeden önce ek düğmesini kullanarak kopyayı ekleyin."
     },
     "backgroundActivity": {
       "status": "Arka plan alt görevleri çalışıyor, model kullanımını tüketmeye devam ediyor…",
-      "bashStatus_one": "{{count}} arka plan görevi çalışıyor…",
-      "bashStatus_other": "{{count}} arka plan görevi çalışıyor…",
       "stopAll": "Tümünü durdur",
       "stopAllTitle": "Bu görevin arka plan işlemini kapat ve tüm arka plan alt görevlerini durdur (görev kullanılabilir kalır)",
       "stopBashTitle": "Bu görevde hâlâ çalışan arka plan işlerini durdur (görev işlemi korunur)",
       "stopping": "Durduruluyor…",
       "remoteStopUnsupported": "Uzak bilgisayardaki {{appName}} sürümü arka plan görevlerini buradan durdurmak için çok eski. Güncelleyip tekrar deneyin",
-      "remoteStopUnreachable": "Uzak bilgisayar şu anda yanıt vermediğinden arka plan görevi durdurulmadı. Daha sonra tekrar deneyin"
+      "remoteStopUnreachable": "Uzak bilgisayar şu anda yanıt vermediğinden arka plan görevi durdurulmadı. Daha sonra tekrar deneyin",
+      "bashWorkStatus_one": "Arka planda çalışıyor ({{count}} komut)…",
+      "bashServiceStatus_one": "{{count}} arka plan hizmeti çalışıyor",
+      "bashWorkStatus_other": "Arka planda çalışıyor ({{count}} komut)…",
+      "bashServiceStatus_other": "{{count}} arka plan hizmeti çalışıyor"
     },
     "interruptedBanner": {
       "text": "Bu görev, çalışırken uygulama kapandığı için kesintiye uğradı.",
@@ -13433,8 +13601,8 @@
       "openPlugin": "Eklentiyi aç"
     },
     "worktreeRestoreBanner": {
-      "text": "Bu görevin worktree'si temizlenmiş (dizin eksik).",
-      "textPendingSnapshot": "Bu görevin uygulanmamış bir değişiklik anlık görüntüsü var.",
+      "text": "Bu görevin “{{name}}” adlı worktree'si temizlenmiş (dizin bulunamıyor).",
+      "textPendingSnapshot": "Bu görevin “{{name}}” adlı worktree'sinde uygulanmamış bir değişiklik anlık görüntüsü var.",
       "restoreAction": "worktree'yi geri yükle",
       "applySnapshotAction": "Değişiklikleri uygula",
       "restoring": "Geri yükleniyor…",
@@ -13996,7 +14164,7 @@
       "editRollbackHint": "Göndermek, son turdaki {{count}} dosyaya yapılan değişiklikleri geri alacaktır",
       "editConversationOnlyHint": "Yalnızca diyalog geçmişi güncellenecektir",
       "forkErrors": {
-        "unsupportedHistory": "Bu noktaya ait geçmiş Agent görevi kullanılamadığı için buradan yeni bir görev başlatılamıyor",
+        "unsupportedHistory": "Bu noktaya ait geçmiş Agent oturumu kullanılamadığı için buradan yeni bir görev başlatılamıyor",
         "noPriorAssistant": "Bir yapay zekâ yanıtını izleyen bir mesajdan yeni görev başlatın",
         "sourceNeverRan": "Asıl görev henüz çalışmadığından yeni görev başlatılamıyor",
         "codexStateUnavailable": "Codex görev durumu kullanılamadığından yeni görev başlatılamıyor. {{detail}}",
@@ -14026,7 +14194,7 @@
       "errors": {
         "noPriorAssistantPreview": "Lütfen bir yapay zekâ yanıtını izleyen bir sorudan geri sarın (bu sorudan önce asistan yanıtı yok)",
         "sessionRunning": "Görev zamanında durmadı — geri sarmayı tekrar deneyin",
-        "noLiveQuery": "Görev etkin değil — geri sarmadan önce SDK'yı uyandırmak için herhangi bir mesaj (yalnızca “tamam” bile olabilir) gönderin",
+        "noLiveQuery": "Görevin çalışma zamanı geri yüklenemediği için geri sarma tamamlanamadı.",
         "noPriorAssistantCommit": "Lütfen bir yapay zekâ yanıtını izleyen bir sorudan geri sarın",
         "commitGeneric": "Geri sarma başarısız oldu, lütfen tekrar deneyin",
         "remoteNotSupported": "Uzak Claude Code görevleri henüz geri sarmayı desteklemiyor"
@@ -14110,7 +14278,8 @@
       "REMOTE_AGENT_DEVICE_LIMIT": "Cihazın Agent çalıştırma sınırına ulaşıldı.",
       "REMOTE_AGENT_TOTAL_LIMIT": "Toplam Agent çalıştırma sınırına ulaşıldı.",
       "REMOTE_AGENT_RESUME_LOST": "Agent devam durumu kayboldu.",
-      "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Medya erişimi reddedildi."
+      "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Medya erişimi reddedildi.",
+      "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "Bu eski bir paylaşım ve \"Yalnızca Agent-Net Kullan\" açıkken kullanılamaz. Devam etmek için bu anahtarı kapatın veya başka bir modele geçin."
     },
     "generatedFiles": {
       "title": "Bu mesajda oluşturulan dosyalar",
@@ -14291,6 +14460,19 @@
       "closeFailed": "Yan sohbet kapatılamadı. Lütfen tekrar deneyin.",
       "sharedTaskUnavailable": "Yan sohbetler paylaşılan görevlerde kullanılamaz.",
       "archivedTask": "Bir yan sohbet açmak için bu görevin arşivini kaldırın."
+    },
+    "botStartedTasks": {
+      "started": "Başlatılan görevler",
+      "handedTo": "Devredilen görevler",
+      "open": "“{{title}}” görevini aç",
+      "untitled": "Başlıksız görev",
+      "startedOne": "Başlatıldı",
+      "handedToOne": "Devredildi"
+    },
+    "botTaskLetter": {
+      "replied": "yanıtladı",
+      "toggle": "“{{title}}” görevinden gelen yanıtı göster veya gizle",
+      "openTask": "Görevi aç"
     }
   },
   "ccAgent": {
@@ -14895,7 +15077,8 @@
         "compactFailed": "Sıkıştırma başarısız oldu",
         "compactNothing": "Henüz sıkıştırılacak bir şey yok",
         "sessionBranches": "Görev dalları",
-        "copySessionLink": "Görev bağlantısını kopyala"
+        "copySessionLink": "Görev bağlantısını kopyala",
+        "compactResumeFirst": "Bağlamını sıkıştırmadan önce bu görevi sürdürmek için bir mesaj gönderin."
       },
       "sessionBranches": {
         "title": "Görev dalları",
@@ -15489,7 +15672,8 @@
         "openConfigAria": "Proje otomasyonu yapılandırmasını aç",
         "openConfigFailed": "Dosya açılamadı",
         "reload": "Yeniden Yükle",
-        "reloadAria": "Proje otomasyonunu yeniden yükle"
+        "reloadAria": "Proje otomasyonunu yeniden yükle",
+        "teammate": "{{name}} · Yardımcı"
       },
       "promote": {
         "menu": "Proje otomasyonuna dönüştür",
@@ -16392,7 +16576,15 @@
       "regionCodeCn": "CN",
       "regionCodeDev": "Geliştirme",
       "submit": "Geri bildirim gönder",
-      "cancel": "İptal"
+      "cancel": "İptal",
+      "previewLabel": "GitHub · Herkese açık geri bildirim",
+      "edit": "Düzenle",
+      "doneEditing": "Düzenlemeyi bitir",
+      "publicSubmit": "Herkese açık olarak gönder",
+      "publicationNotice": "Geri bildiriminiz ve adınız GitHub'da herkese açık olacak.",
+      "attribution": "{{name}} tarafından",
+      "environment": "Ortam bilgileri dâhil",
+      "identitySettings": "Ad ve hesap"
     },
     "redirect": {
       "descriptionBefore": "Yaz",
@@ -17444,13 +17636,11 @@
       "customRolePlaceholder": "+ özel rol adı (isteğe bağlı)",
       "customRolePredefinedError": "Özel rol adı, önceden tanımlanmış bir rol adıyla aynı olamaz",
       "agentLabel": "Agent",
-      "modelLabel": "Model",
       "permissionLabel": "İzin modu",
       "noAvailableModels": "Kullanılabilir {{agent}} modeli yok. Ayarlardan sağlayıcı bağlantısını ve kimlik bilgilerini kontrol edin.",
       "effortLabel": "Akıl Yürütme Yoğunluğu",
       "initialTaskLabel": "İlk görev",
-      "optional": "(isteğe bağlı)",
-      "initialTaskPlaceholder": "Bu Worker için isteğe bağlı ilk görev",
+      "initialTaskPlaceholder": "Vermek istediğiniz ilk işi yazın veya boş bırakıp işi Lead’in atamasına izin verin",
       "enableCollabTitle": "İş birliğini başlat",
       "enableCollabSubmit": "İş birliğini başlat",
       "executionDeviceLabel": "Çalıştırılacak cihaz",
@@ -17470,7 +17660,31 @@
         "deviceOutdated": "{{device}} cihazındaki Cindy güncel değil. Orada Worker çalıştırmak için güncelleyin.",
         "dirRejected": "{{device}} cihazında klasör bulunamadı veya kullanılamıyor. Worker oluşturulmadı.",
         "dirUnavailable": "{{device}} cihazındaki klasör geçici olarak kullanılamıyor. Bağlantıyı veya ağ sürücüsünü kontrol edip tekrar deneyin. Worker oluşturulmadı."
-      }
+      },
+      "enableCollabDescription": "Bu görev Lead olur: işleri atar ve sonuçları kontrol eder. Worker, işi yapan ve sonucu bildiren ayrı bir Agent'tır.",
+      "templateLabel": "Worker'ın Yapacağı İş",
+      "templates": {
+        "developer": {
+          "name": "Geliştir"
+        },
+        "reviewer": {
+          "name": "İncele",
+          "task": "Lead'in çalışmasını inceleyin ve önerilerde bulunun."
+        },
+        "tester": {
+          "name": "Test Et",
+          "task": "Lead'in şu ana kadarki çalışmasını test edin ve başarısız olanları yeniden üretme adımlarıyla birlikte bildirin."
+        }
+      },
+      "removePreset": "{{role}} rolünü kaldır",
+      "removePresetConfirm": {
+        "title": "“{{role}}” kaldırılsın mı?",
+        "description": "Rol Ekle ile istediğiniz zaman yeniden ekleyebilirsiniz.",
+        "confirm": "Rolü Kaldır",
+        "cancel": "İptal"
+      },
+      "addRole": "Rol Ekle",
+      "moreSettings": "Diğer Ayarlar"
     },
     "rolePill": {
       "unread": "Okunmamış güncelleme",
@@ -18208,168 +18422,10 @@
     "compression": "Uzun içerikleri kısaltmak için."
   },
   "routines": {
-    "deliveryLabel": "Sonuç teslimi",
-    "deliveryDirect": "Doğrudan yol arkadaşı sohbetinde göster",
-    "deliveryProcess": "Yol arkadaşından işlemesini ve yanıtlamasını iste",
-    "deliveryIm": "Mesajlaşma botu aracılığıyla gönder",
-    "deliveryNone": "Yalnızca yürütme görevinde tut",
-    "deliveryHint": "Doğrudan teslim ek model çağrısı kullanmaz. Sessiz kontroller, işlem gerektirmeyen sonuçları yine göstermez.",
-    "deliveryRecipient": "Alıcı",
-    "deliveryUnavailable": "Hedef kullanılamıyor",
-    "deliveryNoRecipients": "Bir mesajlaşma botu bağlayıp onunla sohbet edin, ardından bu ayarları yeniden açın.",
-    "deliveryFailed": "Tamamlandı, teslim edilemedi",
-    "deliveryFailedHint": "Sonuç kaydedildi. Teslim ayarlarını kontrol edin; yalnızca yeniden göndermek için işi tekrar çalıştırmayın.",
-    "deliveryDelivered": "Sonuç teslim edildi",
-    "onEvent": "Olay: {{source}} · {{event}}",
-    "triggerDetails": "Tetikleyicileri görüntüle ({{count}}; herhangi biri çalıştırmayı başlatabilir)",
-    "noTriggers": "Tetikleyici ayarlanmadı",
-    "unsavedTitle": "Kaydedilmemiş değişiklikler",
-    "unsavedDescription": "Ayrılırsanız rutinde yaptığınız bu değişiklikler kaybolacak.",
-    "discard": "Değişiklikleri Yok Say",
-    "continueEditing": "Düzenlemeye Devam Et",
-    "title": "Rutinler",
-    "add": "Rutin ekle",
-    "back": "Rutinlere dön",
-    "error": "Rutinler güncellenemedi. Ayarları kontrol edip tekrar deneyin.",
-    "empty": "Bu ekip arkadaşına neyi ne zaman yapacağını belirtmek için bir rutin ekleyin.",
-    "enabled": "Etkin",
-    "paused": "Duraklatıldı",
-    "runNow": "Şimdi çalıştır",
-    "running": "Çalışıyor…",
-    "name": "Ad",
-    "instructions": "Talimatlar",
-    "when": "Çalıştırma zamanı",
-    "addTrigger": "Tetikleyici ekle",
-    "removeTrigger": "Tetikleyiciyi kaldır",
-    "schedule": "Zamanlama",
     "hourly": "Saatlik",
-    "daily": "Günlük",
-    "weekdays": "Hafta içi",
-    "weekly": "Haftalık",
-    "monthly": "Aylık",
-    "interval": "Aralık",
-    "advanced": "Gelişmiş…",
     "everyMinutes": "Her {{count}} dakikada bir",
-    "minutes": "Dakika",
-    "expression": "Cron ifadesi",
-    "timezone": "Saat dilimi",
-    "delete": "Rutini sil",
-    "save": "Rutini kaydet",
-    "saved": "Rutin kaydedildi",
-    "deleteConfirm": "Bu rutin silinsin ve bekleyen çalıştırmaları iptal edilsin mi?",
-    "keep": "Rutini koru",
-    "openTask": "Görevi aç",
-    "history": "Çalıştırma geçmişi",
-    "noRuns": "Bu rutin henüz çalıştırılmadı.",
-    "field": "Alan",
-    "operator": "Koşul",
-    "value": "Değer",
-    "addFilter": "Koşul ekle",
-    "removeFilter": "Koşulu kaldır",
     "pluginCapability": "Tanımlanmış olayları rutinlerinize iletir. Yalnızca sizin yapılandırdığınız rutinler çalışabilir.",
-    "time": "Zaman",
-    "day": "Gün",
-    "weekday": "Haftanın günü",
-    "status": {
-      "queued": "Kuyrukta",
-      "running": "Çalışıyor",
-      "success": "Tamamlandı",
-      "failed": "Başarısız",
-      "interrupted": "Kesintiye uğradı",
-      "cancelled": "İptal Edildi",
-      "skipped": "Kontrol edildi · model atlandı"
-    },
-    "sourceStatus": {
-      "listening": "Dinleniyor",
-      "disconnected": "Dinlemiyor",
-      "error": "Kaynakla ilgilenilmesi gerekiyor"
-    },
-    "operators": {
-      "equals": "Eşittir",
-      "contains": "İçerir",
-      "not-equals": "Eşit değildir"
-    },
-    "quiet": "Kontroller bir şey bulamadığında sessiz kal",
-    "sessionMode": "Çalıştırma görevi",
-    "sessionModePersistent": "Kalıcı görev (bağlamı korur)",
-    "sessionModeFresh": "Her tetikleyicide yeni görev (bağlamı ayırır)",
-    "sessionModeHint": "Kalıcı seçeneği, rutin için tek bir konuşmayı korur. Yeni görev seçeneği, her tetikleyici için ayrı bir konuşma oluşturup kapatır.",
-    "quietHint": "Yalnızca değişiklikleri veya sorunları bildirin. Hatırlatıcılar ve zamanlanmış mesajlar için kapatın.",
-    "checkSource": "Kontrol yöntemi",
-    "checkCommand": "Çalıştırma öncesi kontrol komutu",
-    "checkHint": "İsteğe bağlıdır. Her çalıştırmadan önce bilgisayarda kontrol yapar: exit 2 çalıştırmayı atlar, exit 0 devam eder, hatalar görünür kalır. Kaldırmak için temizleyin.",
-    "timeoutMs": "Kontrol zaman aşımı (ms, sınır olmaması için boş bırakın)",
-    "advancedSettings": "Gelişmiş ayarlar",
-    "builtinFollowUp": {
-      "name": "Atanan görevleri takip et (yerleşik)",
-      "hint": "Atanan görevler durakladığında, size ihtiyaç duyduğunda, başarısız olduğunda, kullanım sınırına ulaştığında veya tamamlandığında takip edin."
-    },
-    "todoCheck": {
-      "name": "Günlük yapılacaklar kontrolü"
-    },
-    "builtinNightlyLearning": {
-      "name": "Gece öğrenimi (yerleşik)",
-      "title": "Gece öğrenimi",
-      "hint": "Her gece 3:30'da konuşmalarınızı gözden geçirir: anıları düzenler ve tekrarlanan yaklaşımları beceri olarak kaydeder. Yeni bir şey yoksa model çağrısı yapılmadan atlanır.",
-      "hintWeekly": "Pazartesileri 3:30'da haftanın konuşmalarını gözden geçirir: anıları düzenler ve tekrarlanan yaklaşımları beceri olarak kaydeder. Yeni bir şey yoksa model çağrısı yapılmadan atlanır."
-    },
-    "nightly": {
-      "switchLabel": "Zamanlamaya göre gözden geçir",
-      "paused": "Duraklatıldı. Konuşmalar sayılmaya devam eder; yeniden açtığınızda gözden geçirmeler zamanlamaya göre sürer.",
-      "running": "Gözden geçiriliyor…",
-      "memoryOff": "Bellek kapalı olduğu için yalnızca beceriler gözden geçirilir.",
-      "pending": "Gözden geçirilecekler",
-      "pendingTurns_one": "{{count}} karşılıklı yazışma",
-      "pendingTurns_other": "{{count}} karşılıklı yazışma",
-      "pendingNone": "Yeni bir şey yok; sonraki çalıştırma atlanacak",
-      "last": "Son çalıştırma",
-      "lastNever": "Henüz çalıştırılmadı",
-      "lastFailed": "Tamamlanamadı; bir dahaki sefere tekrar denenecek",
-      "lastLearned_one": "{{count}} değişiklik",
-      "lastLearned_other": "{{count}} değişiklik",
-      "nothing": "Değiştirilecek bir şey yok",
-      "viewHistory": "Geçmişi görüntüle",
-      "notHere": "Gece öğrenimi yalnızca ekip arkadaşının ana bilgisayarında çalışır.",
-      "switchHint": "Yeni bir şey yoksa model çağrısı yapılmadan atlanır",
-      "frequency": "Sıklık",
-      "daily": "Günlük",
-      "weekly": "Haftalık",
-      "dailyHint": "Her gün 3:30'da",
-      "weeklyHint": "Pazartesileri 3:30'da",
-      "runNow": "Şimdi gözden geçir",
-      "history": "Geçmiş",
-      "empty": "Henüz hiçbir şey gözden geçirilmedi. Yeni konuşmalar olduğunda ilk gözden geçirme zamanlamaya göre yapılır.",
-      "manual": "Sizin tarafınızdan çalıştırıldı",
-      "readTurns_one": "{{count}} karşılıklı yazışma okundu",
-      "readTurns_other": "{{count}} karşılıklı yazışma okundu",
-      "undone": "Geri alındı",
-      "undo": "Geri Al",
-      "redo": "Geri yükle",
-      "watching": "İzlenen yaklaşımlar",
-      "watchingHint": "Yalnızca bir kez görülen yaklaşımlar burada bekler ve yüklenmez. Ancak benzer bir durum tekrar ortaya çıkarsa beceriye dönüşürler.",
-      "promote": "Beceriye dönüştür",
-      "decline": "Öğrenme",
-      "changedSince": "Bu öğe sonradan değiştirildiği için geri alınamaz",
-      "failed": "Tamamlanamadı. Tekrar deneyin.",
-      "item": {
-        "memoryCreated": "“{{title}}” hatırlandı",
-        "memoryUpdated": "“{{title}}” anısı düzenlendi",
-        "memoryDeleted": "“{{title}}” anısı silindi",
-        "memoryMerged": "“{{title}}” anısı “{{into}}” ile birleştirildi",
-        "skillCreated": "“{{title}}” becerisi öğrenildi",
-        "skillUpdated": "“{{title}}” becerisi güncellendi",
-        "skillDisabled": "“{{title}}” becerisi devre dışı bırakıldı",
-        "skillMerged": "“{{title}}” becerisi “{{into}}” ile birleştirilip devre dışı bırakıldı"
-      }
-    },
-    "remote": {
-      "pause": "Rutini duraklat",
-      "resume": "Rutini sürdür",
-      "addSchedule": "Zamanlama ekle",
-      "addInterval": "Aralık ekle",
-      "addEvent": "Olay tetikleyicisi ekle",
-      "filterField": "Filtre alanı"
-    }
+    "advancedSettings": "Gelişmiş ayarlar"
   },
   "cindyMakeDoctor": {
     "description": "Cindy'yi derlemek için yerel ortamı kontrol edin. Kullanım: /cindy-make-doctor",
@@ -19409,10 +19465,7 @@
     "sourcePresent": "[Kaynak] Ana bilgisayar, kullanıcının orijinal sözlerini değişiklik yapmadan istek arka planı olarak korudu. Geçerli istek Agent ekinde yer almaktadır.",
     "sourceMissing": "[Kaynak] Doğrulanabilir orijinal kullanıcı metni bulunamadı.",
     "userPrefix": "Kullanıcının orijinal sözleri:",
-    "agentPrefix": "Agent eki:",
-    "taskSource": "[Görev kaynağı] Bu görevi bir yol arkadaşı başlattı.",
-    "taskId": "Görev Kimliği:",
-    "contextReferences": "Bağlam referansları:"
+    "agentPrefix": "Agent eki:"
   },
   "sharing": {
     "loginRequired": "Paylaşmak için oturum aç",
@@ -19911,7 +19964,13 @@
     "openDirectoryFailed": "Hesap klasörü açılamadı. Taşınmış veya silinmiş olabilir.",
     "unassigned": "Hesap atanmadı",
     "providerManagedAuth": "Mevcut Codex sağlayıcısı bir ChatGPT hesabı sunmuyor. Ayrı bir klasör kullanmak için sağlayıcıyı eklerken “$t(subscriptionAccounts.signIn.anotherAccount)” seçeneğini seçin.",
-    "defaultTag": "Varsayılan"
+    "defaultTag": "Varsayılan",
+    "boundUnavailable": "Hesap kullanılamıyor",
+    "quotaAverage": "Ortalama kalan %{{percent}}",
+    "quotaUpdating": "Kota güncelleniyor",
+    "quotaResetSoon": "Yakında sıfırlanacak",
+    "quotaAverageHint": "Haftalık kota · Her hesap eşit ağırlıklı",
+    "quotaResetHint": "Mevcut kullanım hızında sıfırlama anında kullanılmamış kota kalabilir: son 24 saatte sarı, son 6 saatte kırmızı."
   },
   "crashDiagnosis": {
     "description": "Ne olduğunu teşhis etmek ister misiniz? Göndermeden önce incelemeniz için çıkış ayrıntılarını ve sansürlenmiş günlükleri içeren bir görev taslağı hazırlayacağız. Beklenmeyen bir çıkış, zorla kapatma veya güç kaybından da kaynaklanabilir.",
@@ -19943,5 +20002,15 @@
     "keepDraft": "Taslağınız burada kalır. Bağlantı yeniden kurulduğunda görev durumu eşitlenir.",
     "retry": "Bağlantıyı yeniden dene",
     "desktopAuthHelp": "Başlatma terminalinizde Host bağlantı ayarlarını güncelleyin, ardından bu deneysel istemciyi yeniden açın."
+  },
+  "sessionNotify": {
+    "finished": "Bu görev turunu tamamladı. Son yanıtı:",
+    "ended": "Bu görevin turu normal şekilde tamamlanmadı. Son çıktısı:"
+  },
+  "remoteControlConsent": {
+    "title": "Bu bilgisayarın uzaktan kontrol edilmesine izin verilsin mi?",
+    "detail": "İstekte bulunan cihaz: {{device}}\nAmaç: {{purpose}}\n\nBu ayarı etkinleştirmek, hesabınızdaki cihazların görev çalıştırma ve dosyalara erişme dâhil bu bilgisayarı kontrol etmesine izin verir. Ayarlar'dan kapatana kadar etkin kalır.",
+    "decline": "Şimdi değil",
+    "enable": "Uzaktan kontrolü etkinleştir"
   }
 }

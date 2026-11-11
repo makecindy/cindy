@@ -546,7 +546,10 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
               latestPageCeiling: previous.latestPageCeiling
                 ?? previous.group.messages.reduce((max, message) => Math.max(max, message.sequence), Number.NEGATIVE_INFINITY),
               group: { ...previous.group,
-              messages: mergeBotGroupMessages(previous.group.messages, payload.messages!.filter(message => !message.threadRootId)) } }
+              // Plan messages reference details absent from a message-only push. Adopt them
+              // with the full read's plans, so loading never masquerades as a missing arrangement.
+              // Ordinary messages still appear immediately; failures use the existing read retry.
+              messages: mergeBotGroupMessages(previous.group.messages, payload.messages!.filter(message => !message.threadRootId && message.kind !== 'plan')) } }
             : previous);
         }
         load();

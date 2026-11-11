@@ -621,8 +621,6 @@
       "minutes": "{{n}} Min.",
       "hoursMinutes": "{{h}} Std. {{m}} Min."
     },
-    "retrying": "Noch nicht gestartet – neuer Versuch…",
-    "stopTask": "Aufgabe stoppen",
     "actionFailed": "Diese Aktion konnte nicht geladen oder abgeschlossen werden",
     "messages": "Nachrichten",
     "readOnly": "Schreibgeschützt",
@@ -760,8 +758,6 @@
     "artifactsEmpty": "Noch keine Artefakte. Bitte dein Teammitglied, etwas zu erstellen.",
     "openSourceTask": "Ursprüngliche Sitzung öffnen",
     "modelFollowsDefault": "Standard-Modellkette verwenden",
-    "taskModel": "Aufgabenmodell",
-    "taskInheritsPrimary": "Primäres Modell übernehmen",
     "modelOverride": "Eigene Modellkette dieses Teammitglieds wird verwendet",
     "modelsUnavailable": "Keine nutzbaren Modelle. Prüfe die Modelleinstellungen dieses Teammitglieds auf deinem Computer und aktualisiere dann.",
     "artifactsRecovery": "Öffne Dateien aus den Nachrichtenkarten oder durchsuche sie auf {{deviceName}}.",
@@ -867,7 +863,6 @@
   },
   "glance": {
     "open": "{{name}} auf einen Blick",
-    "dueUnseen": "Ein To-do ist fällig",
     "computers": "Computer",
     "runningHere": "Läuft hier",
     "online": "Online",
@@ -875,37 +870,16 @@
     "current": "Aktuell",
     "offlineCount_one": "{{count}} offline",
     "offlineCount_other": "{{count}} offline",
-    "todos": "To-dos",
     "showMore": "Mehr anzeigen",
     "showLess": "Weniger anzeigen",
     "doneCount_one": "{{count}} erledigt",
     "doneCount_other": "{{count}} erledigt",
-    "delete": "Löschen",
-    "deleted": "Gelöscht. Wird nicht erneut hinzugefügt.",
-    "undo": "Rückgängig",
-    "undoFailed": "Rückgängig machen fehlgeschlagen. Versuche es erneut.",
-    "deleteFailed": "Löschen fehlgeschlagen. Versuche es erneut.",
-    "check": "Für mich prüfen",
     "checkMeta": "In verbundenen E-Mails und Chats nach neuen To-dos suchen",
-    "checkPrompt": "Prüfe meine verbundenen Quellen wie E-Mails und Nachrichten auf Neues, um das ich mich kümmern muss, und füge es meinen To-dos hinzu.",
-    "dailyCheck": "Täglich prüfen",
-    "dailyCheckMeta": "Werktags um 9:00, keine Meldung ohne Neuigkeiten",
     "recentTasks": "Letzte Aufgaben",
     "unread": "Ungelesenes Ergebnis",
-    "stopDailyCheck": "Tägliche Prüfung beenden",
     "openFailed": "Dieser Link konnte nicht geöffnet werden",
-    "dailyCheckFailed": "Speichern fehlgeschlagen. Versuche es erneut.",
-    "loadFailed": "To-dos konnten nicht geladen werden",
     "outputs": "Ergebnisse",
-    "outputMeta": "{{time}} · {{task}}",
-    "source": {
-      "conversation": "Deine Anfrage",
-      "mail": "Aus E-Mails",
-      "feishu": "Aus Feishu",
-      "github": "Aus GitHub",
-      "community": "Aus der Community",
-      "task": "Aus einer Aufgabe"
-    }
+    "outputMeta": "{{time}} · {{task}}"
   },
   "cloudCompanion": {
     "homeOffline": "Hauptcomputer „{{device}}“ ist offline",
@@ -928,6 +902,8 @@
     "moveTo": "Auf „{{device}}“ verschieben",
     "moveTitle": "{{name}} auf „{{device}}“ ausführen?",
     "moveDescription": "Ab jetzt läuft {{name}} auf „{{device}}“ und der Chatverlauf zieht mit um. Arbeitsverzeichnisse, Verbindungen und lokale Dateien bleiben auf ihrem bisherigen Computer.",
+    "olderTarget": "Ältere Cindy",
+    "olderTargetNote": "Auf „{{device}}“ läuft eine ältere Cindy-Version, daher arbeitet {{name}} dort wie bisher: Der Chatverlauf wird weiter synchronisiert, Projektregeln und Automatisierungen gelten dort aber nicht.",
     "moveAction": "Auf „{{device}}“ verschieben",
     "moving": "{{name}} wird zu „{{device}}“ verschoben…",
     "busyTitle": "{{name}} antwortet noch",
@@ -996,5 +972,8 @@
     "background": "Dieses Panel kann geschlossen werden. Der Import läuft auf dem Computer weiter.",
     "missingDir": "Der ursprüngliche Ordner existiert nicht mehr. Zum Fortsetzen einen Ordner auf dem Computer auswählen.",
     "title": "Aus anderen Werkzeugen importieren"
+  },
+  "liveActivity": {
+    "waitingForUpdate": "Warte auf Aktualisierung"
   }
 }

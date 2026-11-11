@@ -2710,16 +2710,18 @@ export async function deleteBotProfileAndDetachSessionsInDb(
   botId: string,
   sessionIds: string[],
   keepTaskHistory: boolean,
+  projectSessionIds: string[] = [],
 ): Promise<void> {
-  const ids = [...new Set(sessionIds)];
+  const ids = [...new Set([...sessionIds, ...projectSessionIds])];
   const ownerScope = captureOwnerScope();
   const dbClient = getDbClient();
   const db = dbClient.drizzle;
   const commitDeletion = () =>
     commitBotProfileDeletion({
       botId,
-      sessionIds: ids,
+      sessionIds: [...new Set(sessionIds)],
       keepTaskHistory,
+      projectSessionIds,
     });
   const prepared: SharedTaskClosurePreparation[] = [];
   let committedStatus = false;
@@ -3059,7 +3061,7 @@ function scheduleSessionListProjectionBackfill(rows: readonly SessionListRow[]):
   for (const row of rows) {
     const sessionId = row.session.id;
     const item = pendingSessionListProjectionBackfill.get(sessionId) ?? { id: sessionId };
-    if (row.session.listPreview == null && row.latestMessageExtract != null) {
+    if (!row.session.listPreview && row.latestMessageExtract != null) {
       const preview = finalizePlainPreview(row.latestMessageExtract, row.latestMessageRole);
       if (preview != null) {
         item.preview = preview;

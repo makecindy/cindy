@@ -460,6 +460,29 @@ describe('Orca lead/worker dispatcher', () => {
     expect(liveSession.send).not.toHaveBeenCalled();
   });
 
+  it('recycles a drifted runtime before live dispatch and rebuilds via the queued path', async () => {
+    // Orca 直发绕过发送事务:漂移时先回收(重建窗口内),本条消息转
+    // sendToSessionInternal 的 lazy/queued 路径重扫重建投递,不拿旧 argv 跑。
+    const recycleProjectResourceRuntime = vi.fn(async () => true);
+    const h = createHarness({ recycleProjectResourceRuntime });
+
+    const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      rawContent: 'Run with the refreshed skill set',
+      source: 'lead',
+      senderLabel: 'Lead',
+      meta: { source: 'orca', context: 'drift-recycle-test' },
+    });
+
+    expect(recycleProjectResourceRuntime).toHaveBeenCalledWith('target-session');
+    expect(h.liveSession.send).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ ok: true, mode: 'dispatched' });
+    expect(h.deps.sendToSessionInternal).toHaveBeenCalledWith(expect.objectContaining({
+      targetSessionId: 'target-session',
+      clientId: 'client-1',
+    }));
+  });
+
   it('still sends through the live handle after prepare leaves it open', async () => {
     const prepareUnhealthySession = vi.fn(async () => false);
     const h = createHarness({ prepareUnhealthySession });

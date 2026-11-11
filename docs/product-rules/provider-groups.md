@@ -94,7 +94,7 @@
 > 交互设计稿见 [`docs/design-previews/provider-groups/index.html`](../design-previews/provider-groups/index.html)。
 > 读取时机：新增或修改供应商组、组策略、组内电脑的添加与状态、经供应商组的任务分配或转发、
 > 供应商组用量与「远程与分享」页之前。
-> 相关规则：[供应商分享](provider-sharing.md)、远程 Agent 协议（`docs/dev-rules/protocol-compatibility.md`
+> 相关规则：[供应商分享](provider-sharing.md)、远程 Agent 协议（`docs/dev-rules/protocol-compatibility/remote-agent.md`
 > 「远程 Agent」）、[用量上限自动继续](usage-limit-auto-continue.md)、[跨电脑复制任务](task-device-migration.md)。
 
 ## 1. 定位
@@ -214,7 +214,7 @@
     接收端以字节预算保护内存；已完成片段重发仍幂等。旧版不能安全接收大名单时显示需要更新，不发送部分名单。
     那台的 Cindy 太旧、给不出同意时不分给分享的人。分享的人看到的匿名状态里这台写「暂不
     可用」(或「需要更新」)，组的台数不变。同账号的电脑经组使用(组所在电脑自己与我的其他电脑)不需要同意。
-    协议见 `docs/dev-rules/protocol-compatibility.md`「供应商组：转分享需原主人逐人同意」。
+    协议见 `docs/dev-rules/protocol-compatibility/provider-group-reshare-owner-consent.md`「供应商组：转分享需原主人逐人同意」。
   - 被中转过来的任务，组内电脑一律按受邀者隔离运行（即使来自同账号的组所在电脑）：受邀者目录、会话索引按
     （组所在电脑, 受邀者）分开，受邀者在那台的身份是组所在电脑为它取的不透明键，任务 id 也按受邀者派生，两个受邀者
     用同一个任务 id 不会撞车。数量上限独立于数据隔离：组内电脑按直接连接的组所在电脑合计，
@@ -229,7 +229,7 @@
     （离线等）记在组所在电脑上，之后自动再通知（约每 10 分钟一次，重启后继续），通知到才划掉。
 - **防转圈**：经组分配到组内电脑的任务，在那台电脑上直接运行，不再进入那台电脑自己的供应商组。
   打开任务时带一个可选标记 `groupAssigned` 说明「已由供应商组分配」；旧版本不认识这个标记，也是直接运行。
-  登记见 `docs/dev-rules/protocol-compatibility.md`「供应商组」。
+  登记见 `docs/dev-rules/protocol-compatibility/` 下 `provider-group-*.md`「供应商组」。
 
 ## 5. 组策略
 
@@ -369,7 +369,7 @@
 是否允许自动恢复沿用既有资格检查；Stop、新输入、删除／归档均可取消。
 供应商主人主动断开或关闭远程控制属于用户撤销，新版通过 `controller-disconnected` 转为既有
 `user-revoked`，不自动接回、换电脑或发中转切换凭证。旧版 host 只发 `aborted` 的歧义与取舍见
-`protocol-compatibility.md`「远程 Agent」；不能借重启兼容覆盖新版的明确断开意图。
+`protocol-compatibility/remote-agent.md`「远程 Agent」；不能借重启兼容覆盖新版的明确断开意图。
 实现：`remote-agent/controller/startRemote.ts`、`provider-group/service.ts`、
 `maker-ipc/agent-input-coordinator.ts`；测试并入对应模块的既有测试文件。
 
@@ -520,7 +520,7 @@
 活动伙伴的 `canonical` / `thread` 任务可使用本节的故障换机，但只接管输入协调器持有的主人输入及其重试／续跑。
 同一任务角色也可能收到 IM、自动化或其他任务的消息，不能仅凭 `source = bot` 或角色放行。归属不明、历史／归档任务、
 停用／隐藏或已被另一台主力电脑接管的伙伴、共享中的任务，以及目标模式接管的输入仍交回原恢复负责人。
-群、渠道、例行执行及旧委派路径尚未接入此机制。
+群、渠道与自动化执行路径尚未接入此机制（V1 例行任务与委派路径已于 2026-11-08 移除）。
 远程 Agent 结束或丢失（`remote_agent_closed` / `remote_agent_lost`）沿伙伴既有候选恢复路径处理；
 本次不改变该路径的接管顺序和只续跑、不重放原文的约束。候选恢复禁用或耗尽时，组资格仍不接管这两类错误，
 保留错误与手动重试；不能以没有可见产出为由让组恢复重新发送原文。
@@ -577,6 +577,8 @@
   只能换到同一台电脑上的另一个账号时（交接只能换电脑）；伙伴、共享中、目标模式管着限额等待等不由组自动换电脑的任务（与 §6.1
   同一个判定）。
 - **原生接续**：宿主先复制并验证原生恢复，成功后聊天保留换电脑及配额均衡原因记录。失败先恢复原位置，再通过已有宿主确认卡询问摘要接续；桌面、手机与同账号远控共同回应，不由模型代答。取消不产生成功换电脑分隔条，也不写入摘要。
+  验证时那台此刻接不了（连不上、保留的远程任务数已满、不提供这个模型等，按 §6.1 同一个判定）不算「无法恢复」：改用摘要同样打不开，
+  恢复原位置后不询问，按下面「换不过去」照常发到原来的账号（2026-11-11 修复：此前会误弹摘要确认，确认后仍打不开并退回原电脑，白白丢掉原生记录）。
 - **共享来源弹窗**：写明要换去哪台（同一台电脑上有几个账号时带账号名）、那台的配额还剩多少、多久重置，以及交接摘要可能遗漏细节。
   电脑使用上面的三行单选项，选好后点「继续发送」；「暂不切换」只取消本次切换，仍发送消息。
   手机初层为「换过去」「更多选项」「取消」，更多选项内提供以后自动换、不自动切换与取消；每层最多三个原生按钮。
@@ -596,7 +598,7 @@
   `rebalanceDecision`、`beforeSend`），尺子是 `usage.ts` 的 `providerGroupRebalanceTarget`；「以后自动换」存在
   `provider-group/sessionPrefs.ts`。电脑在 `features/provider-group/sessionRebalancePrompt.ts`（发送前由
   `CCAgentSessionView` 调用），手机在 `apps/mobile/src/session/sessionRebalancePrompt.ts`（会话页发送前调用）；
-  协议见 protocol-compatibility.md「供应商组任务进行中换号」。回归见 `provider-group/__tests__/service.test.ts`、
+  协议见 protocol-compatibility/provider-group-mid-task-account-switch.md「供应商组任务进行中换号」。回归见 `provider-group/__tests__/service.test.ts`、
   `usage.test.ts`、两端的 `sessionRebalancePrompt.test.ts` 与分隔条的 `SystemCard.i18n.test.tsx`、手机 `systemCard.test.ts`。
 
 ## 7. 用量
@@ -857,6 +859,8 @@
     与输入框下方的用量同一份；悬停在组名下多一行「当前在 {电脑} 上运行 · {账号}」（就是这台电脑时写「当前在这台电脑上运行」）。
     那台是别人分享的电脑时不显示配额（分享者的配额不对受邀者开放），只写在哪台运行。
     同一台电脑同时在几个组里时，只认任务归的那个组（与上面「在组那一项下显示」同一个查询），别的组那一项按还没分到电脑处理。
+    那台电脑的这个供应商里有几个订阅账号时，读的是这个任务固定的那个账号，账号名与用量都是它的，不是那台下一个要分配的
+    账号（2026-11-11 用户反馈，见[供应商内的订阅账号](subscription-account-pools.md)「已建立任务的账号与用量」）。
   - 还没分到电脑（新任务、还没运行过，或此刻运行的那台不在这个组里）：不显示某一台的配额，悬停写「开始后由供应商组选一台电脑，用量按那台显示」。
   - 组名本身不再带组所在电脑那一个账号的名字。手机端本期不变。实现见 `apps/desktop/src/renderer/components/new-chat/ModelSelector.tsx`
     的 `providerGroupUsage`，回归见 `modelSelectorProviderGroupUsage.test.tsx`。
@@ -903,7 +907,7 @@
   声明了的电脑在事件流里发出凭证状态(`providerGroupSwitch`)，重新打开时带回(`groupSwitchToken`)。手机与远程控制问任务所在的电脑
   「这个任务归哪个组」用同一通道的只读动作 `session-group`(§10)。同账号任意电脑管理组与分享用同一通道的
   `manage-group` / `manage-share`(§10)。其余沿用现有协议，不改服务端。兼容做法见 §14，登记见
-  `docs/dev-rules/protocol-compatibility.md`「供应商组」。
+  `docs/dev-rules/protocol-compatibility/` 下 `provider-group-*.md`「供应商组」。
 - [跨电脑复制任务](task-device-migration.md) 与已建任务换 Agent 所在电脑：§6.1 的自动换电脑与手动「换一台继续」
   复用原生转录的导入／导出与有界交接兜底；仅迁移 Agent 时不复制任务、工作文件或凭证。
 - [用量上限自动继续](usage-limit-auto-continue.md)：冷却的重置时刻口径与之一致；有组时先换电脑，组里所有电脑都失败且其中有

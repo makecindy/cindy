@@ -599,7 +599,12 @@
     "confirm": "Onayla",
     "cancelRename": "İptal",
     "backToMenu": "Menüye geri dön",
-    "openSection": "Aç"
+    "openSection": "Aç",
+    "moveToProject": "Görevi taşı",
+    "moveFailed": "Görev taşınamadı",
+    "moveRunning": "Bu görev çalışıyor. Tamamlandıktan sonra taşıyın.",
+    "moveWorktree": "Bu görevin çalışma dizini bir worktree olduğundan henüz başka bir projeye taşınamaz",
+    "moveUnsupported": "Görevleri taşımak için bağlı bilgisayardaki uygulamayı güncelleyin."
   },
   "messageMenu": {
     "addToChat": "Sohbete ekle",
@@ -702,7 +707,8 @@
     "REMOTE_AGENT_FORK_FAILED": "Agent çatallama başarısız oldu.",
     "REMOTE_AGENT_SHARE_PAUSED": "Agent paylaşımı duraklatıldı.",
     "REMOTE_AGENT_SHARE_REMOVED": "Agent paylaşımı kaldırıldı.",
-    "REMOTE_AGENT_SHARE_UNAVAILABLE": "Agent paylaşımı kullanılamıyor."
+    "REMOTE_AGENT_SHARE_UNAVAILABLE": "Agent paylaşımı kullanılamıyor.",
+    "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "Bu eski bir paylaşım ve \"Yalnızca Agent-Net kullan\" açıkken kullanılamaz. Devam etmek için bu anahtarı kapatın veya başka bir modele geçin."
   },
   "collab": {
     "modeLabel": "İş birliği modu",
@@ -726,21 +732,13 @@
     "remoteDirPathHint": "Bilgisayardaki bir dizin yolunu girin.",
     "remoteDirInvalid": "Geçerli bir dizin yolu girin.",
     "roleLabel": "Rol",
-    "roleHint": "Bu Worker'ın uzmanlık alanı veya görevi.",
-    "customRole": "Özel rol",
-    "customRolePlaceholder": "örn. Araştırmacı, İncelemeci",
-    "customRolePredefinedError": "Bu zaten önceden tanımlanmış bir roldür.",
     "agentLabel": "Agent",
-    "modelLabel": "Model",
     "modelDefault": "Varsayılan model",
     "modelDefaultHint": "Lead ile aynı modeli kullanır.",
-    "permissionLabel": "İzinler",
     "permissionAuto": "Otomatik onayla",
     "permissionFull": "Tam erişim",
-    "permissionAutoHint": "Rutin izinleri otomatik olarak onaylar.",
-    "permissionFullHint": "Tüm kısıtlamaları kaldırır; dikkatli kullanın.",
     "initialTaskLabel": "İlk görev",
-    "initialTaskPlaceholder": "Worker'a ne yapması gerektiğini söyleyin…",
+    "initialTaskPlaceholder": "Vermek istediğiniz ilk işi yazın veya boş bırakıp işi Lead’in atamasına izin verin",
     "workerCountSummary_one": "{{count}} Worker · {{running}} çalışıyor",
     "workerCountSummary_other": "{{count}} Worker · {{running}} çalışıyor",
     "loading": "Yükleniyor…",
@@ -795,7 +793,28 @@
       "WORKER_NOT_FOUND": "Bu Worker artık mevcut değil. Liste yenilendi.",
       "ORCA_CREATE_UNCONFIRMED": "Worker oluşturma zaman aşımına uğradı ve doğrulanamadı. Önce Worker listesini kontrol edin ve yalnızca yeni bir Worker görünmüyorsa tekrar deneyin.",
       "ORCA_ACTION_UNCONFIRMED": "İstek zaman aşımına uğradı, bu nedenle sonuç henüz doğrulanmadı. Liste yenilendi; şimdi gösterilene göre hareket edin."
-    }
+    },
+    "taskLabel": "Worker ne yapacak",
+    "enableHint": "Bu görev Lider olur: işleri dağıtır ve sonuçları denetler. Worker, işi yapan ve sonuçları bildiren ayrı bir Agent'tır.",
+    "roles": {
+      "reviewer": {
+        "name": "İncele",
+        "task": "Liderin çalışmasını incele ve öneriler sun."
+      },
+      "developer": {
+        "name": "Geliştir"
+      },
+      "tester": {
+        "name": "Test et",
+        "task": "Liderin şu ana kadarki çalışmasını test et ve başarısız olanları yeniden üretme adımlarıyla birlikte bildir."
+      }
+    },
+    "addRole": "Rol ekle",
+    "removeRoleHint": "Kaldırmak için basılı tutun",
+    "removeRoleConfirmTitle": "“{{role}}” kaldırılsın mı?",
+    "removeRoleConfirmDesc": "Rol ekle seçeneğiyle istediğiniz zaman yeniden ekleyebilirsiniz.",
+    "removeRoleConfirm": "Rolü kaldır",
+    "moreSettings": "Diğer ayarlar"
   },
   "resetAutoUse": {
     "label": "Otomatik kullanım",
@@ -815,12 +834,6 @@
     "hint": "Kural sağlandığında otomatik sıfırlama uygulanır.",
     "failed": "Ayarlar kaydedilemedi. Tekrar deneyin.",
     "restore": "Varsayılan kuralları geri yükle"
-  },
-  "followUp": {
-    "title": "Görevlerinizi takip etmemi ister misiniz?",
-    "start": "Takip Etmeye Başla",
-    "notNow": "Şimdi Değil",
-    "saveFailed": "Kaydedilemedi. Tekrar deneyin."
   },
   "providerGroupRebalance": {
     "disable": "Otomatik geçiş yapma (bu görev)",

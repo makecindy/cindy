@@ -113,6 +113,16 @@
       "hour": "sa",
       "minute": "dk",
       "second": "sn"
-    }
+    },
+    "accountUnassigned": "Hesap atanmamış",
+    "accountCount_one": "{{count}} hesap",
+    "accountCount_other": "{{count}} hesap",
+    "accountFallback": "Hesap {{index}}",
+    "quotaAverage": "Ortalama kalan: %{{percent}}",
+    "quotaUpdating": "Kota güncelleniyor",
+    "quotaResetSoon": "Yakında sıfırlanacak",
+    "quotaResetIn": "{{duration}} sonra sıfırlanacak",
+    "quotaAverageHint": "Haftalık kota · Her hesap eşit ağırlıklı",
+    "quotaResetHint": "Mevcut kullanım hızında, sıfırlama anında kullanılmamış kota kalabilir: sıfırlamaya 24 saatten az kaldığında sarı, 6 saatten az kaldığında kırmızı."
   }
 }

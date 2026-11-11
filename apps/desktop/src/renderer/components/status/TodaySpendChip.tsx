@@ -152,6 +152,11 @@ import {
   type QuotaLevel,
 } from '@cindy/maker-shared/quota-level';
 import { QUOTA_TEXT_COLOR_CLASSES } from './QuotaBar';
+import {
+  sessionAccountCodexPayload,
+  sessionAccountDisplay,
+  useSessionSubscriptionAccount,
+} from '../new-chat/SessionSubscriptionAccount';
 
 // XD 网关 / 托管账号之前会跳到内部用量看板(内部域名)—— 开源前移除该硬编码。
 // 登录随凭据只下发 { endpoint, apiKey }(见 main/model-access/credentialsSync.ts),不含
@@ -1105,7 +1110,20 @@ export function TodaySpendChip({
         !isClaudeSubscription &&
         !isSubscriptionBridge &&
         (providerId == null || providerId === 'xd')));
-  const shouldReadLocalCodexAccountUsage = usesCodexQuotaForm && !isAnyRemoteSession;
+  // 账号池：任务固定在一个账号上，用量与账号名只读那个账号，不读默认账号或下一个待分配的账号。
+  // 默认账号、没有账号池或旧任务时 taskAccount 不替换用量，原来的读取就是这个账号。
+  const taskAccount = sessionAccountDisplay(
+    useSessionSubscriptionAccount(
+      !accountUnreadable && (usesCodexQuotaForm || (isClaudeSubscription && !isSubscriptionBridge))
+        ? providerId
+        : null,
+      accountDeviceId,
+    ),
+    t,
+  );
+  const readsTaskAccountUsage = taskAccount?.replacesUsage === true;
+  const shouldReadLocalCodexAccountUsage =
+    usesCodexQuotaForm && !isAnyRemoteSession && !readsTaskAccountUsage;
   // 会话金额只由已发生的 turn 决定，不由当前选中的 provider/模型决定。实际费用从
   // session ledger 读取，订阅价值从消息明细重建，再统一汇总成“本对话”投影。
   const sessionUsage = useSessionUsageMoney(sessionId, sessionInitialMoney, sessionInitialCostUsd);
@@ -1135,18 +1153,29 @@ export function TodaySpendChip({
   // device-link 远程 codex / chatgpt-bridge:账号所在电脑的权威组合 payload 镜像,选槽 / 选桶
   // 与本机同口径在消费点执行(selectRemoteCodexAccountUsage)。
   const remoteCodexAccountPayload = useRemoteCodexAccountUsage(
-    isDeviceLinkRemote && usesCodexQuotaForm ? accountDeviceId : null,
+    isDeviceLinkRemote && usesCodexQuotaForm && !readsTaskAccountUsage ? accountDeviceId : null,
     providerId ?? 'openai',
   );
-  const accountUsage = isDeviceLinkRemote
-    ? selectRemoteCodexAccountUsage(
-        remoteCodexAccountPayload,
-        isChatgptBridge ? 'openai-web' : 'app-server',
-        modelId,
-      )
-    : localAccountUsage;
+  const taskAccountCodexPayload = React.useMemo(
+    () =>
+      readsTaskAccountUsage && usesCodexQuotaForm
+        ? sessionAccountCodexPayload(taskAccount?.usage ?? null)
+        : null,
+    [readsTaskAccountUsage, usesCodexQuotaForm, taskAccount?.usage],
+  );
+  const accountUsage =
+    isDeviceLinkRemote || readsTaskAccountUsage
+      ? selectRemoteCodexAccountUsage(
+          readsTaskAccountUsage ? taskAccountCodexPayload : remoteCodexAccountPayload,
+          isChatgptBridge && !readsTaskAccountUsage ? 'openai-web' : 'app-server',
+          readsTaskAccountUsage && isChatgptBridge
+            ? modelId?.slice(CHATGPT_MODEL_PREFIX.length)
+            : modelId,
+        )
+      : localAccountUsage;
+  // 重置次数属于默认账号；任务用的是账号池里的其他账号时不显示。
   const { snapshot: codexRateLimits, refresh: refreshCodexRateLimits } = useCodexRateLimits(
-    usesCodexQuotaForm && !isAnyRemoteSession,
+    usesCodexQuotaForm && !isAnyRemoteSession && !readsTaskAccountUsage,
     providerId ?? 'openai',
   );
   const manualReset = useCodexRateLimitReset(codexRateLimits, refreshCodexRateLimits, providerId ?? 'openai');
@@ -1186,16 +1215,20 @@ export function TodaySpendChip({
   // 优先(不消耗 Claude 订阅额度),此时不读。device-link 远程会话 / 远程 Agent 读账号所在
   // 电脑的镜像,本机快照与其无关(额度事实在那台),两个 hook 的 enabled 互斥。
   const localClaudeSubscriptionUsage = useClaudeSubscriptionUsage(
-    isClaudeSubscription && !isSubscriptionBridge && !isDeviceLinkRemote,
+    isClaudeSubscription && !isSubscriptionBridge && !isDeviceLinkRemote && !readsTaskAccountUsage,
     providerId ?? 'anthropic',
   );
   const remoteClaudeSubscriptionUsage = useRemoteClaudeSubscriptionUsage(
-    isDeviceLinkRemoteClaudeSubscription && !isSubscriptionBridge ? accountDeviceId : null,
+    isDeviceLinkRemoteClaudeSubscription && !isSubscriptionBridge && !readsTaskAccountUsage
+      ? accountDeviceId
+      : null,
     providerId ?? 'anthropic',
   );
-  const claudeSubscriptionUsage = isDeviceLinkRemote
-    ? remoteClaudeSubscriptionUsage
-    : localClaudeSubscriptionUsage;
+  const claudeSubscriptionUsage = readsTaskAccountUsage
+    ? (taskAccount?.usage?.claude ?? null)
+    : isDeviceLinkRemote
+      ? remoteClaudeSubscriptionUsage
+      : localClaudeSubscriptionUsage;
   const latestTurnUsage = useLatestTurnUsageSummary(sessionId);
   const quotaCardSessionUsage = toQuotaHoverCardSessionUsage(sessionUsage, sessionTokens);
   const quotaCardTurnUsage = toQuotaHoverCardTurnUsage(latestTurnUsage, t);
@@ -1764,9 +1797,12 @@ export function TodaySpendChip({
             provider.id ===
             (providerId ?? (usesCodexQuotaForm ? 'openai' : usesXaiQuotaForm ? 'xai' : 'anthropic')),
         );
-        account.identity = usesCodexQuotaForm
-          ? identityProvider?.openAiAccount?.identity
-          : identityProvider?.subscriptionAccount?.identity;
+        // 账号池里的任务写它实际在用的账号，不写默认账号。
+        account.identity = taskAccount
+          ? taskAccount.identity
+          : usesCodexQuotaForm
+            ? identityProvider?.openAiAccount?.identity
+            : identityProvider?.subscriptionAccount?.identity;
       }
     }
   } else {
@@ -2006,7 +2042,7 @@ export function TodaySpendChip({
             dashboardLabel={usageDashboardLabel}
             onOpenDashboard={handleClick}
             dashboardButtonRef={quotaPopoverDashboardButtonRef}
-            windowAction={usesCodexQuotaForm && !isAnyRemoteSession && (codexRateLimits?.rateLimitResetCredits || manualReset.canRetry) ? (
+            windowAction={usesCodexQuotaForm && !isAnyRemoteSession && !readsTaskAccountUsage && (codexRateLimits?.rateLimitResetCredits || manualReset.canRetry) ? (
               <Button size="xs" compact tone="quiet" aria-label={t('codexResets.title')} title={t('codexResets.title')}
                 onClick={() => {
                   quotaPopoverFocusTakenRef.current = false;
@@ -2021,7 +2057,7 @@ export function TodaySpendChip({
           </QuotaHoverCard>
         </PopoverContent>
       </Popover>
-      <Dialog.Root open={resetListOpen && usesCodexQuotaForm && !isAnyRemoteSession} onOpenChange={setResetListOpen}>
+      <Dialog.Root open={resetListOpen && usesCodexQuotaForm && !isAnyRemoteSession && !readsTaskAccountUsage} onOpenChange={setResetListOpen}>
         <Dialog.Portal>
           <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
           <Dialog.Content

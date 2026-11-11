@@ -29,7 +29,14 @@
       "cancel": "Mevcut izinleri koru"
     },
     "mcpComplete": "Tamamlandı",
-    "mcpCancel": "İptal"
+    "mcpCancel": "İptal",
+    "description": {
+      "default": "Gerektiğinde işlemleri siz onaylarsınız.",
+      "acceptEdits": "Dosya düzenlemelerine doğrudan izin verilir; diğer işlemleri gerektiğinde siz onaylarsınız.",
+      "auto": "İşlemleri bir yapay zekâ modeli onaylar; bu ek zaman alabilir. Gerektiğinde sizden onay istenir.",
+      "bypass": "Çalışma alanı dışındaki dosyalar ve ağ komutları dâhil rutin işlemlere doğrudan izin verilir.",
+      "plan": "Dosyaları değiştirmeden analiz eder ve planlar."
+    }
   },
   "planMode": {
     "label": "Plan modu",
@@ -454,5 +461,39 @@
       "ghost_id": "Eklenti",
       "tool": "Araç"
     }
+  },
+  "issueConfirm": {
+    "title": "{{appName}} uygulamasına geri bildirim gönderimini onaylayın",
+    "typeBug": "Hata",
+    "typeFeature": "Özellik",
+    "titleLabel": "Başlık",
+    "bodyLabel": "Gövde (Markdown)",
+    "privacyHint": "Issue başlığı ve gövdesi herkese açık olacak; arama sonuçlarında görünebilir veya önbelleğe alınabilir. Otomatik maskeleme yalnızca bazı yaygın kalıpları kapsar ve tüm hassas bağlamları algılayamaz.",
+    "relatedLogsHint": "Bu gönderim, yukarıda gösterilen ilgili istemci günlüklerini içerir. Yayımlanmadan önce filtrelenir, hassas bilgileri maskelenir ve uzunlukları sınırlanır.",
+    "privacyConfirm": "Yukarıdaki herkese açık içeriği inceledim; gizli kalması gereken kişisel bilgi, sohbet içeriği veya iş bilgisi içermiyor",
+    "submissionMethodLabel": "Gönderim Kimliği",
+    "identityGithubUser": "GitHub hesabım @{{login}}",
+    "identityGithubUserHint": "GitHub'da yazar siz olacaksınız ve bu Issue'yu GitHub üzerinden düzenleyebilecek veya kapatabileceksiniz",
+    "identityPlatform": "Cindy resmî botu @{{login}} (varsayılan)",
+    "identityPlatformHint": "GitHub hesabı kurulumu gerekmez. Issue'yu resmî bot oluşturur ve gövdeye adınızı herkese açık olarak ekleyebilirsiniz",
+    "publicNameLabel": "Herkese açık katkı sahibi bilgisi",
+    "publicNameHint": "Bu katkı sahibi bilgisi, Issue metninde herkese açık olarak görünecek",
+    "anonymous": "Anonim",
+    "useAnonymous": "Anonim katkı sahibi bilgisi kullan",
+    "envLine": "Gönderimi yapan istemcinin ortamı (gönderim sırasında otomatik olarak eklenir): istemci {{appVersion}} · {{platform}} {{arch}} ({{osVersion}}) · Arayüz dili {{uiLanguage}}",
+    "runtimeLine": "Harness {{harness}} · Model kimliği {{modelId}} (bu görev)",
+    "regionLine": "Derleme bölgesi: {{region}}",
+    "regionCodeCn": "CN",
+    "regionCodeDev": "Dev",
+    "submit": "Geri bildirim gönder",
+    "cancel": "İptal",
+    "previewLabel": "GitHub · Herkese açık geri bildirim",
+    "edit": "Düzenle",
+    "doneEditing": "Düzenlemeyi bitir",
+    "publicSubmit": "Herkese açık olarak gönder",
+    "publicationNotice": "Geri bildiriminiz ve katkı sahibi bilginiz GitHub'da herkese açık olacak.",
+    "attribution": "Katkı sahibi: {{name}}",
+    "environment": "Ortam bilgileri dahil",
+    "identitySettings": "Ad ve hesap"
   }
 }

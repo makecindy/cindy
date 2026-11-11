@@ -624,8 +624,6 @@
       "minutes": "{{n}} min",
       "hoursMinutes": "{{h}} h {{m}} min"
     },
-    "retrying": "Pas encore démarrée : nouvelle tentative…",
-    "stopTask": "Arrêter la tâche",
     "actionFailed": "Impossible de charger ou de terminer cette action",
     "messages": "Messages",
     "readOnly": "Lecture seule",
@@ -767,8 +765,6 @@
     "artifactsEmpty": "Aucune production pour l'instant. Demandez à votre coéquipier de créer quelque chose.",
     "openSourceTask": "Ouvrir la session source",
     "modelFollowsDefault": "Suivre la chaîne de modèles par défaut",
-    "taskModel": "Modèle des tâches",
-    "taskInheritsPrimary": "Hériter du modèle principal",
     "modelOverride": "Utilise la chaîne de modèles propre à ce coéquipier",
     "modelsUnavailable": "Aucun modèle utilisable. Vérifiez les paramètres de modèle de ce coéquipier sur votre ordinateur, puis actualisez.",
     "artifactsRecovery": "Ouvrez les fichiers depuis les cartes de message, ou parcourez-les sur {{deviceName}}.",
@@ -874,7 +870,6 @@
   },
   "glance": {
     "open": "{{name}} en un coup d'œil",
-    "dueUnseen": "Une tâche à faire arrive à échéance",
     "computers": "Ordinateurs",
     "runningHere": "S'exécute ici",
     "online": "En ligne",
@@ -882,37 +877,16 @@
     "current": "Actuel",
     "offlineCount_one": "{{count}} hors ligne",
     "offlineCount_other": "{{count}} hors ligne",
-    "todos": "À faire",
     "showMore": "Afficher plus",
     "showLess": "Afficher moins",
     "doneCount_one": "{{count}} terminée",
     "doneCount_other": "{{count}} terminées",
-    "delete": "Supprimer",
-    "deleted": "Supprimée. Elle ne sera plus ajoutée.",
-    "undo": "Annuler",
-    "undoFailed": "Impossible d'annuler. Réessayez.",
-    "deleteFailed": "Impossible de supprimer. Réessayez.",
-    "check": "Vérifier pour moi",
     "checkMeta": "Rechercher de nouvelles tâches à faire dans les e-mails et conversations connectés",
-    "checkPrompt": "Vérifie mes sources connectées, comme les e-mails et les messages, pour repérer tout nouvel élément que je dois traiter, et ajoute-le à ma liste de tâches à faire.",
-    "dailyCheck": "Vérifier chaque jour",
-    "dailyCheckMeta": "En semaine à 9:00, silencieux quand il n'y a rien de nouveau",
     "recentTasks": "Tâches récentes",
     "unread": "Résultat non lu",
-    "stopDailyCheck": "Arrêter la vérification quotidienne",
     "openFailed": "Impossible d'ouvrir ce lien",
-    "dailyCheckFailed": "Impossible d'enregistrer. Réessayez.",
-    "loadFailed": "Tâches non chargées",
     "outputs": "Productions",
     "outputMeta": "{{time}} · {{task}}",
-    "source": {
-      "conversation": "Votre demande",
-      "mail": "Depuis un e-mail",
-      "feishu": "Depuis Feishu",
-      "github": "Depuis GitHub",
-      "community": "Depuis la communauté",
-      "task": "Depuis une tâche"
-    },
     "offlineCount_many": "{{count}} hors ligne",
     "doneCount_many": "{{count}} terminées"
   },
@@ -937,6 +911,8 @@
     "moveTo": "Déplacer vers « {{device}} »",
     "moveTitle": "Exécuter {{name}} sur « {{device}} » ?",
     "moveDescription": "Désormais, {{name}} s'exécute sur « {{device}} », et l'historique de conversation suit. Les répertoires de travail, les connexions et les fichiers locaux restent sur leur ordinateur actuel.",
+    "olderTarget": "Ancienne Cindy",
+    "olderTargetNote": "« {{device}} » utilise une ancienne version de Cindy : {{name}} y fonctionnera comme avant. L'historique de discussion reste synchronisé, mais les règles et automatisations du projet ne s'y appliquent pas.",
     "moveAction": "Déplacer vers « {{device}} »",
     "moving": "Déplacement de {{name}} vers « {{device}} »…",
     "busyTitle": "{{name}} est encore en train de répondre",
@@ -1016,5 +992,8 @@
     "sumFailed_many": "{{count}} échecs",
     "found_many": "{{count}} sessions trouvées sur {{device}}",
     "confirmBody_many": "{{count}} sessions seront importées, utilisant jusqu’à {{size}} d’espace disque. L’importation s’effectue en arrière-plan sur l’ordinateur ; vous pouvez l’arrêter à tout moment. Touchez à nouveau pour commencer."
+  },
+  "liveActivity": {
+    "waitingForUpdate": "En attente de mise à jour"
   }
 }

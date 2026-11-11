@@ -136,7 +136,7 @@ export const RSB_BROWSER_WEBAUTHN_LABELS: Record<
     title: 'Bir Geçiş Anahtarı Seçin',
     message: '{{relyingPartyId}} için bir geçiş anahtarı seçin',
     detail:
-      'Cindy seçiminizi yalnızca kimlik doğrulayıcıya iletir; geçiş anahtarı parolası kimlik doğrulayıcıda kalır.',
+      'Cindy seçiminizi yalnızca kimlik doğrulayıcıya iletir; geçiş anahtarının gizli bilgisi kimlik doğrulayıcıda kalır.',
     cancel: 'Geçiş Anahtarı ile Girişi İptal Et',
     unknownAccount: 'Geçiş Anahtarı {{index}}',
     unknownRelyingParty: 'bu web sitesi',

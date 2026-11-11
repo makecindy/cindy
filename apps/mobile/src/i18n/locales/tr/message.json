@@ -64,7 +64,8 @@
       "discord": "Discord",
       "wechat": "WeChat",
       "wecom": "WeCom",
-      "dingtalk": "DingTalk"
+      "dingtalk": "DingTalk",
+      "imessage": "iMessage"
     },
     "modelMismatch": "Bu tur, seçilen {{selected}} yerine {{actual}} tarafından yanıtlandı (sunucu tarafında geçici sürüm düşürme)",
     "copyStateCopying": "Kopyalanıyor",

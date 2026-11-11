@@ -1109,7 +1109,7 @@
      "provenance": {
       "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json",
       "locator": "accountDeletion.status(tr).pendingTitle",
-      "hash": "sha256:2f1e95ad76d7a07e92b3e71242b2756bf87f4b91f38569e1ff1a5b7cd3a147a8"
+      "hash": "sha256:4d8164e34beed40e871f76e27f6e3832e6f1c920bd5242703538e75ab7d9476d"
      }
     },
     "pendingCopy": {
@@ -1117,7 +1117,7 @@
      "provenance": {
       "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json",
       "locator": "accountDeletion.status(tr).pendingCopy",
-      "hash": "sha256:2f1e95ad76d7a07e92b3e71242b2756bf87f4b91f38569e1ff1a5b7cd3a147a8"
+      "hash": "sha256:4d8164e34beed40e871f76e27f6e3832e6f1c920bd5242703538e75ab7d9476d"
      }
     },
     "processingTitle": {
@@ -1125,7 +1125,7 @@
      "provenance": {
       "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json",
       "locator": "accountDeletion.status(tr).processingTitle",
-      "hash": "sha256:2f1e95ad76d7a07e92b3e71242b2756bf87f4b91f38569e1ff1a5b7cd3a147a8"
+      "hash": "sha256:4d8164e34beed40e871f76e27f6e3832e6f1c920bd5242703538e75ab7d9476d"
      }
     },
     "processingCopy": {
@@ -1133,7 +1133,7 @@
      "provenance": {
       "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json",
       "locator": "accountDeletion.status(tr).processingCopy",
-      "hash": "sha256:2f1e95ad76d7a07e92b3e71242b2756bf87f4b91f38569e1ff1a5b7cd3a147a8"
+      "hash": "sha256:4d8164e34beed40e871f76e27f6e3832e6f1c920bd5242703538e75ab7d9476d"
      }
     },
     "completedTitle": {
@@ -1141,7 +1141,7 @@
      "provenance": {
       "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json",
       "locator": "accountDeletion.status(tr).completedTitle",
-      "hash": "sha256:2f1e95ad76d7a07e92b3e71242b2756bf87f4b91f38569e1ff1a5b7cd3a147a8"
+      "hash": "sha256:4d8164e34beed40e871f76e27f6e3832e6f1c920bd5242703538e75ab7d9476d"
      }
     },
     "completedCopy": {
@@ -1149,7 +1149,7 @@
      "provenance": {
       "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json",
       "locator": "accountDeletion.status(tr).completedCopy",
-      "hash": "sha256:2f1e95ad76d7a07e92b3e71242b2756bf87f4b91f38569e1ff1a5b7cd3a147a8"
+      "hash": "sha256:4d8164e34beed40e871f76e27f6e3832e6f1c920bd5242703538e75ab7d9476d"
      }
     },
     "dismissButton": {
@@ -1157,7 +1157,7 @@
      "provenance": {
       "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json",
       "locator": "accountDeletion.status(tr).dismissButton",
-      "hash": "sha256:2f1e95ad76d7a07e92b3e71242b2756bf87f4b91f38569e1ff1a5b7cd3a147a8"
+      "hash": "sha256:4d8164e34beed40e871f76e27f6e3832e6f1c920bd5242703538e75ab7d9476d"
      }
     }
    }

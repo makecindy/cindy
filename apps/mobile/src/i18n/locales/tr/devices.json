@@ -621,8 +621,6 @@
       "minutes": "{{n}} dk",
       "hoursMinutes": "{{h}} sa {{m}} dk"
     },
-    "retrying": "Henüz başlamadı — yeniden deneniyor…",
-    "stopTask": "Görevi durdur",
     "actionFailed": "Bu eylem yüklenemiyor veya tamamlanamıyor",
     "messages": "Mesajlar",
     "readOnly": "Salt okunur",
@@ -760,8 +758,6 @@
     "artifactsEmpty": "Henüz yapıt yok. Yol arkadaşınızdan bir şeyler oluşturmasını isteyin.",
     "openSourceTask": "Kaynak Görevi Aç",
     "modelFollowsDefault": "Varsayılan model zincirini takip et",
-    "taskModel": "Görev Modeli",
-    "taskInheritsPrimary": "Birincil Modeli Devral",
     "modelOverride": "Bu yol arkadaşının kendi model zincirini kullanıyor",
     "modelsUnavailable": "Kullanılabilir model yok. Bilgisayarınızda bu yol arkadaşının model ayarlarını kontrol edin, ardından yenileyin.",
     "artifactsRecovery": "Mesaj kartlarından dosyaları açın veya {{deviceName}} üzerinde dosyalara göz atın.",
@@ -867,7 +863,6 @@
   },
   "glance": {
     "open": "Bir bakışta {{name}}",
-    "dueUnseen": "Bir yapılacak işin vadesi doldu",
     "computers": "Bilgisayarlar",
     "runningHere": "Burada çalışıyor",
     "online": "Çevrimiçi",
@@ -875,37 +870,16 @@
     "current": "Mevcut",
     "offlineCount_one": "{{count}} çevrimdışı",
     "offlineCount_other": "{{count}} çevrimdışı",
-    "todos": "Yapılacaklar",
     "showMore": "Daha fazla göster",
     "showLess": "Daha az göster",
     "doneCount_one": "{{count}} tamamlandı",
     "doneCount_other": "{{count}} tamamlandı",
-    "delete": "Sil",
-    "deleted": "Silindi. Tekrar eklenmeyecek.",
-    "undo": "Geri Al",
-    "undoFailed": "Geri alınamadı. Tekrar deneyin.",
-    "deleteFailed": "Silinemedi. Tekrar deneyin.",
-    "check": "Benim için kontrol et",
     "checkMeta": "Bağlı e-postalarda ve sohbetlerde yeni yapılacak işleri arayın",
-    "checkPrompt": "Ele almam gereken yeni bir şey olup olmadığını görmek için e-posta ve mesajlar gibi bağlı kaynaklarımı kontrol et ve bunları yapılacaklar listeme ekle.",
-    "dailyCheck": "Her gün kontrol et",
-    "dailyCheckMeta": "Hafta içi saat 9:00'da, yeni bir şey olmadığında sessiz",
     "recentTasks": "Son görevler",
     "unread": "Okunmamış sonuç",
-    "stopDailyCheck": "Günlük kontrolü durdur",
     "openFailed": "Bu bağlantı açılamadı",
-    "dailyCheckFailed": "Kaydedilemedi. Tekrar deneyin.",
-    "loadFailed": "Yapılacaklar yüklenemedi",
     "outputs": "Çıktılar",
-    "outputMeta": "{{time}} · {{task}}",
-    "source": {
-      "conversation": "Siz sordunuz",
-      "mail": "E-postadan",
-      "feishu": "Feishu'dan",
-      "github": "GitHub'dan",
-      "community": "Topluluktan",
-      "task": "Bir görevden"
-    }
+    "outputMeta": "{{time}} · {{task}}"
   },
   "cloudCompanion": {
     "homeOffline": "Ana bilgisayar “{{device}}” çevrimdışı",
@@ -938,7 +912,9 @@
     "switchConflict": "{{name}} yol arkadaşının ana bilgisayarı zaten değişti, bu yüzden taşınmadı",
     "homeOutdated": "Ana bilgisayar “{{device}}” daha eski bir Cindy çalıştırıyor. Güncelleyin veya ana bilgisayarı orada değiştirin",
     "homeUnreachable": "“{{device}}” cihazına ulaşılamıyor. “Aynı hesaba ait cihazların bu makineyi kontrol etmesine izin ver” seçeneği açık ve çevrimiçi olmalıdır",
-    "sendUnreachable": "Mesajınız ana bilgisayar “{{device}}” cihazına ulaşmadı; çevrimdışı olabilir. Başka bir bilgisayarda devam edebilirsiniz."
+    "sendUnreachable": "Mesajınız ana bilgisayar “{{device}}” cihazına ulaşmadı; çevrimdışı olabilir. Başka bir bilgisayarda devam edebilirsiniz.",
+    "olderTarget": "Eski Cindy",
+    "olderTargetNote": "“{{device}}” eski bir Cindy sürümü kullanıyor. Bu nedenle {{name}} orada eski yöntemle çalışır: sohbet geçmişi eşitlenmeye devam eder, ancak proje kuralları ve otomasyonlar orada uygulanmaz."
   },
   "sessionImport": {
     "entry": "Diğer Araçlardan İçe Aktar",
@@ -996,5 +972,8 @@
       "disk-full": "İçe aktarılamadı: yeterli disk alanı yok",
       "native-unloadable": "İçe aktarılamadı: orijinal geçmiş yüklenemiyor"
     }
+  },
+  "liveActivity": {
+    "waitingForUpdate": "Güncelleme bekleniyor"
   }
 }

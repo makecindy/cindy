@@ -41,6 +41,8 @@ export function buildDesktopBlur(output, arch = process.arch) {
         '-mmacosx-version-min=12.0',
         '-framework',
         'Cocoa',
+        '-framework',
+        'QuartzCore',
         '-I',
         headers,
         path.join(source, 'desktop-blur.mm'),
