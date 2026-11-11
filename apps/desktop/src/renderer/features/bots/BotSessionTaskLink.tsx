@@ -17,9 +17,9 @@ import * as sessionService from '@/lib/sessionService';
 import type { Session } from '@/lib/ccAgent.types';
 import type { BotCollaborationMeta } from '../../../shared/botCollaboration';
 import type { BotDelegationView } from '../../../shared/botDelegation';
-import { useBotDelegation } from './botDelegationLive';
+import { useBotDelegationRecord } from './botDelegationHistory';
 
-/** Live identity of the original session behind a task card; never a second task. */
+/** Live identity of the original session behind a (read-only) task card; never a second task. */
 export interface BotTaskSessionRef {
   row: BotDelegationView | null;
   resolved: boolean;
@@ -37,7 +37,7 @@ export interface BotTaskSessionRef {
 
 export function useBotTaskSession(card: BotCollaborationMeta, sessionId?: string): BotTaskSessionRef {
   const navigate = useNavigate();
-  const { row, resolved, stale } = useBotDelegation(sessionId ?? card.parentSessionId, card.delegationId);
+  const { row, resolved, stale } = useBotDelegationRecord(sessionId ?? card.parentSessionId, card.delegationId);
   const targetId = row?.childSessionId ?? card.childSessionId;
   const [session, setSession] = useState<Session | null>(null);
   const activity = useAgentIslandActivity(targetId ?? '');

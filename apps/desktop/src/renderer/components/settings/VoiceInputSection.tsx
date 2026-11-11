@@ -10,7 +10,7 @@ import { useSearchParams } from 'react-router-dom';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Check, ChevronDown, Copy, Keyboard, Loader2, Pencil, Plus, RotateCcw, Search, Sparkles, Trash2, Upload, X } from 'lucide-react';
 
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Select } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { Tip } from '@/components/ui/tooltip';
 import { useAuth } from '@/contexts/AuthContext';
@@ -121,7 +121,7 @@ interface VoiceInputSelectProps<T extends string> {
   options: ReadonlyArray<VoiceInputSelectOption<T>>;
   onChange: (value: T) => void;
   ariaLabel: string;
-  icon?: ReactNode;
+  width?: 'md' | 'full';
 }
 
 interface VoiceInputCardProps {
@@ -134,7 +134,6 @@ interface VoiceInputCardProps {
 interface VoiceInputInlineSettingRowProps {
   id?: string;
   label: ReactNode;
-  labelAction?: ReactNode;
   hint?: ReactNode;
   children: ReactNode;
   className?: string;
@@ -195,115 +194,40 @@ function formatHistoryTime(createdAt: number, locale: string): string {
   }
 }
 
+/**
+ * Voice-input single-value picker on the shared Select (DESIGN.md §4). Option
+ * descriptions move to the option tooltip; the selected one stays visible as a
+ * hint under the trigger. width: 'md' = 320px row control, 'full' = form column.
+ */
 function VoiceInputSelect<T extends string>({
   'data-setting-id': settingId,
   value,
   options,
   onChange,
   ariaLabel,
-  icon,
+  width = 'full',
 }: VoiceInputSelectProps<T>) {
-  const [open, setOpen] = useState(false);
-  const selectedOption = options.find((option) => option.value === value) ?? options[0];
+  const selectedOption = options.find((option) => option.value === value);
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button data-setting-id={settingId}
-          type="button"
-          aria-label={ariaLabel}
-          aria-haspopup="listbox"
-          aria-expanded={open}
-          className={cn(
-            'group flex min-h-[44px] w-full items-center justify-between gap-2.5 rounded-[14px] px-3.5',
-            'border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)]',
-            'text-left text-[var(--settings-input-text)]',
-            'outline-none transition-colors',
-            open
-              ? 'border-[var(--settings-section-title)]'
-              : 'hover:border-[var(--settings-input-border-focus)] focus-visible:border-[var(--settings-input-border-focus)]',
-          )}
-        >
-          <span className="flex min-w-0 items-center gap-2.5">
-            {icon ? <span className="shrink-0 text-[var(--settings-section-sublabel)]">{icon}</span> : null}
-            <span className="flex min-w-0 flex-col gap-0.5 py-1.5">
-              <span className="truncate text-14 font-medium leading-[1.25]">
-                {selectedOption?.label}
-              </span>
-              {selectedOption?.description ? (
-                <span className="truncate text-12 leading-[1.25] text-[var(--text-secondary)]">
-                  {selectedOption.description}
-                </span>
-              ) : null}
-            </span>
-          </span>
-          <ChevronDown
-            size={18}
-            className={cn(
-              'shrink-0 text-[var(--settings-section-title)] transition-transform',
-              open && 'rotate-180',
-            )}
-          />
-        </button>
-      </PopoverTrigger>
-
-      <PopoverContent
-        side="bottom"
-        align="start"
-        sideOffset={8}
-        collisionPadding={12}
-        className={cn(
-          'w-[var(--radix-popover-trigger-width)] min-w-[260px] rounded-[16px] p-2',
-          'border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]',
-          'shadow-[shadow:var(--shadow-menu)]',
-          'max-h-[360px] overflow-y-auto',
-        )}
-      >
-        <div data-setting-id={settingId} className="flex flex-col gap-1" role="listbox" aria-label={ariaLabel}>
-          {options.map((option) => {
-            const selected = option.value === value;
-            return (
-              <button data-setting-id={settingId}
-                key={option.value}
-                type="button"
-                role="option"
-                aria-selected={selected}
-                disabled={option.disabled}
-                onClick={() => {
-                  if (option.disabled) return;
-                  onChange(option.value);
-                  setOpen(false);
-                }}
-                className={cn(
-                  'flex w-full items-center justify-between gap-3 rounded-[12px] px-3.5 py-2.5 text-left',
-                  'outline-none transition-colors',
-                  'hover:bg-[var(--settings-menu-bg-hover)] focus-visible:bg-[var(--settings-menu-bg-hover)]',
-                  selected && 'bg-[var(--settings-menu-bg-selected)]',
-                  option.disabled && 'cursor-not-allowed opacity-55',
-                )}
-              >
-                <span className="flex min-w-0 flex-col gap-1">
-                  <span className="truncate text-15 font-medium leading-[1.25] text-[var(--settings-section-title)]">
-                    {option.label}
-                  </span>
-                  {option.description ? (
-                    <span className="truncate text-13 leading-[1.25] text-[var(--settings-section-sublabel)]">
-                      {option.description}
-                    </span>
-                  ) : null}
-                </span>
-
-                {selected ? (
-                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[var(--settings-section-title)] text-[var(--settings-theme-card-bg)]">
-                    <Check size={13} strokeWidth={3} />
-                  </span>
-                ) : null}
-              </button>
-            );
-          })}
-        </div>
-      </PopoverContent>
-    </Popover>
+    <div className={cn('flex min-w-0 flex-col gap-1', width === 'md' ? 'w-[320px] max-w-full shrink-0' : 'w-full')}>
+      <Select data-setting-id={settingId}
+        label={ariaLabel}
+        value={value}
+        options={options.map((option) => ({
+          value: option.value,
+          label: option.label,
+          disabled: option.disabled,
+          title: option.description,
+        }))}
+        onValueChange={(next) => onChange(next as T)}
+        truncateOptions
+        width="full"
+      />
+      {selectedOption?.description ? (
+        <p className={cn('px-3', SETTINGS_HINT)}>{selectedOption.description}</p>
+      ) : null}
+    </div>
   );
 }
 
@@ -316,10 +240,13 @@ function VoiceInputCard({ id, title, action, children }: VoiceInputCardProps) {
   );
 }
 
+/**
+ * Label + field pair inside the custom-ASR form panel (fields only, no row divider).
+ * Card-level settings use SettingsRow.
+ */
 function VoiceInputInlineSettingRow({
   id,
   label,
-  labelAction,
   hint,
   children,
   className,
@@ -333,12 +260,9 @@ function VoiceInputInlineSettingRow({
       )}
     >
       <div className="flex flex-col gap-1">
-        <div className="flex min-w-0 items-center gap-2">
-          <p className={cn('min-w-0', SETTINGS_ROW_LABEL_CLASS)}>
-            {label}
-          </p>
-          {labelAction ? <div className="shrink-0">{labelAction}</div> : null}
-        </div>
+        <p className={cn('min-w-0', SETTINGS_ROW_LABEL_CLASS)}>
+          {label}
+        </p>
         {hint ? (
           <p className={SETTINGS_HINT}>
             {hint}
@@ -564,36 +488,38 @@ function VoiceInputServiceSourceCard({ modelSelection }: VoiceInputSectionProps)
             disabled={saving}
             onClick={() => void resetToDefault()}
           >
-            <RotateCcw size={12} />
+            <RotateCcw size={14} aria-hidden />
             {t('settings.voiceInput.serviceSource.reset')}
           </Button>
         ) : undefined
       }
     >
-      <SettingsBlock>
-        <VoiceInputInlineSettingRow
-          id={voiceInputSettings.serviceSource.targetId}
-          label={t(voiceInputSettings.serviceSource.titleKey)}
-          hint={t(localMode
-            ? 'settings.voiceInput.serviceSource.localHint'
-            : 'settings.voiceInput.serviceSource.hint')}
-        >
+      <SettingsRow
+        id={voiceInputSettings.serviceSource.targetId}
+        wrap
+        title={t(voiceInputSettings.serviceSource.titleKey)}
+        hint={t(localMode
+          ? 'settings.voiceInput.serviceSource.localHint'
+          : 'settings.voiceInput.serviceSource.hint')}
+        trailing={
           <VoiceInputSelect data-setting-id={voiceInputSettings.serviceSource.id}
             value={serviceMode}
             options={modeOptions}
             onChange={(value) => void setServiceMode(value)}
             ariaLabel={t('settings.voiceInput.serviceSource.ariaLabel')}
+            width="md"
           />
-        </VoiceInputInlineSettingRow>
-      </SettingsBlock>
+        }
+      />
 
       {ready && byok ? (
         <>
-          <SettingsBlock className="flex flex-col gap-4">
-            <VoiceInputInlineSettingRow
-              id={voiceInputSettings.asr.targetId}
-              label={t(voiceInputSettings.asr.titleKey)}
-              labelAction={
+          <SettingsRow
+            id={voiceInputSettings.asr.targetId}
+            wrap
+            title={
+              <span className="flex min-w-0 items-center gap-2">
+                <span className="min-w-0">{t(voiceInputSettings.asr.titleKey)}</span>
                 <Button data-settings-search-action="Test the configured voice service connection"
                   variant="secondary"
                   size="sm"
@@ -607,20 +533,26 @@ function VoiceInputServiceSourceCard({ modelSelection }: VoiceInputSectionProps)
                       ? t('settings.voiceInput.serviceSource.connectionTest.saveBeforeTest')
                       : undefined
                   }
+                  className="shrink-0"
                 >
                   {t('settings.voiceInput.serviceSource.connectionTest.action')}
                 </Button>
-              }
-              hint={t(voiceInputSettings.asr.descriptionKey)}
-            >
+              </span>
+            }
+            hint={t(voiceInputSettings.asr.descriptionKey)}
+            trailing={
               <VoiceInputSelect data-setting-id={voiceInputSettings.asr.id}
                 value={selection?.asrProvider ?? ''}
                 options={asrOptions}
                 onChange={(value) => void setAsrProvider(value)}
                 ariaLabel={t('settings.voiceInput.serviceSource.asr.ariaLabel')}
+                width="md"
               />
-            </VoiceInputInlineSettingRow>
+            }
+          />
 
+          {connectionTest.status !== 'idle' || customAsrSelected ? (
+          <SettingsBlock className="flex flex-col gap-4">
             {connectionTest.status === 'error' ? (
               <ErrorNotice
                 role="alert"
@@ -794,16 +726,17 @@ function VoiceInputServiceSourceCard({ modelSelection }: VoiceInputSectionProps)
               </div>
             ) : null}
           </SettingsBlock>
+          ) : null}
 
-          <SettingsBlock>
-            <VoiceInputInlineSettingRow
-              label={t('settings.voiceInput.serviceSource.refiner.label')}
-              hint={
-                cannotRefineWithAuxiliary
-                  ? t('settings.voiceInput.serviceSource.refiner.cannotRefine')
-                  : t('settings.voiceInput.serviceSource.refiner.followHint')
-              }
-            >
+          <SettingsRow
+            wrap
+            title={t('settings.voiceInput.serviceSource.refiner.label')}
+            hint={
+              cannotRefineWithAuxiliary
+                ? t('settings.voiceInput.serviceSource.refiner.cannotRefine')
+                : t('settings.voiceInput.serviceSource.refiner.followHint')
+            }
+            trailing={
               <div className="flex items-center justify-end gap-2">
                 <span className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)]">
                   {t('settings.voiceInput.serviceSource.refiner.followAuxiliary')}
@@ -819,8 +752,8 @@ function VoiceInputServiceSourceCard({ modelSelection }: VoiceInputSectionProps)
                   {t('settings.voiceInput.serviceSource.refiner.openAuxiliary')}
                 </Button>
               </div>
-            </VoiceInputInlineSettingRow>
-          </SettingsBlock>
+            }
+          />
 
           {byokCredentialErrorText ? (
             <SettingsBlock>
@@ -1916,34 +1849,37 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
       <VoiceInputServiceSourceCard modelSelection={modelSelection} />
 
       <VoiceInputCard title={t('settings.voiceInput.sections.basics')}>
-        <SettingsBlock>
-          <VoiceInputInlineSettingRow
-            id={voiceInputSettings.languageLabel.targetId}
-            label={t(voiceInputSettings.languageLabel.titleKey)}
-            hint={t(voiceInputSettings.languageLabel.descriptionKey)}
-          >
+        <SettingsRow
+          id={voiceInputSettings.languageLabel.targetId}
+          wrap
+          title={t(voiceInputSettings.languageLabel.titleKey)}
+          hint={t(voiceInputSettings.languageLabel.descriptionKey)}
+          trailing={
             <VoiceInputSelect data-setting-id={voiceInputSettings.languageLabel.id}
               value={settings.language}
               options={languageOptions}
               onChange={setLanguage}
               ariaLabel={t('settings.voiceInput.language.ariaLabel')}
+              width="md"
             />
-          </VoiceInputInlineSettingRow>
-        </SettingsBlock>
+          }
+        />
 
-        <SettingsBlock>
-          <VoiceInputInlineSettingRow
-            id={voiceInputSettings.microphoneLabel.targetId}
-            label={t(voiceInputSettings.microphoneLabel.titleKey)}
-            labelAction={
+        <SettingsRow
+          id={voiceInputSettings.microphoneLabel.targetId}
+          wrap
+          title={
+            <span className="flex min-w-0 items-center gap-2">
+              <span className="min-w-0">{t(voiceInputSettings.microphoneLabel.titleKey)}</span>
               <VoiceInputPermissionBadge
                 label={t('settings.voiceInput.permissions.microphone.label')}
                 granted={permissions.microphone.ok}
                 onGrant={() => void requestPermission('microphone')}
               />
-            }
-            hint={t(voiceInputSettings.microphoneLabel.descriptionKey)}
-          >
+            </span>
+          }
+          hint={t(voiceInputSettings.microphoneLabel.descriptionKey)}
+          trailing={
             <VoiceInputSelect data-setting-id={voiceInputSettings.microphoneLabel.id}
               value={settings.microphoneDeviceId ?? AUTO_MICROPHONE_VALUE}
               options={microphoneOptions}
@@ -1951,16 +1887,18 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
                 setMicrophoneDeviceId(value === AUTO_MICROPHONE_VALUE ? null : value)
               }
               ariaLabel={t('settings.voiceInput.microphone.ariaLabel')}
+              width="md"
             />
-          </VoiceInputInlineSettingRow>
-        </SettingsBlock>
+          }
+        />
 
-        <SettingsBlock>
-          <VoiceInputInlineSettingRow
-            id={voiceInputSettings.shortcutLabel.targetId}
-            label={t(voiceInputSettings.shortcutLabel.titleKey)}
-            labelAction={
-              shouldShowInputMonitoringBadge({
+        <SettingsRow
+          id={voiceInputSettings.shortcutLabel.targetId}
+          wrap
+          title={
+            <span className="flex min-w-0 items-center gap-2">
+              <span className="min-w-0">{t(voiceInputSettings.shortcutLabel.titleKey)}</span>
+              {shouldShowInputMonitoringBadge({
                 supportsGlobalShortcut: supportsGlobalShortcutSetting,
                 shortcutNeedsPermission: shortcutNeedsKeyboardListenerPermission,
                 fnRecordingBlocked,
@@ -1974,9 +1912,10 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
                     tooltip={t('settings.voiceInput.permissions.inputMonitoring.tooltip')}
                   />
                 )
-                : null
-            }
-            hint={
+                : null}
+            </span>
+          }
+          hint={
               supportsGlobalShortcutSetting
                 ? (
                   <>
@@ -1996,9 +1935,8 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
                 )
                 : t('settings.voiceInput.shortcut.linuxUnsupported')
             }
-          >
-            {supportsGlobalShortcutSetting ? (
-              <div className="flex w-full flex-wrap items-center gap-2 sm:justify-end">
+          trailing={supportsGlobalShortcutSetting ? (
+              <div className="flex w-[320px] max-w-full flex-wrap items-center justify-end gap-2">
                 <button data-setting-id={voiceInputSettings.shortcutLabel.id}
                   ref={shortcutButtonRef}
                   type="button"
@@ -2006,7 +1944,7 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
                   onKeyDown={handleShortcutKeyDown}
                   onKeyUp={handleShortcutKeyUp}
                   className={cn(
-                    'flex min-h-[40px] min-w-[180px] flex-1 items-center justify-between gap-2.5 rounded-full px-3.5 sm:flex-none',
+                    'flex h-9 min-w-[180px] flex-1 items-center justify-between gap-2.5 rounded-full px-3.5',
                     'border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)]',
                     'text-left text-[var(--settings-input-text)] outline-none transition-colors',
                     recordingShortcut
@@ -2017,7 +1955,7 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
                 >
                   <span className="flex min-w-0 items-center gap-2.5">
                     <Keyboard size={15} className="shrink-0 text-[var(--settings-section-sublabel)]" />
-                    <span className="truncate text-14 font-medium leading-[1.25]">
+                    <span className="truncate text-13 font-medium leading-[1.25]">
                       {shortcutLabel}
                     </span>
                   </span>
@@ -2040,8 +1978,7 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
                 {t('settings.voiceInput.shortcut.linuxUnsupported')}
               </p>
             )}
-          </VoiceInputInlineSettingRow>
-        </SettingsBlock>
+        />
       </VoiceInputCard>
 
       <VoiceInputCard title={t('settings.voiceInput.sections.refinement')}>
@@ -2652,6 +2589,7 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
         action={
           <Button data-settings-search-action="Reset voice-input usage statistics"
             variant="secondary"
+            tone="danger"
             size="md"
             compact
             type="button"
@@ -2716,7 +2654,7 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
                 : 'settings.voiceInput.historyToggle.show',
             )}
             className={cn(
-              'flex w-full items-center justify-between gap-3 rounded-[10px] py-1 text-left',
+              'flex w-full items-center justify-between gap-3 rounded-lg py-1 text-left',
               'transition-colors hover:opacity-90',
             )}
           >

@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { AgentInputSerializedFile } from '../../shared/agentInputQueue.js';
 import { PLUGIN_ATTACHMENT_MAX_BYTES, validPluginMessageAttachments } from '../../shared/pluginAttachments.js';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
-import { blobUrl, extForMime } from './blobStore.js';
+import { blobUrl, extForMime } from './blobStore.desktop.js';
 import { ingestMedia } from './ingest.js';
 import { sniffMediaMime } from './sniffMediaMime.js';
 

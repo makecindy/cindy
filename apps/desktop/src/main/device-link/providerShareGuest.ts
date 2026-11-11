@@ -27,7 +27,7 @@ import { getActiveAuthRealm, getAuthState } from '../authManager.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { createLogger } from '../logger.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
-import { fetchIdentityCard, providerShareApi, providerShareOwnerKey, sha256Hex } from './providerShareApi.js';
+import { fetchIdentityCard, providerShareApi, providerShareHiddenByEncryptedOnly, providerShareOwnerKey, sha256Hex, resolveAgentNetProviderShareLink } from './providerShareApi.js';
 import {
   crossRegionGetRequest,
   crossRegionLeave,
@@ -87,6 +87,8 @@ interface Runtime {
   events: ProviderShareGuestEvents;
   scope: string | null;
   received: ProviderShareReceived[];
+  unavailable: ReadonlySet<string>;
+  authorityIncomplete: boolean;
   fetchedAt: number;
   viewAnchor: ViewAnchor | null;
   timer: ReturnType<typeof setTimeout> | null;
@@ -101,6 +103,7 @@ interface ResolvedLink {
   intent: ProviderShareInvitationIntent;
   /** null = 本区域。 */
   region: Region | null;
+  v2?: ReturnType<typeof resolveAgentNetProviderShareLink>;
 }
 
 interface ViewAnchor {
@@ -173,7 +176,7 @@ const receivedListeners = new Set<() => void>();
 
 /** 已拿到权威名单的区域(本区域要拉到过一次；对方区域按跨区域运行时的已加载状态)。 */
 function confirmedRegions(rt: Runtime): Region[] {
-  return [...(rt.fetchedAt > 0 ? [getActiveAuthRealm()] : []), ...getConfirmedCrossRegionReceivedRegions()];
+  return [...(rt.fetchedAt > 0 && !rt.authorityIncomplete ? [getActiveAuthRealm()] : []), ...getConfirmedCrossRegionReceivedRegions()];
 }
 
 let metadataPermissionFingerprint = '';
@@ -256,7 +259,7 @@ export function onProviderShareReceivedChanged(listener: () => void): () => void
  */
 export function getConfirmedReceivedShareIds(): ReadonlySet<string> | null {
   const rt = runtime;
-  if (!rt || !current(rt) || rt.fetchedAt === 0 || !isCrossRegionReceivedComplete()) return null;
+  if (!rt || !current(rt) || rt.fetchedAt === 0 || rt.authorityIncomplete || !isCrossRegionReceivedComplete()) return null;
   return new Set(allReceived(rt).map((share) => share.shareId));
 }
 
@@ -275,6 +278,7 @@ export function parseProviderShareAgentDeviceId(value: string | null | undefined
 }
 
 export function findReceivedShare(shareId: string): ProviderShareReceived | null {
+  if (runtime?.unavailable.has(shareId)) return null;
   return allReceived(runtime).find((share) => share.shareId === shareId) ?? null;
 }
 
@@ -286,7 +290,12 @@ export function resolveRemoteAgentTarget(agentDeviceId: string): string {
   const shareId = parseProviderShareAgentDeviceId(agentDeviceId);
   if (!shareId) return agentDeviceId;
   const share = findReceivedShare(shareId);
-  if (!share) throw new Error('[REMOTE_AGENT_SHARE_REMOVED] this shared provider is no longer available');
+  if (!share) {
+    let hidden = false;
+    try { hidden = providerShareHiddenByEncryptedOnly(shareId); } catch { /* unreadable settings/vault: keep the removed verdict */ }
+    if (hidden) throw new Error('[REMOTE_AGENT_SHARE_LEGACY_DISABLED] encrypted-only connections block this older share');
+    throw new Error('[REMOTE_AGENT_SHARE_REMOVED] this shared provider is no longer available');
+  }
   if (share.status !== 'active') throw new Error('[REMOTE_AGENT_SHARE_PAUSED] the owner has paused this share');
   return providerShareHostPeer(share.shareId, share.hostDeviceId);
 }
@@ -300,6 +309,7 @@ export async function resolveRemoteAgentTargetWhenReady(agentDeviceId: string): 
   if (!shareId) return agentDeviceId;
   const rt = runtime;
   if (!rt || !current(rt)) throw new Error('[DEVICE_LINK_NOT_CONNECTED] provider sharing is not ready');
+  if (rt.unavailable.has(shareId)) throw new Error('[DEVICE_LINK_NOT_CONNECTED] shared provider service is unavailable');
   // An already loaded share remains usable even while the other region is unavailable.
   if (findReceivedShare(shareId)) return resolveRemoteAgentTarget(agentDeviceId);
   if (rt.fetchedAt === 0) await refreshReceivedShares('resolve');
@@ -361,6 +371,7 @@ export function startProviderShareGuest(events: ProviderShareGuestEvents, option
     received: [],
     fetchedAt: 0,
     viewAnchor: null,
+    unavailable: new Set(), authorityIncomplete: false,
     timer: null,
     refreshing: null,
     pending: new Map(),
@@ -400,6 +411,8 @@ export function refreshReceivedShares(reason: string): Promise<void> {
       // a fresh display window. The readiness timestamp keeps its old meaning.
       if (!current(rt) || getActiveAuthRealm() !== requestedRegion) return;
       rt.received = received;
+      rt.unavailable = new Set(received.unavailableShareIds);
+      rt.authorityIncomplete = received.authorityIncomplete === true;
       rt.fetchedAt = Date.now();
       rt.viewAnchor = makeViewAnchor(requestedRegion, requestedAt, requestedMono);
       const changed = emitChanged(rt);
@@ -488,6 +501,7 @@ export function getReceivedSharesSnapshot(recovery?: ProviderShareFavoriteRecove
     ownerStamp,
     confirmedRegions: loadedRegions,
     received: valid ? allReceived(rt) : [],
+    ...(valid && rt.unavailable.size ? { unavailableShareIds: [...rt.unavailable] } : {}),
     active: valid,
     ...(Object.keys(regionBudget).length > 0 ? { regionBudget } : {}),
   };
@@ -497,6 +511,8 @@ export function getReceivedSharesSnapshot(recovery?: ProviderShareFavoriteRecove
 
 /** 粘贴的链接或 scheme intent → 口令与它所属的区域。只认两个官方区域。 */
 export async function resolveProviderShareLink(input: string | ProviderShareInvitationIntent): Promise<ResolvedLink> {
+  const v2 = typeof input === 'string' ? resolveAgentNetProviderShareLink(input) : null;
+  if (v2) return { intent: { invitation: v2.invitation, server: '' }, region: null, v2 };
   const intent = typeof input === 'string'
     ? parseProviderShareInvitationIntent(input) ?? parseProviderShareLink(input)
     : input;
@@ -507,9 +523,9 @@ export async function resolveProviderShareLink(input: string | ProviderShareInvi
 
 export async function previewProviderShare(link: string | ProviderShareInvitationIntent): Promise<ProviderShareLinkPreview> {
   const rt = requireRuntime();
-  const { intent, region } = await resolveProviderShareLink(link);
+  const { intent, region, v2 } = await resolveProviderShareLink(link);
   if (!current(rt)) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Account changed');
-  return region ? crossRegionPreview(region, intent.invitation) : providerShareApi.preview(intent.invitation);
+  return v2 ? v2.api.preview(v2.invitation) : region ? crossRegionPreview(region, intent.invitation) : providerShareApi.preview(intent.invitation);
 }
 
 function pollRequest(rt: Runtime, requestId: string): void {
@@ -552,7 +568,7 @@ function pollRequest(rt: Runtime, requestId: string): void {
 /** 发送申请：名片只含昵称与头像，用自己的登录凭证换取，并绑定这条链接。 */
 export async function sendProviderShareRequest(link: string | ProviderShareInvitationIntent): Promise<ProviderShareRequestState> {
   const rt = requireRuntime();
-  const { intent, region } = await resolveProviderShareLink(link);
+  const { intent, region, v2 } = await resolveProviderShareLink(link);
   if (!current(rt)) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Account changed');
   const { invitation } = intent;
   let state: ProviderShareRequestState;
@@ -565,11 +581,12 @@ export async function sendProviderShareRequest(link: string | ProviderShareInvit
     state = sent.state;
     cross = { region, requestToken: sent.requestToken };
   } else {
-    preview = await providerShareApi.preview(invitation).catch(() => null);
+    const api = v2?.api ?? providerShareApi;
+    preview = await api.preview(invitation).catch(() => null);
     if (!current(rt)) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Account changed');
     const card = await fetchIdentityCard('share-request', sha256Hex(invitation));
     if (!current(rt)) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Account changed');
-    state = await providerShareApi.sendRequest(invitation, card);
+    state = await api.sendRequest(invitation, card);
   }
   if (!current(rt)) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Account changed');
   if (state.status === 'pending') {

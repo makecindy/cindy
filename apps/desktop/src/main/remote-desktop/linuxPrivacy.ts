@@ -4,7 +4,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { t } from '../i18n';
+import { t } from '../i18n.desktop';
 
 const exec = promisify(execFile);
 async function run(args: string[]): Promise<string> {

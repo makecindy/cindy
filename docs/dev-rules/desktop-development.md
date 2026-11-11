@@ -1,5 +1,13 @@
 # Desktop 开发、启动与验证
 
+## 排队消息展示
+
+Desktop 与 Mobile 都把待发消息作为消息流气泡展示，气泡下方的「排队中」菜单提供插话、编辑、上移、下移与取消发送。输入框不再承载独立队列列表。已在提问卡展示的异步回答不产生待发气泡或菜单，判据与手机共用 `isAnsweredAsyncQuestionClientId`；后台投递照常。
+
+Desktop 在工作过程分组后追加待发项（`pendingQueueItems.ts`），避免待发输入提前截断当前助手轮次。待发项与正式回流使用相同的 `msg-clientId` key，已回流的历史优先，防止队列快照迟到造成双显。`PendingQueueBubble` 复用 `UserMessage`，操作可用性使用 `maker-shared/queue` 的共享判据。编辑锁由任务页持有，不随气泡虚拟化卸载而释放；队列通知放在消息流 footer。
+
+定向界面验证：`pnpm ui:check --page pending-queue --theme all`。真实派发仍由现有输入协调器负责。
+
 > **读取时机**：安装、启动、重启、调试或验证 `apps/desktop` 及其共享 packages 时
 
 本文是 Desktop 开发命令及其使用条件的权威说明；可执行脚本以当前 checkout 的根
@@ -57,6 +65,12 @@ Agent 没有 TTY 时，dev 会在新开的 Terminal（macOS）／cmd（Windows�
 该窗口的输出同时写入当前 checkout 的 `apps/desktop/logs/dev-terminal.log`（每次启动覆盖，
 只保留前 8MB，足够覆盖启动过程；之后的运行日志看按天轮转的 `main-*.log`），窗口关掉后仍可查；启动失败时命令会直接打印日志末尾，verdict 带 `log=` 指向该文件。
 排查启动失败先读这份日志，不要靠反复重启猜原因。
+
+Forge 开发进程默认使用 8 GiB 的 Node 堆上限，为主进程／Worker 的 watch 图和 Renderer
+冷启动转换留出空间；已复现过 6 GiB 上限在完整冷启动时触发 `JavaScript heap out of memory`
+并以 `134` 退出。显式设置的 `NODE_OPTIONS` 堆上限仍优先，入口见
+`scripts/shared/desktop-dev-node-options.mjs`。restart 的就绪等待包含完整冷构建与窗口／登录态／
+数据库初始化，默认等待 180 秒，避免在构建刚完成时误报超时。
 
 停止旧实例后的 macOS Terminal 标签页清理，只访问已经运行的 Terminal，并按旧实例的精确
 TTY 匹配标签页；Terminal 未运行时直接跳过，不能因清理 iTerm 等终端的 TTY 而将它启动。
@@ -292,6 +306,12 @@ pnpm test:unit
   对应规则，不以本页命令替代专项验证。
 - 记录实际执行和结果；未执行的高相关检查必须说明原因。
 
+菜单栏状态按钮的原生回归在 macOS 上运行
+`node apps/desktop/native/menubar/test.mjs`。它编译完整 Swift helper，并在离屏 AppKit
+按钮上检查重复更新、标题、提示文字、远控标识和 Light/Dark 切换；不启动 Cindy 或创建
+菜单栏项。该检查属于原生集成层，独立于默认单测池，需在 macOS 上手动执行，未接入 CI。
+脚本分别输出编译与测试耗时；Windows/Linux 不支持运行，不能将其计为通过。
+
 ## 单页 UI 快速验证
 
 `pnpm ui:check` 只编译被改的真实 renderer 组件，在一个隔离的 Electron 窗口（与 Cindy 同一
@@ -446,13 +466,14 @@ node apps/desktop/scripts/check-windows-remote-desktop-runtime.mjs
 计算保持聊天区宽度所需的增量，经本机 `window-sidebar-expansion` IPC 交给
 `SidebarWindowExpansion`。窗口左边缘不动，增量止于当前显示器工作区右边缘；
 空间不足的部分由窗口内部布局分配。最大化与原生全屏不改窗口尺寸，左侧停靠和
-独立工具窗口不触发右扩。启动恢复已展开的侧栏只登记现有几何基准，不重复扩大。
+独立工具窗口不触发右扩。启动恢复已展开的侧栏只登记现有几何基准，不重复扩大；
+该基准的权威说明见本节末尾「侧边栏与主窗口几何」。
 
 展开后以内容区像素宽度为基准：聊天区与其它停靠面板保持宽度，最右侧栏使用 CSS
 剩余空间吸收窗口伸缩；达到最小尺寸后仍遵守原有空间约束。实时缩放不在每个 resize
 事件里重写 React 状态或偏好。主动拖中间分隔线前以实测宽度校准份额账本，提交后
-重新建立聊天区宽度基准。收起时撤回侧栏占用的扩展宽度（包含扩展后主动拖宽的增量），
-保留窗口当前的位置和高度；关闭、移位或重新展开时解除／重建临时基准。
+重新建立聊天区宽度基准。收起时窗口整体回到展开前的位置和大小（扩展后主动拖宽、
+原生移动或缩放都只算临时空间分配，不保留）；关闭、移位或重新展开时解除／重建临时基准。
 
 用户主动调整侧栏后，把实际像素宽度写入布局树 pane 的可选 `preferredWidth`，通过
 既有 LayoutStore 保存到 `layout.v1.json`；下次展开及重启后优先恢复该宽度。
@@ -507,3 +528,18 @@ allowlist；SSH、远程任务及手机不会误触本机重启提示。此功�
 验证入口：`crashDiagnosis.test.ts`、`StartupRecoveryDialogs.test.tsx`，以及
 `pnpm ui:check --page crash-diagnosis --case all --theme all`。单页场景不覆盖原生崩溃、
 真实模型执行或 issue 提交，须与定向测试及完整 Desktop 验收分开报告。
+
+## 侧边栏与主窗口几何
+
+主窗口的位置和大小以没有右侧边栏时的矩形为准。打开侧边栏前保存该矩形，
+打开期间分隔线只调整两侧空间分配，原生窗口移动和缩放也不覆盖这份基准；
+关闭侧边栏或离开对应页面后恢复打开前的矩形。最大化／全屏时不强制修改窗口边界。
+窗口状态持久化同样读取这份基准，重启后若侧边栏仍打开，则从基准重新展开，
+不能再次从已保存的主窗口宽度中扣除侧边栏。旧版本保存的矩形作为首次升级后的基准。
+同一原生窗口再次打开侧边栏时，恢复上次展开的总宽度，并应用布局中已保存的侧栏宽度；
+不能把拖动分隔线后的侧栏宽度当成新增窗口宽度，否则聊天区域会被重置。展开宽度在
+窗口生命周期内独立记忆，关闭状态的调整只更新独立主窗口基准；重新打开仍受当前屏幕边界限制。
+Windows 的贴边／贴满判断仍读真实窗口（程序自己的展开不算贴满），贴满照常记为最大化。
+若打开期间显示器被拔掉或分辨率变小，收起时旧矩形改放回当前工作区内。
+实现见 `main/sidebarWindowExpansion.ts`、`renderer/layout/sidebarPresentation.ts`；
+回归见 `sidebarWindowExpansion.test.ts` 和 `sidebarPresentation.test.tsx`。

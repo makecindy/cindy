@@ -12,6 +12,7 @@ const user = () => fixtureState.__cindyAiScenario === 'personal'
 export const useAuth = () => ({ mode: 'cloud', dataOwnerId: 'fixture', dataOwnerGeneration: 1, user: user() });
 export const useOptionalAuthDeviceId = () => 'fixture-device';
 export const useOptionalAuthUser = () => user();
+export const useOptionalDataOwnerGeneration = () => 1;
 export const useProviders = () => ({
   providers: [{
     id: 'xd', name: cindyAiAccountName(user(), key => i18n.t(key)), source: 'builtin',

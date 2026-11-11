@@ -3,7 +3,7 @@
  * 的第三个控制目标。
  *
  * 与另外两个后端的差别:
- * - 页面活在用户自己的 Chrome / Edge 里,带着用户本人的登录态;Cindy 不启停它;
+ * - 页面活在用户自己的 Chrome / Edge 里,带着用户本人的登录态;Cindy 按需启动但不关闭它;
  * - 用哪个浏览器是用户的选择,所以能力与专用浏览器对齐(扩展 0.4.42 起):截图、
  *   上传、页面脚本、控制台、网络、弹窗、坐标与拖拽都可用。底线是不打扰用户自己的
  *   使用:新页面开在 Cindy 自己的后台窗口,不抢焦点,不切换用户正在看的标签页;
@@ -52,6 +52,9 @@ export interface UserBrowserBackendOptions {
   now?(): number;
   /** status 时扩展未连接,先等它重连这么久(扩展刷新或更新后会断开几秒);默认 8 秒。 */
   reconnectWaitMs?: number;
+  /** Only called for actual browser use, never passive status/doctor/settings reads. */
+  startBrowser?(): Promise<void>;
+  startupWaitMs?: number;
 }
 
 interface TargetRecord {
@@ -225,7 +228,7 @@ const TAB_ACTION_LABEL: Partial<Record<BackendRequest['action'], string>> = {
 const NOT_CONFIGURED_MESSAGE =
   '没有已启用的浏览器扩展插件提供页面控制(安装并启用 Cindy Chrome 插件后再选择「我的浏览器」)。';
 const DISCONNECTED_MESSAGE =
-  '浏览器扩展尚未连接:保持 Cindy 和 Chrome / Edge 运行,检查 Cindy 扩展是否启用;未连接不代表未安装。';
+  '浏览器扩展尚未连接；start 会尝试启动浏览器并等待连接。自动启动后仍未连接时检查扩展是否启用或需要配对；未连接不代表未安装。';
 
 const UNPAIRED_MESSAGE =
   '浏览器扩展已连到 Cindy,但还没完成配对或授权:请让用户在 Cindy Chrome 插件页确认这个浏览器,或重新启用插件后再查询 status。';
@@ -245,6 +248,7 @@ export class UserBrowserBackend implements BrowserBackend {
   private readonly recipePumps = new Map<string, () => Promise<void>>();
   private nextAlias = 1;
   private disposed = false;
+  private preparing: { wantsLaunch: boolean; promise: Promise<void> } | null = null;
 
   constructor(private readonly opts: UserBrowserBackendOptions) {}
 
@@ -256,6 +260,11 @@ export class UserBrowserBackend implements BrowserBackend {
         'BROWSER_RUNTIME_UNAVAILABLE',
       );
     try {
+      if (!['status', 'doctor', 'profiles', 'stop'].includes(request.action) &&
+          request.proxyServer === undefined && request.proxyAllowedHostnames === undefined) {
+        await this.ensureConnected(request);
+      }
+      if (this.disposed) return actionFailed(request.action, 'user browser backend disposed', 'BROWSER_RUNTIME_UNAVAILABLE');
       const result = await this.dispatch(request);
       this.noteSessionTab(request, result);
       return result;
@@ -266,6 +275,45 @@ export class UserBrowserBackend implements BrowserBackend {
       });
       return actionFailed(request.action, err instanceof Error ? err.message : String(err));
     }
+  }
+
+  private async ensureConnected(req: BackendRequest): Promise<void> {
+    const control = this.opts.getPageControl();
+    if (!control || !this.opts.startBrowser || this.connectedClients(control).length > 0) return;
+    // A named connection may belong to a different browser/profile. Never substitute the OS
+    // default for it. Requests without a profile may still join a wait that began earlier and
+    // ask it to launch the default browser, so the first caller's profile does not decide for all.
+    if (!req.profile && this.preparing) this.preparing.wantsLaunch = true;
+    if (!this.preparing) {
+      const state: { wantsLaunch: boolean; promise: Promise<void> } = {
+        wantsLaunch: !req.profile,
+        promise: Promise.resolve(),
+      };
+      const stillCurrent = () => !this.disposed && this.opts.getPageControl()?.bridge === control.bridge;
+      const prepare = async () => {
+        let status = await control.bridge.status();
+        // Pairing is a separate boundary; opening more browsers cannot resolve it.
+        if (!stillCurrent() || !status.ok || status.clients.some(c => c.connected || c.trusted === false)) return;
+        let launched = false;
+        const launchIfWanted = async () => {
+          if (!state.wantsLaunch || launched) return;
+          launched = true;
+          await this.opts.startBrowser!();
+        };
+        await launchIfWanted();
+        const deadline = (this.opts.now ?? Date.now)() + (this.opts.startupWaitMs ?? 35_000);
+        while (stillCurrent() && this.connectedClients(control).length === 0 && (this.opts.now ?? Date.now)() < deadline) {
+          await sleep(500);
+          await launchIfWanted();
+          status = await control.bridge.status();
+          // The extension came online but still needs the user's approval: waiting cannot fix that.
+          if (status.ok && status.clients.some(c => c.trusted === false)) return;
+        }
+      };
+      state.promise = prepare().finally(() => { this.preparing = null; });
+      this.preparing = state;
+    }
+    await this.preparing.promise;
   }
 
   async dispose(): Promise<void> {
@@ -311,7 +359,7 @@ export class UserBrowserBackend implements BrowserBackend {
         return actionOk(req.action, {
           ready: true,
           backend: this.kind,
-          note: '用户浏览器由用户自己启停,Cindy 不关闭它。',
+          note: 'Cindy 会按需启动用户浏览器，不会关闭它。',
         });
       case 'profiles':
         return this.handleProfiles(req);

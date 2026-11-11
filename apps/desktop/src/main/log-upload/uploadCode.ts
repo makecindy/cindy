@@ -1,10 +1,12 @@
 /**
  * 上传编号生成。短、可读、用户能在群里口述（需求 §4.8）。
  *
- * 字符集去掉 0/1/I/L/O/U（字形或读音冲突），8 位分成 `XXXX-XXXX` 两组。
+ * 区域前缀 + 8 位随机字符（分成 `XXXX-XXXX` 两组），字符集去掉 0/1/I/L/O/U。
  * 用 rejection sampling 而不是 `% alphabet.length`：取模会让前几个字符出现概率略高，
  * 虽然对「避免口述冲突」没有实质影响，但偏置的随机数没有存在的理由。
  */
+
+import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 
 import {
   formatUploadCode,
@@ -15,7 +17,7 @@ import {
 /** 注入随机字节，便于单测给定序列。 */
 export type RandomBytes = (size: number) => Uint8Array;
 
-export function generateUploadCode(randomBytes: RandomBytes): string {
+export function generateUploadCode(randomBytes: RandomBytes, region: CindyRegion): string {
   const alphabet = UPLOAD_CODE_ALPHABET;
   // 最大可用值:落在 [limit, 256) 的字节丢弃,保证均匀。
   const limit = Math.floor(256 / alphabet.length) * alphabet.length;
@@ -30,5 +32,5 @@ export function generateUploadCode(randomBytes: RandomBytes): string {
       if (chars.length >= UPLOAD_CODE_LENGTH) break;
     }
   }
-  return formatUploadCode(chars.join(''));
+  return formatUploadCode(chars.join(''), region);
 }

@@ -7,6 +7,7 @@ import { Platform, Pressable, StyleSheet, View } from "react-native";
 import {
   Archive,
   ArchiveRestore,
+  Folder,
   Pencil,
   Pin,
   PinOff,
@@ -47,6 +48,7 @@ const ACTION_ICONS: Record<SessionSwipeAction, LucideIcon> = {
 export function SessionActionSheet({
   session,
   onAction,
+  onMove,
   onClose,
   onClosed,
   pinnedAt,
@@ -56,6 +58,7 @@ export function SessionActionSheet({
   session?: RemoteSession | null;
   /** 点菜单项:父级负责关 sheet 并串后续(删除 Alert / 重命名弹窗 / 直接执行)。 */
   onAction(action: SessionSwipeAction): void;
+  onMove?(): void;
   onClose(): void;
   /** 关闭动画完成、Modal 真正卸载后触发(兄弟 Modal 时序,同 DeviceMenuModal.onClosed)。 */
   onClosed?(): void;
@@ -129,6 +132,14 @@ export function SessionActionSheet({
                 </Pressable>
               );
             })}
+        {!tagsExpanded && onMove ? (
+          <Pressable accessibilityRole="button" accessibilityLabel={t('session.menu.moveToProject')}
+            onPress={onMove} style={({ pressed }) => [styles.actionRow, pressed && styles.pressed]}
+            testID="home.sessionActions.move">
+            <Folder color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />
+            <Text style={styles.actionLabel}>{t('session.menu.moveToProject')}</Text>
+          </Pressable>
+        ) : null}
         {visible && session && (
           <TaskTagsPanel
             key={`${session.canonicalDeviceId ?? session.deviceLinkDeviceId}:${session.id}`}

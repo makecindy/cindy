@@ -35,7 +35,7 @@ import { DesktopCaptureWindow } from '../remote-desktop/captureWindow';
 import { loadDesktopIceServers } from '../remote-desktop/iceConfig';
 import { resolveAuthorizedMedia } from './mediaFetch';
 import { mimeOf } from './mediaMime';
-import { readDeviceLinkSettings } from './settings-store';
+import { readDeviceLinkSettings } from './settings-store.desktop';
 import { captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent } from './broadcast-tap';
 import { captureFilePeerScope, invalidateFilePeerScopes } from './filePeerScope';
 import { createLogger } from '../logger.js';

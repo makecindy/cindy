@@ -324,7 +324,7 @@ const LATEX_FUNCTION_NAMES = new Set([
   'sup', 'inf', 'det', 'dim', 'ker', 'deg', 'gcd', 'arg', 'mod', 'bmod', 'pmod',
 ]);
 
-// 纯样式包装命令:丢弃命令保内容。
+// 文本近似不还原字形,但必须按参数读取样式包装,保住命令边界与作用范围。
 const LATEX_STYLE_WRAPPERS = new Set([
   'text', 'mathrm', 'mathbf', 'mathit', 'mathsf', 'mathtt', 'mathcal',
   'mathbb', 'mathfrak', 'boldsymbol', 'bm', 'operatorname', 'textbf', 'textit',
@@ -436,7 +436,8 @@ function replaceLatexStructures(source: string, depth: number): string {
     const raw = { text: source.slice(start, end), end };
     const name = source.slice(start + 1, end);
     const fraction = name === 'frac' || name === 'dfrac' || name === 'tfrac';
-    if (nesting >= 32 || (!fraction && name !== 'sqrt' && !LATEX_ACCENTS[name])) return remember(raw);
+    const styleWrapper = LATEX_STYLE_WRAPPERS.has(name);
+    if (nesting >= 32 || (!fraction && !styleWrapper && name !== 'sqrt' && !LATEX_ACCENTS[name])) return remember(raw);
     let rootIndexSource: string | undefined;
     const indexStart = skipSpace(end);
     if (name === 'sqrt' && source[indexStart] === '[') {
@@ -457,7 +458,12 @@ function replaceLatexStructures(source: string, depth: number): string {
     if (scanOnly) return remember({ text: source.slice(start, resultEnd), end: resultEnd });
     const body = replaceLatexStructures(first.text, nesting + 1);
     let text: string;
-    if (second) {
+    if (styleWrapper) {
+      // Retain grouping until command mapping: \in\mathcal{E} must not
+      // become \inE, and \mathrm{\alpha}x must not become \alphax.
+      // The same argument reader handles \mathcal E and nested wrappers.
+      text = `{${body}}`;
+    } else if (second) {
       text = `${operand(body)}/${operand(replaceLatexStructures(second.text, nesting + 1))}`;
     } else if (name === 'sqrt') {
       const rootIndex = rootIndexSource === undefined ? undefined
@@ -494,11 +500,6 @@ export function latexToUnicodeApproximation(latex: string): string {
 
 function flattenLatex(latex: string): string {
   let s = latex;
-
-  // 样式包装:\text{...} / \mathbf{...} 等 → 内容本体
-  s = s.replace(/\\([a-zA-Z]+)\s*\{([^{}]*)\}/g, (m, cmd: string, body: string) =>
-    LATEX_STYLE_WRAPPERS.has(cmd) ? body : m,
-  );
 
   // \left / \right / \big 系列定界符修饰:丢弃修饰保定界符
   s = s.replace(/\\(?:left|right|[bB]igg?[lr]?)\s*/g, '');
@@ -537,7 +538,9 @@ function flattenLatex(latex: string): string {
         i += 1;
         continue;
       }
-      const mapped = mapAllChars(arg, map);
+      // Style wrappers retain TeX groups through command mapping. Nested
+      // groups in x^{\mathrm{12}} must not prevent the superscript mapping.
+      const mapped = mapAllChars(stripLatexGrouping(arg), map);
       if (mapped != null) out += mapped;
       else out += arg.length === 1 ? `${marker}${arg}` : `${marker}(${arg})`;
       i += 1 + consumed;
@@ -549,8 +552,12 @@ function flattenLatex(latex: string): string {
 
   // Remove grouping braces while retaining explicitly escaped literal braces
   // and markers. Unescaping earlier would erase \{x\} or reinterpret \_1.
-  s = s.replace(/\\([{}$%&#_^])|[{}]/g, (_m, literal: string | undefined) => literal ?? '');
+  s = stripLatexGrouping(s);
 
   // LaTeX 源码里的多空格无语义,折叠成单空格
   return s.replace(/[ \t]+/g, ' ').trim();
+}
+
+function stripLatexGrouping(text: string): string {
+  return text.replace(/\\([{}$%&#_^])|[{}]/g, (_m, literal: string | undefined) => literal ?? '');
 }

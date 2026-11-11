@@ -5,7 +5,7 @@ import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { SsrFBlockedError } from '@cindy/browser-control-runtime/ssrf-runtime';
 import { createLogger } from '../logger';
-import { guardedOutboundFetch } from '../maker-host/outbound-fetch.js';
+import { guardedOutboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 import { mediaRequestUrlForLog } from './mediaRequestLog.js';
 
 const log = createLogger('cindy-media/download');

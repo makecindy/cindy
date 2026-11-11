@@ -18,7 +18,18 @@ final class NotificationService: UNNotificationServiceExtension {
     original = request.content
     completionLock.unlock()
 
-    let content = request.content
+    var content = request.content
+    if let link = content.userInfo["deepLink"] as? String, link.hasPrefix("cindy://agent-net-notification") {
+      guard let payload = AgentNetNotifications.open(link), let next = content.mutableCopy() as? UNMutableNotificationContent else {
+        finish(UNMutableNotificationContent()); return
+      }
+      next.title = payload["title"] as? String ?? "Cindy"
+      next.body = payload["body"] as? String ?? ""
+      next.threadIdentifier = payload["collapseId"] as? String ?? ""
+      next.userInfo = payload
+      content = next
+      completionLock.lock(); original = next; completionLock.unlock()
+    }
     let category = content.userInfo["category"] as? String
     let isChat = category == "chat-message"
     let isGroup = isChat && (content.userInfo["conversationKind"] as? String) != "direct"

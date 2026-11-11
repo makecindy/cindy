@@ -1,3 +1,6 @@
+import answerPicture from '../../../src/renderer/assets/cindy-share-character.jpg';
+import answerVideo from '../../../src/renderer/assets/wallpapers/cindy-window.mp4?url';
+import answerAudio from '../../../native/agent-island/sounds/startup-chime.mp3?url';
 import { makerChatStore } from '../../../src/renderer/lib/makerChatStore';
 import { useEffect, useRef } from 'react';
 import { Route, Routes, useSearchParams } from 'react-router-dom';
@@ -10,9 +13,6 @@ import { BOT_GROUP_SETTINGS_PARAM } from '../../../src/renderer/features/bots/bo
 import { refreshBotGroups } from '../../../src/renderer/features/bots/botGroupStore';
 import { ControlledBanner } from '../../../src/renderer/features/remote-device/ControlledBanner';
 import { applyRemoteSessionActivity } from '../../../src/renderer/features/device-link/remoteSessionActivityStore';
-import publicImage from '../../../src/renderer/assets/cindy-share-character.jpg';
-import publicVideo from '../../../src/renderer/assets/wallpapers/cindy-window.mp4?url';
-import publicAudio from './silence.wav?url';
 
 // The fixture's custom origin lacks secure-context randomUUID. Only correlation
 // IDs in this isolated renderer use these tokens; production crypto is unchanged.
@@ -91,11 +91,7 @@ function bodyMessages() {
     { seq: 3, op: 'create', id: 'list', kind: 'markdown', props: { text: '- 正文可以阅读\n- **重点**保持格式' } },
     { seq: 4, op: 'create', id: 'image', kind: 'image', props: { src: 'cindy-media://blobs/fixture-image.png', alt: '图片说明保留', caption: '图片标题保留' } },
     { seq: 5, op: 'create', id: 'unnamed-image', kind: 'image', props: { src: '/private/tmp/fixture-image.png' } },
-    // Same-origin HTTP assets exercise public-media rendering without external network or CSP exceptions.
-    ...Object.entries({ image: publicImage, video: publicVideo, audio: publicAudio }).map(([kind, asset], index) => ({
-      seq: index + 6, op: 'create', id: `public-${kind}`, kind,
-      props: { src: new URL(asset, location.href).href, alt: `Public ${kind}` },
-    })),
+    ...Object.entries({ image: answerPicture, video: answerVideo, audio: answerAudio }).map(([kind, asset], index) => ({ seq: index + 6, op: 'create', id: `public-${kind}`, kind, props: { src: new URL(asset, location.href).href, alt: `public-${kind}`, style: { maxHeight: 120 } } })),
   ].map(item => JSON.stringify(item)).join('\n') + '\n```';
   return [
     message({ id: 'body-user', sequence: 1, content: '请整理发布前检查', createdAt: T0 }),

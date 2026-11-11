@@ -25,8 +25,8 @@ export default {
   name: 'group-chat',
   // Voice capture is outside this fixture.
   stubs: {
-    // The harness has no account provider. Media controls use a signed-out identity.
-    'src/renderer/contexts/AuthContext': 'export const useAuth = () => ({ user: null }); export const useOptionalAuthUser = () => null; export const useOptionalAuthDeviceId = () => undefined;',
+    // Rich component bodies read account context, but sign-in is not under test.
+    'src/renderer/contexts/AuthContext': { partial: `export const useAuth = () => ({ mode: 'local', dataOwnerId: 'fixture-account', user: null });` },
     'src/renderer/voice-input/workletUrl': 'export const getVoiceInputWorkletUrl = () => { throw new Error("Voice input is not covered by this fixture"); };',
     // The file preview pulls in pdf.js' and draw.io's workers through Vite's ?url, which the single-page builder does not implement; no group case opens a file.
     'src/renderer/features/cc-agent/workdir-browse/FileBodyView': 'export const FileBodyView = () => null;',
@@ -35,7 +35,7 @@ export default {
   viewport: { width: 1280, height: 800 },
   real: 'BotGroupChatView (timeline, composer, send button, header registration), ControlledBanner, ContentHeader shell, Markdown, theme, fonts and translations',
   notCovered:
-    'Real IPC/network sending (send-status/share-pending control host receipts), round control, real device-link control and revocation, answering pending owner interactions, server plan scheduling and attachment IO; plan-read cases control the full-read receipt; the bubbles case shows a task snapshot, not a live task; the sidebar renders the real group row for work-state cases and is otherwise an empty frame',
+    'Account sign-in, real IPC/network sending (send-status/share-pending control host receipts), round control, real device-link control and revocation, answering pending owner interactions, server plan scheduling and attachment IO; plan-read cases control the full-read receipt; the bubbles case shows a task snapshot, not a live task; the sidebar renders the real group row for work-state cases and is otherwise an empty frame',
   cases: {
     'plan-read-talk': { about: '#9398: delayed plan details never flash an organizer or missing bubble; talk is independent', data: { ...base, sidebar: false, messages: 1, planRead: 'talk' } },
     'plan-read-work': { about: '#9398: delayed work details preserve the selected organizer', data: { ...base, sidebar: false, messages: 1, planRead: 'work' } },
@@ -354,15 +354,18 @@ export default {
       assert.equal(await timeline.getByText('重点', { exact: true }).count(), 1);
       assert.ok(!(await timeline.innerText()).includes('"op":"create"'));
       const text = await timeline.innerText();
-      assert.ok(text.includes('图片标题保留'));
-      await timeline.locator('[data-rich-node="image"]').getByRole('status').getByText(await ui.t('richAnswer.invalidImageReference'), { exact: true }).waitFor();
-      // A model-provided path may remain readable error text; it must not gain host access.
-      assert.equal(await timeline.locator('[src^="cindy-media:"], [src^="file:"], [src^="/private/tmp/"], a[href^="cindy-media:"], a[href^="file:"], a[href^="/private/tmp/"]').count(), 0, 'private references are never fetchable media or privileged links');
-      for (const kind of ['image', 'video', 'audio']) {
-        const media = kind === 'image' ? timeline.getByAltText('Public image', { exact: true }) : timeline.locator(kind);
-        await media.waitFor({ state: 'attached' });
-        assert.equal(await media.count(), 1, 'public media use the production image/player');
-        assert.ok((await media.getAttribute('src')).startsWith('http://cindy-ui.test/'), 'only the isolated HTTP fixture asset is loaded');
+      assert.ok(text.includes('图片说明保留') && text.includes('图片标题保留'));
+      assert.equal(await timeline.getByText(await ui.t('richAnswer.invalidImageReference'), { exact: true }).count(), 1, 'invalid managed image references have an explicit recovery state');
+      assert.equal(await timeline.locator('a[href^="cindy-media:"], a[href^="/private/"], img[src^="/private/"]').count(), 0, 'unavailable references must not become privileged links or file requests');
+      // Group replies now render rich media instead of the former text-only projection.
+      // Serve checked-in assets from the fixture origin; never relax its network CSP.
+      const picture = timeline.locator('img[alt="public-image"]');
+      await picture.waitFor();
+      assert.equal(await picture.evaluate(img => img.complete && img.naturalWidth > 0), true);
+      for (const kind of ['video', 'audio']) {
+        const media = timeline.locator(kind);
+        assert.equal(await media.count(), 1, `${kind} keeps a native media control`);
+        assert.ok((await media.getAttribute('src'))?.startsWith('http://cindy-ui.test/assets/'));
       }
       return;
     }

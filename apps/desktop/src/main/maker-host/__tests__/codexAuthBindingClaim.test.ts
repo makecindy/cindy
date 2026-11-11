@@ -1,3 +1,4 @@
+import { configureOwnerContext } from '../../ownerContext.js';
 /**
  * Codex OAuth 绑定自愈(claimDetectedCodexOAuthBinding)+ readState 绑定 gate 集成测试。
  *
@@ -17,6 +18,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const dirs: string[] = [];
 const h = vi.hoisted(() => ({ userDataDir: '', dataOwnerId: null as string | null }));
+
+// Mirror this fixture's changing profile/owner through the Host-neutral ports.
+vi.mock('../../userDataPath.js', () => ({ getUserDataDir: () => h.userDataDir, userDataPath: (...parts: string[]) => path.join(h.userDataDir, ...parts) }));
+configureOwnerContext({
+  read: () => ({ dataOwnerId: h.dataOwnerId, generation: 1, boundaryPending: false }),
+  fallbackBaseDir: () => h.userDataDir,
+});
 
 vi.mock('electron', () => ({
   app: {

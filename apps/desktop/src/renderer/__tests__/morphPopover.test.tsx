@@ -15,10 +15,10 @@
  * jsdom 无布局引擎(rect 全 0),几何/丝滑度靠 DESIGN.md §14.4 实测兜底,不在此测。
  */
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { useRef, useState, type ReactNode } from 'react';
+import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { MorphPopover } from '../components/ui/morph-popover';
+import { MORPH_CONTENT_RESIZE_EVENT, MorphPopover } from '../components/ui/morph-popover';
 
 function setReducedMotion(reduced: boolean): void {
   Object.defineProperty(window, 'matchMedia', {
@@ -588,5 +588,444 @@ describe('MorphPopover interaction contract', () => {
     await waitFor(() => {
       expect(content.style.overflowX).toBe('hidden');
     });
+  });
+
+  // #9536: 「+」添加目录页自己滚列表。外壳 settle 后再 auto，会和内层并排两条竖向滚动条。
+  // 最小输入：子树带 data-morph-scroll="inner"。没有该标记的菜单仍由外壳滚动。Tier: unit。
+  it('子面板声明内滚时，外壳 settle 后仍保持 overflow hidden', async () => {
+    render(
+      <Harness>
+        <div data-morph-scroll="inner">inner list</div>
+      </Harness>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle' }));
+    const panel = await screen.findByRole('group', { name: 'Morph panel' });
+    const content = panel.firstElementChild as HTMLElement;
+    await waitFor(() => {
+      expect(content.style.overflowY).toBe('hidden');
+    });
+  });
+
+  it('没有内滚标记时，外壳 settle 后恢复 overflow auto', async () => {
+    render(<Harness />);
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle' }));
+    const panel = await screen.findByRole('group', { name: 'Morph panel' });
+    const content = panel.firstElementChild as HTMLElement;
+    await waitFor(() => {
+      expect(content.style.overflowY).toBe('auto');
+    });
+  });
+
+  // #9536 复审：滚动归属只在打开后的 settle 里判一次。往返切页（「+」→添加目录→返回）
+  // 不会再跑那次判定，返回主面板后外壳停在 hidden，列表再也滚不动。
+  // 最小输入：打开后先是内滚页；切页时在新内容提交前派发重量事件（与面板的 useLayoutEffect 同序）。
+  // Tier: unit。
+  it('往返切页后按当前内容重新判定外壳是否滚动', async () => {
+    function Page({
+      kind,
+      onCommit,
+    }: {
+      kind: 'inner' | 'main';
+      onCommit: () => void;
+    }) {
+      useLayoutEffect(() => {
+        onCommit();
+      }, [onCommit]);
+      return kind === 'inner' ? (
+        <div data-morph-scroll="inner">directory list</div>
+      ) : (
+        <div>main list</div>
+      );
+    }
+    function Host() {
+      const [open, setOpen] = useState(false);
+      const [page, setPage] = useState<'inner' | 'main'>('inner');
+      const notify = () => {
+        document
+          .querySelector('[aria-label="Morph panel"] > div')
+          ?.dispatchEvent(new CustomEvent(MORPH_CONTENT_RESIZE_EVENT));
+      };
+      return (
+        <>
+          <button type="button" onClick={() => setOpen(true)}>
+            Toggle
+          </button>
+          <button type="button" onClick={() => setPage('main')}>
+            Show main
+          </button>
+          <button type="button" onClick={() => setPage('inner')}>
+            Show inner
+          </button>
+          <MorphPopover
+            open={open}
+            onOpenChange={setOpen}
+            panelAriaLabel="Morph panel"
+            trigger={<span />}
+          >
+            <Page kind={page} onCommit={notify} />
+          </MorphPopover>
+        </>
+      );
+    }
+    render(<Host />);
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle' }));
+    const panel = await screen.findByRole('group', { name: 'Morph panel' });
+    const content = panel.firstElementChild as HTMLElement;
+    await waitFor(() => {
+      expect(content.style.overflowY).toBe('hidden');
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show main' }));
+    expect(content.querySelector('[data-morph-scroll="inner"]')).toBeNull();
+    expect(content.style.overflowY).toBe('auto');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show inner' }));
+    expect(content.querySelector('[data-morph-scroll="inner"]')).toBeTruthy();
+    expect(content.style.overflowY).toBe('hidden');
+  });
+
+  // #9536 / #9573：外壳被锁成 hidden 后，内层必须接过外壳量到的确定高度。
+  // 只有 max-h-full 时父层高度仍是 auto，长列表按全部条目撑高，底部被外壳裁掉。
+  // 生产入口：MorphPopover 打开内滚页。现有用例只断言 overflowY，不看内层高度。
+  // 最小输入：外壳 scrollHeight 400，上限 240。切回无标记页后外壳恢复可滚，内层高度被清掉。
+  // Tier: unit。
+  it('内滚页接过外壳的确定高度，返回主面板后外壳恢复滚动', async () => {
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(480);
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.getAttribute('role') === 'group' ? 400 : 0;
+    });
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(20, 800, 120, 30));
+    class ResizeObserverStub {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    vi.stubGlobal('ResizeObserver', ResizeObserverStub);
+
+    function Host() {
+      const [open, setOpen] = useState(false);
+      const [page, setPage] = useState<'inner' | 'main'>('inner');
+      const notify = () => {
+        document
+          .querySelector('[aria-label="Morph panel"] > div')
+          ?.dispatchEvent(new CustomEvent(MORPH_CONTENT_RESIZE_EVENT));
+      };
+      return (
+        <>
+          <button type="button" onClick={() => setOpen(true)}>
+            Toggle
+          </button>
+          <button type="button" onClick={() => setPage('main')}>
+            Show main
+          </button>
+          <MorphPopover
+            open={open}
+            onOpenChange={setOpen}
+            panelWidth={480}
+            maxContentHeight={240}
+            panelAriaLabel="Morph panel"
+            trigger={<span />}
+          >
+            <PinnedPage kind={page} onCommit={notify} />
+          </MorphPopover>
+        </>
+      );
+    }
+    function PinnedPage({
+      kind,
+      onCommit,
+    }: {
+      kind: 'inner' | 'main';
+      onCommit: () => void;
+    }) {
+      useLayoutEffect(() => {
+        onCommit();
+      }, [onCommit]);
+      return kind === 'inner' ? (
+        <div data-morph-scroll="inner">directory list</div>
+      ) : (
+        <div>main list</div>
+      );
+    }
+
+    render(<Host />);
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle' }));
+    const panel = await screen.findByRole('group', { name: 'Morph panel' });
+    const content = panel.firstElementChild as HTMLElement;
+    await waitFor(() => {
+      expect(panel.style.height).toBe('240px');
+      expect(content.style.overflowY).toBe('hidden');
+    });
+    const inner = content.querySelector('[data-morph-scroll="inner"]') as HTMLElement;
+    expect(inner.style.height).toBe('240px');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show main' }));
+    expect(content.querySelector('[data-morph-scroll="inner"]')).toBeNull();
+    expect(content.style.overflowY).toBe('auto');
+  });
+
+  // #9573 复审：内容包装若是 h-full，ResizeObserver 量到的高度恒等于外壳，搜索过滤后列表变短
+  // 不会触发 syncPanelToContent，弹层保留打开时的高度留下大块空白。
+  // 生产入口：MorphPopover 打开后内容变矮，外壳高度必须跟着收缩，且不超过 maxContentHeight。
+  // 现有用例只断言 overflow，没有覆盖高度跟随。最小输入：打开时内容高 400，随后缩到 80，上限 240。
+  // Tier: unit。
+  it('搜索后结果变少时外壳高度跟着收缩，且不超过内容高度上限', async () => {
+    const contentHeight = { current: 400 };
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(480);
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.getAttribute('role') === 'group' ? contentHeight.current : 0;
+    });
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(20, 800, 120, 30));
+    class ResizeObserverStub {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    vi.stubGlobal('ResizeObserver', ResizeObserverStub);
+
+    function Host() {
+      const [open, setOpen] = useState(false);
+      const [lines, setLines] = useState(8);
+      return (
+        <>
+          <button type="button" onClick={() => setOpen(true)}>
+            Toggle
+          </button>
+          <button type="button" onClick={() => setLines(1)}>
+            Filter
+          </button>
+          <MorphPopover
+            open={open}
+            onOpenChange={setOpen}
+            panelWidth={480}
+            maxContentHeight={240}
+            panelAriaLabel="Morph panel"
+            trigger={<span />}
+          >
+            <div>
+              {Array.from({ length: lines }, (_, index) => (
+                <div key={index}>row {index}</div>
+              ))}
+            </div>
+          </MorphPopover>
+        </>
+      );
+    }
+
+    render(<Host />);
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle' }));
+    const panel = await screen.findByRole('group', { name: 'Morph panel' });
+    await waitFor(() => {
+      expect(panel.style.height).toBe('240px');
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Filter' }));
+    await waitFor(() => {
+      expect(screen.getAllByText(/^row /)).toHaveLength(1);
+    });
+    // 搜索后列表变矮。内容包装不再用 h-full，自然高度能被量到；面板显式请求重测，外壳跟着收缩。
+    contentHeight.current = 80;
+    const content = panel.firstElementChild as HTMLElement;
+    content.dispatchEvent(new CustomEvent(MORPH_CONTENT_RESIZE_EVENT, { bubbles: true }));
+    expect(panel.style.height).toBe('80px');
+  });
+
+  // #9573 复审（codex P2）：内滚层的定高会算进外壳 scrollHeight。旧实现在量自然高度前
+  // 不松这层定高，于是「上一轮的整段高度 + 边框」被当成新内容高度写回去，短列表在内容
+  // 没变、也没搜索的情况下也会一路长到上限。jsdom 没有排版，这里按浏览器的口径模拟：
+  // 内层带定高时外壳 scrollHeight = 定高 + 2px 边框。
+  // 最小输入：短列表内容 200、上限 240，连续三次内容重测。Tier: unit。
+  it('内滚层的定高不会被当成内容高度叠回外壳', async () => {
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(480);
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      if (this.getAttribute('role') !== 'group') return 0;
+      const inner = this.querySelector('[data-morph-scroll="inner"]') as HTMLElement | null;
+      const pinned = inner ? Number.parseFloat(inner.style.height) || 0 : 0;
+      return Math.max(200, pinned + (pinned > 0 ? 2 : 0));
+    });
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(20, 800, 120, 30));
+    class ResizeObserverStub {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    vi.stubGlobal('ResizeObserver', ResizeObserverStub);
+
+    function Host() {
+      const [open, setOpen] = useState(false);
+      return (
+        <>
+          <button type="button" onClick={() => setOpen(true)}>
+            Toggle
+          </button>
+          <MorphPopover
+            open={open}
+            onOpenChange={setOpen}
+            panelWidth={480}
+            maxContentHeight={240}
+            panelAriaLabel="Morph panel"
+            trigger={<span />}
+          >
+            <div data-morph-scroll="inner">short list</div>
+          </MorphPopover>
+        </>
+      );
+    }
+
+    render(<Host />);
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle' }));
+    const panel = await screen.findByRole('group', { name: 'Morph panel' });
+    await waitFor(() => {
+      expect(panel.style.height).toBe('200px');
+    });
+    const content = panel.firstElementChild as HTMLElement;
+    const inner = panel.querySelector('[data-morph-scroll="inner"]') as HTMLElement;
+    expect(inner.style.height).toBe('200px');
+
+    for (let round = 0; round < 3; round += 1) {
+      content.dispatchEvent(new CustomEvent(MORPH_CONTENT_RESIZE_EVENT, { bubbles: true }));
+    }
+    expect(panel.style.height).toBe('200px');
+    expect(inner.style.height).toBe('200px');
+  });
+
+  // #9573 复审（codex P2）：量自然高度要先松掉内层定高,列表在那一刻会展开到完整内容高度,
+  // 浏览器随即把 scrollTop 夹回 0。jsdom 没有排版,这里在 scrollHeight 读取时模拟这次夹取:
+  // 内层处于「无定高」状态就把 scrollTop 置 0。没有保存/恢复的实现会停在上一步的 0。
+  // 生产入口:删除引用目录 / 扫描结果更新都会重新量高。Tier: unit。
+  it('重新量高时保留内滚列表的滚动位置', async () => {
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(480);
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      if (this.getAttribute('role') !== 'group') return 0;
+      const inner = this.querySelector('[data-morph-scroll="inner"]') as HTMLElement | null;
+      // 浏览器口径:定高被清掉的那一刻列表撑满,滚动位置被夹到 0。
+      if (inner && inner.style.height === '') inner.scrollTop = 0;
+      return 400;
+    });
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(20, 800, 120, 30));
+    class ResizeObserverStub {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    vi.stubGlobal('ResizeObserver', ResizeObserverStub);
+
+    function Host() {
+      const [open, setOpen] = useState(false);
+      return (
+        <>
+          <button type="button" onClick={() => setOpen(true)}>
+            Toggle
+          </button>
+          <MorphPopover
+            open={open}
+            onOpenChange={setOpen}
+            panelWidth={480}
+            maxContentHeight={240}
+            panelAriaLabel="Morph panel"
+            trigger={<span />}
+          >
+            <div data-morph-scroll="inner">long list</div>
+          </MorphPopover>
+        </>
+      );
+    }
+
+    render(<Host />);
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle' }));
+    const panel = await screen.findByRole('group', { name: 'Morph panel' });
+    await waitFor(() => {
+      expect(panel.style.height).toBe('240px');
+    });
+    const content = panel.firstElementChild as HTMLElement;
+    const inner = panel.querySelector('[data-morph-scroll="inner"]') as HTMLElement;
+    expect(inner.style.height).toBe('240px');
+
+    inner.scrollTop = 120;
+    content.dispatchEvent(new CustomEvent(MORPH_CONTENT_RESIZE_EVENT, { bubbles: true }));
+    expect(inner.scrollTop).toBe(120);
+  });
+
+  // #9573 复审：普通动效下，扫描结果 / 模型列表会在 220ms 开场动画内派发重测。
+  // 旧监听当场改宽高，会把正在过渡的面板拽到终态。生产入口：MorphPopover 打开后、settle 前派发重测。
+  // 现有收缩用例走 reduced-motion，settle 已完成，盖不住这条时序。
+  // 最小输入：开场量到 120，动画中途内容变成 400 并派发重测；flush 开场帧后高度仍是 120，
+  // 推进 220ms 后补跑并写成 400。Tier: unit。
+  it('开场期间派发重测不改变面板高度，settle 后补跑一次并应用新高度', () => {
+    setReducedMotion(false);
+    vi.useFakeTimers();
+    const flushFrame = captureFrames();
+    const contentHeight = { current: 120 };
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(480);
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.getAttribute('role') === 'group' ? contentHeight.current : 0;
+    });
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(20, 800, 120, 30));
+    class ResizeObserverStub {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    vi.stubGlobal('ResizeObserver', ResizeObserverStub);
+
+    render(
+      <Harness>
+        <div>rows</div>
+      </Harness>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle' }));
+    const panel = screen.getByRole('group', { name: 'Morph panel' });
+    flushFrame();
+    expect(panel.style.height).toBe('120px');
+
+    contentHeight.current = 400;
+    const content = panel.firstElementChild as HTMLElement;
+    content.dispatchEvent(new CustomEvent(MORPH_CONTENT_RESIZE_EVENT, { bubbles: true }));
+    expect(panel.style.height).toBe('120px');
+
+    act(() => {
+      vi.advanceTimersByTime(220);
+    });
+    expect(panel.style.height).toBe('400px');
+    vi.useRealTimers();
+  });
+
+  // #9573 复审：scrollHeight 不含上下边框，写入的 height 是 border-box。少这 2px 时
+  // max-h-full 的内容区被压短，没有内滚标记的面板（权限 / Agent）会多出一条竖向滚动条。
+  // 生产入口：MorphPopover 打开后按内容量高。现有收缩用例的 scrollHeight 是 mock，边框为 0，
+  // 看不出差额。最小输入：内容高 100，外壳上下边框各 1px，视口放得下。写入高度必须是 102，
+  // 外壳 settle 后仍是 auto（内容放得下，不需要滚）。Tier: unit。
+  it('内容能完整放下时，写入的高度包含上下边框，外壳不自滚', async () => {
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(480);
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.getAttribute('role') === 'group' ? 100 : 0;
+    });
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(20, 800, 120, 30));
+    class ResizeObserverStub {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    vi.stubGlobal('ResizeObserver', ResizeObserverStub);
+
+    render(
+      <Harness>
+        <div>one row</div>
+      </Harness>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle' }));
+    const panel = await screen.findByRole('group', { name: 'Morph panel' });
+    await waitFor(() => {
+      expect(panel.style.height).toBe('100px');
+    });
+    // jsdom 不计算样式表边框。写到元素上之后重测一次，getComputedStyle 才能读到 1px。
+    panel.style.borderTopWidth = '1px';
+    panel.style.borderBottomWidth = '1px';
+    panel.style.borderStyle = 'solid';
+    const content = panel.firstElementChild as HTMLElement;
+    content.dispatchEvent(new CustomEvent(MORPH_CONTENT_RESIZE_EVENT, { bubbles: true }));
+    expect(panel.style.height).toBe('102px');
+    expect(content.style.overflowY).toBe('auto');
+    expect(content.querySelector('[data-morph-scroll="inner"]')).toBeNull();
   });
 });

@@ -11,7 +11,28 @@
     "./customization-scanner": "./src/agents/shared/customization-worker-api.ts",
     "./pi-extension-ui": "./src/agents/pi/extension-ui-capabilities.ts",
     "./pi-subagent-runs": "./src/agents/pi/pi-subagent-runs.ts",
-    "./skill-scan-limits": "./src/agents/shared/skill-scan-limits.ts"
+    "./skill-scan-limits": "./src/agents/shared/skill-scan-limits.ts",
+    "./runtime-owner-lock": {
+      "types": "./src/runtime-owner-lock.d.ts",
+      "import": "./src/runtime-owner-lock.js",
+      "default": "./src/runtime-owner-lock.js"
+    },
+    "./claude-cli-login-status": {
+      "import": "./src/agents/claude-code/cli-login-status.ts",
+      "default": "./src/agents/claude-code/cli-login-status.ts"
+    },
+    "./agents/claude-code": {
+      "import": "./src/agents/claude-code/index.ts",
+      "default": "./src/agents/claude-code/index.ts"
+    },
+    "./maker": {
+      "import": "./src/maker.ts",
+      "default": "./src/maker.ts"
+    },
+    "./agents/codex": {
+      "import": "./src/agents/codex/index.ts",
+      "default": "./src/agents/codex/index.ts"
+    }
   },
   "scripts": {
     "build": "tsc --noEmit",
