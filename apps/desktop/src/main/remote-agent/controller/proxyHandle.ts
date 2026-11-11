@@ -412,7 +412,8 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       activeTurn = true;
     }
     try {
-      await client.callWithId(callId, method, [wireMessage, encoded.wire]);
+      // Keep Session cancellation local; AbortSignal is never part of the wire payload.
+      await client.callWithId(callId, method, [wireMessage, encoded.wire], opts?.signal);
     } catch (error) {
       // The ordered error/done below already settles this send. Do not race it with
       // a second send rejection that can replace the host-owned recovery receipt.

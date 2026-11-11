@@ -1,4 +1,12 @@
 {
+  "runtimePlugins": {
+    "save": "保存",
+    "promptUnsupported": "当前 Pi 运行位置不支持系统提示词片段。",
+    "title": "任务插件",
+    "description": "为这个任务选择插件。修改从下一条消息起生效。",
+    "unsupported": "每次请求前处理仅支持本机 Pi，当前任务的引擎不支持。",
+    "failed": "未能读取或保存设置，请重新打开此面板重试。"
+  },
   "sharedTaskRecovery": {
     "title": "无法在原电脑上恢复任务",
     "description": "可以选择其他电脑或供应商，通过上下文交接继续。原消息保留，但切换不会迁移原电脑上的完整运行状态。",
@@ -860,6 +868,7 @@
       "assignLocalAria": "允许 {{name}} 接收外部新任务",
       "moreAria": "{{name}} 的更多操作",
       "remove": "移出组",
+      "removeLocalBlocked": "组所在的电脑不能移出组",
       "status": {
         "checking": "正在检查…",
         "idle": "空闲",
@@ -2260,6 +2269,7 @@
         "desktopVisibilityHint": "透出 Cindy 后面的桌面与窗口，文字和控件保持清晰。",
         "desktopBlurLabel": "桌面模糊",
         "desktopBlurHint": "模糊窗口后面的桌面，0 为关闭，数值越大越模糊。不支持强度调节的系统使用默认效果。",
+        "desktopBlurSwitchHint": "用 Windows 系统效果模糊窗口后面的桌面。需要 Windows 11 22H2 或更高版本。",
         "blurLabel": "壁纸模糊",
         "blurHint": "仅模糊壁纸，0 为关闭。动态壁纸开启模糊后会增加显卡负载。",
         "motionLabel": "展示方式",
@@ -3586,6 +3596,36 @@
           "invalid": "无法预览此配置，请检查配置或重新选择文件",
           "skipped": "已跳过；再次导入需重新选择文件",
           "authorizationPending": "连接已添加，请在供应商设置中完成授权"
+        },
+        "local": {
+          "title": "从本地应用导入",
+          "note": "只读导入这台电脑已保存的 API 配置，不修改来源应用。Claude Code 仅读取用户级 settings.json（含 CLAUDE_CONFIG_DIR），不读取 shell 环境变量、项目或托管设置。",
+          "review": "查看并导入（{{count}}）",
+          "scanning": "正在读取已保存的配置…",
+          "empty": "没有找到已保存的 API 配置。",
+          "failed": "读取未完成，请重试。",
+          "edit": "编辑",
+          "editFailed": "请检查地址、协议和密钥后重试。",
+          "editNote": "密钥留空会保留已读取的凭据。更改地址或协议后，需填写新密钥。",
+          "name": "显示名称",
+          "baseUrl": "基础 URL",
+          "protocol": "接口协议",
+          "chooseProtocol": "请选择协议",
+          "apiKey": "API 密钥",
+          "keepKey": "留空保留已读取的密钥",
+          "missingUrl": "需要填写地址",
+          "status": {
+            "missing": "未找到配置",
+            "readFailed": "无法读取，请检查权限或重试",
+            "invalid": "格式无法识别，请检查或编辑配置",
+            "limit": "超过读取上限，本来源未完整读取",
+            "unsupported": "此配置无法自动导入。不会执行命令或 apiKeyHelper，请手动添加 API 配置。",
+            "needsInput": "需要补全配置",
+            "changed": "来源已变化，请重新扫描",
+            "duplicate": "已存在相同连接"
+          },
+          "rescan": "重新扫描",
+          "sourceDisabled": "在来源应用中已关闭"
         }
       },
       "order": {
@@ -3747,6 +3787,10 @@
           "openaiImagesHint": "使用此连接的地址和 API Key 调用 /images/generations 与 /images/edits。开启后，此连接将作为供应商唯一的图片连接。缺少的模型可手动添加 ID，再到模型详情声明图片能力。",
           "xaiVideos": "使用 xAI 兼容视频接口",
           "xaiVideosHint": "使用此连接的地址和 API Key 提交、查询视频任务。开启后，此连接将作为供应商唯一的视频连接。缺少的模型可手动添加 ID，再到模型详情声明视频能力。",
+          "minimaxVideos": "使用 MiniMax 兼容视频接口",
+          "minimaxVideosHint": "使用此连接的地址和 API Key 提交、查询 MiniMax 视频任务（如 MiniMax-H3）。每个供应商只能使用一种视频接口。缺少的模型可手动添加 ID，再到模型详情声明视频能力。",
+          "openaiVideos": "使用 OpenAI 兼容视频接口（/v1/videos）",
+          "openaiVideosHint": "使用此连接的地址和 API Key，以 tu-zi 等多数中转站采用的 POST /v1/videos 格式提交、查询视频任务，MiniMax-H3 等模型也可通过它使用。每个供应商只能使用一种视频接口。缺少的模型可手动添加 ID，再到模型详情声明视频能力。",
           "runtimeSupportsImageGeneration": "支持图片生成与编辑",
           "runtimeSupportsImageGenerationHelpLabel": "了解图片生成与编辑支持",
           "runtimeSupportsImageGenerationConditionTitle": "适用条件",
@@ -6554,7 +6598,7 @@
             "unavailable": "组织未配置",
             "unavailablePersonal": "暂未开放",
             "disabled": "已停用",
-            "none": "未绑定",
+            "none": "未关联",
             "pending": "在浏览器里授权，或把关联码发给飞书机器人",
             "awaiting_confirmation": "请在飞书 / Lark 里确认更换这台电脑关联的账号",
             "confirmed": "{{user}} 已关联飞书机器人",
@@ -6571,8 +6615,27 @@
             "copied": "关联码已复制",
             "hint": "或者在飞书里把关联码私聊发给 Cindy 机器人"
           },
+          "linkedAccounts": "已关联账号：{{count}}",
+          "connectionTenant": "所属企业：{{tenant}}",
           "setWorkingDevice": "设为工作电脑",
-          "workingDeviceSet": "已设为工作电脑"
+          "workingDeviceSet": "已设为工作电脑",
+          "appType": {
+            "self_built": "组织自建应用",
+            "store": "商店应用"
+          },
+          "linkedBotsSummary": "已关联 {{bots}} 个机器人 · {{accounts}} 个飞书账号",
+          "chooseBot": "选择要关联的机器人，可以同时使用多个机器人。",
+          "connectBot": "关联此机器人",
+          "linkAnotherAccount": "关联其他飞书账号",
+          "botFallback": "Cindy 机器人",
+          "bridgeTitle": "飞书机器人",
+          "bridgeDescription": "机器人只负责把飞书里的消息转给 Cindy。每个飞书账号的消息交给它的工作电脑处理，任务按机器人和飞书账号分开。",
+          "settingsTitle": "工作目录与模型",
+          "settingsDescription": "属于你的 Cindy 账号和这台电脑，不随机器人或飞书账号变化：所有飞书机器人共用同一份。工作目录清单也与其他渠道共用。",
+          "workingDeviceLabel": "工作电脑：{{name}}",
+          "workingDeviceThisComputer": "本机",
+          "workingDeviceUnknown": "工作电脑尚未同步",
+          "workingDeviceUnnamed": "未命名电脑"
         }
       },
       "summary": {
@@ -7993,8 +8056,18 @@
         "subscribeScheduleRunDetail": "在「前置检查」里选了它的自动化，运行前会先问它。它看得到这条自动化的名称和指令，可以让这次跳过或停止，但不能替你批准。",
         "subscribeRoutineRun": "可在你选定的伙伴例行任务运行前做检查",
         "subscribeRoutineRunDetail": "在「前置检查」里选了它的例行任务，每次触发后会先问它。它看得到例行任务的指令和触发它的事件内容，可以让这次跳过或停止，但不能替你批准。",
+        "systemPrompt": "可为所选任务补充系统提示词",
+        "systemPromptDetail": "下方静态片段只会进入选了这个插件的任务，放在 Cindy 固定提示词之后，顺序与引擎范围按包内声明。修改从下一条消息起生效，出错时按任务设置处理。",
+        "subscribeComposeContext": "可在所选任务回复前补充资料",
+        "subscribeComposeContextDetail": "只有选了它的任务会将当前消息交给它。返回内容作为普通参考资料，不进入系统提示词，也不代表主人授权。出错时按任务设置处理。",
+        "subscribeSearchMemory": "可为所选任务提供记忆",
+        "subscribeSearchMemoryDetail": "在现有 memory_search 中合并完整条目并标明来源插件。需先启用记忆检索；只共享所选任务的查询，插件失败时保留 Cindy 自己的结果。",
+        "subscribeStartTurn": "可在选定任务的每次回复前选择模型",
+        "subscribeStartTurnDetail": "仅在你为任务选择此插件时，读取本条消息并选择已连接的模型、推理强度及 Fast。出错按该任务的设置处理，不能替你批准操作。",
+        "subscribeModelRequest": "可在选定任务中处理每次模型请求",
+        "subscribeModelRequestDetail": "仅在你为任务选择此插件时，读取并处理发送给模型的请求内容，调整模型和参数。目前仅支持本机 Pi；出错按任务设置处理，不包含连接凭证。",
         "subscribeStartTask": "可为新任务选模型",
-        "subscribeStartTaskDetail": "新任务选了它提供的模型时，它会看第一条消息，从你已连接的模型里选一个。只选一次，任务中途不会换模型。",
+        "subscribeStartTaskDetail": "新任务选了它提供的模型时，它会看第一条消息，从你已连接的模型里选一个。这个节点只在第一条消息发出前运行一次。",
         "card": "渲染消息卡片",
         "cardExternalLink": "卡片内可声明外链，经你确认后打开浏览器",
         "cardExternalLinkDetail": "卡片中的链接点击后会弹出确认框，你同意后才会在系统浏览器中打开；仅限 http/https 地址。",
@@ -11702,7 +11775,7 @@
       "remove": "移除",
       "removeAria": "移除 {{platform}}",
       "empty": "把你已有的机器人添加到平台，或在下方连接个人微信，{{name}} 就会在那里回复。",
-      "externalNote": "给这个机器人发消息的人都是在和 {{name}} 对话。你自己的消息按 {{name}} 的权限执行；其他人各有一条隐藏任务，权限受限。",
+      "externalNote": "Telegram 和飞书/Lark 绑定后只接收主人的私聊。群聊按各平台的参与设置接收消息，工具沿用 {{name}} 的权限。独立任务共享资料与记忆。",
       "sharedMemoryNote": "{{name}} 会把这里和其它对话里的信息放在一起用。想隔开记忆，请换一位伙伴。",
       "groups": {
         "title": "群聊",
@@ -12572,47 +12645,47 @@
         "claude-code": {
           "ask": {
             "label": "默认权限",
-            "description": "允许在工作区内读写；需要更高权限、联网或访问工作区外路径时再询问。"
+            "description": "操作按需由你审批。"
           },
           "acceptEdits": {
             "label": "允许编辑",
-            "description": "自动接受文件编辑请求，减少反复确认；涉及更高风险的命令或权限仍按底层权限策略处理。"
+            "description": "文件编辑直接允许，其他操作按需由你审批。"
           },
           "auto": {
             "label": "自动审批",
-            "description": "允许在工作区内读写，并自动审批提权请求；高风险操作可能被拒绝或要求确认。能减少打断，但存在误判风险。"
+            "description": "操作由 AI 模型审批，可能需要额外等待；必要时由你确认。"
           },
           "bypassPermissions": {
             "label": "完全访问",
-            "description": "允许修改任意文件并运行联网命令，无需再次确认。风险最高，只适合可信任务。"
+            "description": "常规操作直接允许，可访问工作区外文件和联网执行命令。"
           }
         },
         "codex": {
           "ask": {
             "label": "默认权限",
-            "description": "允许在工作区内读写；需要更高权限、联网或访问工作区外路径时再询问。"
+            "description": "操作按需由你审批。"
           },
           "auto": {
             "label": "自动审批",
-            "description": "在受保护的工作区沙箱内自动执行命令；需要越过沙箱边界的操作交给自动审查器判断，高风险操作可能被拒绝或要求确认。"
+            "description": "操作由 AI 模型审批，可能需要额外等待；必要时由你确认。"
           },
           "bypassPermissions": {
             "label": "完全访问",
-            "description": "允许修改任意文件并运行联网命令，无需再次确认。风险最高，只适合可信任务。"
+            "description": "常规操作直接允许，可访问工作区外文件和联网执行命令。"
           }
         },
         "pi": {
           "ask": {
             "label": "默认权限",
-            "description": "只读工具直接执行；写文件、跑命令和 MCP 工具每次都询问。"
+            "description": "操作按需由你审批。"
           },
           "auto": {
             "label": "自动审批",
-            "description": "工作区内写文件与安全命令自动执行；越界写、危险命令和 MCP 工具仍会询问。"
+            "description": "操作由 AI 模型审批，可能需要额外等待；必要时由你确认。"
           },
           "bypassPermissions": {
             "label": "完全访问",
-            "description": "允许修改任意文件并运行联网命令，无需再次确认。风险最高，只适合可信任务。"
+            "description": "常规操作直接允许，可访问工作区外文件和联网执行命令。"
           }
         }
       }
@@ -13486,8 +13559,8 @@
       "dismissTitle": "关闭历史失败提示"
     },
     "worktreeRestoreBanner": {
-      "text": "该任务的 worktree 已被回收（目录不存在）。",
-      "textPendingSnapshot": "该任务有一份未应用的更改快照。",
+      "text": "该任务的 worktree「{{name}}」已被回收（目录不存在）。",
+      "textPendingSnapshot": "该任务的 worktree「{{name}}」有一份未应用的更改快照。",
       "restoreAction": "恢复 worktree",
       "applySnapshotAction": "恢复更改",
       "restoring": "恢复中…",
@@ -14079,7 +14152,7 @@
       "errors": {
         "noPriorAssistantPreview": "请在 AI 回复之后的提问上 rewind（这条之前没有 assistant 回复）",
         "sessionRunning": "等待任务停止超时，请重新回退",
-        "noLiveQuery": "Agent 会话未激活——请先发送任意一条消息（哪怕一句\"ok\"）让 SDK 起来再 rewind",
+        "noLiveQuery": "未能恢复任务运行环境，回退未完成。",
         "noPriorAssistantCommit": "请在 AI 回复之后的提问上 rewind",
         "commitGeneric": "rewind 失败，请重试",
         "remoteNotSupported": "远端 Claude Code 会话暂不支持 rewind"
@@ -19769,6 +19842,7 @@
   },
   "subscriptionAccounts": {
     "unassigned": "账号待分配",
+    "boundUnavailable": "账号已不可用",
     "providerManagedAuth": "Codex 当前供应商未提供 ChatGPT 账号信息。请在添加供应商时选择「$t(subscriptionAccounts.signIn.anotherAccount)」，使用独立目录",
     "signIn": {
       "checking": "正在检测本机账号…",
@@ -19796,7 +19870,12 @@
     "openDirectory": "打开账号目录",
     "openDirectoryFailed": "无法打开账号目录，它可能已被移动或删除。",
     "loginAgain": "重新登录",
-    "login": "登录"
+    "login": "登录",
+    "quotaAverage": "平均余量 {{percent}}%",
+    "quotaUpdating": "余量待更新",
+    "quotaResetSoon": "即将重置",
+    "quotaAverageHint": "周限额 · 按账号等权平均",
+    "quotaResetHint": "按当前使用速度，重置时可能仍有余量：24 小时内为黄色，6 小时内为红色。"
   },
   "sessionNotify": {
     "finished": "这个任务这一轮做完了，最终答复如下：",

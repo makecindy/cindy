@@ -2,8 +2,9 @@
 
 > **状态**：权威开发规则（authoritative）
 > **读取时机**：新增或修改 Desktop 日志、IPC 错误处理、main 侧业务逻辑与测试、
-> 跨平台（macOS／Windows）相关行为、任何 UI 文案的 i18n 落地，或新增／修改动画与
-> 界面加载时序等渲染性能相关行为之前
+> 跨平台（macOS／Windows）相关行为、任何 UI 文案的 i18n 落地，新增／修改动画与
+> 界面加载时序等渲染性能相关行为，或新增一处每个功能都要来登记的列表、台账、注册表、
+> 版本号之前
 
 本文收拢一组适用于整个客户端的通用工程约束。IPC 的安全与授权边界另见
 [`electron-security-and-process-boundaries.md`](electron-security-and-process-boundaries.md)，
@@ -264,6 +265,10 @@ PR 门禁必须在 Windows 上用多个并行分片（当前为 4 个）完整�
 
 - **数据正本**：`i18n/glossary.json`；人读版 `i18n/GLOSSARY.md` 由
   `pnpm i18n:glossary-doc` 生成，**不要手改**。
+- **条目顺序**：`terms` 按 `id` 升序，门禁校验。新术语插到按 id 排序的位置，不加在数组
+  开头或末尾——都往同一处加时，任意两个加术语的 PR 必然冲突（2026-11-11 有 7 个未合并 PR
+  卡在数组开头）。顺序不参与规则判定：扫描逐条独立，人读版生成时自行重排（已裁决在前，
+  各组内按 id）。
 - **两级状态**：`decided` 违反即阻断 CI；`proposed` 只告警，用于承载「已知不一致但
   尚未拍板」的术语——让清单可见可讨论，而不是靠脚本替产品做裁决。
 - **三类规则**：禁用译法、保留英文术语的大小写形态、zh-CN 半角标点与三语省略号。
@@ -372,6 +377,41 @@ PR 门禁必须在 Windows 上用多个并行分片（当前为 4 个）完整�
   时用 DevTools Performance 实测，以数据为准。弹窗按钮 loading 等秒级瞬态存量不强制
   改，新代码一律照此。
 
+## 8. 不制造共享追加点
+
+合并冲突的主要成因不是文件大，而是许多 PR 改同一行，或都往同一个位置插入。两个 PR 各改
+一个大文件的不同区域可以自动合并；各往同一处加一行则必然冲突。这类冲突没有语义分歧，
+只是登记方式造成的，却要每个 PR 逐个处理，后合入的还要再做一遍。
+
+2026-11-11 对最近 14 天更新过的 189 个冲突 PR 逐个与 `main` 模拟合并（当时未合并 PR 618 个，
+368 个处于冲突）。下表是多数 PR 落在同一位置的文件；同期 `register.ts` 命中 29 个 PR，
+除 import 区外分散在 58 处，属于正常的并发修改。
+
+| 位置 | 命中的冲突 PR | 成因 | 现状 |
+| --- | --- | --- | --- |
+| `protocol-compatibility.md` | 31 | 新记录都插在文首 | 已拆成每项能力一个文件，并由 `pnpm check:dev-docs` 守护 |
+| 大文件的 import 区 | `register.ts` 18、`mcp-providers.ts` 9、`bootstrap-electron.ts` 9 | 同一条 import 里各加一个名字，或都在末尾加一行 | 未治理 |
+| `BUILT_IN_SKILLS_BUNDLE_VERSION` | 10 | 每个改内置 Skill 的 PR 都把同一个整数加一（近 30 天 94 次） | 未治理 |
+| `createLiziMcpProviders({ ... })` 的 `xdtHelper` | 8 | 每个新 helper 工具都往同一个 600 行的依赖对象里加属性 | 未治理 |
+| `HELPER_CATEGORY_DESCRIPTIONS` | 7 | 一个类目的说明写成一整行，增删该类目工具都改这一行 | 已改成一句一行再拼接，拼出的文字不变；新增内容单独起一行 |
+| `agent-user-parity.md`「现状台账」 | 7 | 每个 helper 工具改动都要写回同一张表，新行集中插在少数几处 | 未治理 |
+| `i18n/glossary.json` | 7 | 新术语多插在 `terms` 数组开头 | 已按 id 排序，由 `pnpm check:i18n-glossary` 守护 |
+
+新增一处每个功能都要来登记一笔的位置，或发现现有位置反复冲突时：
+
+- **列表、台账、注册表**：一项一个文件，目录本身就是索引；必须放在同一个文件时，规定按键
+  排序并由检查脚本守护。不规定「加在开头」或「加在末尾」。
+- **计数器、版本号、合计**：从内容推导。必须人工维护时，不让两个 PR 写同一行。
+- **一行里的多项内容**（数组常量、同一条 import 的多个名字、汇总多个工具的长描述）：拆成
+  一项一行并排序。只拆行不够：两处新增都落在末尾仍然冲突，排序才让它们落在不同位置。
+- **生成物**：只入库稳定的登记事实；随每次改动变化的统计数字按需生成。设计台账的统计列
+  即按此移出入库文件（`pnpm design:inventory:report`）。
+
+复查用 `pnpm repo:conflict-hotspots`（[`scripts/repo-conflict-hotspots.mjs`](../../scripts/repo-conflict-hotspots.mjs)，
+需要 gh 已登录；不改工作区和分支，临时引用结束时删除）。读法：一个文件命中很多 PR 但位置
+分散，是正常的并发修改；多数 PR 落在同一位置（报告标「共享追加点」）才需要从结构上消除。
+治理一处后把上表对应行的现状写回来。
+
 ## Review 清单
 
 1. 有没有裸 `console.log`？临时排查日志是否清理干净？
@@ -388,6 +428,8 @@ PR 门禁必须在 Windows 上用多个并行分片（当前为 4 个）完整�
 7. 新增类／核心逻辑是否有职责注释？
 8. 新增常驻动画是否 compositor-only（HTML 元素 + `transform`/`opacity` + wrapper）、
    响应 `prefers-reduced-motion`？界面切换是否无跳变／空白帧、未引入不必要的 loading 态？
+9. 是否新增了每个功能都要改同一行、或都往同一位置追加的登记点（列表开头／末尾、手动
+   递增的版本号、单行数组）？是否改成一项一个文件、按键排序或从内容推导？
 
 验证按 [`desktop-development.md`](desktop-development.md) 的分层选择：改 TypeScript 至少跑相关
 类型检查与定向测试；改 i18n 跑 `pnpm check:i18n` 与 `pnpm check:i18n-glossary`；跨模块或

@@ -4,7 +4,7 @@ import {
   CodeXml,
   ClipboardList,
   Sparkles,
-  TriangleAlert,
+  LockOpen,
   ChevronDown,
   Check,
 } from 'lucide-react';
@@ -82,7 +82,7 @@ const PERMISSION_ICONS: Record<string, typeof Hand> = {
   acceptEdits: CodeXml,
   plan: ClipboardList,
   auto: Sparkles,
-  bypassPermissions: TriangleAlert,
+  bypassPermissions: LockOpen,
 };
 
 function vendorKeyToAgentKind(v: 'cc' | 'codex' | 'pi'): AgentKind {
@@ -97,12 +97,6 @@ function normalizeMode(mode: PermissionMode, options: PermissionModeDescriptor[]
   return options[0]?.id ?? mode;
 }
 
-function getModeTone(mode: PermissionMode): 'auto' | 'bypassPermissions' | null {
-  if (mode === 'auto') return 'auto';
-  if (mode === 'bypassPermissions') return 'bypassPermissions';
-  return null;
-}
-
 /**
  * 权限模式选择器 —— 容器形变(MorphPopover)试点组件。
  * 弹层不再是 Radix Popover 浮层,而是从 trigger chip 原位生长(docs/design-rules/cindy-design-system.md §14.4
@@ -115,7 +109,7 @@ function getModeTone(mode: PermissionMode): 'auto' | 'bypassPermissions' | null 
  *     翻转 —— 与 ModelSelector 的 field 形态同一原语;morph 只在打开时测一次 fixed
  *     几何,设置页的滚动列里会脱锚),供「IM 机器人 → 工作目录映射」等设置卡片与
  *     ModelSelector 的 field trigger 并排成套。权限模式的可选项、Codex 归一化、
- *     危险档配色只此一份,设置页不得再私搭一套下拉。
+ *     中性呈现只此一份,设置页不得再私搭一套下拉。
  */
 export function PermissionSelector({
   footer,
@@ -154,7 +148,6 @@ export function PermissionSelector({
     options.length > 0 && !fallbackModeLabel ? normalizeMode(permissionMode, options) : permissionMode;
   const current = options.find((o) => o.id === effectiveMode);
   const TriggerIcon = PERMISSION_ICONS[effectiveMode] ?? Hand;
-  const triggerTone = getModeTone(effectiveMode);
   const labelOf = (option: PermissionModeDescriptor | undefined, fallbackId: string) => {
     const id = option?.id ?? fallbackId;
     return t(`newChat.permissionSelector.modes.${agentKind}.${id}.label`, {
@@ -231,7 +224,7 @@ export function PermissionSelector({
   );
 
   // trigger 与选项列表在 chip(Morph)/ field(Radix)两个弹层原语间共用 —— 权限语义、
-  // 归一化、危险档配色只此一份,分叉的只有弹层壳。
+  // 归一化、中性呈现只此一份,分叉的只有弹层壳。
   const triggerButton = (
         <Tip
           text={triggerDescription}
@@ -265,9 +258,6 @@ export function PermissionSelector({
                     'border border-transparent bg-transparent text-[var(--text-primary)]',
                     'hover:border-[var(--border-default)] hover:bg-[var(--composer-pill-bg,#FCFCFC)] dark:hover:bg-[var(--composer-pill-bg,#393838)]',
                   ),
-              // 危险档只染文字,不改底色 —— field / chip 两形态同规则。
-              triggerTone === 'auto' && 'text-[var(--perm-auto-selected-text)]',
-              triggerTone === 'bypassPermissions' && 'text-[var(--perm-bypass-selected-text)]',
               disabled && 'pointer-events-none opacity-50',
             )}
             aria-label={
@@ -330,18 +320,12 @@ export function PermissionSelector({
         {options.map((option) => {
           const Icon = PERMISSION_ICONS[option.id] ?? Hand;
           const isSelected = effectiveMode === option.id;
-          const selectedTone = isSelected ? getModeTone(option.id) : null;
           const label = labelOf(option, option.id);
           const description = descriptionOf(option, option.id);
           const disabledReason = disabledModes?.[option.id];
           return (
-            <Tip
-              key={option.id}
-              text={disabledReason ?? description}
-              side="right"
-              contentClassName="max-w-[280px] whitespace-normal break-words text-left"
-            >
               <button
+                key={option.id}
                 type="button"
                 ref={isSelected ? selectedOptionRef : undefined}
                 // MorphPopover 打开后优先聚焦当前选中项；否则会聚焦列表首项，
@@ -354,6 +338,8 @@ export function PermissionSelector({
                   onPermissionModeChange(option.id);
                   setOpen(false);
                 }}
+                aria-label={label}
+                aria-description={disabledReason ?? description}
                 role="option"
                 aria-selected={isSelected}
                 data-permission-mode={option.id}
@@ -362,32 +348,33 @@ export function PermissionSelector({
                 className={cn(
                   // Shared menu row (DESIGN §4 Composer dropdown rows): the panel's glide
                   // highlight, no own hover / selected fill; the chosen row is the check
-                  // and 500, and danger tiers tint the text only.
+                  // and 500; all modes use neutral text.
                   COMPOSER_MENU_ROW,
                   'flex w-full items-center gap-3 px-3 py-2',
-                  selectedTone === 'auto' && 'text-[var(--perm-auto-selected-text)]',
-                  selectedTone === 'bypassPermissions' &&
-                    'text-[var(--perm-bypass-selected-text)]',
                   disabledReason && 'cursor-not-allowed opacity-45',
                 )}
               >
                 {withMenuLabels(
                   <>
                     <Icon size={17} className="shrink-0" />
-                    <span className="min-w-0 flex-1 truncate text-left">{label}</span>
+                    <span className="min-w-0 flex-1 text-left">
+                      <span className="block">{label}</span>
+                      <span className="mt-1 block whitespace-normal text-12 font-normal leading-relaxed text-[var(--text-secondary)]">
+                        {disabledReason ?? description}
+                      </span>
+                    </span>
                     {isSelected && (
                       <Check
                         size={13}
                         className={cn(
                           'shrink-0',
-                          selectedTone ? 'text-current' : 'text-[var(--model-item-check)]',
+                          'text-[var(--text-secondary)]',
                         )}
                       />
                     )}
                   </>,
                 )}
               </button>
-            </Tip>
           );
         })}
       </div>
@@ -423,6 +410,8 @@ export function PermissionSelector({
             isFieldTrigger
               ? 'w-[var(--radix-popover-trigger-width)]'
               : 'w-[300px] max-w-[calc(100vw-16px)]',
+            // 多行说明会让菜单变高: 高度受可用空间限制, 超出时内部滚动。
+            'max-h-[var(--radix-popover-content-available-height)] overflow-y-auto',
             'rounded-[12px] p-2',
             'bg-[var(--model-dropdown-bg)]',
             'border border-[var(--model-dropdown-border)]',

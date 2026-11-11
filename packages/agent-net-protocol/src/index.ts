@@ -207,7 +207,28 @@ export interface DeviceView extends DeviceMetadata {
 export interface RelayInfo {
   protocolVersion: 2;
   mode: 'official' | 'self-hosted';
+  /** STUN port of the relay's UDP listener; null when UDP is disabled. */
+  udpPort: number | null;
+  /** Host that serves `udpPort` when UDP is published apart from the HTTPS host (for example a separate L4 load balancer). */
+  stunHost?: string;
   features: string[];
+}
+const STUN_HOST_LABEL = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
+/** A DNS name or IPv4 literal only: no port, path, userinfo or IPv6 literal (clients resolve STUN over IPv4). */
+export function isAgentNetStunHost(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 253) return false;
+  const labels = value.split('.');
+  if (!labels.every(label => STUN_HOST_LABEL.test(label))) return false;
+  if (!labels.every(label => /^\d+$/.test(label))) return true;
+  return labels.length === 4 && labels.every(label => Number(label) <= 255 && (label === '0' || !label.startsWith('0')));
+}
+/** `host:port` to query for STUN from an `/info` body: its `stunHost`, else the API host (relays without one). */
+export function agentNetStunServer(apiBase: string, info: unknown): string | null {
+  if (!info || typeof info !== 'object') return null;
+  const { udpPort, stunHost } = info as { udpPort?: unknown; stunHost?: unknown };
+  if (typeof udpPort !== 'number' || !Number.isInteger(udpPort) || udpPort < 1 || udpPort > 65_535) return null;
+  if (isAgentNetStunHost(stunHost)) return stunHost + ':' + udpPort;
+  try { return new URL(apiBase).hostname + ':' + udpPort; } catch { return null; }
 }
 export interface PushRegistration {
   token: string;

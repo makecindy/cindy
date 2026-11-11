@@ -1,4 +1,12 @@
 {
+  "runtimePlugins": {
+    "save": "存之",
+    "promptUnsupported": "此 Pi 所在之處不支援系統提示詞片段。",
+    "title": "差事法器",
+    "description": "為此差事擇法器，改動自下條消息生效。",
+    "unsupported": "逐次請求前處置僅本機 Pi 可用，此差事引擎不支援。",
+    "failed": "設定未能讀取或儲存，請重開此頁再試。"
+  },
   "sharedTaskRecovery": {
     "title": "無法在原電腦上恢復任務",
     "description": "可以選擇其他電腦或供應商，透過上下文交接繼續。原訊息保留，但切換不會移轉原電腦上的完整執行狀態。",
@@ -860,6 +868,7 @@
       "assignLocalAria": "許 {{name}} 接外來之新差事",
       "moreAria": "{{name}} 之餘者操作",
       "remove": "出組",
+      "removeLocalBlocked": "組所在之機，不可出組",
       "status": {
         "checking": "方察…",
         "idle": "閒",
@@ -2260,6 +2269,7 @@
         "desktopVisibilityHint": "透見 Cindy 後之桌面與視窗，文字控件仍清晰。",
         "desktopBlurLabel": "桌面模糊",
         "desktopBlurHint": "模糊窗後桌面；0 則關閉，值愈大則愈朦朧。系統若不可調，仍用預設之效。",
+        "desktopBlurSwitchHint": "以 Windows 系統之效模糊窗後桌面；須 Windows 11 22H2 或更新之版。",
         "blurLabel": "桌布朦朧",
         "blurHint": "僅朦朧桌布，0 為闔。動態桌布啟朦朧則增顯示卡之負。",
         "motionLabel": "展示之式",
@@ -3586,6 +3596,36 @@
           "invalid": "此設不能先覽，請察其設或重擇卷",
           "skipped": "已略；再納須重擇卷",
           "authorizationPending": "連線已增，請於供方之設中完成授權"
+        },
+        "local": {
+          "title": "自本機應用程式匯入",
+          "note": "唯讀此機已存 API 設定，不改來源應用。Claude Code 僅讀使用者級 settings.json（含 CLAUDE_CONFIG_DIR），不讀 shell 環境變數、專案或託管設定。",
+          "review": "審閱並匯入（{{count}}）",
+          "scanning": "正讀取所存設定…",
+          "empty": "未見所存 API 設定。",
+          "failed": "讀取未竟，請重試。",
+          "edit": "編輯",
+          "editFailed": "請核網址、協定與金鑰，再試。",
+          "editNote": "金鑰留空則沿用已讀憑證；改網址或協定，須另填金鑰。",
+          "name": "顯示名稱",
+          "baseUrl": "基礎 URL",
+          "protocol": "API 協定",
+          "chooseProtocol": "請選擇協定",
+          "apiKey": "API 金鑰",
+          "keepKey": "留空則沿用已讀金鑰",
+          "missingUrl": "須填網址",
+          "status": {
+            "missing": "未見設定",
+            "readFailed": "讀取不成，請核權限或重試",
+            "invalid": "格式未識，請核驗或編輯設定",
+            "limit": "已逾讀取上限，此來源未讀全",
+            "unsupported": "此設定不可自動匯入。不執行命令或 apiKeyHelper，請手動新增 API 設定。",
+            "needsInput": "設定尚待補全",
+            "changed": "來源已變，請重新掃描",
+            "duplicate": "相同連線已存"
+          },
+          "rescan": "重新掃描",
+          "sourceDisabled": "來源應用程式中已關閉"
         }
       },
       "order": {
@@ -3745,6 +3785,10 @@
           "openaiImagesHint": "以此連線之位址與 API Key 呼 /images/generations 與 /images/edits。啟之，則此連線為供方唯一之圖連線。所缺模型可手增 ID，再於模型詳情中宣其圖之能。",
           "xaiVideos": "用 xAI 相容影介面",
           "xaiVideosHint": "以此連線之位址與 API Key 遞交、查詢影之差事。啟之，則此連線為供方唯一之影連線。所缺模型可手增 ID，再於模型詳情中宣其影之能。",
+          "minimaxVideos": "用 MiniMax 相容影介面",
+          "minimaxVideosHint": "以此連線之位址與 API Key 遞交、查詢 MiniMax 影之差事（如 MiniMax-H3）。每供方僅可用一種影介面。所缺模型可手增 ID，再於模型詳情中宣其影之能。",
+          "openaiVideos": "用 OpenAI 相容影介面（/v1/videos）",
+          "openaiVideosHint": "以此連線之位址與 API Key，循 tu-zi 等諸中轉所用之 POST /v1/videos 式遞交、查詢影之差事，MiniMax-H3 等模型亦可由此用之。每供方僅可用一種影介面。所缺模型可手增 ID，再於模型詳情中宣其影之能。",
           "runtimeSupportsImageGeneration": "支援圖之生成與編輯",
           "runtimeSupportsImageGenerationHelpLabel": "詳圖之生成與編輯支援",
           "runtimeSupportsImageGenerationConditionTitle": "適用之條",
@@ -6571,8 +6615,27 @@
             "copied": "關聯碼已錄",
             "hint": "或於飛書中將關聯碼私遣予 Cindy 機器人"
           },
+          "linkedAccounts": "已繫帳號：{{count}}",
+          "connectionTenant": "所屬企業：{{tenant}}",
           "setWorkingDevice": "設為工作電腦",
-          "workingDeviceSet": "已設為工作電腦"
+          "workingDeviceSet": "已設為工作電腦",
+          "appType": {
+            "self_built": "組織自建應用",
+            "store": "商店應用"
+          },
+          "linkedBotsSummary": "已聯機器人 {{bots}} · 飛書帳號 {{accounts}}",
+          "chooseBot": "擇機器人以聯，可並用多者。",
+          "connectBot": "聯此機器人",
+          "linkAnotherAccount": "另聯飛書帳號",
+          "botFallback": "Cindy 機器人",
+          "bridgeTitle": "飛書機器人",
+          "bridgeDescription": "機器人惟轉飛書之訊於 Cindy。各飛書帳號之訊，交其工作電腦處理；差事依機器人與飛書帳號各立。",
+          "settingsTitle": "工作目錄與模型",
+          "settingsDescription": "屬爾之 Cindy 帳號與此臺電腦，不隨機器人或飛書帳號而易：諸飛書機器人共用一份。工作目錄清單亦與他渠道共用。",
+          "workingDeviceLabel": "工作電腦：{{name}}",
+          "workingDeviceThisComputer": "本機",
+          "workingDeviceUnknown": "工作電腦尚未同步",
+          "workingDeviceUnnamed": "未命名電腦"
         }
       },
       "summary": {
@@ -8038,8 +8101,18 @@
         "subscribeRoutineRunDetail": "凡於「預檢」擇之之例行差事，每番觸發必先詢之。其可見差事之指令与觸發事件之內容，可令此番略過或止之，不能代君准允。",
         "subscribeScheduleRun": "可於君所擇之自動化運行前行檢",
         "subscribeScheduleRunDetail": "凡於「預檢」擇之之自動化，運行前必先詢之。其可見此自動化之名与指令，可令此番略過或止之，不能代君准允。",
+        "systemPrompt": "可為所選差事補系統提示詞",
+        "systemPromptDetail": "下列靜文唯入所選差事，置 Cindy 固定提示詞之後；次序與引擎之域依包中所載。改動自下條訊息生效，有誤依差事所設處置。",
+        "subscribeComposeContext": "可於所選差事答前補資料",
+        "subscribeComposeContextDetail": "唯所選差事交其當前消息。所返為參閱之材，不入系統提示詞，不作主人授權；有誤依差事所設處置。",
+        "subscribeSearchMemory": "可為所選差事供記憶",
+        "subscribeSearchMemoryDetail": "於既有 memory_search 合入全文，署法器之名。須先啟記憶檢索；唯交所選差事之查詢，法器失誤則留 Cindy 原果。",
+        "subscribeStartTurn": "可於所選差事每次回覆前擇模型",
+        "subscribeStartTurnDetail": "僅在差事選用此法器時，彼可閱本條訊息，擇已連之模型、思之深淺及 Fast。出錯依差事所設處理，不得代君批准操作。",
+        "subscribeModelRequest": "可處理所選差事之每次模型請求",
+        "subscribeModelRequestDetail": "僅在差事選用此法器時，彼可閱並調整模型請求之內容、模型及參數。現僅支援本機 Pi；出錯依差事所設處理，不含連接憑證。",
         "subscribeStartTask": "可為新差事擇模型",
-        "subscribeStartTaskDetail": "新任務擇其所供之模型時，彼閱首條訊息，於汝已連之模型中擇一。唯擇一次，任務中途不易模型。"
+        "subscribeStartTaskDetail": "新任務擇其所供之模型時，彼閱首條訊息，於汝已連之模型中擇一。此節唯於首條訊息發出前行一次。"
       },
       "connections": {
         "confirmTitle": "增連線位址",
@@ -11702,7 +11775,7 @@
       "remove": "除",
       "removeAria": "除 {{platform}}",
       "empty": "增君已有之機器人，或於下方接個人微信，{{name}} 即於彼處回覆。",
-      "externalNote": "凡遣訊予此機器人者，皆與 {{name}} 言談。君之訊依 {{name}} 之權柄行事；他人各有一條隱藏差事，權柄受限。",
+      "externalNote": "Telegram 與飛書/Lark 既綁定，私訊惟受主人。群訊依各平台參與之設，工具循 {{name}} 之權柄。差事雖分，資料與記憶共用。",
       "sharedMemoryNote": "{{name}} 將合用此處與他處言談之資訊。欲隔記憶，請換一同僚。",
       "groups": {
         "title": "諸群",
@@ -12572,47 +12645,47 @@
         "claude-code": {
           "ask": {
             "label": "預設權柄",
-            "description": "許於工作區內讀寫；需更高權柄、聯網或存取工作區外路徑時，再詢問君。"
+            "description": "操作須批者，由君裁可。"
           },
           "acceptEdits": {
             "label": "許修改",
-            "description": "自動接受卷之修改請求，以減反覆確認；涉更高風險之命令或權柄，仍依底層權柄策略處理。"
+            "description": "編輯文件徑許，餘事按需請君裁可。"
           },
           "auto": {
             "label": "自審",
-            "description": "許於工作區內讀寫，並自動審批提權請求；高風險之舉或遭拒或須確認。可減打斷，然有誤判之險。"
+            "description": "操作由 AI 模型裁可，審之或須多候；必要時仍請君確認。"
           },
           "bypassPermissions": {
             "label": "完全存取",
-            "description": "許修改任意卷並執行聯網命令，不再確認。風險最高，僅宜可信之差事，慎之。"
+            "description": "常規操作徑許，可訪工作區外文件、聯網執行命令。"
           }
         },
         "codex": {
           "ask": {
             "label": "預設權柄",
-            "description": "許於工作區內讀寫；需更高權柄、聯網或存取工作區外路徑時，再詢問君。"
+            "description": "操作須批者，由君裁可。"
           },
           "auto": {
             "label": "自審",
-            "description": "於受保護之工作區沙箱內自動執行命令；需越沙箱邊界之舉交自動審查器判之，高風險之舉或遭拒或須確認。"
+            "description": "操作由 AI 模型裁可，審之或須多候；必要時仍請君確認。"
           },
           "bypassPermissions": {
             "label": "完全存取",
-            "description": "許修改任意卷並執行聯網命令，不再確認。風險最高，僅宜可信之差事，慎之。"
+            "description": "常規操作徑許，可訪工作區外文件、聯網執行命令。"
           }
         },
         "pi": {
           "ask": {
             "label": "預設權柄",
-            "description": "唯讀器具直接執行；寫卷、跑命令與 MCP 器具，每次皆詢問。"
+            "description": "操作須批者，由君裁可。"
           },
           "auto": {
             "label": "自審",
-            "description": "工作區內寫卷與安全命令自動執行；越界之寫、危險命令與 MCP 器具仍將詢問。"
+            "description": "操作由 AI 模型裁可，審之或須多候；必要時仍請君確認。"
           },
           "bypassPermissions": {
             "label": "完全存取",
-            "description": "許修改任意卷並執行聯網命令，不再確認。風險最高，僅宜可信之差事，慎之。"
+            "description": "常規操作徑許，可訪工作區外文件、聯網執行命令。"
           }
         }
       }
@@ -13477,8 +13550,8 @@
       "dismissTitle": "闔往昔未成之示"
     },
     "worktreeRestoreBanner": {
-      "text": "此差事之 worktree 已被收回（目錄不存）。",
-      "textPendingSnapshot": "此差事有一份未施之更改快照。",
+      "text": "此差事之 worktree「{{name}}」已被收回（目錄不存）。",
+      "textPendingSnapshot": "此差事之 worktree「{{name}}」有一份未施之更改快照。",
       "restoreAction": "復 worktree",
       "applySnapshotAction": "復更改",
       "restoring": "方復…",
@@ -14070,7 +14143,7 @@
       "errors": {
         "noPriorAssistantPreview": "請於 AI 答覆之後所問處 rewind（此前無 assistant 之答）",
         "sessionRunning": "候差事止息逾時，請再回退",
-        "noLiveQuery": "Agent 會話未啟——請先遣一訊（縱一句\"ok\"亦可）令 SDK 起，再 rewind",
+        "noLiveQuery": "任務未能復啟，回退未成。",
         "noPriorAssistantCommit": "請於 AI 答覆之後所問處 rewind",
         "commitGeneric": "rewind 未成，請再試",
         "remoteNotSupported": "遠方 Claude Code 差事暫不支援 rewind"
@@ -19769,6 +19842,7 @@
   },
   "subscriptionAccounts": {
     "unassigned": "帳號待定",
+    "boundUnavailable": "帳號已不可用",
     "providerManagedAuth": "Codex 目前供方未提供 ChatGPT 帳號資訊。請於新增供方時選「$t(subscriptionAccounts.signIn.anotherAccount)」，另用獨立目錄",
     "signIn": {
       "checking": "正察本機帳號…",
@@ -19796,7 +19870,12 @@
     "openDirectory": "啟帳號目錄",
     "openDirectoryFailed": "帳號目錄未能啟，或已移或已刪。",
     "loginAgain": "重登",
-    "login": "登入"
+    "login": "登入",
+    "quotaAverage": "平均餘量 {{percent}}%",
+    "quotaUpdating": "餘量待新",
+    "quotaResetSoon": "將重置",
+    "quotaAverageHint": "週限額 · 諸帳號等權均值",
+    "quotaResetHint": "依今耗速，重置或尚有餘：距二十四時以內示黃，六時以內示紅。"
   },
   "sessionNotify": {
     "finished": "此務此輪已畢，終答如下：",

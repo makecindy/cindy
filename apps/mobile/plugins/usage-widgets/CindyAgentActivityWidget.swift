@@ -42,7 +42,7 @@ private struct AgentActivityMascot: View {
       .frame(width: size, height: size)
       .overlay(alignment: .bottomTrailing) {
         if stale {
-          Image(systemName: "clock.badge.exclamationmark")
+          Image(systemName: "clock")
             .font(.system(size: max(9, size * 0.35)))
         } else if showBadge {
           Circle().fill(state.tint)
@@ -50,7 +50,7 @@ private struct AgentActivityMascot: View {
             .overlay(Circle().stroke(.black, lineWidth: max(1, size * 0.06)))
         }
       }
-      .accessibilityLabel(stale ? state.staleDetail : state.detail)
+      .accessibilityLabel(stale ? Text("activity.waitingForUpdate") : Text(state.detail))
   }
 }
 
@@ -58,21 +58,39 @@ private struct AgentActivityMascot: View {
 private struct AgentActivityCounts: View {
   let state: CindyAgentActivityAttributes.ContentState
   let size: CGFloat
+  var stale = false
 
   var body: some View {
     HStack(spacing: size * 0.25) {
       if state.noticeCount > 0 {
         Text(state.noticeCount, format: .number)
-          .foregroundStyle(state.attentionCount > 0 ? AgentActivityPalette.attention : AgentActivityPalette.completed)
+          .foregroundStyle(stale ? .secondary : (state.attentionCount > 0 ? AgentActivityPalette.attention : AgentActivityPalette.completed))
       }
       if state.noticeCount > 0 && state.runningCount > 0 {
         Text("·").foregroundStyle(.secondary)
       }
       if state.runningCount > 0 {
-        Text(state.runningCount, format: .number).foregroundStyle(AgentActivityPalette.running)
+        Text(state.runningCount, format: .number).foregroundStyle(stale ? .secondary : AgentActivityPalette.running)
       }
     }
     .font(.system(size: size, weight: .semibold, design: .rounded)).monospacedDigit()
+  }
+}
+
+private struct AgentActivityFreshness: View {
+  let state: CindyAgentActivityAttributes.ContentState
+
+  var body: some View {
+    HStack(spacing: 4) {
+      if let confirmedAt = state.confirmedAt, confirmedAt.isFinite, confirmedAt > 0 {
+        Text("activity.lastUpdated")
+        Text(Date(timeIntervalSince1970: confirmedAt), style: .time)
+      } else {
+        Text("activity.waitingForUpdate")
+      }
+    }
+    .font(.caption)
+    .lineLimit(1)
   }
 }
 
@@ -92,9 +110,12 @@ struct CindyAgentActivityWidget: Widget {
     VStack(alignment: .leading, spacing: 4) {
       Text(context.state.title).font(.headline).foregroundStyle(AgentActivityPalette.islandText)
         .lineLimit(1).privacySensitive()
-      Text(context.isStale ? context.state.staleDetail : context.state.detail)
+      Text(context.state.detail)
         .font(.subheadline)
         .foregroundStyle(context.isStale ? AgentActivityPalette.islandSecondary : context.state.tint).lineLimit(2)
+      if context.isStale {
+        AgentActivityFreshness(state: context.state).foregroundStyle(AgentActivityPalette.islandSecondary)
+      }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
     // Keep text inside the bottom region's rounded mask. Include the padding
@@ -110,12 +131,15 @@ struct CindyAgentActivityWidget: Widget {
         AgentActivityMascot(state: context.state, size: 38, stale: context.isStale, showBadge: true)
         VStack(alignment: .leading, spacing: 4) {
           Text(context.state.title).font(.headline).lineLimit(1).privacySensitive()
-          Text(context.isStale ? context.state.staleDetail : context.state.detail)
+          Text(context.state.detail)
             .font(.subheadline)
             .foregroundStyle(context.isStale ? WidgetPalette.ink2 : context.state.tint).lineLimit(2)
+          if context.isStale {
+            AgentActivityFreshness(state: context.state).foregroundStyle(WidgetPalette.ink2)
+          }
         }
         Spacer(minLength: 0)
-        AgentActivityCounts(state: context.state, size: 18)
+        AgentActivityCounts(state: context.state, size: 18, stale: context.isStale)
       }
       .padding(16)
       .activityBackgroundTint(WidgetPalette.background)
@@ -129,7 +153,7 @@ struct CindyAgentActivityWidget: Widget {
             .padding(.leading, 4)
         }
         DynamicIslandExpandedRegion(.trailing) {
-          AgentActivityCounts(state: context.state, size: 20).padding(.trailing, 4)
+          AgentActivityCounts(state: context.state, size: 20, stale: context.isStale).padding(.trailing, 4)
         }
         DynamicIslandExpandedRegion(.bottom) {
           if let destination = taskURL(context) {
@@ -143,7 +167,7 @@ struct CindyAgentActivityWidget: Widget {
       } compactLeading: {
         AgentActivityMascot(state: context.state, size: 20, stale: context.isStale)
       } compactTrailing: {
-        AgentActivityCounts(state: context.state, size: 13)
+        AgentActivityCounts(state: context.state, size: 13, stale: context.isStale)
       } minimal: {
         AgentActivityMascot(state: context.state, size: 20, stale: context.isStale, showBadge: true)
       }

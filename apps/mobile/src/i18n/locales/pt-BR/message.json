@@ -64,7 +64,8 @@
       "discord": "Discord",
       "wechat": "WeChat",
       "wecom": "WeCom",
-      "dingtalk": "DingTalk"
+      "dingtalk": "DingTalk",
+      "imessage": "iMessage"
     },
     "modelMismatch": "Esta rodada foi respondida por {{actual}} em vez do modelo selecionado {{selected}} (rebaixamento temporário no servidor)",
     "copyStateCopying": "Copiando",

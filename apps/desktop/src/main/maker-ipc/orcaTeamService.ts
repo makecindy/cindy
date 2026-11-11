@@ -1108,6 +1108,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
           case 'REHYDRATE_FAILED':
           case 'HOST_NOT_READY':
           case 'SEND_FAILED':
+          case 'PLUGIN_TURN_SKIPPED':
+          case 'PLUGIN_TURN_BLOCKED':
             return 'AGENT_NOT_READY';
         }
       })();

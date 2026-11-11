@@ -817,3 +817,11 @@ describe('remoteIndexedSearchIgnoredWorkingDirs', () => {
     ).toBe(false);
   });
 });
+
+// Unit regression: offline/legacy title search discarded tags during projection;
+// the existing cached-search cases only supplied untagged tasks.
+it('keeps task labels in cached title search results', () => {
+  const tags = [{ id: 'red', name: 'Important', color: 'red' as const, favoriteOrder: null, revision: 1 }];
+  const page = searchCachedSessionsByTitle([session({ id: 'tagged', title: 'needle', tags })], { query: 'needle' });
+  expect(page.results[0]?.session.tags).toEqual(tags);
+});

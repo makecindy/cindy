@@ -6,7 +6,8 @@ import { isTerminalAgentErrorEvent, type AgentEvent } from '@cindy/maker-core';
 
 import { mapJsonPathText, pathTextContext, type ExecutorWorkspace, type PathTextContext } from '../executor/workspace';
 
-const URL_TEXT = /[a-z][a-z0-9+.-]*:\/\/[^\s\x60"'<>()[\]{}]+/gi;
+// 文件链接仍按 Markdown 分隔符取路径；其它 URL 的括号、IPv6 方括号等属于地址，不能当成本机路径正文。
+const URL_TEXT = /(?:file|xdt-(?:file|audio|image)):\/\/[^\s\x60"'<>()[\]{}]+|[a-z][a-z0-9+.-]*:\/\/[^\s\x60"'<>]+/gi;
 /** 渠道说明要求的 `[名称](xdt-file:///绝对路径)`；括号内才是完整地址，路径可能带裸空格。 */
 const XDT_PATH_LINK = /\]\((xdt-(?:file|image):\/\/\/[^()\r\n]+)\)/gi;
 const TEXT_BOUNDARIES = new Set(['tool_use', 'tool_result', 'tool_result_full', 'interaction_request', 'done', 'error', 'compact_boundary']);
@@ -46,7 +47,8 @@ function localFileUrl(value: string, workspace: ExecutorWorkspace): string {
   return value;
 }
 
-function localText(value: string, workspace: ExecutorWorkspace, context: PathTextContext = 'text'): string {
+/** 事件正文与 MCP 文本入参共用的还原；URL、JSON 转义和源码分隔符沿用同一判据。 */
+export function localText(value: string, workspace: ExecutorWorkspace, context: PathTextContext = 'text'): string {
   // 先处理 JSON 字符串，保留 Windows 转义、正文格式和非字符串字节。
   if (/^\s*[{["]/.test(value)) {
     try {

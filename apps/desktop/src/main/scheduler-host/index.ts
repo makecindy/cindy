@@ -130,6 +130,7 @@ export function createSchedulerHost<Deps extends SchedulerHostStartDeps>(runtime
       // agent 在对话里建任务时常把自己的 cwd 当 workingDir 传入 —— 引擎据此归一成
       // 对话任务,避免任务/会话错误归入项目分组。path.relative 同时兼容两端分隔符。
       resolvePreRunPlugin: deps.resolvePreRunPlugin,
+      validateModelSelection: (schedule, previous) => promptRunner.validateModelSelection(schedule, previous),
       isManagedWorkspaceDir: (dir) => {
         return runtime.dialogueWorkspaceRoots().some((root) => {
           const rel = path.relative(root, dir);
