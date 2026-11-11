@@ -328,6 +328,9 @@ export function MainLayout() {
   // 只有用户亲手开/关右栏才改主窗口矩形；切任务按各会话记忆恢复开合时保持窗口不动
   // (见 layout/sidebarPresentation.ts)。每次写折叠态时同步标记来源。
   const [rightTabsUserToggle, setRightTabsUserToggle] = useState(false);
+  // 当前会话的记忆开合是否已读入：未读入前不观察开合变化，否则启动恢复开栏会被
+  // 当成切任务恢复，窗口停在独立宽度里。
+  const [rightTabsRestored, setRightTabsRestored] = useState(false);
   // 「侧边栏在新窗口中显示」偏好 + 子窗口开闭(main 权威,广播镜像)。
   // 副窗(会话多开窗)不参与 detach:内嵌行为保持不变,只有主窗联动子窗口
   // (main 侧 SET_CONTEXT 也只信主窗 sender,双保险)。
@@ -374,6 +377,7 @@ export function MainLayout() {
         : readCollapsedFor(sessionId);
       setRightTabsUserToggle(false);
       setIsRightSidebarCollapsed(nextCollapsed);
+      setRightTabsRestored(true);
       if (hasInitialCollapsed && opts.writeInitialCollapsedRecord === true) {
         writeCollapsedFor(sessionId, nextCollapsed);
       }
@@ -1048,6 +1052,7 @@ export function MainLayout() {
     if (!rsbWindow.loaded || !rightSidebarSessionId || rsbDetached) return;
     setRightTabsUserToggle(false);
     setIsRightSidebarCollapsed(readCollapsedFor(rightSidebarSessionId));
+    setRightTabsRestored(true);
   }, [rightSidebarSessionId, rsbDetached, rsbWindow.loaded]);
 
   // 监听"右侧栏可见性"信号 —— Phase 5 RsbWebviewBackend 触发(rsbBrowserBridge
@@ -1377,7 +1382,8 @@ export function MainLayout() {
         }
         if (isRightSidebarCollapsedRef.current && !rsbDetachedRef.current) {
           writeCollapsedFor(rightSidebarSessionIdRef.current, false);
-          setRightTabsUserToggle(true);
+          // 崩溃回收只是恢复面板，不是用户手势：不改窗口。
+          setRightTabsUserToggle(reason === 'merge');
           setIsRightSidebarCollapsed(false);
         }
         return;
@@ -1401,7 +1407,7 @@ export function MainLayout() {
           });
           if (isRightSidebarCollapsedRef.current && !rsbDetachedRef.current) {
             writeCollapsedFor(sessionId, false);
-            setRightTabsUserToggle(true);
+            setRightTabsUserToggle(reason === 'merge');
             setIsRightSidebarCollapsed(false);
           }
         });
@@ -2046,7 +2052,9 @@ export function MainLayout() {
             <LayoutRoot
               onInstalledGhostsChange={handleInstalledGhostsChange}
               suppressNonChatPanels={isSettingsRoute}
-              sidebarExpansionReady={rightSidebarPaneAvailable && rsbWindow.loaded && !rsbDetached}
+              sidebarExpansionReady={
+                rightSidebarPaneAvailable && rsbWindow.loaded && !rsbDetached && rightTabsRestored
+              }
               rightTabsUserToggle={rightTabsUserToggle}
               rightTabsCollapsed={
                 !rightSidebarMounted || isRightSidebarCollapsed || rightSidebarForceCollapsed
