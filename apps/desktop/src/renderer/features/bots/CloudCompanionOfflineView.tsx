@@ -15,6 +15,7 @@ import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDev
 import { toast } from '@/lib/toast';
 import type { CompanionTranscriptMessage, CompanionTranscriptPage } from '../../../shared/companionCloud';
 import type { BotGroupAttachment } from '../../../shared/botGroupChat';
+import { CompanionCindyConflictAction, useCompanionCindyConflictAction } from './CompanionCindyConflictAction';
 import { BotAvatar } from './BotAvatar';
 import { BotGroupMessageAttachments } from './BotGroupMessageAttachments';
 import { BotSessionContentHeaderRegistration, type BotChatIdentity } from './BotSessionContentHeader';
@@ -49,6 +50,7 @@ export function CloudCompanionOfflineView(props: CloudCompanionOfflineViewProps)
 function CloudCompanionOfflineContent({ botId, deviceId, name, avatar, avatarColor, deviceName, controlOff = false }: CloudCompanionOfflineViewProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const conflict = useCompanionCindyConflictAction();
   const devices = useDeviceLinkDeviceList();
   const device = deviceName.trim() || t('bots.cloud.unknownDevice');
   const identity = useMemo<BotChatIdentity>(() => ({ id: botId, deviceId, deviceName: device, name, avatar, avatarColor, sessionId: null }),
@@ -135,6 +137,7 @@ function CloudCompanionOfflineContent({ botId, deviceId, name, avatar, avatarCol
     const api = companionCloudApi();
     if (!api || state.kind === 'running') return;
     setState({ kind: 'running' });
+    conflict.clear();
     const owner = getDataOwnerGeneration();
     try {
       const result = await api.takeOverCompanion(botId);
@@ -146,6 +149,7 @@ function CloudCompanionOfflineContent({ botId, deviceId, name, avatar, avatarCol
         return;
       }
       refreshCompanionCloud();
+      conflict.report(result);
       if (result.code === 'HOME_CONFLICT') {
         const winner = devices?.find((candidate) => candidate.deviceId === result.homeDeviceId)?.name?.trim() || t('bots.cloud.unknownDevice');
         if (result.homeDeviceId && result.homeDeviceId !== deviceId) {
@@ -155,7 +159,8 @@ function CloudCompanionOfflineContent({ botId, deviceId, name, avatar, avatarCol
           navigate(`/bots/remote/${encodeURIComponent(result.homeDeviceId)}/${encodeURIComponent(botId)}`);
         } else setState({ kind: 'conflict', device: winner });
       } else setState({ kind: 'error', key: result.code === 'OFFLINE' ? 'bots.cloud.takeOverOffline'
-        : result.code === 'NOT_ENABLED' ? 'bots.cloud.notEnabled' : 'bots.cloud.takeOverFailed' });
+        : result.code === 'NOT_ENABLED' ? 'bots.cloud.notEnabled' : result.code === 'LOCAL_CINDY_CONFLICT'
+          ? 'bots.cloud.localCindyConflict' : 'bots.cloud.takeOverFailed' });
     } catch {
       if (isDataOwnerGenerationCurrent(owner)) setState({ kind: 'error', key: 'bots.cloud.takeOverFailed' });
     }
@@ -168,18 +173,21 @@ function CloudCompanionOfflineContent({ botId, deviceId, name, avatar, avatarCol
         role="status"
         className="mx-4 mt-3 flex flex-wrap items-center gap-3 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3"
       >
-        <BotAvatar bot={identity} size="sm" />
-        <div className="min-w-0 flex-1">
-          <p className="text-14 font-medium text-[var(--text-primary)]">
-            {t(controlOff ? 'bots.cloud.homeControlOff' : 'bots.cloud.homeOffline', { device })}
-          </p>
-          <p className="mt-0.5 text-12 text-[var(--text-secondary)]">
-            {state.kind === 'running' ? t('bots.cloud.takingOver', { name })
-              : state.kind === 'conflict' ? t('bots.cloud.takeOverConflict', { name, device: state.device })
-                : state.kind === 'error' ? t(state.key, { name })
-                  : t('bots.cloud.takeOverHint', { name })}
-          </p>
+        <div className={`flex min-w-0 flex-1 items-center gap-3${conflict.action ? ' basis-full' : ''}`}>
+          <BotAvatar bot={identity} size="sm" />
+          <div className="min-w-0 flex-1">
+            <p className="text-14 font-medium text-[var(--text-primary)]">
+              {t(controlOff ? 'bots.cloud.homeControlOff' : 'bots.cloud.homeOffline', { device })}
+            </p>
+            <p className="mt-0.5 text-12 text-[var(--text-secondary)]">
+              {state.kind === 'running' ? t('bots.cloud.takingOver', { name })
+                : state.kind === 'conflict' ? t('bots.cloud.takeOverConflict', { name, device: state.device })
+                  : state.kind === 'error' ? t(state.key, { name })
+                    : t('bots.cloud.takeOverHint', { name })}
+            </p>
+          </div>
         </div>
+        <CompanionCindyConflictAction action={conflict.action} />
         <Button
           variant="primary"
           size="md"

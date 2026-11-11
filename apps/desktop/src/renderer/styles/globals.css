@@ -649,11 +649,13 @@ html:lang(ko) {
    rotating the inline svg element sweeps a bounding box that overlaps adjacent
    wrapped lines and makes Chromium repaint their text every frame (the
    multi-line refine jitter). Rotating the path keeps the svg's paint box
-   fixed — the same containment the listening level-bars rely on. */
+   fixed — the same containment the listening level-bars rely on.
+   Registered SVG-loop exception (DESIGN.md §14.4, maintainer ruling D-05,
+   2026-11-11); the turn uses the shared spinner cycle like every loader. */
 .ProseMirror [data-voice-caret][data-voice-caret-state='processing'] [data-voice-spinner-arc] {
   transform-box: view-box;
   transform-origin: center;
-  animation: voice-caret-spin 0.9s linear infinite;
+  animation: voice-caret-spin var(--motion-spinner-cycle) linear infinite;
 }
 @keyframes voice-caret-spin {
   to {
@@ -662,7 +664,8 @@ html:lang(ko) {
 }
 /* Mic level bars — shared by every VoiceInputMicWaveIcon consumer (in-app
    voice caret widget, dictation overlay title), hence not scoped to
-   .ProseMirror. The bars exist only inside that icon's svg. */
+   .ProseMirror. The bars exist only inside that icon's svg. The 1.1s wave is
+   part of the same registered SVG-loop exception (DESIGN.md §14.4, D-05). */
 [data-voice-mic-active='true'] [data-voice-mic-bar] {
   transform-box: fill-box;
   transform-origin: center;
@@ -915,31 +918,9 @@ body.resizing-pane [data-ghost-webview] {
   will-change: opacity;
 }
 
-/* 折叠 rail(竖排 tile)及置顶卡片运行中的扫动进度条。置顶卡片固定为 52px 宽度(见
-   SessionCard showCardBar),rail 延续全宽;reduce-motion 停动画。 */
-.session-card-bar::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  height: 100%;
-  width: 36%;
-  border-radius: 2px;
-  background: var(--text-tertiary);
-  animation: session-card-prog 1.5s ease-in-out infinite;
-}
-@keyframes session-card-prog {
-  0% {
-    transform: translateX(-115%);
-  }
-  100% {
-    transform: translateX(330%);
-  }
-}
-
 /* sidebar-card-mode: SessionCard 完成 settle——运行结束时卡片底色闪一下 hover 色
    再归位(0.9s),作为低调的"完成"提示。运行中的活动感由标题左侧
-   SessionStatusIcon 呼吸 + 底部短扫动进度条表达。 */
+   SessionStatusIcon 呼吸表达。 */
 .session-card--settle {
   animation: session-card-settle 0.9s ease;
 }
@@ -952,44 +933,6 @@ body.resizing-pane [data-ghost-webview] {
   }
   100% {
     background-color: var(--surface-elevated);
-  }
-}
-
-/* 需关注圆点——深色 + box-shadow 扩散脉冲（对照 redesign 稿 xdtsb-pulse） */
-/* 呼吸点(AttentionDot 的 breathing 形态)。
-   常驻循环动画按 DESIGN.md §14.4 只允许动 transform / opacity(compositor-only);
-   原实现动的是 box-shadow,每帧都要重绘,多张未读卡长期同屏时持续吃 CPU 与电量
-   (codex review)。改成一个 ::after 光环做 scale + opacity,视觉节奏不变:
-   6px 的点外扩到约 4px 光环(6→14px ≈ scale 2.33),同时淡出。
-   起始帧 opacity 为 0,所以 scale(1) 那一刻光环不可见,不会给点本身蒙一层底色。 */
-.session-card-dot {
-  position: relative;
-}
-.session-card-dot::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: 9999px;
-  background: hsl(var(--foreground));
-  animation: session-card-pulse 2.1s infinite;
-  will-change: transform, opacity;
-  pointer-events: none;
-}
-@keyframes session-card-pulse {
-  0% {
-    transform: scale(1);
-    opacity: 0;
-  }
-  30% {
-    opacity: 0.32;
-  }
-  70% {
-    transform: scale(2.33);
-    opacity: 0;
-  }
-  100% {
-    transform: scale(2.33);
-    opacity: 0;
   }
 }
 
@@ -1019,20 +962,69 @@ body.resizing-pane [data-ghost-webview] {
   }
 }
 
+/* 开始引导的入场(DESIGN.md §14.4):每一步的内容按 --rise-index 依次淡入并上移,相邻错峰 30ms。
+   欢迎页(.first-run-cover)是一段约 1.3 秒的编排:各块相隔 45ms 利落到场,随后每张卡片里的
+   小场景按 --at 指定的时刻各播放一次(对勾弹出、横条从左画出、圆环让位给对勾)。仅 transform /
+   opacity,只在内容出现时播放一次、不循环,减弱动态效果下直落终态。 */
+.first-run-rise {
+  animation: first-run-rise var(--rise-duration, var(--motion-base)) var(--motion-ease-out)
+    calc(var(--rise-start, 0ms) + var(--rise-index, 0) * var(--rise-step, 30ms)) both;
+}
+@keyframes first-run-rise {
+  from {
+    opacity: 0;
+    transform: translateY(var(--rise-distance, 6px));
+  }
+}
+.first-run-cover {
+  --rise-step: 45ms;
+  --rise-distance: 8px;
+}
+.first-run-pop {
+  animation: first-run-pop var(--motion-base) var(--motion-ease-out) var(--at, 0ms) both;
+}
+@keyframes first-run-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+}
+.first-run-draw {
+  transform-origin: left center;
+  animation: first-run-draw var(--motion-base) var(--motion-ease-out) var(--at, 0ms) both;
+}
+@keyframes first-run-draw {
+  from {
+    opacity: 0;
+    transform: scaleX(0);
+  }
+}
+/* 终态是不可见:动效关闭时只留下取代它的对勾。 */
+.first-run-leave {
+  opacity: 0;
+  animation: first-run-leave var(--motion-fast) var(--motion-ease-in) var(--at, 0ms) both;
+}
+@keyframes first-run-leave {
+  from {
+    opacity: 1;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   [data-voice-mic-active='true'] [data-voice-mic-bar],
   .status-bar-shimmer,
   .status-bar-done,
   .session-status-breathing,
-  .session-card-bar::before,
   .session-card--settle,
-  .session-card-dot::after,
-  .session-running-dot,
   .thinking-dot,
   .stream-word,
   [data-stream-marker]::marker,
   .card-col-fade,
-  .bot-market-rise {
+  .bot-market-rise,
+  .first-run-rise,
+  .first-run-pop,
+  .first-run-draw,
+  .first-run-leave {
     animation: none !important;
     will-change: auto;
   }
@@ -1068,9 +1060,6 @@ body.resizing-pane [data-ghost-webview] {
 /* .status-bar-shimmer 已 cadenced 化为一次性动画(2026-08-07),按「一次性动画
    不得纳入冻结清单」原则移出 —— 冻在中途帧会让状态栏停在半暗。 */
 [data-app-hidden='true'] .session-status-breathing,
-[data-app-hidden='true'] .session-card-bar::before,
-[data-app-hidden='true'] .session-card-dot::after,
-[data-app-hidden='true'] .session-running-dot,
 [data-app-hidden='true'] .thinking-dot,
 [data-app-hidden='true'] .ghost-card-sweep,
 [data-app-hidden='true'] .brand-loading-mark-sheen::before,
@@ -1090,44 +1079,6 @@ body.resizing-pane [data-ghost-webview] {
 [data-app-hidden='true'] [data-mxgraph],
 [data-app-hidden='true'] [data-mxgraph] * {
   animation-play-state: paused !important;
-}
-
-/* Running indicator — three horizontal dots, scale-up wave from left to right.
-   Color uses currentColor so the parent span controls accent vs gray. */
-.session-running-dots {
-  display: inline-flex;
-  align-items: center;
-  gap: 1.5px;
-}
-.session-running-dot {
-  display: inline-block;
-  width: 3px;
-  height: 3px;
-  border-radius: 50%;
-  background-color: currentColor;
-  animation: session-running-dot-wave 1.1s ease-in-out infinite;
-}
-.session-running-dot-1 {
-  animation-delay: 0s;
-}
-.session-running-dot-2 {
-  animation-delay: 0.18s;
-}
-.session-running-dot-3 {
-  animation-delay: 0.36s;
-}
-
-@keyframes session-running-dot-wave {
-  0%,
-  60%,
-  100% {
-    transform: scale(0.7);
-    opacity: 0.4;
-  }
-  30% {
-    transform: scale(1.35);
-    opacity: 1;
-  }
 }
 
 /* Cadenced 后的一次呼吸:静止态是全亮(无动画时 opacity 继承 fadeStyle 的 1),
@@ -2416,14 +2367,16 @@ html[data-wallpaper-transition='true'] :is(.wallpaper-composer-zone, .wallpaper-
 /* Blend video into an opaque theme surface before composing with the UI.
    A separate translucent veil over a hardware video overlay changes brightness
    when P3 content switches Windows HDR output to scRGB. Keep visibility on the
-   video itself; the wrapper opacity is reserved for loading/exit crossfades. */
+   video itself; the wrapper opacity is reserved for loading/exit crossfades.
+   The crossfade uses the same tier and curve as the still-image fade above
+   (DESIGN.md §14.4, maintainer ruling D-11, 2026-11-11). */
 .app-wallpaper-video {
   position: fixed;
   inset: 0;
   z-index: -1;
   pointer-events: none;
   background: var(--surface);
-  transition: opacity var(--motion-base) var(--motion-ease-move);
+  transition: opacity var(--motion-fast) var(--motion-ease-move);
 }
 .app-wallpaper-video video {
   width: 100%;

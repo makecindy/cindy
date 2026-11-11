@@ -31,6 +31,7 @@ export function hostRuntimeLayout() {
     atomicRenameSource: release ? null : path.join(desktop, 'native', 'windows-atomic-rename', 'main.rs'),
     nodeWorker: release ? path.join(root, 'bin', 'node-worker.cjs') : null,
     pluginBridge: release ? resource('plugin-bridge.js') : null,
+    powerWorker: release ? path.join(root, 'bin', 'power-worker.cjs') : null,
     credentialScript: release ? path.join(root, 'bin', 'electron-codec.cjs') : path.join(root, 'apps', 'host', 'src', 'credentials', 'electron-codec.cjs'),
     electronBinary: release?.electronBinary ? path.join(root, release.electronBinary) : null,
     chromiumExecutable: release?.chromiumExecutable ? path.join(root, release.chromiumExecutable) : null,

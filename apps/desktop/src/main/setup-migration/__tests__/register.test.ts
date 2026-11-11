@@ -97,12 +97,12 @@ const stateWith = (checklist: unknown[]) => ({
 
 beforeAll(async () => {
   const { registerSetupMigration } = await import('../register.js');
-  registerSetupMigration({ getMaker: h.blocked, getManagedSkillRoots: h.blocked, getBuiltInSkills: h.blocked, getMainWindow: h.blocked });
+  registerSetupMigration({ getMaker: h.blocked, getManagedSkillRoots: h.blocked, getBuiltInSkills: h.blocked, getMainWindow: h.blocked, getLegacyMigrated: h.blocked });
   expect(h.normalize).toBeTypeOf('function');
   expect(h.deps).toBeDefined();
   expect(h.snapshotHandler).toHaveBeenCalledTimes(1);
   expect(h.transferHandler).toHaveBeenCalledTimes(1);
-  expect(h.ipcHandle).toHaveBeenCalledTimes(5);
+  expect(h.ipcHandle).toHaveBeenCalledTimes(6);
   expect(h.blocked).not.toHaveBeenCalled();
 });
 beforeEach(() => {

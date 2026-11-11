@@ -11802,6 +11802,8 @@
       "takeOverConflict": "{{name}} a déjà été déplacé vers « {{device}} »",
       "takeOverOffline": "Impossible de joindre le serveur, {{name}} ne peut donc pas continuer ici pour le moment",
       "takeOverFailed": "Impossible de reprendre {{name}} sur cet ordinateur",
+      "localCindyConflict": "L’ordinateur qui prend le relais a déjà une autre Cindy. Gérez-la dans ses réglages ou choisissez un autre ordinateur principal",
+      "localCindyConflictAction": "Ouvrir les réglages de la Cindy locale",
       "notEnabled": "Ce serveur ne permet pas de changer d'ordinateur principal",
       "readOnlyNote": "Cette conversation est enregistrée dans le cloud et est en lecture seule",
       "empty": "Aucune conversation dans le cloud pour le moment",
@@ -19965,12 +19967,6 @@
       "from": "Transféré depuis « {{name}} »",
       "closeChecklist": "Fermer la liste"
     },
-    "suggestion": {
-      "title": "Utiliser l'assistant de migration pour transférer depuis « {{name}} » ?",
-      "description": "Vous pouvez configurer cet ordinateur avec les plugins, compétences, réglages et connexions de l'autre. Tout ce qui demande une nouvelle connexion ou autorisation ici est listé pour vous. Vous pouvez aussi l'ouvrir plus tard dans Réglages → Général → Assistant de migration.",
-      "confirm": "Ouvrir l'assistant de migration",
-      "later": "Plus tard"
-    },
     "walkthrough": {
       "progress": "Liste de configuration {{current}} / {{total}}",
       "open": "Ouvrir",
@@ -19992,6 +19988,103 @@
         "allow": "Autoriser",
         "deny": "Refuser"
       }
+    }
+  },
+  "firstRunGuide": {
+    "title": {
+      "new": "Bienvenue dans Cindy",
+      "returning": "Bon retour"
+    },
+    "stepsLabel": "Étapes du guide",
+    "close": "Fermer le guide",
+    "next": "Suivant",
+    "skip": "Passer",
+    "preparing": "Préparation…",
+    "steps": {
+      "legacy": "Données antérieures",
+      "intro": "Découvrir Cindy",
+      "migration": "Migrer",
+      "models": "Connecter un modèle",
+      "import": "Importer l’existant",
+      "finish": "Terminé"
+    },
+    "legacy": {
+      "title": "Vos données de la version précédente sont là",
+      "body": "Les sessions passées, les fichiers multimédias et les connexions du navigateur de l’Agent ont été transférés vers cette version et sont prêts à l’emploi.",
+      "note": "Les clés et identifiants tiers que vous aviez autorisés ne sont pas transférés avec les données. Autorisez-les ou saisissez-les à nouveau dans les Réglages."
+    },
+    "intro": {
+      "lead": "Cindy est l’assistant IA qui vous aide à concrétiser ce que vous avez en tête.",
+      "work": {
+        "title": "Confiez-lui le travail",
+        "body": "Il travaille directement dans vos dossiers et vos applications, au lieu de seulement répondre à des questions."
+      },
+      "connect": {
+        "title": "Utilisez les modèles et outils que vous avez déjà",
+        "body": "Connectez votre abonnement ou votre clé API, et ajoutez des plugins et des skills quand vous en avez besoin."
+      },
+      "continue": {
+        "title": "Reprenez où que vous soyez",
+        "body": "Depuis votre téléphone, lancez, consultez et poursuivez les sessions de votre ordinateur."
+      },
+      "start": "Commencer",
+      "next": "Ensuite"
+    },
+    "migration": {
+      "title": "Rapatrier Cindy depuis votre autre ordinateur",
+      "body": "Un autre ordinateur de votre compte est déjà configuré. L’Assistant de migration copie ses plugins, skills, réglages et connexions sur cet ordinateur ; les clés ne sont copiées qu’après avoir choisi Autoriser sur cet autre ordinateur.",
+      "manualBody": "Si vous avez utilisé Cindy sur un autre ordinateur, l’Assistant de migration peut copier ses plugins, skills, réglages et connexions sur cet ordinateur.",
+      "done": "Migré depuis « {{name}} »",
+      "from": "Ancien ordinateur",
+      "to": "Cet ordinateur"
+    },
+    "models": {
+      "title": "Donner un modèle à Cindy",
+      "body": "Ces deux options peuvent être utilisées ensemble.",
+      "cindy": {
+        "badge": "Service officiel",
+        "body": "Le service de modèles fourni par Cindy. Il est inclus dans votre compte, sans rien à activer. Les nouveaux comptes reçoivent un solde offert pour l’essayer ; une fois l’offre payée, presque tous les modèles sont disponibles, et sans payer le choix de modèles est plus restreint.",
+        "active": "Inclus dans votre compte et prêt à l’emploi",
+        "freeBalance": "Montant offert : bienvenue pour l’essayer"
+      },
+      "own": {
+        "title": "Utiliser votre propre offre",
+        "badge": "Plus avantageux",
+        "body": "Vous avez déjà un abonnement Claude ou ChatGPT, ou une clé API ? Nous vous recommandons vivement de le connecter et de l’utiliser avec Cindy AI pour une expérience optimale.",
+        "more": "Autres fournisseurs et clés API",
+        "connected": "Connecté"
+      }
+    },
+    "import": {
+      "title": "Importer ce qui se trouve déjà sur cet ordinateur",
+      "body": "Voici ce que Cindy a trouvé dans les autres outils d’IA de cet ordinateur. Cindy lit les originaux sans jamais les modifier.",
+      "empty": "Rien à importer n’a été trouvé sur cet ordinateur.",
+      "tasksHeading": "Sessions",
+      "tasksHint": "Sélectionnez des outils pour importer leurs sessions dans Cindy et poursuivre le travail.",
+      "pick": "Choisir une par une",
+      "started": "L’import a démarré en arrière-plan. Suivez sa progression dans Réglages → Import de sessions.",
+      "startFailed": "L’import n’a pas démarré. Relancez-le depuis Réglages → Import de sessions.",
+      "teammatesHeading": "Coéquipiers",
+      "teammatesHint": "Importez un Agent d’un autre outil comme coéquipier, avec sa mémoire, ses skills et ses automatisations.",
+      "importTeammate": "Importer comme coéquipier"
+    },
+    "finish": {
+      "title": "Tout est prêt",
+      "legacy": "Les données de la version précédente ont été transférées vers cette version",
+      "modelReady": "Un modèle est connecté",
+      "modelMissing": "Aucun modèle n’est encore connecté. Vous pourrez en connecter un au moment de démarrer une session.",
+      "importStarted": "Les sessions des autres outils sont importées en arrière-plan",
+      "native": "Vos skills et serveurs MCP de Claude Code et Codex fonctionnent ici directement ; il n’y a rien à importer.",
+      "start": "Démarrer votre première session"
+    },
+    "resume": {
+      "label": "Guide en cours · {{step}}",
+      "back": "Revenir au guide"
+    },
+    "settings": {
+      "title": "Guide de démarrage",
+      "description": "Revoir comment découvrir Cindy, migrer depuis un autre ordinateur, connecter un modèle et importer l’existant.",
+      "open": "Ouvrir le guide"
     }
   },
   "forwardedRequest": {
