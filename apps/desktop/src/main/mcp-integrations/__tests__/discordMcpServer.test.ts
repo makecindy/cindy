@@ -133,14 +133,142 @@ describe('Discord MCP host bridge', () => {
       } finally { await h.close(); }
     });
 
-    it('keeps an upload Abort unconfirmed and calls send only once', async () => {
+    // unit: MCP failures previously discarded all transport details. A rejected SDK send is the
+    // smallest input; expose only closed diagnostic scalars, without reading sensitive fields or
+    // hiding a lease lost during that await. This counts SDK calls, not its internal HTTP retries.
+    it('keeps an upload Abort unconfirmed with its tool boundary and calls the SDK only once', async () => {
       const h = await setup('owner', workingDir);
       mockMetadata();
       h.channel.send.mockRejectedValueOnce(Object.assign(new Error('private transport details'), { name: 'AbortError' }));
       try {
         const output = await h.call('call_tool', { name: 'send_file', args: { lane: 'g/10/20/30', path: file } });
-        expect(output.body).toEqual({ ok: false, errorCode: 'DISCORD_OPERATION_UNCONFIRMED' });
+        expect(output.body).toEqual({ ok: false, errorCode: 'DISCORD_OPERATION_UNCONFIRMED', diagnostic: { stage: 'send_file_call', name: 'AbortError' } });
         expect(h.channel.send).toHaveBeenCalledTimes(1);
+      } finally { await h.close(); }
+    });
+
+    it('rebuilds only closed diagnostic fields and never reads sensitive fields or a second cause', async () => {
+      const h = await setup('owner', workingDir);
+      mockMetadata();
+      const sensitiveRead = vi.fn(() => { throw new Error('sensitive getter'); });
+      const secondCauseRead = vi.fn(() => { throw new Error('second cause'); });
+      const cause = { name: 'SocketError', code: 'UND_ERR_SOCKET', status: 503 };
+      const error = { name: 'TypeError', code: 'ERR_INVALID_ARG_TYPE', status: 400, cause };
+      for (const value of [error, cause]) {
+        for (const field of ['message', 'stack', 'path', 'URL', 'url', 'headers', 'request', 'body', 'requestBody', 'rawError', 'toJSON', 'toString']) {
+          Object.defineProperty(value, field, { get: sensitiveRead });
+        }
+      }
+      Object.defineProperty(cause, 'cause', { get: secondCauseRead });
+      h.channel.send.mockRejectedValueOnce(error);
+      try {
+        const output = await h.call('call_tool', { name: 'send_file', args: { lane: 'g/10/20/30', path: file } });
+        expect(output.body).toEqual({ ok: false, errorCode: 'DISCORD_OPERATION_UNCONFIRMED', diagnostic: {
+          stage: 'send_file_call', name: 'TypeError', code: 'ERR_INVALID_ARG_TYPE', status: 400,
+          causeName: 'SocketError', causeCode: 'UND_ERR_SOCKET', causeStatus: 503,
+        } });
+        expect(sensitiveRead).not.toHaveBeenCalled(); expect(secondCauseRead).not.toHaveBeenCalled();
+        expect(h.channel.send).toHaveBeenCalledTimes(1);
+      } finally { await h.close(); }
+    });
+
+    it.each([
+      { name: 'AbortError-private', code: 'UND_ERR_SOCKET_private', status: '503', cause: { name: 'DiscordAPIError[123456]', code: 123456, status: 418 } },
+      { name: { toString: () => { throw new Error('do not coerce'); } }, code: ['ABORT_ERR'], status: [503], cause: 'SocketError' },
+    ])('omits unknown or non-scalar diagnostic values without coercion', async error => {
+      const h = await setup('owner', workingDir);
+      mockMetadata(); h.channel.send.mockRejectedValueOnce(error);
+      try {
+        const output = await h.call('call_tool', { name: 'send_file', args: { lane: 'g/10/20/30', path: file } });
+        expect(output.body).toEqual({ ok: false, errorCode: 'DISCORD_OPERATION_UNCONFIRMED', diagnostic: { stage: 'send_file_call' } });
+      } finally { await h.close(); }
+    });
+
+    it('normalizes only an exact known Discord API error name', async () => {
+      const h = await setup('owner', workingDir);
+      mockMetadata(); h.channel.send.mockRejectedValueOnce({ name: 'DiscordAPIError[50035]', code: 50035, status: 400 });
+      try {
+        const output = await h.call('call_tool', { name: 'send_file', args: { lane: 'g/10/20/30', path: file } });
+        expect(output.body).toEqual({ ok: false, errorCode: 'DISCORD_OPERATION_UNCONFIRMED', diagnostic: { stage: 'send_file_call', name: 'DiscordAPIError', code: 50035, status: 400 } });
+      } finally { await h.close(); }
+    });
+
+    it('summarizes a cyclic cause once without traversing it', async () => {
+      const h = await setup('owner', workingDir);
+      mockMetadata();
+      const error = { name: 'AbortError', code: 'ABORT_ERR' };
+      const causeRead = vi.fn(() => error);
+      Object.defineProperty(error, 'cause', { get: causeRead });
+      h.channel.send.mockRejectedValueOnce(error);
+      try {
+        const output = await h.call('call_tool', { name: 'send_file', args: { lane: 'g/10/20/30', path: file } });
+        expect(output.body).toEqual({ ok: false, errorCode: 'DISCORD_OPERATION_UNCONFIRMED', diagnostic: { stage: 'send_file_call', name: 'AbortError', code: 'ABORT_ERR', causeName: 'AbortError', causeCode: 'ABORT_ERR' } });
+        expect(causeRead).toHaveBeenCalledTimes(1);
+      } finally { await h.close(); }
+    });
+
+    it.each(['name', 'cause'])('does not replace the original failure when its %s getter throws', async field => {
+      const h = await setup('owner', workingDir);
+      mockMetadata();
+      const error = { code: 'ABORT_ERR' };
+      Object.defineProperty(error, field, { get: () => { throw new Error('unreadable diagnostic'); } });
+      h.channel.send.mockRejectedValueOnce(error);
+      try {
+        const output = await h.call('call_tool', { name: 'send_file', args: { lane: 'g/10/20/30', path: file } });
+        expect(output.body).toEqual({ ok: false, errorCode: 'DISCORD_OPERATION_UNCONFIRMED', diagnostic: { stage: 'send_file_call', code: 'ABORT_ERR' } });
+      } finally { await h.close(); }
+    });
+
+    it('keeps concurrent file-call stages separate while one authorization is pending', async () => {
+      const h = await setup('owner', workingDir);
+      mockMetadata();
+      let entered!: () => void; const authorizationEntered = new Promise<void>(resolve => { entered = resolve; });
+      let reject!: (error: unknown) => void; const authorization = new Promise<boolean>((_, rejectPromise) => { reject = rejectPromise; });
+      h.authorizeFile.mockImplementationOnce(() => { entered(); return authorization; });
+      h.channel.send.mockRejectedValueOnce({ name: 'AbortError' });
+      try {
+        const pending = h.call('call_tool', { name: 'send_file', args: { lane: 'g/10/20/30', path: path.join(os.tmpdir(), 'outside.txt') } });
+        await authorizationEntered;
+        const send = await h.call('call_tool', { name: 'send_file', args: { lane: 'g/10/20/30', path: file } });
+        reject({ name: 'TypeError' });
+        expect((await pending).body).toEqual({ ok: false, errorCode: 'DISCORD_OPERATION_UNCONFIRMED', diagnostic: { stage: 'file_authorization', name: 'TypeError' } });
+        expect(send.body).toEqual({ ok: false, errorCode: 'DISCORD_OPERATION_UNCONFIRMED', diagnostic: { stage: 'send_file_call', name: 'AbortError' } });
+        expect(h.channel.send).toHaveBeenCalledTimes(1);
+      } finally { await h.close(); }
+    });
+
+    it.each([
+      { scope: 'owner' as const, revoke: 'account', expected: 'DISCORD_CALLER_CHANGED' },
+      { scope: 'companion' as const, revoke: 'origin', expected: 'DISCORD_SCOPE_ACCOUNT_CHANGED' },
+      { scope: 'companion' as const, revoke: 'lease', expected: 'DISCORD_SCOPE_EXPIRED' },
+    ])('prioritizes $revoke invalidation over a rejected SDK send without reading diagnostics', async ({ scope, revoke, expected }) => {
+      const h = await setup(scope, workingDir);
+      mockMetadata();
+      const diagnosticRead = vi.fn(() => 'AbortError');
+      const error = Object.defineProperties({}, { name: { get: diagnosticRead }, cause: { get: diagnosticRead } });
+      h.channel.send.mockImplementationOnce(async () => {
+        if (revoke === 'account') h.revokeAccount(); else if (revoke === 'origin') h.revokeOrigin(); else h.expire();
+        throw error;
+      });
+      try {
+        const output = await h.call('call_tool', { name: 'send_file', args: { lane: 'g/10/20/30', path: file } });
+        expect(output.body).toEqual({ ok: false, errorCode: expected });
+        expect(diagnosticRead).not.toHaveBeenCalled(); expect(h.channel.send).toHaveBeenCalledTimes(1);
+      } finally { await h.close(); }
+    });
+
+    it('leaves non-file failures and confirmed permission errors without diagnostics', async () => {
+      const h = await setup('owner', workingDir);
+      mockMetadata();
+      const diagnosticRead = vi.fn(() => 'AbortError');
+      h.rest.post.mockRejectedValueOnce(Object.defineProperty({}, 'name', { get: diagnosticRead }));
+      h.channel.send.mockRejectedValueOnce({ status: 403, name: 'HTTPError' });
+      try {
+        const text = await h.call('call_tool', { name: 'send_message', args: { lane: 'g/10/20/30', text: 'hello' } });
+        expect(text.body).toEqual({ ok: false, errorCode: 'DISCORD_OPERATION_UNCONFIRMED' });
+        const fileOutput = await h.call('call_tool', { name: 'send_file', args: { lane: 'g/10/20/30', path: file } });
+        expect(fileOutput.body).toEqual({ ok: false, errorCode: 'DISCORD_PERMISSION_DENIED' });
+        expect(diagnosticRead).not.toHaveBeenCalled();
       } finally { await h.close(); }
     });
 
