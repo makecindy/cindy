@@ -6,6 +6,124 @@ import { BUNDLED_CATALOG } from '../catalog.js';
 
 describe('shared provider discovery', () => {
   it.each([
+    { context_length: '1000000' },
+    { context_window: '1000000' },
+    { max_context_length: '1000000' },
+    { max_input_tokens: '1000000' },
+    { contextWindow: '1000000' },
+    { model_info: { max_input_tokens: '1000000' } },
+    { limit: { context: '1000000' } },
+  ])('normalizes string context limits through discovery, refresh, save and all engines: %j', fields => {
+    const discovered = parseModelsListResponse({ data: [{ id: 'private-model', ...fields }] })!;
+    expect(discovered[0]).toMatchObject({ contextWindow: 1_000_000,
+      discoveredMetadata: { contextWindow: 1_000_000 } });
+    const previous = [{ id: 'private-model', name: 'Private',
+      discoveredMetadata: { contextWindow: 200_000 } }];
+    const refreshed = mergeDiscoveredRuntimeModels(previous, discovered);
+    const sparse = parseModelsListResponse({ data: [{ id: 'private-model' }] })!;
+    const models = JSON.parse(JSON.stringify(mergeDiscoveredRuntimeModels(refreshed, sparse)));
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      const runtime = { baseUrl: 'https://relay.example/v1', models };
+      expect(buildUserProvider({ id: 'relay', name: 'Relay', runtimes: { [agent]: runtime } })
+        .models[agent]?.[0]).toMatchObject({ contextWindow: 1_000_000, contextWindowVerified: true });
+      expect(buildUserProvider({ id: 'relay', name: 'Relay', runtimes: { [agent]: {
+        ...runtime, models: [{ ...models[0], contextWindow: 128_000 }],
+      } } }).models[agent]?.[0]?.contextWindow).toBe(128_000);
+    }
+    expect(previous[0].discoveredMetadata.contextWindow).toBe(200_000);
+  });
+
+  it.each(['', ' ', '1M', '1,000,000', '0', '-1', '0.5', '1000000.5', 'Infinity',
+    'NaN', '0x100000', '1e6', '9007199254740992', true, {}, []])(
+    'does not invent context limits from invalid values: %j', value => {
+      for (const fields of [{ context_length: value }, { contextWindow: value },
+        { model_info: { max_input_tokens: value } }, { limit: { context: value } }]) {
+        const [model] = parseModelsListResponse({ data: [{ id: 'private-model', ...fields }] })!;
+        expect(model.contextWindow).toBeUndefined();
+        expect(model.discoveredMetadata?.contextWindow).toBeUndefined();
+      }
+    });
+
+  it.each(['contextWindowMax', 'max_context_window'])(
+    'normalizes string capacity without inventing a reported working window: %s', key => {
+      const [model] = parseModelsListResponse({ data: [{ id: 'private-model', [key]: '1000000' }] })!;
+      expect(model.discoveredMetadata?.contextWindowMax).toBe(1_000_000);
+      expect(model.discoveredMetadata?.contextWindow).toBeUndefined();
+      expect(model.contextWindow).toBeUndefined();
+    });
+
+  it('keeps output validation unchanged when normalizing nested context strings', () => {
+    const [model] = parseModelsListResponse({ data: [{ id: 'private-model',
+      limit: { context: '1000000', output: '8192' },
+    }] })!;
+    expect(model.contextWindow).toBe(1_000_000);
+    expect(model.discoveredMetadata?.maxOutputTokens).toBeUndefined();
+  });
+
+  it('preserves field precedence and skips invalid context aliases', () => {
+    const models = parseModelsListResponse({ data: [
+      { id: 'first', context_length: '128000', context_window: 1_000_000,
+        contextWindow: 2_000_000, limit: { context: 3_000_000 } },
+      { id: 'second', context_length: 'invalid', context_window: ' 1000000 ' },
+    ] })!;
+    expect(models.map(model => model.contextWindow)).toEqual([128_000, 1_000_000]);
+  });
+
+  // #8867: flat-window coverage missed OpenCode's nested limit metadata.
+  // Unit: real discovery -> refresh merge -> JSON save -> three runtime catalogs.
+  it('retains nested token limits through refresh and save without overriding user budgets', () => {
+    const discovered = parseModelsListResponse({ data: [{ id: 'deepseek-v4.1-flash',
+      limit: { context: 1_000_000, output: 384_000 },
+    }] })!;
+    expect(discovered[0]).toMatchObject({ contextWindow: 1_000_000,
+      discoveredMetadata: { contextWindow: 1_000_000, maxOutputTokens: 384_000 } });
+    const existing = [{ id: 'deepseek-v4.1-flash', name: 'DeepSeek',
+      discoveredMetadata: { contextWindow: 200_000, maxOutputTokens: 8192 } }];
+    const models = JSON.parse(JSON.stringify(mergeDiscoveredRuntimeModels(existing, discovered)));
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      const runtime = { baseUrl: 'https://relay.example/v1', models };
+      const provider = buildUserProvider({ id: 'relay', name: 'Relay', runtimes: { [agent]: runtime } });
+      expect(provider.models[agent]?.[0]).toMatchObject({
+        contextWindow: 1_000_000, maxOutput: 384_000, contextWindowVerified: true,
+      });
+      const overridden = buildUserProvider({ id: 'relay', name: 'Relay', runtimes: {
+        [agent]: { ...runtime, models: [{ ...models[0], contextWindow: 128_000, maxOutputTokens: 4096 }] },
+      } });
+      expect(overridden.models[agent]?.[0]).toMatchObject({ contextWindow: 128_000, maxOutput: 4096 });
+    }
+  });
+
+  it.each([{ context_length: 128_000 }, { contextWindow: 128_000 }])(
+    'keeps existing flat token fields ahead of nested limits: %j', fields => {
+      const [model] = parseModelsListResponse({ data: [{ id: 'private-model',
+        ...fields, max_output_tokens: 8192,
+        limit: { context: 1_000_000, output: 384_000 },
+      }] })!;
+      expect(model).toMatchObject({ contextWindow: 128_000,
+        discoveredMetadata: { contextWindow: 128_000, maxOutputTokens: 8192 } });
+    });
+
+  it('ignores invalid nested token limits independently and retains unknown-model defaults', () => {
+    for (const value of [undefined, null, '', '1M', 0, -1, 0.5, Number.MAX_SAFE_INTEGER + 1]) {
+      const [badContext, badOutput] = parseModelsListResponse({ data: [
+        { id: 'private-model', limit: { context: value, output: 8192 } },
+        { id: 'other-model', limit: { context: 128_000, output: value } },
+      ] })!;
+      expect(badContext.contextWindow).toBeUndefined();
+      expect(badContext.discoveredMetadata?.contextWindow).toBeUndefined();
+      expect(badContext.discoveredMetadata?.maxOutputTokens).toBe(8192);
+      expect(badOutput.contextWindow).toBe(128_000);
+      expect(badOutput.discoveredMetadata?.maxOutputTokens).toBeUndefined();
+      const models = mergeDiscoveredRuntimeModels([], [badContext]);
+      const provider = buildUserProvider({ id: 'relay', name: 'Relay', runtimes: {
+        pi: { baseUrl: 'https://relay.example/v1', models },
+      } });
+      expect(provider.models.pi?.[0]?.contextWindow).toBe(200_000);
+      expect(provider.models.pi?.[0]?.contextWindowVerified).not.toBe(true);
+    }
+  });
+
+  it.each([
     { service_tiers: [{ id: 'priority' }, { id: 'ultrafast' }] },
     { additional_speed_tiers: ['fast', 'ultrafast'] },
   ])('keeps account speed tiers through discovery and JSON save: %j', fields => {

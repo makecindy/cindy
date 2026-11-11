@@ -1,16 +1,78 @@
 import { describe, it, expect, vi } from 'vitest';
 
-import { BUNDLED_CATALOG, buildUserProvider, connectedProvidersForAgent, providerMediaField } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, buildUserProvider, connectedProvidersForAgent, providerMediaField, remoteInvocationModels, type ModelDisableOverrides } from '@cindy/model-providers';
 
 import { checkModelRoute } from '../model-route-guard.js';
 import { createProviderService, type ConnectionReadOptions } from '../provider-service.js';
 import { cindyAiAccountName, cindyAiAccountLogoKind } from '../../../shared/cindyAiPresentation.js';
+import { organizationProviderLogoKind } from '../../organizationProviderLogo.js';
 import type { XdOrgIdentity } from '../../../shared/xdOrg.js';
 
 /** 注入内置 bundled 目录作为「当前生效目录」(桌面端真实注入的是 active-catalog 的 getActiveCatalog)。 */
 const bundledCatalog = () => BUNDLED_CATALOG;
 
 describe('createProviderService', () => {
+  // Unit: the real list projection must brand only XD's exact enterprise provider,
+  // including mixed Auto/concrete model lists, and re-read membership after account changes.
+  it('projects enterprise branding from current membership without applying local display preferences', async () => {
+    let user: XdOrgIdentity | null = { membershipKind: 'org', orgSlug: 'xd', orgName: 'XD' };
+    const model = { id: 'byok-openai-codex/gpt-6.1-terra', name: 'Terra', contextWindow: 200000, efforts: [], defaultEffort: null };
+    const provider = { id: 'byok-test', name: 'Enterprise Codex', source: 'organization' as const,
+      auth: { method: 'none' as const }, agents: ['codex' as const, 'pi' as const], routing: {},
+      models: { codex: [{ ...model, id: 'auto/group' }], pi: [model] } };
+    const svc = createProviderService({
+      getCatalog: () => ({ version: 'test', providers: [provider,
+        { ...provider, id: 'byok-other', models: { codex: [{ ...model, id: 'byok-other/gpt' }] } },
+        { ...provider, id: 'user-test', source: 'user' as const },
+      ] }),
+      connection: { xd: () => false, anthropic: () => false, openai: () => false, xai: () => false },
+      getOrganizationProviderLogoKind: p => organizationProviderLogoKind(p, user),
+      getProviderPresentation: () => ({ name: 'Stale local name', removed: true, logoKind: 'xd' }),
+    });
+    const read = () => svc.listProviders({ snapshotOnly: true });
+    const xd = await read();
+    expect(xd[0]).toMatchObject({ name: 'Enterprise Codex', logoKind: 'openai-spectrum' });
+    expect(xd[0].removed).not.toBe(true);
+    expect(xd.slice(1).map(p => p.logoKind)).toEqual([undefined, undefined]);
+    user = { membershipKind: 'org', orgSlug: 'other', orgName: 'XD' };
+    expect((await read())[0].logoKind).toBeUndefined();
+    user = null;
+    expect((await read())[0].logoKind).toBeUndefined();
+    user = { membershipKind: 'org', orgSlug: 'xd', orgName: 'Renamed' };
+    expect((await read())[0].logoKind).toBe('openai-spectrum');
+  });
+
+  // #9501, unit: existing view tests never supply advanced-settings budgets.
+  // One exact route with a 1M override must retain the 200k settings default,
+  // expose 1M to Remote Agent selection, and follow defaults again after reset.
+  it('projects live owner budgets by exact route without replacing settings defaults', async () => {
+    const model = { id: 'claude-opus-5-5[1m]', name: 'Opus', contextWindow: 200_000, efforts: [], defaultEffort: null };
+    const provider = { id: 'custom', name: 'Custom', source: 'user' as const, auth: { method: 'none' as const },
+      agents: ['claude-code', 'codex'] as const, routing: {
+        'claude-code': { upstream: 'https://fake.invalid', authStrategy: 'none' as const },
+        codex: { upstream: 'https://fake.invalid', authStrategy: 'none' as const },
+      },
+      models: { 'claude-code': [model, { ...model, id: 'claude-opus-5-5' }], codex: [model] } };
+    const catalog = { version: 'test', providers: [
+      { ...provider, agents: [...provider.agents] }, { ...provider, id: 'other', agents: [...provider.agents] },
+    ] };
+    let limits: Record<string, number> = {};
+    const svc = createProviderService({ getCatalog: () => catalog, getModelContextLimits: () => limits,
+      connection: { xd: () => false, anthropic: () => false, openai: () => false, xai: () => false } });
+    const before = await svc.listProviders();
+    limits = { 'claude-code:custom:claude-opus-5-5[1m]': 1_000_000 };
+    const views = await svc.listProviders();
+    expect(views[0].models['claude-code']![0]).toMatchObject({ contextWindow: 200_000, contextWindowOverride: 1_000_000 });
+    expect(remoteInvocationModels(views[0]).models['claude-code']![0].contextWindow).toBe(1_000_000);
+    expect(views[0].models.codex).toEqual(before[0].models.codex);
+    expect(views[0].models['claude-code']![1]).toEqual(before[0].models['claude-code']![1]);
+    expect(views[1]).toEqual(before[1]);
+    expect(model.contextWindow).toBe(200_000);
+    limits = {};
+    expect(await svc.listProviders()).toEqual(before);
+    model.contextWindow = 300_000;
+    expect(remoteInvocationModels((await svc.listProviders())[0]).models['claude-code']![0].contextWindow).toBe(300_000);
+  });
   it('projects the live membership name without changing routes, models or custom names', async () => {
     let user: XdOrgIdentity | null = { membershipKind: 'personal', orgName: null, orgSlug: null };
     const labels: Record<string, string> = {
@@ -307,6 +369,30 @@ describe('createProviderService', () => {
     expect(provider?.models['claude-code']).toEqual([discoveredModel]);
   });
 
+  // Unit regression: imported account members must pass through the same access
+  // overrides as raw members. Existing override tests had no catalog projection.
+  it('applies model disable overrides to projected account membership', async () => {
+    const openai = BUNDLED_CATALOG.providers.find(provider => provider.id === 'openai')!;
+    const model = { id: 'pool-model', name: 'Pool model', contextWindow: 200_000,
+      efforts: [], defaultEffort: null };
+    const catalog = { ...BUNDLED_CATALOG, providers: [{ ...openai, models: { codex: [] } }] };
+    let disabled = true;
+    const svc = createProviderService({
+      getCatalog: () => catalog,
+      projectCatalog: source => ({ ...source, providers: source.providers.map(provider => ({
+        ...provider, models: { codex: [model] },
+      })) }),
+      connection: { xd: () => false, anthropic: () => false, openai: () => true, xai: () => false },
+      getModelAccess: (): ModelDisableOverrides => ({ disabledModels: disabled ? { 'openai:pool-model': true } : {} }),
+    });
+    expect(checkModelRoute(await svc.listProviders({ catalog }), 'codex', model.id, 'openai'))
+      .toEqual({ kind: 'reject', reason: 'explicit-source-disabled' });
+    disabled = false;
+    expect(checkModelRoute(await svc.listProviders({ getCatalog: () => catalog }), 'codex', model.id, 'openai'))
+      .toEqual({ kind: 'pass' });
+    expect(catalog.providers[0].models.codex).toEqual([]);
+  });
+
   it('supports async connection readers (codex oauth)', async () => {
     const svc = createProviderService({
       getCatalog: bundledCatalog,
@@ -426,5 +512,30 @@ describe('createProviderService', () => {
     expect(providers[0]?.connected).toBe(true);
     expect(connectedProvidersForAgent(providers, 'claude-code')).toHaveLength(1);
     expect(connectedProvidersForAgent(providers, 'codex')).toHaveLength(0);
+  });
+});
+
+
+describe('alias exact-route overrides in provider snapshots', () => {
+  it('rechecks custom budget/price state on each snapshot and keeps original members', async () => {
+    const provider = buildUserProvider({ id: 'alias-test', name: 'Alias', runtimes: {
+      codex: { baseUrl: 'https://api.deepseek.com', wireProtocol: 'openai-chat', models: [
+        { id: 'deepseek-flash', name: 'Flash' }, { id: 'deepseek-v4-flash', name: 'Legacy' },
+      ] },
+    } });
+    provider.models.codex!.forEach((m) => { m.selectionAliasKey = 'deepseek-flash'; });
+    let customized = false;
+    const check = vi.fn((_pid: string, _agent: string, id: string) => customized && id === 'deepseek-v4-flash');
+    const svc = createProviderService({ getCatalog: () => ({ ...BUNDLED_CATALOG, providers: [provider] }),
+      connection: { xd: () => false, anthropic: () => false, openai: () => false, xai: () => false },
+      customApiKeyConnected: () => true, hasModelAliasOverride: check });
+    expect((await svc.listProviders())[0].models.codex!.every((m) => m.selectionAliasKey)).toBe(true);
+    customized = true;
+    const rows = (await svc.listProviders())[0].models.codex!;
+    expect(rows.map((m) => m.id)).toEqual(['deepseek-flash', 'deepseek-v4-flash']);
+    expect(rows.every((m) => !m.selectionAliasKey)).toBe(true);
+    expect(provider.models.codex!.every((m) => m.selectionAliasKey)).toBe(true);
+    customized = false;
+    expect((await svc.listProviders())[0].models.codex!.every((m) => m.selectionAliasKey)).toBe(true);
   });
 });

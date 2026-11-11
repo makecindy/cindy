@@ -1,8 +1,9 @@
 import { useSyncExternalStore } from 'react';
 import { parseSharedTaskInvitationIntent, type SharedTaskInvitationIntent } from '@cindy/device-link';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, subscribeMobileAuthOwner } from '@/auth/authOwnerGeneration';
+import { buildAgentNetSharingInvitation, parseAgentNetSharingInvitation } from '@cindy/agent-net/portable';
 
-let pending: (SharedTaskInvitationIntent & { expiresAt: number }) | null = null;
+let pending: (SharedTaskInvitationIntent & { expiresAt: number; link?: string }) | null = null;
 let stopWatching: (() => void) | undefined;
 let expiry: ReturnType<typeof setTimeout> | undefined;
 const listeners = new Set<() => void>();
@@ -17,7 +18,9 @@ export function clearSharedTaskInvitationIntent(): void {
 }
 
 export function receiveSharedTaskInvitationIntent(url: string): boolean {
-  const value = parseSharedTaskInvitationIntent(url);
+  const v2 = parseAgentNetSharingInvitation(url, 'shared-task');
+  const value = v2 ? { invitation: v2.receipt.invitation, server: v2.server,
+    link: buildAgentNetSharingInvitation(v2.receipt, v2.server) } : parseSharedTaskInvitationIntent(url);
   if (!value) return false;
   clearSharedTaskInvitationIntent();
   let owner = getMobileAuthOwner();

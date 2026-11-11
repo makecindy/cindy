@@ -11,6 +11,7 @@ import {
   useTheme,
   lightColors,
   darkColors,
+  radius,
 } from "@/theme";
 import type { LayoutRect } from "@/platform/windowGeometry";
 import { retroMacArtwork } from "./retroMacArtwork";
@@ -32,6 +33,7 @@ export const FOLD_DESKTOP_SKINS = [
   "macii",
   "powerbook",
   "thinkpad",
+  "macbook",
   "modern",
   "keyboard",
 ] as const;
@@ -107,6 +109,7 @@ function SlicedArtwork({
   );
 }
 const VIEWPORTS = {
+  macbook: { x: 0, y: 0, width: 1, height: 1 },
   macii: { x: 0.072, y: 0.082, width: 0.856, height: 0.73 },
   powerbook: { x: 0.08, y: 0.11, width: 0.84, height: 0.765 },
   thinkpad: { x: 0.07, y: 0.107, width: 0.86, height: 0.805 },
@@ -144,13 +147,25 @@ function adjacentSkin(
   ];
 }
 
-/** The live surface fits inside the rendered CRT's black opening. */
+// Keep the opening at the MacBook proportions tuned on Duo. Host displays with
+// different ratios are fitted inside it by the viewer, without moving the case.
+const MACBOOK_DISPLAY_ASPECT = 1.54;
+
+/** CRTs follow their glass opening; MacBook has a fixed, top-aligned opening. */
 export function retroDesktopViewport(
   region: LayoutRect,
   skin: RetroDesktopSkin = "classic",
   safeRegion: LayoutRect = region,
   aspectRatio?: number,
 ): LayoutRect {
+  // Video runs behind the system status area and floating controls. Applying
+  // safe insets here creates a black header above the desktop on Duo.
+  if (skin === "macbook") {
+    return {
+      ...region,
+      height: Math.min(region.height, region.width / MACBOOK_DISPLAY_ASPECT),
+    };
+  }
   const inset =
     skin === "classic" || skin === "compact" || skin === "edge"
       ? EXPANDED_VIEWPORTS[skin]
@@ -197,6 +212,48 @@ export function FoldDesktopBezel({
   skin?: RetroDesktopSkin;
   viewport?: LayoutRect | null;
 }) {
+  if (skin === "macbook") {
+    return (
+      <>
+        <View
+          pointerEvents="none"
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+          testID="remoteDesktop.macbookBezel"
+          style={{
+            position: "absolute",
+            left: region.x,
+            top: region.y,
+            width: region.width,
+            height: region.height,
+            backgroundColor: lightColors.surfaceChip,
+          }}
+        />
+        {viewport && (
+          <View
+            pointerEvents="none"
+            accessibilityElementsHidden
+            importantForAccessibility="no-hide-descendants"
+            style={{
+              position: "absolute",
+              // Draw above the lower case so the shadow can cross the fold
+              // seam without being cut off by the deck's opaque background.
+              zIndex: 1,
+              left: viewport.x,
+              top: viewport.y + viewport.height,
+              width: viewport.width,
+              height: 20,
+              backgroundColor: darkColors.surface,
+              shadowColor: darkColors.surface,
+              shadowOffset: { width: 0, height: 9 },
+              shadowOpacity: 0.38,
+              shadowRadius: 12,
+            }}
+          />
+        )}
+      </>
+    );
+  }
   const source =
     skin === "compact" || skin === "edge"
       ? retroMacArtwork[skin]
@@ -352,6 +409,69 @@ export function FoldDesktopDeck({
     control.height - 8,
     skin === "thinkpad" ? 24 : 56,
   );
+  if (skin === "macbook")
+    return (
+      <View
+        testID="remoteDesktop.retroDeck"
+        style={{ flex: 1, backgroundColor: lightColors.surfaceChip }}
+      >
+        <View
+          style={{
+            paddingTop: safeInsets.top,
+            paddingLeft: safeInsets.left,
+            paddingRight: safeInsets.right,
+          }}
+        >
+          <FoldDesktopSkinSwitch skin={skin} onChange={onChange} />
+        </View>
+        <View
+          style={{
+            flex: 1,
+            minHeight: 0,
+            paddingLeft: safeInsets.left,
+            paddingRight: safeInsets.right,
+          }}
+        >
+          <View
+            style={[
+              {
+                flex: 1,
+                minHeight: 0,
+                marginHorizontal: "4%",
+                marginBottom: 6,
+              },
+              styles.macbookKeywell,
+            ]}
+          >
+            <RemoteKeySurface
+              {...keys}
+              key={skin}
+              testID="remoteDesktop.retroKeys"
+              mode="classic"
+              palette={darkColors}
+              renderKeycap={(rect) => (
+                <FoldDesktopKeycap
+                  skin={skin}
+                  wide={rect.width > rect.height * 1.3}
+                />
+              )}
+            />
+          </View>
+          <View style={{ height: 110 + safeInsets.bottom + bottomReserve }}>
+            <View
+              testID="remoteDesktop.palmrest"
+              style={[
+                StyleSheet.absoluteFill,
+                styles.macbookTouchpad,
+                { bottom: safeInsets.bottom + bottomReserve + spacing.sm },
+              ]}
+            >
+              <FoldTouchpad send={send} enabled={enabled} bare />
+            </View>
+          </View>
+        </View>
+      </View>
+    );
   return (
     <View
       testID="remoteDesktop.retroDeck"
@@ -477,6 +597,11 @@ function Trackpoint({ rects }: { rects: KeyRect[] }) {
   );
 }
 
+/** The near edge faces the seated user; modern scissor keys have less travel. */
+export function foldDesktopKeyDepth(skin: FoldDesktopSkin) {
+  return skin === "macbook" ? 3 : 7;
+}
+
 export function FoldDesktopKeycap({
   skin = "classic",
   wide = false,
@@ -484,6 +609,41 @@ export function FoldDesktopKeycap({
   skin?: FoldDesktopSkin;
   wide?: boolean;
 }) {
+  return (
+    <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+      {/* Retro textures already contain the front wall and bevel. Drawing
+          them again underneath creates two stacked keys, not extra depth. */}
+      {skin === "macbook" && (
+        <View style={[StyleSheet.absoluteFill, styles.keycapFront]} />
+      )}
+      <View
+        style={[
+          StyleSheet.absoluteFill,
+          styles.keycapTop,
+          { bottom: skin === "macbook" ? foldDesktopKeyDepth(skin) : 0 },
+        ]}
+      >
+        <FoldDesktopKeyArtwork skin={skin} wide={wide} />
+      </View>
+    </View>
+  );
+}
+
+function FoldDesktopKeyArtwork({
+  skin = "classic",
+  wide = false,
+}: {
+  skin?: FoldDesktopSkin;
+  wide?: boolean;
+}) {
+  if (skin === "macbook") {
+    return (
+      <View
+        pointerEvents="none"
+        style={[StyleSheet.absoluteFill, styles.macbookKeycap]}
+      />
+    );
+  }
   const source =
     skin === "powerbook" || skin === "thinkpad"
       ? retroMacArtwork.darkKeycap
@@ -545,6 +705,40 @@ export function FoldDesktopKeycap({
 }
 
 const styles = StyleSheet.create({
+  keycapFront: {
+    top: 3,
+    bottom: 1,
+    borderRadius: radius.micro,
+    borderBottomWidth: 1,
+    backgroundColor: darkColors.border,
+    borderBottomColor: darkColors.surface,
+  },
+  keycapTop: {
+    // Only the material tilts. The full cell remains the touch target, so
+    // adjacent keys never overlap and a held modifier keeps its own finger.
+    transform: [{ perspective: 220 }, { rotateX: "12deg" }],
+  },
+  macbookKeywell: {
+    backgroundColor: lightColors.textSecondary,
+    borderRadius: radius.control,
+    padding: 3,
+  },
+  macbookKeycap: {
+    backgroundColor: darkColors.surfaceElevated,
+    borderColor: darkColors.border,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: radius.micro,
+  },
+  macbookTouchpad: {
+    left: "23%",
+    right: "23%",
+    top: 6,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: lightColors.borderStrong,
+    borderRadius: radius.control,
+    backgroundColor: lightColors.surfaceListExpanded,
+  },
+  darkDeckArtwork: { left: "-2%", width: "104%" },
   keycapEnd: { height: "100%", aspectRatio: 0.25, overflow: "hidden" },
   // Native Image keeps its asset's intrinsic size unless both dimensions are
   // explicit; absoluteFill alone does not constrain a bundled bitmap.

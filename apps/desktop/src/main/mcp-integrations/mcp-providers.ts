@@ -1,3 +1,13 @@
+import { randomUUID } from 'node:crypto';
+import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
+import { createIMessageMcpServer } from './imessageMcpServer';
+import { searchGhostRuntimeMemories } from '../cindy-brain/index.js';
+import { getPiKernelManager } from '../agent-binaries/index.js';
+import { PiKernelError } from '../agent-binaries/pi-kernel-manager.js';
+import { manageAppSettings } from '../app-settings/sections.js';
+import { manageAppModels } from '../app-settings/models.js';
+import { classifyOrigin } from '../input-handoff/originPolicy.js';
+import { inspectAppDefaultModel, changeAppDefaultModel } from '../maker-ipc/appDefaultModelControl.js';
 import { hostname } from 'node:os';
 import { isSessionSharedTaskActive } from '../device-link/sharedTaskDispatch.js';
 import { listMachines, type MachineDirectoryDeps } from '../machines/directory.js';
@@ -5,29 +15,25 @@ import { readLocalMachineStatus } from '../machines/localStatus.js';
 import { SSH_STATUS_COMMAND } from '../machines/sshStatus.js';
 import { readGithub, manageGithubPrs } from '../git-context/githubReadRuntime';
 import type { GithubReadMethod } from '@cindy/maker-shared';
-import { reportTaskDelivery } from '../bot-autonomy/hub.js';
-import { todoForCaller } from '../maker-ipc/botTodoAccess.js';
 import { getDeviceId } from '../authManager.js';
 import { buildHistorySessionDeepLink } from '../deepLink.js';
 import { activeCompanionCloud } from '../companion-cloud/runtime.js';
-import { TodoError, queryTodoItems, type TodoListQuery, type TodoPatch, type preflightTodoEvents } from '@cindy/maker-shared/teammate-todo';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import { executeTaskTags } from '../localDb/ipc/taskTags.js';
 import { getPluginMarketService } from '../plugin-market/service.js';
-import { resolveHelperSurface, resolveHelperSystemSkillsOff } from './helperSurface.js';
+import { resolveHelperSurface } from './helperSurface.js';
 import { createProject } from './createProject.js';
 import { createMoveSession } from './moveSession.js';
+import { createTaskWorktreeHost } from './createTaskWorktree.js';
 import { sessionImportCallbacks } from '../session-import/agentTools.js';
-import { listProjects, renameProject, removeProject, resolveSessionProject, readCurrentSessionProject } from './projectManagement.js';
-import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending, ownerScopedUserDataPath } from '../appSessionState.js';
+import { listProjects, renameProject, removeProject, readCurrentSessionProject } from './projectManagement.js';
+import { activeOwnerScopeKey, isAppSessionBoundaryPending, ownerScopedUserDataPath } from '../appSessionState.js';
 import { botProfileDir } from '../maker-ipc/botProfileFolder.js';
 import type { createBotCapabilityService } from '../maker-ipc/botCapabilityService.js';
-import { getRoutineEngine, routineTools } from '../routines/service.js';
-import { taskActionRoutineRevision } from '../maker-ipc/taskActionAuthorization.js';
 import { join as pathJoin } from 'node:path';
 import { homedir } from 'node:os';
 import { app } from 'electron';
-import { and, eq, inArray, isNull } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 
 import {
   createLiziMcpProviders,
@@ -49,7 +55,7 @@ import {
   type GhostGrantLiveSessionState,
   type CindyGhostsHostDeps,
   type ToolResultImageDescription,
-} from './ghost.js';
+} from './ghost.desktop.js';
 import { createGroupHistoryMcpServer } from './groupHistoryMcpServer.js';
 import { compressInlineImage } from './inlineImageCompressor.js';
 import { createTelegramBotMcpServer } from './telegramBotMcpServer.js';
@@ -68,21 +74,21 @@ import { sendFeishuSessionNotification } from '../im/feishu/notificationOrigin';
 import { getSlackToolBridge } from '../hook-control/slackToolBridge.js';
 import { createLogger } from '../logger.js';
 import { createAgentAppUpdateCallbacks } from '../agent-app-update/index.js';
-import { getScheduler } from '../scheduler-host/index.js';
+import { getScheduler } from '../scheduler-host/index.desktop.js';
+import { getScheduleWebhookHost, scheduleWebhookReceiver } from '../scheduler-host/webhook/runtime.js';
 import { stabilizeHookCommand } from '../scheduler-host/hook-script-generator.js';
 import { assertPreRunHookCommandSyntax } from '../scheduler-host/pre-run-hook.js';
 import { searchSessionsWithBotScope } from '../maker-host/session-search.js';
 import { readLspModeSettings } from '../maker-host/lsp-mode-store.js';
 import {
-  tryGetBotDelegationService,
   tryGetBotDirectMessageService,
   tryGetOrcaCollabService,
   isSessionInTurn,
   getTaskActionInputState,
+  isActiveInputAccountScoped,
   getTaskActionSession,
   confirmTaskAction,
   requestMcpSetupForSession,
-  captureTaskActionPermissionRequest,
 } from '../maker-ipc/register.js';
 import { createBotProfile } from '../localDb/ipc/bots.js';
 import { submitGithubIssueForSession } from '../github-issue/index.js';
@@ -95,6 +101,7 @@ import {
   isDbClientNotReadyError,
   getDbClient,
   tryGetDbClient,
+  getCurrentDbClientSnapshot,
 } from '../localDb/client/current.js';
 import { searchChatHistoryHybrid } from '../localDb/chatHistorySearch.js';
 import { resolveBotHistorySessionIds } from '../localDb/botHistoryScope.js';
@@ -102,17 +109,15 @@ import {
   listBotSkillsForSession,
   saveBotSkillForSession,
 } from '../maker-ipc/botSkillService.js';
-import {
-  captureBotCreatedTaskResponsibility,
-  runBotWorkbenchTool,
-  runBotProjectsTool,
-  type BotWorkbenchHostDeps,
-} from '../maker-ipc/botWorkbenchTools.js';
+import { captureBotCreatedTaskResponsibility } from '../maker-ipc/botTaskCreation.js';
+import { runBotProjectsTool } from '../maker-ipc/botLinkedProjects.js';
 import { createTaskDigestReader } from './taskDigest.js';
-import { createDesktopTaskDigestDeps, createRemoteWorkbenchMessageReader } from './taskDigestHost.js';
+import { createDesktopTaskDigestDeps } from './taskDigestHost.js';
 import { createTaskToolCallAuthorizer } from '../maker-ipc/taskToolCallAuthorizer.js';
 import { createDesktopTaskActionAuthorizer } from '../maker-ipc/taskActionHost.js';
-import { assertTaskActionCurrent, taskActionScheduleGuard } from '../maker-ipc/taskActionAuthorization.js';
+import { authorizeGroupTool } from '../maker-ipc/botGroupToolAuthorization.js';
+import { createSharedTaskTools } from './sharedTaskTools.js';
+import { assertTaskActionCurrent } from '../maker-ipc/taskActionAuthorization.js';
 import {
   getSessionRowSnapshot,
   patchSessionMetaInDb,
@@ -142,18 +147,20 @@ import { HELP_KNOWLEDGE } from '../maker-ipc/helpKnowledge.generated.js';
 import { consumeLearnInvocationGrant } from '../learn-host/invocationGrant.js';
 import { createSkillhubAgentTools } from '../skillhub/agentTools.js';
 import { startGrokDeviceLogin, grokDeviceLoginStatus, cancelGrokDeviceLogin } from '../maker-host/grok-device-login-service.js';
+import { resolveSessionTeammate } from '../maker-ipc/sessionTeammate.js';
 
 export interface DesktopMcpProvidersDeps {
   askUserQuestionAsync?: XdtHelperMcpDeps['askUserQuestionAsync'];
+  manageUserQuestions?: XdtHelperMcpDeps['manageUserQuestions'];
   runtimeCapabilities?: XdtHelperMcpDeps['runtimeCapabilities'];
-  botCapabilities: Pick<ReturnType<typeof createBotCapabilityService>, 'list' | 'select'>;
+  botCapabilities: Pick<ReturnType<typeof createBotCapabilityService>, 'list' | 'select'> & Partial<Pick<ReturnType<typeof createBotCapabilityService>, 'models' | 'setDefaultModel'>>;
   createMediaDownloadContext?: CindyGhostsHostDeps['createMediaDownloadContext'];
   /** 当前 Desktop 版本，供 Forge 为具体插件包生成默认 minCindyVersion。 */
   getAppVersion?: () => string;
   getMakerMemoryManager: () => MakerMemoryManager;
   lspPool: LspServerPool;
-  /** 按会话控制启用状态的 plugin registry。 */
-  pluginRegistry: PluginRegistry;
+  /** Current owner's registry; may be a getter, so do not capture it at construction. */
+  readonly pluginRegistry: PluginRegistry;
   /** Device-link transport stays host-injected so provider tests do not load Electron runtime services. */
   invokeRemote: (
     deviceId: string,
@@ -162,6 +169,7 @@ export interface DesktopMcpProvidersDeps {
     options?: { preSend?: () => void },
   ) => ReturnType<ChatHistoryReaderDeps['invokeRemote']>;
   historyRemote?: import('@cindy/mcps').HistoryRemoteDeps;
+  captureSharedTaskCommand?: (sessionId: string, assertCurrent: () => void) => (command: import('@cindy/device-link').SharedTaskHostCommand) => Promise<unknown>;
   /** list_machines：账号下的电脑从这里读，SSH 主机与本机资源在这个文件里接。 */
   machineDirectory?: Pick<MachineDirectoryDeps, 'listDevices' | 'invokeStatus'>;
   /** 插件文件交接只认活跃 Session 的实时权限；缺失时由 ghost.ts fail closed。 */
@@ -215,7 +223,6 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
   setSessionPathAuthorizer((request) =>
     authorizeDesktopSessionPath(request, deps.getLiveSessionGrantState),
   );
-  const { pluginRegistry } = deps;
   // 代输入 gates shared by window and picture handoffs: a current local task,
   // the service, and the teammate switch (unknown policy fails closed).
   const admitInputHandoff = async (context: { sessionId?: string; sessionInstanceId?: string }) => {
@@ -257,7 +264,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
 
   const remoteSessionHandoff = deps.historyRemote
     ? createRemoteSessionHandoff({
-        captureRequest: async (id, text) => (await import('../maker-ipc/register.js')).captureSessionAgentRequest(id, text),
+        captureRequest: async (id, text, target) => (await import('../maker-ipc/register.js')).captureSessionAgentRequest(id, text, target),
         captureAccess: deps.historyRemote.captureAccess,
         invoke: deps.invokeRemote,
       })
@@ -270,31 +277,6 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         .where(eq(sessions.id, dispatcherSessionId)).limit(1).catch(() => [])
       : [];
     return { sessionId: dispatcherSessionId, ...(row?.title ? { title: row.title } : {}) };
-  };
-
-  // 工作台继续 / 跨电脑读取:与 send_to_session、get_chat_history 同一条宿主路径。
-  const workbenchHost: BotWorkbenchHostDeps = {
-    sendToSession: wrap(async (svc, { targetSessionId, message, dispatcherSessionId }) => {
-      const result = await svc.sendToSession({ targetSessionId, message, dispatcherSessionId });
-      return result.ok
-        ? {
-            ok: true as const,
-            wakeKind: result.wakeKind,
-            ...(result.queuedMessageId ? { queuedMessageId: result.queuedMessageId } : {}),
-          }
-        : { ok: false as const, errorCode: result.errorCode, message: result.message };
-    }),
-    sendToRemoteSession: async ({ deviceId, sessionId, message, dispatcherSessionId }) => {
-      if (!remoteSessionHandoff) {
-        return { ok: false as const, errorCode: 'REMOTE_UNAVAILABLE', message: '这台电脑没有开启跨电脑发送' };
-      }
-      const result = await remoteSessionHandoff({ deviceId, sessionId }, {
-        message,
-        sender: () => remoteHandoffSender(dispatcherSessionId),
-      });
-      return result.ok ? { ok: true as const, wakeKind: result.wakeKind } : result;
-    },
-    readRemoteMessages: createRemoteWorkbenchMessageReader(deps.invokeRemote),
   };
 
   const readTaskDigest = createTaskDigestReader(createDesktopTaskDigestDeps({
@@ -391,77 +373,6 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     isScopeCurrent: (db) => !isAppSessionBoundaryPending() && db === tryGetDbClient(),
     authorizeAction: createDesktopTaskActionAuthorizer({
       input: getTaskActionInputState, getSession: getTaskActionSession, confirm: confirmTaskAction,
-      capturePermissionRequest: captureTaskActionPermissionRequest,
-      getSessionWorkDir: resolveHookSessionWorkDir,
-      getScheduleDefinition: async (id, hookInstallation, device) => {
-        let schedule: Schedule | null;
-        if (device && device !== 'local') {
-          if (!deps.historyRemote) throw new Error('SCHEDULE_DEFINITION_UNAVAILABLE');
-          let assertAccess: (() => void) | undefined;
-          try {
-            assertAccess = deps.historyRemote.captureAccess();
-            const response = await deps.invokeRemote(device, 'maker:schedule:get', [id], { preSend: assertAccess });
-            assertAccess();
-            if (!response.ok) {
-              const code = response.error && typeof response.error === 'object' && 'code' in response.error
-                ? String((response.error as { code?: unknown }).code ?? '') : '';
-              if (code === 'NOT_FOUND') return null;
-              throw new Error('SCHEDULE_DEFINITION_UNAVAILABLE');
-            }
-            schedule = response.result as Schedule | null;
-          } catch {
-            throw new Error('SCHEDULE_DEFINITION_UNAVAILABLE');
-          }
-        } else {
-          schedule = await getScheduler().get(id);
-        }
-        if (!schedule) return null;
-        const { name, prompt, persistentSession, useWorktree, executionMode, scriptConfig, preRunHook, workingDir, targetSessionId } = schedule;
-        const preRunWorkingDir = preRunHook?.command?.trim()
-          ? (targetSessionId ? await resolveHookSessionWorkDir(targetSessionId, device) : undefined) ?? workingDir
-          : undefined;
-        const mutationGuard = preRunWorkingDir?.trim()
-          ? { ...schedule, effectiveWorkingDir: preRunWorkingDir }
-          : schedule;
-        const definition = { id, name, prompt, persistentSession, useWorktree, executionMode, scriptConfig, preRunHook, workingDir, targetSessionId,
-          mutationGuard,
-          ...(preRunHook?.command?.trim() ? { preRunWorkingDir: preRunWorkingDir?.trim() ? preRunWorkingDir : homedir() } : {}) };
-        if (!hookInstallation) return definition;
-        let installWorkingDir = hookInstallation.workingDir;
-        if (!installWorkingDir && executionMode !== 'script' && targetSessionId)
-          installWorkingDir = await resolveHookSessionWorkDir(targetSessionId, device) ?? installWorkingDir;
-        return { ...definition, hookInstallation: { workingDir: installWorkingDir ?? workingDir,
-          fallbackDir: pathJoin(app.getPath('userData'), 'schedule-hooks') } };
-      },
-      captureRoutine: async (botId, id, forExecution) => {
-        const engine = await getRoutineEngine();
-        const routine = (await routineTools.list(botId)).find(row => row.id === id);
-        if (!routine) return undefined;
-        let execution: { targetSessionId: string | null; workingDir: string } | undefined;
-        if (forExecution && routine.preRunHook?.command?.trim()) {
-          // Match ensureBotOwnedLaneSession's read-only lookup. Fresh runs always
-          // create a lane in Home; persistent runs retain their existing meta cwd.
-          const [lane] = routine.sessionMode === 'fresh' ? [] : await getDbClient().drizzle
-            .select({ sessionId: botSessionLinks.sessionId }).from(botSessionLinks)
-            .innerJoin(sessions, eq(sessions.id, botSessionLinks.sessionId))
-            .where(and(eq(botSessionLinks.botId, botId), eq(botSessionLinks.role, 'routine'),
-              eq(botSessionLinks.routeKey, `routine:${id}`), isNull(botSessionLinks.archivedAt),
-              eq(sessions.source, 'bot'), eq(sessions.status, 'active'))).limit(1);
-          execution = { targetSessionId: lane?.sessionId ?? null, workingDir: lane
-            ? await resolveHookSessionWorkDir(lane.sessionId) ?? homedir()
-            : pathJoin(botProfileDir(ownerScopedUserDataPath(), botId), 'workspace') };
-        }
-        return {
-          enabled: routine.enabled, revision: routine.revision, prompt: routine.prompt,
-          builtin: !!routine.builtin, preRunCommand: routine.preRunHook?.command,
-          details: { routine: { id, name: routine.name, prompt: routine.prompt, enabled: routine.enabled,
-            revision: routine.revision, preRunHook: routine.preRunHook }, ...(execution ? { execution } : {}) },
-          assertCurrent() {
-            if (engine.list(botId).find(row => row.id === id)?.revision !== routine.revision)
-              throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
-          },
-        };
-      },
     }),
   });
   // Companion history uses the same account scope as ordinary task history.
@@ -493,12 +404,12 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         // Codex provider presence is the bridge-creation enablement snapshot.
         // Keep that snapshot for a busy turn when a disable refresh is deferred;
         // a successfully rebuilt bridge omits this provider via the outer gate.
-        context?.agentKind === 'codex' || pluginRegistry.isEnabled('android'),
+        context?.agentKind === 'codex' || deps.pluginRegistry.isEnabled('android'),
     }),
     browser: getBrowserMcpDeps(),
     computer: getComputerMcpDeps({
       isComputerUseEnabled: (context) =>
-        context?.agentKind === 'codex' || pluginRegistry.isEnabled('computer'),
+        context?.agentKind === 'codex' || deps.pluginRegistry.isEnabled('computer'),
     }),
     // lizi_feishu 已于 2026-07-16 摘壳:飞书能力(44 精品 + 123 只读直通)迁入
     // 内置意识 xd-feishu;2026-07-17 起授权切到意识 OAuth broker
@@ -631,7 +542,6 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       withAccountDataAccess,
       authorizeCall: authorizeTaskToolCall,
       getScheduler: () => getScheduler(),
-      getApprovedScheduleGuard: taskActionScheduleGuard,
       // 其它电脑上的定时任务:与历史查询共用设备目录与 owner fence,走既有远程控制通道。
       ...(deps.historyRemote
         ? {
@@ -645,6 +555,29 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       // 前置检查脚本统一安装服务:落盘路径/协议/自测与 UI「AI 生成」共用同一实现
       // (hook-script-generator)。lazy import:该链上有 electron app 依赖,且 maker
       // 仅 description 生成模式需要,tool-call 时才解引用。
+      webhookStatus: (schedule) => getScheduleWebhookHost()?.status(schedule) ?? null,
+      webhookReceiver: scheduleWebhookReceiver,
+      webhookManagement: {
+        list: async () => {
+          const host = getScheduleWebhookHost();
+          if (!host) throw new Error('scheduler not started');
+          return host.accountOverview();
+        },
+        release: async (id) => {
+          const host = getScheduleWebhookHost();
+          if (!host) throw new Error('scheduler not started');
+          await assertTaskActionCurrent();
+          await host.releaseEndpoint(id);
+        },
+        restore: async (id) => {
+          const host = getScheduleWebhookHost();
+          const schedule = await getScheduler().get(id);
+          if (!host) throw new Error('scheduler not started');
+          if (!schedule) throw new Error('Schedule not found');
+          await assertTaskActionCurrent();
+          await host.restoreEndpoint(schedule);
+        },
+      },
       hookScript: {
         isSessionAgentOnOtherDevice: async (sessionId) => {
           const row = await getSessionRowSnapshot(sessionId);
@@ -703,6 +636,9 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       addHost: async (input) => {
         await (await loadRemoteSsh()).addRemoteSshHost(input);
       },
+      listHosts: async () => (await loadRemoteSsh()).listRemoteSshHostsForAgent(),
+      updateHost: async (input) => (await (await loadRemoteSsh()).updateRemoteSshHost(input, { patch: true })).host,
+      removeHost: async (id) => { await (await loadRemoteSsh()).removeRemoteSshHost({ id }); },
       reloadConfig: async () => {
         const result = await (await loadRemoteSsh()).reloadRemoteSshConfig();
         return { diagnostic: result.diagnostic?.kind ?? null, warningCount: result.warningCount };
@@ -718,8 +654,9 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     memory: {
       withAccountDataAccess,
       getManager: deps.getMakerMemoryManager,
+      searchProviders: searchGhostRuntimeMemories,
       beginWrite: (context) => {
-        const saved = botLearningTracker.capture(context?.memoryScopeKey?.startsWith('bot:') ? context.sessionId ?? '' : '');
+        const saved = botLearningTracker.capture(botLearningTracker.learnsFrom(context?.sessionId, context?.memoryScopeKey));
         return receipt => saved({ ...receipt, kind: 'memory' });
       },
       searchSessions: async (query, opts = {}) => {
@@ -823,7 +760,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             sessionInstanceId: context.sessionInstanceId,
             workingDir: context.workingDir ?? '',
             path: absPath,
-            toolName: 'cindy_helper.ask_owner',
+            toolName: 'cindy_helper.request_input_handoff',
             operation: 'read',
           }, deps.getLiveSessionGrantState));
           if (!picture.ok) return picture;
@@ -865,7 +802,25 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       },
       createProject,
       moveSession: createMoveSession(isSessionInTurn),
-      projectManagement: { list: listProjects, rename: renameProject, remove: removeProject },
+      createTaskWorktree: createTaskWorktreeHost(),
+      projectManagement: {
+        list: async ({ device, ...options }) => {
+          if (!device || device === 'local' || device === getDeviceId()) return listProjects(options);
+          if (isSessionSharedTaskActive(options.callerSessionId)) return { ok: false, errorCode: 'PERMISSION_DENIED', message: 'Not available in a shared task' };
+          return withAccountDataAccess(options.callerSessionId, async assertCurrent => {
+            const support = await deps.invokeRemote(device, 'maker:session:handoff', [{ action: 'task-action-capability' }]);
+            await assertCurrent();
+            if (!support.ok || (support.result as { projectCatalogVersion?: unknown } | null)?.projectCatalogVersion !== 1)
+              return { ok: false as const, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'The destination must support the remote project catalog. Update it and retry.' };
+            const { callerSessionId: _caller, ...remoteOptions } = options;
+            const response = await deps.invokeRemote(device, 'maker:session:handoff', [{ action: 'list-projects', options: remoteOptions }]);
+            await assertCurrent();
+            if (!response.ok) return { ok: false as const, errorCode: 'INTERNAL', message: response.error.message };
+            return response.result as Awaited<ReturnType<typeof listProjects>>;
+          });
+        },
+        rename: renameProject, remove: removeProject,
+      },
       authorizeSkillLearning: async (request, context) => {
         if (!isCindyLearnSkillEnabled()) {
           return {
@@ -961,11 +916,6 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         if (isAppSessionBoundaryPending() || dbClient !== tryGetDbClient()) return 'restricted';
         return surface;
       },
-      resolveSystemSkillsOff: async ({ sessionId }) => {
-        const dbClient = tryGetDbClient();
-        if (!dbClient || isAppSessionBoundaryPending()) return [];
-        return resolveHelperSystemSkillsOff(dbClient, sessionId);
-      },
       sessionQueue: {
         listSessionQueue: wrap((service, sessionId: string) => service.listSessionQueue(sessionId)),
         listSessionQueuedCounts: wrap((service, sessionIds: string[]) =>
@@ -981,7 +931,6 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         getSessionRuntime: wrap((service, params) => service.getSessionRuntime(params)),
         setSessionRuntime: wrap((service, params) => service.setSessionRuntime(params)),
       },
-      taskDelivery: { report: reportTaskDelivery },
       setCurrentSessionTitle: async ({ sessionId, title }) => {
         if (!tryGetDbClient()) {
           return { ok: false, errorCode: 'HOST_NOT_READY', message: 'localDb not ready' };
@@ -998,6 +947,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         }
       },
       askUserQuestionAsync: deps.askUserQuestionAsync,
+      manageUserQuestions: deps.manageUserQuestions,
       sessionImport: sessionImportCallbacks,
       renameSessions: async ({ changes, dryRun }) => {
         if (!tryGetDbClient()) {
@@ -1039,21 +989,33 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           return { ok: false, errorCode: 'INTERNAL', message };
         }
       },
+      listAvailableModels: async params => {
+        if (params.callerSessionId && isSessionSharedTaskActive(params.callerSessionId))
+          return { ok: false, errorCode: 'PERMISSION_DENIED', message: 'Not available in a shared task' };
+        return withAccountDataAccess(params.callerSessionId, async () => {
+          const svc = tryGetOrcaCollabService();
+          return svc ? svc.listAvailableModels(params)
+            : { ok: false, errorCode: 'HOST_NOT_READY', message: 'Model catalog is not ready' };
+        });
+      },
       // 目标在另一台电脑(deviceId::sessionId):交给那台电脑按它本机的同一条通路投递。
       ...(remoteSessionHandoff
         ? {
-            sendToRemoteSession: async ({ deviceId, sessionId, message, dispatcherSessionId }) =>
-              remoteSessionHandoff({ deviceId, sessionId }, {
-                message,
-                sender: () => remoteHandoffSender(dispatcherSessionId),
-              }),
+            sendToRemoteSession: async ({ deviceId, sessionId, message, dispatcherSessionId }) => {
+              const result = await remoteSessionHandoff({ deviceId, sessionId }, {
+                message, sender: () => remoteHandoffSender(dispatcherSessionId),
+              });
+              if (!result.ok) return result;
+              if (result.wakeKind === 'created') return { ok: false, errorCode: 'DELIVERY_UNKNOWN', message: 'Unexpected creation receipt for an existing task.' };
+              return { ...result, wakeKind: result.wakeKind };
+            },
           }
         : {}),
       sendToSession: async ({
+        device,
         targetSessionId,
         message,
         dispatcherSessionId,
-        messagePurpose,
         title,
         useWorktree,
         workingDir,
@@ -1062,8 +1024,37 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         model,
         effort,
         fast,
+        agentDeviceId,
       }) => {
-        // deviceId::sessionId → 目标在另一台电脑:交给那台电脑按它本机的同一条通路投递。
+        if (!targetSessionId && device && device !== 'local' && device !== getDeviceId()) {
+          if (!remoteSessionHandoff || !dispatcherSessionId)
+            return { ok: false, errorCode: 'REMOTE_UNSUPPORTED', message: 'Remote task creation is unavailable in this host.' };
+          const id = randomUUID();
+          const qualifiedId = `${device}::${id}`;
+          let recordCreation: Awaited<ReturnType<typeof captureBotCreatedTaskResponsibility>> = null;
+          const result = await remoteSessionHandoff({ deviceId: device, sessionId: id }, {
+            message, sender: () => remoteHandoffSender(dispatcherSessionId),
+            create: async () => {
+              if (isSessionSharedTaskActive(dispatcherSessionId)) throw new Error('Shared tasks cannot create remote tasks');
+              const [source] = await getDbClient().drizzle.select({ permissionMode: sessions.permissionMode })
+                .from(sessions).where(eq(sessions.id, dispatcherSessionId)).limit(1);
+              if (!source) throw new Error('Source task is unavailable');
+              recordCreation = await captureBotCreatedTaskResponsibility(dispatcherSessionId, { remoteDeviceId: device });
+              return { title: title?.trim() || message.split('\n')[0].slice(0, 60), projectDir, workingDir,
+                useWorktree, agentKind, model, effort, fast, agentDeviceId,
+                permissionMode: permissionModeOrAsk(source.permissionMode) };
+            },
+          });
+          if (!result.ok) return { ...result,
+            ...(['DELIVERY_UNKNOWN', 'CREATED_NOT_DELIVERED'].includes(result.errorCode)
+              ? { recoverySessionId: qualifiedId, message: `${result.message} Recovery target_session_id: ${qualifiedId}. Do not repeat create.` } : {}) };
+          const accepted = { ...result, targetSessionId: qualifiedId, targetDeviceId: device };
+          if (recordCreation) {
+            try { await (recordCreation as (sessionId: string) => Promise<void>)(qualifiedId); }
+            catch { return { ...accepted, responsibilityRecorded: false }; }
+          }
+          return accepted;
+        }
         const svc = tryGetOrcaCollabService();
         if (!svc) {
           return { ok: false, errorCode: 'HOST_NOT_READY', message: 'orca collab service not initialized' };
@@ -1079,7 +1070,6 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             targetSessionId,
             message,
             dispatcherSessionId,
-            messagePurpose,
             title,
             useWorktree,
             workingDir,
@@ -1094,6 +1084,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
                   },
                 }
               : {}),
+            ...(agentDeviceId !== undefined ? { agentDeviceId } : {}),
           });
           if (result.ok && result.wakeKind === 'created' && recordCreation) {
             try { await recordCreation(result.targetSessionId); }
@@ -1104,151 +1095,28 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           return { ok: false, errorCode: 'INTERNAL', message: err instanceof Error ? err.message : String(err) };
         }
       },
-      sessionTasks: {
-        startSessionTask: async (params) => {
-          const svc = tryGetBotDelegationService();
-          if (!svc) {
-            return {
-              ok: false,
-              errorCode: 'HOST_NOT_READY',
-              message: 'Session task service not initialized',
-            };
-          }
-          try {
-            const project = await resolveSessionProject({ callerSessionId: params.callerSessionId, projectDir: params.projectDir });
-            if (!project.ok) return project;
-            const result = await svc.startSessionTask({ ...params, projectDir: project.projectDir,
-              workingDir: params.workingDir ?? project.projectDir ?? undefined });
-            return result.ok ? { ...result, projectDir: project.projectDir } : result;
-          } catch (err) {
-            return {
-              ok: false,
-              errorCode: 'INTERNAL',
-              message: err instanceof Error ? err.message : String(err),
-            };
-          }
-        },
-        messageSessionTask: async ({ callerSessionId, taskId, reply }) => {
-          const svc = tryGetBotDelegationService();
-          if (!svc) {
-            return {
-              ok: false,
-              errorCode: 'HOST_NOT_READY',
-              message: 'Session task service not initialized',
-            };
-          }
-          try {
-            return await svc.messageSessionTask(callerSessionId, taskId, reply);
-          } catch (err) {
-            return {
-              ok: false,
-              errorCode: 'INTERNAL',
-              message: err instanceof Error ? err.message : String(err),
-            };
-          }
-        },
-        getSessionTask: async ({ callerSessionId, taskId, queuedMessageId }) => {
-          const svc = tryGetBotDelegationService();
-          if (!svc) {
-            return {
-              ok: false,
-              errorCode: 'HOST_NOT_READY',
-              message: 'Session task service not initialized',
-            };
-          }
-          return svc.getSessionTask(callerSessionId, taskId, queuedMessageId);
-        },
-        stopSessionTask: async ({ callerSessionId, taskId, mode }) => {
-          const svc = tryGetBotDelegationService();
-          if (!svc) {
-            return {
-              ok: false,
-              errorCode: 'HOST_NOT_READY',
-              message: 'Session task service not initialized',
-            };
-          }
-          return svc.stopSessionTask(callerSessionId, taskId, mode);
-        },
-        inspectSessionTaskRoute: async ({ callerSessionId, taskId }) => {
-          const svc = tryGetBotDelegationService();
-          if (!svc) return { ok: false, errorCode: 'HOST_NOT_READY', message: 'Session task service not initialized' };
-          return svc.inspectSessionTaskRoute(callerSessionId, taskId);
-        },
-        advanceSessionTaskRoute: async ({ callerSessionId, taskId, expectedGeneration, selectionToken }) => {
-          const svc = tryGetBotDelegationService();
-          if (!svc) return { ok: false, errorCode: 'HOST_NOT_READY', message: 'Session task service not initialized' };
-          return svc.advanceSessionTaskRoute(callerSessionId, taskId, expectedGeneration, selectionToken);
-        },
-      },
       botMessaging: {
         sendToUser: async (params) => {
           const svc = tryGetBotDirectMessageService();
           if (!svc) return { ok: false, errorCode: 'HOST_NOT_READY', message: t('groupTools.privateUnavailable') };
           return svc.sendToUser(params);
         },
-        checkMessage: async (params) => {
-          const svc = tryGetBotDirectMessageService();
-          if (!svc) return { ok: false, errorCode: 'HOST_NOT_READY', message: 'Teammate messaging is unavailable' };
-          return svc.checkMessage(params);
-        },
         listAgents: async ({ callerSessionId }) => {
+          if (isSessionSharedTaskActive(callerSessionId)) return { ok: false, errorCode: 'PERMISSION_DENIED', message: 'Not available in a shared task' };
           const svc = tryGetBotDirectMessageService();
           if (!svc) return { ok: false, errorCode: 'HOST_NOT_READY', message: 'Teammate service is not ready' };
           return svc.listAgents(callerSessionId);
         },
-        messageAgent: async (params) => {
-          const svc = tryGetBotDirectMessageService();
-          if (!svc) {
-            return {
-              ok: false,
-              errorCode: 'HOST_NOT_READY',
-              message: 'Bot direct message service not initialized',
-            };
-          }
-          try {
-            return await svc.messageAgent(params);
-          } catch (err) {
-            return {
-              ok: false,
-              errorCode: 'INTERNAL',
-              message: err instanceof Error ? err.message : String(err),
-            };
-          }
-        },
-      },
-      botRoutines: {
-        service: {
-          ...routineTools,
-          save: (botId, input, id) => routineTools.save(botId, input, id,
-            taskActionRoutineRevision(botId, id)),
-          runNow: (botId, id) => routineTools.runNow(botId, id, taskActionRoutineRevision(botId, id)),
-        },
-        resolveBotId: async (callerSessionId) => {
-          const scope = activeOwnerScopeKey();
-          if (!getActiveAppSession().dataOwnerId || isAppSessionBoundaryPending()) {
-            throw new Error('Routine account is no longer active');
-          }
-          const dbClient = tryGetDbClient();
-          if (!dbClient) throw new Error('localDb not ready');
-          const [owned] = await dbClient.drizzle
-            .select({ botId: botSessionLinks.botId })
-            .from(botSessionLinks)
-            .innerJoin(sessions, eq(sessions.id, botSessionLinks.sessionId))
-            .where(and(
-              eq(botSessionLinks.sessionId, callerSessionId),
-              eq(sessions.source, 'bot'),
-              // The owner's Bot Chat: the main Chat or one of its private-chat topics.
-              inArray(botSessionLinks.role, ['canonical', 'thread', 'routine']),
-            ))
-            .limit(1);
-          if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== scope) {
-            throw new Error('Routine account is no longer active');
-          }
-          if (!owned) throw new Error('当前调用未绑定伙伴主任务');
-          return owned.botId;
-        },
       },
       ...(deps.machineDirectory ? { machines: {
+        requestRemoteControl: async ({ callerSessionId, deviceId, purpose }: { callerSessionId: string; deviceId: string; purpose: string }) => {
+          if (isSessionSharedTaskActive(callerSessionId) || isAppSessionBoundaryPending()) {
+            return { ok: false as const, errorCode: 'PERMISSION_DENIED', message: 'Not available in this task' };
+          }
+          const { requestRemoteControlConsent } = await import('../device-link/index.js');
+          const status = await requestRemoteControlConsent(deviceId, purpose);
+          return { ok: true as const, status };
+        },
         list: async ({ callerSessionId }: { callerSessionId: string }) => {
           // 共享任务里的访客不是账号本人，不能经 Agent 看到账号下的机器。
           if (isSessionSharedTaskActive(callerSessionId)) {
@@ -1300,23 +1168,11 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         },
       },
       botProfiles: {
-        create: async ({ callerSessionId, name, description, identitySource }) => {
-          const dbClient = tryGetDbClient();
-          if (!dbClient) {
+        create: async ({ callerSessionId, callerSessionInstanceId, name, description, identitySource }) => {
+          if (!tryGetDbClient()) {
             return { ok: false, errorCode: 'HOST_NOT_READY', message: 'localDb not ready' };
           }
-          const [owned] = await dbClient.drizzle
-            .select({ botId: botSessionLinks.botId })
-            .from(botSessionLinks)
-            .innerJoin(sessions, eq(sessions.id, botSessionLinks.sessionId))
-            .where(
-              and(
-                eq(botSessionLinks.sessionId, callerSessionId),
-                eq(sessions.source, 'bot'),
-                inArray(botSessionLinks.role, ['canonical', 'thread', 'routine']),
-              ),
-            )
-            .limit(1);
+          const owned = await resolveSessionTeammate(callerSessionId);
           if (!owned) {
             return { ok: false, errorCode: 'NOT_A_BOT_SESSION', message: '当前调用未绑定伙伴主任务' };
           }
@@ -1341,6 +1197,87 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         },
       },
       // 伙伴自己沉淀的真技能。归属同样由 callerSessionId 反查,工具面不收 botId。
+      modelSettings: {
+        call: ({ callerSessionId, ...input }, signal) => withAccountDataAccess(callerSessionId, async (assertCurrent) => {
+          const guard = async () => {
+            await assertCurrent();
+            if (input.operation === 'set' || input.operation === 'provider' || input.operation === 'connection') await assertTaskActionCurrent();
+          };
+          return manageAppModels(input, guard, async (name, endpoints, lifetime) => {
+            await guard();
+            if (await isInputHandoffDisabledForSession(callerSessionId)) throw new Error('DISABLED_BY_OWNER');
+            await guard();
+            const service = getInputHandoffService();
+            if (!service) throw new Error('SECRET_INPUT_UNAVAILABLE');
+            return new Promise<string | null>((resolve, reject) => {
+              const started = service.startHostSecretPrompt({
+                sessionId: callerSessionId,
+                ...lifetime,
+                step: {
+                  purpose: `${name.slice(0, 128)} · API key${endpoints[1] ? ` · ${new URL(endpoints[1]).origin}` : ''}`,
+                  source: { app: 'Cindy', ...classifyOrigin(endpoints[0], true) },
+                  controls: [{ id: 'answer', kind: 'text', label: 'API key', contentType: 'password' }],
+                },
+                answer: resolve,
+              });
+              if (!started.ok) reject(new Error(started.errorCode));
+            });
+          }, signal);
+        }),
+      },
+      piRuntime: {
+        call: (callerSessionId, input) => withAccountDataAccess(callerSessionId, async assertCurrent => {
+          await assertCurrent();
+          const manager = getPiKernelManager();
+          try {
+            if (input.install) {
+              await assertTaskActionCurrent();
+              await manager.install(input.install);
+            }
+            const state = await (input.check ? manager.check() : manager.state());
+            await assertCurrent();
+            return { ...state, scope: 'local-managed-pi', runningProcesses: 'unchanged' };
+          } catch (error) {
+            return { ok: false, errorCode: error instanceof PiKernelError ? error.reason : 'PI_RUNTIME_FAILED',
+              message: 'Pi 操作未确认完成；请重新读取版本和状态。' };
+          }
+        }),
+      },
+      appSettings: {
+        call: ({ callerSessionId, ...input }) => withAccountDataAccess(callerSessionId, async (assertCurrent) => {
+          return manageAppSettings(input, async () => {
+            await assertCurrent();
+            if (input.operation === 'update' || input.operation === 'reset') await assertTaskActionCurrent();
+          });
+        }),
+      },
+      appModels: {
+        models: ({ callerSessionId }) => withAccountDataAccess(callerSessionId, async (assertCurrent) => {
+          const surface = await resolveHelperSurface(tryGetDbClient()!, callerSessionId);
+          if (surface === 'bot' || surface === 'bot-main') {
+            if (!deps.botCapabilities.models) throw new Error('HOST_NOT_READY');
+            return deps.botCapabilities.models({ callerSessionId });
+          }
+          await assertCurrent();
+          return { ok: true as const, ...await inspectAppDefaultModel() };
+        }),
+        setDefaultModel: ({ callerSessionId, id, effort, fastMode }) => withAccountDataAccess(callerSessionId, async (assertCurrent) => {
+          const surface = await resolveHelperSurface(tryGetDbClient()!, callerSessionId);
+          if (surface === 'bot' || surface === 'bot-main') {
+            if (!deps.botCapabilities.setDefaultModel) throw new Error('HOST_NOT_READY');
+            return deps.botCapabilities.setDefaultModel({ callerSessionId, id, effort, fastMode });
+          }
+          const owner = activeOwnerScopeKey();
+          await assertCurrent();
+          await assertTaskActionCurrent();
+          const result = await changeAppDefaultModel(id, effort, async () => {
+            await assertCurrent();
+            await assertTaskActionCurrent();
+            if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== owner) throw new Error('OWNER_SCOPE_CHANGED');
+          }, fastMode);
+          return { ok: true as const, ...result };
+        }),
+      },
       botCapabilities: deps.botCapabilities,
       botSkills: {
         save: async (params) => {
@@ -1352,33 +1289,8 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         },
         list: (params) => listBotSkillsForSession(params),
       },
-      // 工作台观察范围与行动授权分开：角色只影响可见性，写入还需 Host 的具体授权。
-      // 授权在 botWorkbenchAccess 里逐次确定性校验;投递复用 send_to_session 的同一条宿主路径。
-      // 停止走通用的 stop_session_turn。
-      botWorkbench: {
-        projects: runBotProjectsTool,
-        todos: async (caller, operation, input) => {
-          try {
-            const access = await todoForCaller(caller, () => getTaskActionInputState(caller).ownerInput);
-            if (operation === 'list') {
-              const all = await access.list();
-              const q = (input ?? {}) as TodoListQuery & {id?:string;key?:string};
-              if (q.id || q.key) {
-                const items = all.items.filter(t => q.id ? t.id === q.id : t.key === q.key);
-                return {ok:true,items,total:items.length};
-              }
-              return {ok:true,...queryTodoItems(all.items,q)};
-            }
-            if (operation === 'update') return {ok:true,todo:await access.patch(input as TodoPatch)};
-            if (operation === 'preflight') return {ok:true,events:await access.preflight(input as Parameters<typeof preflightTodoEvents>[1])};
-            return {ok:true,...await access.ingest(input as Parameters<typeof access.ingest>[0])};
-          } catch(error) { return {ok:false,errorCode:error instanceof TodoError ? error.code : 'INTERNAL',message:error instanceof Error?error.message:'INTERNAL'}; }
-        },
-        setResponsibility: (params) => runBotWorkbenchTool(workbenchHost, (access) => access.setResponsibility(params)),
-        get: (params) => runBotWorkbenchTool(workbenchHost, (access) => access.get(params)),
-        read: (params) => runBotWorkbenchTool(workbenchHost, (access) => access.read(params)),
-        continueTask: (params) => runBotWorkbenchTool(workbenchHost, (access) => access.continueTask(params)),
-      },
+      // Linked projects of the calling teammate; the host derives the teammate from the caller session.
+      teammateProjects: runBotProjectsTool,
       skillhub: createSkillhubAgentTools({
         isCurrentSession: (context) => !!context.sessionId
           && deps.isCurrentLocalSessionInstance?.(context.sessionId, context.sessionInstanceId) === true,
@@ -1435,6 +1347,31 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       githubIssue: (req) => submitGithubIssueForSession(req),
       mcpSetup: (context, proposal) => requestMcpSetupForSession(
         context.sessionId!, context.sessionInstanceId!, proposal),
+      ...(deps.captureSharedTaskCommand ? { sharedTask: createSharedTaskTools({
+        caller: context => {
+          const sessionId = context.sessionId ?? '';
+          const session = getTaskActionSession(sessionId);
+          const input = getTaskActionInputState(sessionId);
+          const lane = readChannelToolScope({ sessionId, sessionInstanceId: context.sessionInstanceId });
+          return {
+            key: JSON.stringify([activeOwnerScopeKey(), getCurrentDbClientSnapshot()?.clientEpoch, input.key, input.boundary,
+              lane?.channel, lane?.botId, lane?.chatId, lane?.inputClientId,
+              session?.stablePermissionModeState, session?.stablePlanModeState]),
+            accountScoped: lane ? lane.requesterIsOwner : isActiveInputAccountScoped(sessionId),
+            current: !isAppSessionBoundaryPending() && !!tryGetDbClient() &&
+              !!context.sessionInstanceId && session?.instanceId === context.sessionInstanceId &&
+              input.permission?.isCurrent?.() === true,
+            planMode: input.permission?.planModeEnabled !== false || input.permission?.permissionMode === 'plan',
+          };
+        },
+        captureGroupAccess: async context => {
+          const [link] = await getDbClient().drizzle.select({ botId: botSessionLinks.botId, role: botSessionLinks.role })
+            .from(botSessionLinks).where(eq(botSessionLinks.sessionId, context.sessionId!)).limit(1);
+          return link?.role === 'group' ? authorizeGroupTool(context.sessionId!, link.botId, 'owner-action') : null;
+        },
+        assertActionCurrent: assertTaskActionCurrent,
+        captureCommand: deps.captureSharedTaskCommand,
+      }) } : {}),
     },
     // cindy_orca: 多 worker 协同 team 工具集。创建权限由 Main handler 实时校验。
     orca: {
@@ -1485,7 +1422,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
   const gated: LiziMcpProvider[] = providers.map((p) => {
     const originalIsEnabled = p.isEnabled;
     const pluginId = pluginIdForProviderName(p.name);
-    const declaration = pluginRegistry.getPlugins().find((entry) => entry.id === pluginId);
+    const declaration = deps.pluginRegistry.getPlugins().find((entry) => entry.id === pluginId);
     return {
       ...p,
       capability: {
@@ -1516,7 +1453,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         if (
           !keepOrcaProviderStable &&
           !deferOrdinaryGate &&
-          !pluginRegistry.isEnabled(pluginId, ctx.workingDir)
+          !deps.pluginRegistry.isEnabled(pluginId, ctx.workingDir)
         ) {
           return false;
         }
@@ -1542,6 +1479,14 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         getSessionContext: () => resolveLiziMcpSessionContext(ctx),
       }),
     }),
+  });
+
+  gated.push({
+    name: 'cindy_imessage',
+    isEnabled: ctx => hasImChannelVendorOptions(ctx.vendorOptions, 'imessage')
+      || ((ctx.agentKind === 'codex' || ctx.agentKind === 'pi') && !ctx.workingDir),
+    toClaudeSdkConfig: ctx => ({ type: 'sdk', name: 'cindy_imessage',
+      instance: createIMessageMcpServer({ getSessionContext: () => resolveLiziMcpSessionContext(ctx) }) }),
   });
 
   // cindy_telegram_bot: 个人 / 伙伴 Telegram bot 轮次里的 Bot API 直通。只挂在带 Telegram 渠道

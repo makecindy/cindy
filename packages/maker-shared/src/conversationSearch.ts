@@ -1,3 +1,4 @@
+import type { TaskTag } from './taskTags.js';
 import { projectDraftSessionTitle } from './sessionTitle.js';
 import { collapseWorktreeDirForGrouping } from './worktreePaths.js';
 import { CINDY_MAKE_ENABLED, isCindyMakeSource } from './cindyMakeFeature.js';
@@ -52,6 +53,8 @@ export interface ConversationSearchFilters {
 export type ConversationSearchMatchKind = 'title' | 'content' | 'both';
 
 export interface ConversationSearchSessionSummary {
+  /** Optional for search responses from older hosts. */
+  tags?: TaskTag[];
   id: string;
   title: string;
   workingDir: string | null;

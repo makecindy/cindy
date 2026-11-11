@@ -12,7 +12,16 @@ interface Turn {
 /** Capture the write's owner before awaiting storage. Late completions retain this object. */
 export function createBotLearningTracker() {
   const current = new Map<string, Turn>();
+  // V2 teammates write their project's memory (not a `bot:` scope); their writes still count as learning.
+  const projectTeammateSessions = new Set<string>();
   return {
+    markProjectTeammate(sessionId: string) {
+      projectTeammateSessions.add(sessionId);
+    },
+    learnsFrom(sessionId: string | undefined, memoryScopeKey: string | undefined): string {
+      if (!sessionId) return '';
+      return memoryScopeKey?.startsWith('bot:') || projectTeammateSessions.has(sessionId) ? sessionId : '';
+    },
     observe(sessionId: string, identity: string, publish: Turn['publish']) {
       if (current.get(sessionId)?.identity !== identity)
         current.set(sessionId, { identity, receipts: [], publish });

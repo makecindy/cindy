@@ -87,7 +87,9 @@ it('continues waiting for the same remote fetch and shows its final result', asy
   const replies = [{ pending: true, operationId }, { pending: true, operationId }, { status: baseStatus, updated: 3 }];
   invoke.mockImplementation(async (_device, channel) => channel === 'worktree:sync-branch' ? replies.shift() : baseStatus);
   render(<BranchWorktreeChip {...props} deviceId="remote-a" />);
-  await screen.findByRole('button', { name: /newChat.branchSync.action/ });
+  // The action exists while the initial status is still loading; wait until a
+  // user can click it before checking remote operation continuation.
+  await waitFor(() => expect(refreshButton().hasAttribute('disabled')).toBe(false));
   fireEvent.click(refreshButton());
   await screen.findByRole('button', { name: /newChat.branchSync.updated/ });
   const writes = invoke.mock.calls.filter((call) => call[1] === 'worktree:sync-branch');
@@ -112,11 +114,13 @@ it.each(['transport', 'terminal', 'selection-change'] as const)('retries after a
     return { status: baseStatus, updated: 3 };
   });
   const view = render(<BranchWorktreeChip {...props} deviceId="remote-a" />);
-  fireEvent.click(await screen.findByRole('button', { name: /newChat.branchSync.action/ }));
+  await waitFor(() => expect(refreshButton().hasAttribute('disabled')).toBe(false));
+  fireEvent.click(refreshButton());
   let retry = await screen.findByRole('button', { name: /newChat.branchSync.failed/ });
   expect(polls).toBe(2);
   if (failure === 'selection-change') {
     view.rerender(<BranchWorktreeChip {...props} branchLabel="next" deviceId="remote-a" />);
+    await waitFor(() => expect(refreshButton().hasAttribute('disabled')).toBe(false));
     retry = await screen.findByRole('button', { name: /newChat.branchSync.action/ });
   }
   fireEvent.click(retry);

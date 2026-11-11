@@ -81,7 +81,7 @@
   自动清理只接受该命名空间独占且仍为 `isCache` 的字节；扫描和条件删除都检查其他
   引用与 pin，不能清理聊天附件或其他集成的共享字节。其他媒体清理维持原手动流程。
   普通 HTML 等非媒体仍走 `remote-file-cache`。完整身份、复验与平台清理策略见
-  [`protocol-compatibility.md`](protocol-compatibility.md)「远程文件连接复用与版本缓存」。
+  [`protocol-compatibility/image-delivery-and-missing-source.md`](protocol-compatibility/image-delivery-and-missing-source.md#远程文件连接复用与版本缓存)「远程文件连接复用与版本缓存」。
 - 桌面聊天的不可变远程图片通过 `device-link/remoteMediaPersistentCache.ts` 复用媒体总仓，
   `remote-media` 索引包含账号、来源设备和原始地址。先查内存、再查磁盘，缓存命中不取件；
   重启和断连不清理，不增加自动到期或容量淘汰。设置中的「远程图片缓存」复用账本扫描和
@@ -123,7 +123,9 @@
   窗边陪伴、未来工作室、梦境漫游从选择器下架（`RETIRED_WALLPAPER_IDS`），清单条目与 CDN 对象保留，
   已选用户的静态与动态照常可用，并在其设置中临时显示为选中项；
   静态条目不暴露动态选项、不下载视频。默认无壁纸和浏览设置列表不下载，
-  选中且可见时下载对应高清图，动态模式且未启用减少动态效果时再下载视频；下载或解码失败保留可用背景。
+  选中且可见时下载对应高清图，动态模式且未启用减少动态效果时再下载视频。
+  官方壁纸切换时立即显示所选项的内置预览图，原图解码成功后替换；下载或解码失败保留该预览图，
+  不保留上一张壁纸（2026-11-03 用户裁决，#8591）。已有解码缓存时直接复用原图。
   传输复用统一下载器并保留 guardedOutboundFetch 的来源校验，清单大小及 SHA-256 校验后入仓。
   缓存位于既有 `userData/cindy-media/client-wallpaper/`，仅以内容哈希和扩展名寻址，
   **不含应用版本或账号**；启动与升级先核对本地文件，有效即返回，不请求 CDN。
@@ -236,12 +238,36 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
 - 删除或清理历史目录必须走已有的显式名单、复验和用户确认流程；不得新增任意
   `cc-agent` 子目录删除能力。
 
+## 媒体调用说明与执行绑定
+
+- 图片、视频的新调用说明统一从 Server 读取。Guide 只描述请求、参数、响应与轮询协议；
+  provider、实际地址、Key、连接摘要、模型可见性和额度归连接与执行上下文。
+- 客户端按完整 `modelId` 及连接已有的接口格式读取公开资料，不发送账号 token、Key、
+  base URL 或连接摘要。协议说明不可用时不在本地生成 Guide，也不发出付费请求。
+  客户端根据本地来源绑定现有图片适配器、视频执行器或网关，不按 Server 的 `guideId` 分派。
+- `prepare` 在既有 `guide_json` 中保存选定 operation 及独立的 `binding`；`revision` 表示
+  Server 协议版本，视频 `binding.connectionRevision` 表示本地连接摘要。地址、Key 或来源
+  变化继续按原摘要校验，已付费任务的查询与下载不要求重新读取 Server Guide。
+- 升级时只解码旧快照的 `connection` 和旧视频 revision，不请求时重写历史记录，不改数据库
+  物理 schema。旧 Guide ID 仅用于解码既有记录，不参与新调用选择。Server 须先支持公开协议读取，
+  已发布客户端继续使用旧接口投影。
+- 存量插件的 `cindy-request` 图片、视频接口保留原参数与返回格式。Host 完成原有权限、配额、
+  参考图归属与账号校验后，把旧参数转换为 Server operation 的输入，直接调用已有
+  `callCindyMedia` 的 `prepare/request/poll`，不另起 Agent 或媒体执行链，也不按 Guide ID 筛选。
+  Core 统一生成并入仓，兼容入口只给同一媒体挂插件引用；旧 `jobId/query_job` 只投影调用结果。
+
+实现与回归证据见 [`invocationService.ts`](../../apps/desktop/src/main/cindy-media/invocationService.ts)、
+[`mediaInvocation.ts`](../../apps/desktop/src/shared/mediaInvocation.ts) 和
+[`mediaInvocationStore.test.ts`](../../apps/desktop/src/main/cindy-media/__tests__/mediaInvocationStore.test.ts)。
+
 ## 已授权生成任务的结果下载
 
 - 下载是生成流程内部的一步，不新增“领取”状态、列表或用户操作。上游返回后，客户端
   下载并通过 `ingestMedia` 返回受管媒体；需要确认时暂停同一次操作，批准后自动继续。
-- Guide 的 `allowedUrlHosts` 保留为已确认来源名单。名单内正常目标自动下载；名单外
-  来源、HTTP、特殊端口、地址内登录信息、受限网络等权限要求通过
+- Guide 的 `allowedUrlHosts` 保留为已确认来源名单。使用 `openai-videos` 的自定义视频连接还将
+  绑定中转站的域名及其子域名视作已确认结果来源（排除 IP、无点域名和 `.local`）。
+  名单内的正常结果 URL 自动通过隔离下载读取，仅允许 GET，不携带生成接口凭证；
+  名单外来源、HTTP、特殊端口、地址内登录信息、受限网络等权限要求通过
   Cindy 普通 `permission` 交互确认。卡片只说明实际地址、原因和本次范围，不出现
   Guide、“模型说明”等内部概念，不使用仅限本机的 `ghost_grant_confirm`。
 - 用户拒绝后结束本次下载，不自动重试或再次审批。网络失败由客户端最多自动尝试
@@ -302,9 +328,25 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
 - Art 返回的画幅、成品尺寸、分辨率和质量意图不得在客户端适配层静默丢弃。
   第三方图像通道声明自己的协议，`cindy-media/imageParameters.ts` 同时生成调用指南和
   验证实际请求；账号 ID 不参与协议推断。旧调用省略新增参数仍然可用。
+- 图片参数是开放的：`prepare.input_schema` 中的命名字段是便捷参数，不是上游参数白名单。
+  已声明协议的通道允许在 `body` 直接传入该协议的其他原生字段，并按官方文档保留字段名、
+  值与嵌套结构；Core 用 `nativeParameters` 在内部传递，生成和编辑的执行器都必须序列化。
+  Gemini 的 `generationConfig` / `imageConfig` 与便捷参数合并，显式原生字段优先。
+  模型、请求端点、鉴权、取消信号和主参考图仍走宿主原有路径，原生字段不能改写这些对象。
+  当前交付合同只接收一张最终图片，改变结果形态的批量或流式选项在付费提交前明确拒绝。
+- 参数开放不等于替上游声明支持情况：新增模型参数不需要逐项修改客户端白名单，由实际
+  执行通道的上游校验并保留错误原因。公开 Images API 与 Codex 订阅接口分别执行，不能
+  依据公开 API 文档宣称订阅接口支持同一字段。未指定参数时保持各通道既有默认；例如订阅
+  图片的 `opaque` 默认仅在调用方没有明确背景选项时生效，不再覆盖显式原生参数。
+- 原生参数内的受管媒体引用沿用已有取件、数量和字节预算；multipart 编辑将展开后的媒体
+  字节作为文件字段提交，普通对象按 JSON 序列化，不把对象变成 `[object Object]`。
+  图片结果仍按真实 MIME 原样入库；透明背景、格式、压缩等都是原生参数的使用场景，
+  不另建透明生图流程，也不在通用透传层替上游追加背景或格式默认。
 - `size` 表示生成像素尺寸，`resolution` 表示供应商的分辨率档，`quality` 是原生质量。
   不把不同来源的枚举互相套用，不强制 `medium` 或 `1k`。明确参数优先，省略时由上游决定。
-  已知 GPT Image 尺寸约束在付费提交前检查；不合法时保留 prepared 调用供更正。
+  Gateway/Guide 驱动的图像调用以服务端 Guide 和实际模型为准，客户端不再按型号代际预检
+  `size`/`quality`；不合法参数由上游拒绝，调用按已提交失败处理，不保留 prepared 供更正。
+  直连供应商通道仍由 `imageParameters.ts` 在付费提交前校验其已知约束，不合法时保留 prepared。
   目标成品尺寸不满足模型约束时，由 Agent 选择合法生成尺寸并单独完成成品缩放，不能谎报
   请求尺寸就是实际输出尺寸。没有自动缩放或偷偷裁切。
 - Codex SSE 的 partial image 仅为预览，不能在失败、未完成或只有预览的断流中当成成品。

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { validateGhostManifest as validateProtocolManifest, type GhostHostUi } from '@cindy/plugin-protocol';
 
 import {
   GHOST_CARD_ACTION_ID_RE,
@@ -12,6 +13,9 @@ import {
   ghostAppContextLocale,
   ghostAppContextLanguages,
   ghostContentKeys,
+  getApprovedGhostHostUi,
+  ghostHostUiApprovalTokens,
+  ghostHostUiNeedsApproval,
   ghostRequiresCindyAccount,
   ghostExternalLinkUrls,
   ghostLocalePathFor,
@@ -43,10 +47,52 @@ import {
   resolveGhostManifestLocale,
   validateGhostManifest,
   validateGhostManifestLocaleResource,
+  validateInstalledGhostManifest,
+  validateStoredGhostManifest,
   validateNormalizedGhostManifest,
   withGhostResolvedLocale,
   type GhostManifest,
+  type InstalledGhost,
 } from '../ghost';
+
+// Real receipt projection: new resources/fields never inherit an older capability grant.
+describe('host appearance approval', () => {
+  it('requires approval for each new field and resource while preserving existing views', () => {
+    const host: GhostHostUi = { capabilities: ['appearance'], appearance: { fields: ['uiFont'] },
+      views: [{ id: 'board', title: 'Board', resourceUri: 'ui://board' }] };
+    const manifest: GhostManifest = { schemaVersion: 3, id: 'appearance-example', name: 'Appearance',
+      version: '1', kind: 'chip', entry: 'main.js', mcpApps: {
+        ui: { resources: [{ uri: 'ui://board', file: 'board.html' }], tools: {} },
+        host,
+      } };
+    const approvedHostUi = ghostHostUiApprovalTokens(manifest);
+    host.appearance = { fields: ['bodyFont', 'future-field'],
+      resources: [{ id: 'font', kind: 'font', path: 'assets/font.woff2' }] };
+    const ghost = { manifest, approvedHostUi, approval: { state: 'approved', revision: 'one' } } as InstalledGhost;
+    expect(getApprovedGhostHostUi(ghost)).toMatchObject({ capabilities: ['appearance'],
+      views: [{ id: 'board' }], appearance: { fields: [], resources: [] } });
+    ghost.approvedHostUi = ghostHostUiApprovalTokens(manifest);
+    expect(getApprovedGhostHostUi(ghost)?.appearance).toEqual({ fields: ['bodyFont'],
+      resources: [{ id: 'font', kind: 'font', path: 'assets/font.woff2' }] });
+    host.appearance.resources![0].path = 'assets/replacement.woff2';
+    expect(getApprovedGhostHostUi(ghost)?.appearance?.resources).toEqual([]);
+  });
+  // Removing the field declaration requests the public default (all fields),
+  // never an implicit expansion of the existing receipt's uiFont approval.
+  it('requires the remaining default fields to be approved after removing a restricted declaration', () => {
+    const host: GhostHostUi = { capabilities: ['appearance'], appearance: { fields: ['uiFont'] } };
+    const manifest = { schemaVersion: 3, id: 'example', name: 'Example', version: '1', kind: 'chip',
+      entry: 'main.js', mcpApps: { host } } as GhostManifest;
+    const ghost = { manifest, approvedHostUi: ghostHostUiApprovalTokens(manifest),
+      approval: { state: 'approved', revision: 'one' } } as InstalledGhost;
+    delete host.appearance;
+    expect(ghostHostUiNeedsApproval(ghost)).toBe(true);
+    expect(getApprovedGhostHostUi(ghost)?.appearance?.fields).toEqual(['uiFont']);
+    ghost.approvedHostUi = ghostHostUiApprovalTokens(manifest);
+    expect(ghostHostUiNeedsApproval(ghost)).toBe(false);
+    expect(getApprovedGhostHostUi(ghost)?.appearance?.fields).toContain('wallpaper');
+  });
+});
 
 /** 一份全绿的清单基底(意识唯一形态:芯片,2026-07-12 单形态定案),单点破坏它来测各字段规则。 */
 function goodManifest(): Record<string, unknown> {
@@ -1033,6 +1079,47 @@ describe('ghost · 清单校验', () => {
     for (const icon of ['../evil.png', '/abs.png', 'a\\b.png', 'icon.svg', 'icon.js', 'icon', 42]) {
       expect(validateGhostManifest({ ...goodManifest(), icon }).ok, String(icon)).toBe(false);
     }
+  });
+
+  it('tools[].parameters 新包按 UTF-8 字节限 16KB,已装快照保留旧口径', () => {
+    const schema = (description: string) => ({ type: 'object', description });
+    const utf8Bytes = (parameters: Record<string, unknown>) =>
+      new TextEncoder().encode(JSON.stringify(parameters)).length;
+    const withParameters = (parameters: Record<string, unknown>) => ({
+      ...goodManifest(),
+      slots: ['panel', 'tool'],
+      tools: [{ name: 'do_thing', description: '做点事', parameters }],
+    });
+    const atLimit = schema('a'.repeat(16_384 - utf8Bytes(schema(''))));
+    const chineseDescription = '汉'.repeat(5_000);
+    const overLimit = schema(
+      `${chineseDescription}${'a'.repeat(16_385 - utf8Bytes(schema(chineseDescription)))}`,
+    );
+
+    expect(utf8Bytes(atLimit)).toBe(16_384);
+    expect(validateGhostManifest(withParameters(atLimit)).ok).toBe(true);
+
+    expect(JSON.stringify(overLimit).length).toBeLessThan(16_384);
+    expect(utf8Bytes(overLimit)).toBe(16_385);
+    expect(validateGhostManifest(withParameters(overLimit))).toEqual({
+      ok: false,
+      reason: 'tools[].parameters 过大(上限 16KB)',
+    });
+    // 升级前按 UTF-16 长度装入的多字节 schema,读取安装快照时不能因口径收紧失效。
+    expect(validateInstalledGhostManifest(withParameters(overLimit)).ok).toBe(true);
+    // #7408: stored releases get only parameter-size compatibility, not relaxed agent declarations.
+    expect(validateStoredGhostManifest(withParameters(overLimit)).ok).toBe(true);
+    expect(validateStoredGhostManifest({
+      ...withParameters(overLimit), agent: { tasks: 'historical' },
+    }).ok).toBe(false);
+    expect(validateStoredGhostManifest(withParameters(schema('a'.repeat(16_384))))).toEqual({
+      ok: false,
+      reason: 'tools[].parameters 过大(上限 16KB)',
+    });
+    expect(validateInstalledGhostManifest(withParameters(schema('a'.repeat(16_384))))).toEqual({
+      ok: false,
+      reason: 'tools[].parameters 过大(上限 16KB)',
+    });
   });
 });
 
@@ -5144,5 +5231,26 @@ describe('liveScreen declaration', () => {
     );
     const alone = validateGhostManifest({ ...base, liveScreen: true });
     expect(alone.ok).toBe(false);
+  });
+});
+
+describe('ghost · readme 详细介绍声明', () => {
+  // protocol-compatibility §3:Desktop 运行时 validator 与协议正本对同一 fixture 结论一致;
+  // 两边漂移会让 Forge 能打包、市场或安装却拒收(或反之)。
+  it.each<[string, unknown, boolean]>([
+    ['按语言指向包内 Markdown', { en: 'README.md', 'zh-CN': 'docs/README.zh-CN.md' }, true],
+    ['多个语言共用一份文件', { en: 'README.md', ja: 'README.md' }, true],
+    ['缺少英文回退', { 'zh-CN': 'README.zh-CN.md' }, false],
+    ['宿主不支持的语言', { en: 'README.md', it: 'README.it.md' }, false],
+    ['不是 .md 文件', { en: 'README.txt' }, false],
+    ['越出安装目录', { en: '../README.md' }, false],
+    ['大小写不同的同一路径', { en: 'README.md', ja: 'readme.md' }, false],
+    ['不是对象', 'README.md', false],
+  ])('%s', (_name, readme, ok) => {
+    const raw = { ...goodManifest(), readme };
+    const desktop = validateGhostManifest(raw);
+    expect(desktop.ok).toBe(ok);
+    expect(validateProtocolManifest(raw).ok).toBe(ok);
+    if (desktop.ok) expect(desktop.manifest.readme).toEqual(readme);
   });
 });

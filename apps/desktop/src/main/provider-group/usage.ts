@@ -116,6 +116,8 @@ interface CodexUsageBucket {
 
 /** Only quota fields survive parsing; account identity and reset-credit offers stay out of the directory. */
 export interface ProviderGroupCodexUsageSnapshot {
+  /** These accounts are selected by the native pool for every engine, including ChatGPT bridges. */
+  nativeAccountPool?: boolean;
   appServerBuckets: Record<string, CodexUsageBucket> | null;
   webSnapshot: CodexUsageBucket | null;
 }
@@ -132,11 +134,14 @@ function currentSnapshot(updatedAt: unknown, now: number): boolean {
 function codexWindow(raw: unknown): CodexUsageWindow | null {
   if (raw === undefined || raw === null) return null;
   const value = record(raw);
+  // Native account/rateLimits/read uses windowDurationMins; task events already
+  // normalize it to windowMinutes. Both sources must retain the same quota pace.
+  const minutes = value?.windowMinutes ?? value?.windowDurationMins;
   return {
     usedPercent: typeof value?.usedPercent === 'number' && Number.isFinite(value.usedPercent) && value.usedPercent >= 0
       ? Math.min(100, value.usedPercent) : undefined,
-    windowMinutes: typeof value?.windowMinutes === 'number' && Number.isFinite(value.windowMinutes) && value.windowMinutes > 0
-      ? value.windowMinutes : null,
+    windowMinutes: typeof minutes === 'number' && Number.isFinite(minutes) && minutes > 0
+      ? minutes : null,
     resetsAt: typeof value?.resetsAt === 'number' && Number.isFinite(value.resetsAt) && value.resetsAt > 0 ? value.resetsAt : null,
   };
 }
@@ -161,7 +166,10 @@ export function providerGroupCodexUsageSnapshot(raw: unknown): ProviderGroupCode
     ? Object.fromEntries(Object.entries(table).map(([key, bucket]) => [key, codexBucket(bucket)!]))
     : fallback ? { [codexLimitBucketKey(fallback)]: fallback } : null;
   const webSnapshot = codexBucket(value.webSnapshot ?? (value.source === 'openai-web' ? value : null));
-  return appServerBuckets || webSnapshot ? { appServerBuckets, webSnapshot } : null;
+  return appServerBuckets || webSnapshot ? {
+    appServerBuckets, webSnapshot,
+    ...(value.nativeAccountPool === true ? { nativeAccountPool: true } : {}),
+  } : null;
 }
 
 /** A completed account/rateLimits/read is fresh; cached account payloads retain each bucket's own timestamp. */
@@ -180,8 +188,10 @@ export function providerGroupCodexUsageFromReads(account: unknown, rateLimits: u
 
 /** Select a model's own bucket before checking age: fresh unrelated buckets cannot refresh it. */
 function codexUsageState(snapshot: ProviderGroupCodexUsageSnapshot, model: string | null | undefined, now: number, agentKind?: string) {
-  const bucket = (agentKind !== undefined && agentKind !== 'codex') || model?.startsWith('chatgpt/')
-    ? snapshot.webSnapshot : matchCodexBucketForModel(snapshot.appServerBuckets, model, now);
+  const bucket = snapshot.nativeAccountPool
+    ? matchCodexBucketForModel(snapshot.appServerBuckets, model?.replace(/^chatgpt\//, ''), now)
+    : (agentKind !== undefined && agentKind !== 'codex') || model?.startsWith('chatgpt/')
+      ? snapshot.webSnapshot : matchCodexBucketForModel(snapshot.appServerBuckets, model, now);
   if (!bucket || !currentSnapshot(bucket.updatedAt, now)) return providerGroupUsageState(null, model, now);
   const windows = [bucket.primary, bucket.secondary].filter((w): w is CodexUsageWindow => w !== null);
   const limit = accountUsageLimitFromWindows(windows.flatMap((w) => w.usedPercent === undefined
@@ -320,6 +330,7 @@ export function createProviderGroupUsageReader<T>(deps: ProviderGroupUsageReader
             : await deps.readRemote(member.agentDeviceId!, member.providerId);
           return deps.isCurrent() ? deps.parseSnapshot(raw, deps.now()) : null;
         }).catch(() => null).then((snapshot) => {
+          if (pending.get(key) !== request) return null;
           pending.delete(key);
           if (deps.isCurrent() && (member.kind !== 'local' || deps.cacheLocal)) {
             if (cached.size >= MAX_CACHED_ACCOUNTS) cached.delete(cached.keys().next().value!);
@@ -332,6 +343,6 @@ export function createProviderGroupUsageReader<T>(deps: ProviderGroupUsageReader
       const snapshot = await bounded(request);
       return deps.isCurrent() ? deps.parseSnapshot(snapshot, deps.now()) : null;
     },
-    invalidate() { cached.clear(); },
+    invalidate() { cached.clear(); pending.clear(); },
   };
 }

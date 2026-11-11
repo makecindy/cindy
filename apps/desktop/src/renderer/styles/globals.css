@@ -649,11 +649,13 @@ html:lang(ko) {
    rotating the inline svg element sweeps a bounding box that overlaps adjacent
    wrapped lines and makes Chromium repaint their text every frame (the
    multi-line refine jitter). Rotating the path keeps the svg's paint box
-   fixed — the same containment the listening level-bars rely on. */
+   fixed — the same containment the listening level-bars rely on.
+   Registered SVG-loop exception (DESIGN.md §14.4, maintainer ruling D-05,
+   2026-11-11); the turn uses the shared spinner cycle like every loader. */
 .ProseMirror [data-voice-caret][data-voice-caret-state='processing'] [data-voice-spinner-arc] {
   transform-box: view-box;
   transform-origin: center;
-  animation: voice-caret-spin 0.9s linear infinite;
+  animation: voice-caret-spin var(--motion-spinner-cycle) linear infinite;
 }
 @keyframes voice-caret-spin {
   to {
@@ -662,7 +664,8 @@ html:lang(ko) {
 }
 /* Mic level bars — shared by every VoiceInputMicWaveIcon consumer (in-app
    voice caret widget, dictation overlay title), hence not scoped to
-   .ProseMirror. The bars exist only inside that icon's svg. */
+   .ProseMirror. The bars exist only inside that icon's svg. The 1.1s wave is
+   part of the same registered SVG-loop exception (DESIGN.md §14.4, D-05). */
 [data-voice-mic-active='true'] [data-voice-mic-bar] {
   transform-box: fill-box;
   transform-origin: center;
@@ -915,31 +918,9 @@ body.resizing-pane [data-ghost-webview] {
   will-change: opacity;
 }
 
-/* 折叠 rail(竖排 tile)及置顶卡片运行中的扫动进度条。置顶卡片固定为 52px 宽度(见
-   SessionCard showCardBar),rail 延续全宽;reduce-motion 停动画。 */
-.session-card-bar::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  height: 100%;
-  width: 36%;
-  border-radius: 2px;
-  background: var(--text-tertiary);
-  animation: session-card-prog 1.5s ease-in-out infinite;
-}
-@keyframes session-card-prog {
-  0% {
-    transform: translateX(-115%);
-  }
-  100% {
-    transform: translateX(330%);
-  }
-}
-
 /* sidebar-card-mode: SessionCard 完成 settle——运行结束时卡片底色闪一下 hover 色
    再归位(0.9s),作为低调的"完成"提示。运行中的活动感由标题左侧
-   SessionStatusIcon 呼吸 + 底部短扫动进度条表达。 */
+   SessionStatusIcon 呼吸表达。 */
 .session-card--settle {
   animation: session-card-settle 0.9s ease;
 }
@@ -952,44 +933,6 @@ body.resizing-pane [data-ghost-webview] {
   }
   100% {
     background-color: var(--surface-elevated);
-  }
-}
-
-/* 需关注圆点——深色 + box-shadow 扩散脉冲（对照 redesign 稿 xdtsb-pulse） */
-/* 呼吸点(AttentionDot 的 breathing 形态)。
-   常驻循环动画按 DESIGN.md §14.4 只允许动 transform / opacity(compositor-only);
-   原实现动的是 box-shadow,每帧都要重绘,多张未读卡长期同屏时持续吃 CPU 与电量
-   (codex review)。改成一个 ::after 光环做 scale + opacity,视觉节奏不变:
-   6px 的点外扩到约 4px 光环(6→14px ≈ scale 2.33),同时淡出。
-   起始帧 opacity 为 0,所以 scale(1) 那一刻光环不可见,不会给点本身蒙一层底色。 */
-.session-card-dot {
-  position: relative;
-}
-.session-card-dot::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: 9999px;
-  background: hsl(var(--foreground));
-  animation: session-card-pulse 2.1s infinite;
-  will-change: transform, opacity;
-  pointer-events: none;
-}
-@keyframes session-card-pulse {
-  0% {
-    transform: scale(1);
-    opacity: 0;
-  }
-  30% {
-    opacity: 0.32;
-  }
-  70% {
-    transform: scale(2.33);
-    opacity: 0;
-  }
-  100% {
-    transform: scale(2.33);
-    opacity: 0;
   }
 }
 
@@ -1024,10 +967,7 @@ body.resizing-pane [data-ghost-webview] {
   .status-bar-shimmer,
   .status-bar-done,
   .session-status-breathing,
-  .session-card-bar::before,
   .session-card--settle,
-  .session-card-dot::after,
-  .session-running-dot,
   .thinking-dot,
   .stream-word,
   [data-stream-marker]::marker,
@@ -1060,7 +1000,7 @@ body.resizing-pane [data-ghost-webview] {
 
    Tailwind 的 animate-spin / animate-pulse 用 [class*=] 匹配,以覆盖
    motion-safe:animate-pulse 这类变体编译出的转义类名。任意值工具类
-   (animate-[spin_2.4s_linear_infinite] 之类,见 GhostSummonCard)不含 animate-spin
+   (animate-[spin_2.4s_linear_infinite] 之类)不含 animate-spin
    子串,靠 [class*='infinite'] 兜住:Tailwind 把 keyframes 简写原样编进类名,
    循环动画必然带 infinite 字面量,而一次性的 animate-[xxx_200ms_ease-out] 不会。 */
 [data-app-hidden='true'] [data-voice-spinner-arc],
@@ -1068,16 +1008,11 @@ body.resizing-pane [data-ghost-webview] {
 /* .status-bar-shimmer 已 cadenced 化为一次性动画(2026-08-07),按「一次性动画
    不得纳入冻结清单」原则移出 —— 冻在中途帧会让状态栏停在半暗。 */
 [data-app-hidden='true'] .session-status-breathing,
-[data-app-hidden='true'] .session-card-bar::before,
-[data-app-hidden='true'] .session-card-dot::after,
-[data-app-hidden='true'] .session-running-dot,
 [data-app-hidden='true'] .thinking-dot,
 [data-app-hidden='true'] .ghost-card-sweep,
 [data-app-hidden='true'] .brand-loading-mark-sheen::before,
 [data-app-hidden='true'] .ghost-bubble-face,
 [data-app-hidden='true'] .agent-island-mascot-character,
-[data-app-hidden='true'] .agent-island-mascot-keyboard,
-[data-app-hidden='true'] .agent-island-mascot-key,
 [data-app-hidden='true'] .agent-island-mascot-eyes,
 [data-app-hidden='true'] .agent-island-mascot-sparkle,
 [data-app-hidden='true'] [class*='animate-spinner'],
@@ -1092,44 +1027,6 @@ body.resizing-pane [data-ghost-webview] {
 [data-app-hidden='true'] [data-mxgraph],
 [data-app-hidden='true'] [data-mxgraph] * {
   animation-play-state: paused !important;
-}
-
-/* Running indicator — three horizontal dots, scale-up wave from left to right.
-   Color uses currentColor so the parent span controls accent vs gray. */
-.session-running-dots {
-  display: inline-flex;
-  align-items: center;
-  gap: 1.5px;
-}
-.session-running-dot {
-  display: inline-block;
-  width: 3px;
-  height: 3px;
-  border-radius: 50%;
-  background-color: currentColor;
-  animation: session-running-dot-wave 1.1s ease-in-out infinite;
-}
-.session-running-dot-1 {
-  animation-delay: 0s;
-}
-.session-running-dot-2 {
-  animation-delay: 0.18s;
-}
-.session-running-dot-3 {
-  animation-delay: 0.36s;
-}
-
-@keyframes session-running-dot-wave {
-  0%,
-  60%,
-  100% {
-    transform: scale(0.7);
-    opacity: 0.4;
-  }
-  30% {
-    transform: scale(1.35);
-    opacity: 1;
-  }
 }
 
 /* Cadenced 后的一次呼吸:静止态是全亮(无动画时 opacity 继承 fadeStyle 的 1),
@@ -1274,56 +1171,6 @@ body.resizing-pane [data-ghost-webview] {
   }
 }
 
-/* 召唤法阵终态编舞(GhostSummonCard/SummonSeal,DESIGN.md §14.4 登记):
-   running 结束时两道弧在旋转中把缺口收拢至满圆(600ms 一次性 dasharray
-   过渡,一次性瞬态允许非合成器属性)→ 光晕从法阵荡开一圈 + ✓ 弹出
-   (✓ 复用 Done 语义的唯一批准 overshoot 曲线,同 status-done-pop)。
-   motion-reduce 下全部禁用,直接落终态帧。 */
-.summon-seal-arc {
-  transition:
-    stroke-dasharray 600ms var(--motion-ease-out),
-    opacity 600ms var(--motion-ease-out);
-}
-@keyframes summon-seal-halo {
-  0% {
-    transform: scale(1);
-    opacity: 0.85;
-  }
-  100% {
-    transform: scale(1.65);
-    opacity: 0;
-  }
-}
-.summon-seal-halo {
-  animation: summon-seal-halo 0.9s var(--motion-ease-out) forwards;
-}
-@keyframes summon-seal-tick-pop {
-  0% {
-    transform: scale(0);
-  }
-  60% {
-    transform: scale(1.12);
-  }
-  100% {
-    transform: scale(1);
-  }
-}
-.summon-seal-tick-pop {
-  animation: summon-seal-tick-pop 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) both;
-}
-@media (prefers-reduced-motion: reduce) {
-  .summon-seal-arc {
-    transition: none;
-  }
-  .summon-seal-halo,
-  .summon-seal-tick-pop {
-    animation: none;
-  }
-  .summon-seal-halo {
-    opacity: 0;
-  }
-}
-
 /* Done: pop bounce, stays orange */
 .status-bar-done {
   color: var(--status-bar-accent);
@@ -1348,26 +1195,26 @@ body.resizing-pane [data-ghost-webview] {
   /* Light theme highlight.js styles are the default (imported globally at top of file) */
   --model-budget-gradient: linear-gradient(
     90deg,
-    #e11d48,
-    #ea580c,
-    #d97706,
-    #ca8a04,
-    #65a30d,
-    #16a34a,
-    #0d9488
+    var(--model-spectrum-1),
+    var(--model-spectrum-2),
+    var(--model-spectrum-3),
+    var(--model-spectrum-4),
+    var(--model-spectrum-5),
+    var(--model-spectrum-6),
+    var(--model-spectrum-7)
   );
 }
 
 .dark {
   --model-budget-gradient: linear-gradient(
     90deg,
-    #fb7185,
-    #fb923c,
-    #fbbf24,
-    #fde047,
-    #a3e635,
-    #4ade80,
-    #2dd4bf
+    var(--model-spectrum-1),
+    var(--model-spectrum-2),
+    var(--model-spectrum-3),
+    var(--model-spectrum-4),
+    var(--model-spectrum-5),
+    var(--model-spectrum-6),
+    var(--model-spectrum-7)
   );
 }
 
@@ -1771,18 +1618,10 @@ body.resizing-pane [data-ghost-webview] {
   will-change: transform;
 }
 
-.agent-island-mascot-keyboard {
-  transform-origin: 50% 92%;
-  will-change: transform;
-}
-
 .agent-island-mascot-eyes {
   transform-origin: center;
   will-change: transform;
 }
-
-/* 键帽不设常驻 will-change:12 键 x 6 皮肤会造出 72 个常驻合成层,
-   而 opacity/transform keyframe 动画激活时 Chromium 会自动按需提层。 */
 
 .agent-island-mascot-sparkle {
   position: absolute;
@@ -1819,15 +1658,6 @@ body.resizing-pane [data-ghost-webview] {
   animation: agent-island-mascot-type 520ms ease-in-out infinite;
 }
 
-.agent-island-mascot-stage[data-motion='working'] .agent-island-mascot-keyboard {
-  animation: agent-island-mascot-keyboard-tap 520ms ease-in-out infinite;
-}
-
-.agent-island-mascot-stage[data-motion='working'] .agent-island-mascot-key {
-  animation: agent-island-mascot-key-flash 720ms ease-in-out infinite;
-  animation-delay: var(--agent-island-key-delay);
-}
-
 .agent-island-mascot-stage[data-motion='waitingApproval'] .agent-island-mascot-character {
   animation: agent-island-mascot-focus 1.15s ease-in-out infinite;
 }
@@ -1862,28 +1692,6 @@ body.resizing-pane [data-ghost-webview] {
   }
   50% {
     transform: translate3d(1px, 1px, 0) rotate(1deg) scale(var(--agent-island-mascot-scale));
-  }
-}
-
-@keyframes agent-island-mascot-keyboard-tap {
-  0%,
-  100% {
-    transform: translate3d(0, 0, 0);
-  }
-  50% {
-    transform: translate3d(0, 0.7px, 0);
-  }
-}
-
-@keyframes agent-island-mascot-key-flash {
-  0%,
-  100% {
-    opacity: 0.55;
-    transform: translate3d(0, 0, 0);
-  }
-  45% {
-    opacity: 1;
-    transform: translate3d(0, 0.35px, 0);
   }
 }
 
@@ -1937,8 +1745,6 @@ body.resizing-pane [data-ghost-webview] {
 
 @media (prefers-reduced-motion: reduce) {
   .agent-island-mascot-stage .agent-island-mascot-character,
-  .agent-island-mascot-stage .agent-island-mascot-keyboard,
-  .agent-island-mascot-stage .agent-island-mascot-key,
   .agent-island-mascot-stage .agent-island-mascot-eyes,
   .agent-island-mascot-stage .agent-island-mascot-sparkle {
     animation: none !important;
@@ -2140,7 +1946,7 @@ mark.doc-search-mark [class] {
 [data-theme='cindy-dark'] :is(.layout-divider-v, .layout-divider-h) {
   background: linear-gradient(var(--border-default), var(--border-default)), var(--surface);
 }
-html[data-wallpaper-active='true'] :is(.layout-divider-v, .layout-divider-h) {
+html:is([data-wallpaper-active='true'], [data-desktop-background='true']) :is(.layout-divider-v, .layout-divider-h) {
   background: var(--border-default);
 }
 /* CINDY 文字色是半透明墨水,图标经 currentColor 继承同一颜色;图标由多段描边拼成,
@@ -2195,30 +2001,45 @@ html[data-wallpaper-active='true'] :is(.layout-divider-v, .layout-divider-h) {
    与左侧主区(不透明 content-area)底色打架;移除后回落 CINDY 的 --panel-bg
    (2026-08 起 #F2F2ED/#181818),与主区同色,右侧面板整体与左边聊天区一致(模式2 口径)。 */
 [data-theme='cindy-light'] aside.bg-sidebar {
-  background: var(--surface-translucent-sidebar);
+  background: transparent;
 }
 [data-theme='cindy-dark'] aside.bg-sidebar {
-  background: var(--surface-translucent-sidebar);
+  background: transparent;
   /* backdrop-filter 移除:CSS blur 采样不到窗外壁纸,且已知会把透明窗背衬渲染成黑;壁纸模糊由原生 vibrancy 材质提供 */
+}
+[data-theme='cindy-light'] aside.bg-sidebar > .sidebar-frost,
+[data-theme='cindy-dark'] aside.bg-sidebar > .sidebar-frost {
+  background: var(--surface-translucent-sidebar);
 }
 /* Windows Acrylic 的 BrowserWindow backing 已在创建期铺同一份 85% 侧栏染色，确保快速
    扩窗时原生新区域先显示正确颜色。常规侧栏让 backing 直接透出，避免 CSS 再叠一遍导致
-   颜色变重；peek drawer 覆盖的是应用内容，仍保留下方独立的染色 + blur。 */
-[data-platform='win32'][data-window-backdrop-material='acrylic'][data-theme='cindy-light']
-  aside.bg-sidebar:not([data-sidebar-peek-drawer]),
-[data-platform='win32'][data-window-backdrop-material='acrylic'][data-theme='cindy-dark']
-  aside.bg-sidebar:not([data-sidebar-peek-drawer]) {
+   颜色变重；peek drawer 覆盖的是应用内容，仍保留下方独立的染色 + blur。
+   桌面背景模式的 backing 是全透明的（见 vibrancyConfig），侧栏自带语义染色，不在此清除。 */
+[data-platform='win32'][data-window-backdrop-material='acrylic'][data-theme='cindy-light']:not([data-desktop-background='true'])
+  aside.bg-sidebar:not([data-sidebar-peek-drawer]) > .sidebar-frost,
+[data-platform='win32'][data-window-backdrop-material='acrylic'][data-theme='cindy-dark']:not([data-desktop-background='true'])
+  aside.bg-sidebar:not([data-sidebar-peek-drawer]) > .sidebar-frost {
   background: transparent;
 }
 /* Sidebar peek 抽屉是 fixed overlay,它覆盖的是应用内容而不是窗外壁纸;这里需要
    单独 blur 被覆盖的应用 UI,避免 hover 预览时正文直接透出来。常规展开态仍交给
    原生 vibrancy,非 CINDY family 不命中。 */
-[data-theme='cindy-light'] aside.bg-sidebar[data-sidebar-peek-drawer],
-[data-theme='cindy-dark'] aside.bg-sidebar[data-sidebar-peek-drawer] {
+[data-theme='cindy-light'] aside.bg-sidebar[data-sidebar-peek-drawer] > .sidebar-frost,
+[data-theme='cindy-dark'] aside.bg-sidebar[data-sidebar-peek-drawer] > .sidebar-frost {
   background: var(--surface-translucent-sidebar);
   backdrop-filter: blur(28px);
   -webkit-backdrop-filter: blur(28px);
 }
+
+/* Plugin presentation keeps layout preferences and pending permission UI intact. */
+html[data-plugin-ui-hidden~='workspace'] [data-plugin-ui-element='workspace'] { visibility: hidden; }
+html[data-plugin-ui-hidden~='workspace'] [data-plugin-ui-keep-visible] { visibility: visible; }
+html[data-plugin-ui-hidden~='sidebar'] [data-plugin-ui-element='sidebar'],
+html[data-plugin-ui-hidden~='header'] [data-plugin-ui-element='header'],
+html[data-plugin-ui-hidden~='messages'] [data-plugin-ui-element='messages'],
+html[data-plugin-ui-hidden~='composer'] [data-chat-input-root],
+html[data-plugin-ui-hidden~='tools'] [data-plugin-ui-element='tools'],
+html[data-plugin-ui-hidden~='windowControls'] [data-plugin-ui-element='windowControls'] { display: none !important; }
 /* 模式2 主面板:用户勘误 2026-07-17 — 主内容区不透壁纸(macOS 标准范式),撤销 blur。
    content-area 回落 --content-area(=var(--surface-hsl) 不透明,2026-08 起 #F2F2ED/#181818),无 blur。
    surface-translucent-main token 保留注册但 CINDY override 改不透明等价值(见 cindy themes)。 */
@@ -2368,7 +2189,7 @@ html[data-wallpaper-active='true'] body::before {
   background-position: center;
   background-repeat: no-repeat;
 }
-html[data-wallpaper-active='true'] :is(
+html:is([data-wallpaper-active='true'], [data-desktop-background='true']) :is(
   .bg-content-area,
   .app-wallpaper-surface,
   main[class~='bg-[var(--surface)]'],
@@ -2377,7 +2198,7 @@ html[data-wallpaper-active='true'] :is(
 ) {
   background-color: transparent;
 }
-html[data-wallpaper-active='true'] aside.bg-sidebar:not([data-sidebar-peek-drawer]) {
+html:is([data-wallpaper-active='true'], [data-desktop-background='true']) aside.bg-sidebar:not([data-sidebar-peek-drawer]) {
   background: transparent;
 }
 /* Fixed attachment uses the same viewport coordinates as the canvas. The
@@ -2397,6 +2218,60 @@ html[data-wallpaper-active='true'] :is(.wallpaper-composer-zone, .wallpaper-comp
 }
 html[data-wallpaper-active='true'] .wallpaper-composer-fade {
   mask-image: linear-gradient(transparent, currentColor);
+}
+
+/* In-page raised surfaces tint artwork or the native desktop with their own token instead of
+   covering it. CINDY themes only: their text is translucent ink, so the
+   contrast floor below holds; other built-in themes use fixed text colors
+   calibrated against solid surfaces and keep them. Scoped to page containers, so portaled popovers, menus and
+   dialogs keep their readable surfaces; in-page floating roles and surfaces
+   positioned over other content (absolute / fixed / sticky) stay opaque too.
+   Higher wallpaper visibility raises the opacity to the contrast floor set by
+   useWallpaperBackground. Fill only: backdrop-filter would become the
+   containing block for the composer's fixed palettes. Keeps base-utility
+   specificity, so hover and state variants still win. Each token needs a fill
+   line and an entry in the target list. Left out on purpose: tokens that are
+   already translucent (selected-row ink tints), and any surface holding
+   syntax-highlighted code (code blocks, diffs), whose fixed palette needs a
+   solid surface. */
+html:is([data-wallpaper-active='true'], [data-desktop-background='true']) {
+  --wallpaper-glass-opacity: max(72%, var(--app-wallpaper-glass-floor, 0%));
+}
+html.dark:is([data-wallpaper-active='true'], [data-desktop-background='true']) {
+  --wallpaper-glass-opacity: max(64%, var(--app-wallpaper-glass-floor, 0%));
+}
+[class~='bg-[var(--chat-input-bg)]'] { --wallpaper-glass-fill: var(--chat-input-bg); }
+[class~='bg-[var(--msg-user-bg)]'] { --wallpaper-glass-fill: var(--msg-user-bg); }
+[class~='bg-[var(--msg-tool-card-bg)]'] { --wallpaper-glass-fill: var(--msg-tool-card-bg); }
+[class~='bg-[var(--msg-table-header-bg)]'] { --wallpaper-glass-fill: var(--msg-table-header-bg); }
+[class~='bg-[var(--surface-elevated)]'] { --wallpaper-glass-fill: var(--surface-elevated); }
+[class~='bg-[var(--settings-theme-card-bg)]'] { --wallpaper-glass-fill: var(--settings-theme-card-bg); }
+[class~='bg-[var(--settings-input-bg)]'] { --wallpaper-glass-fill: var(--settings-input-bg); }
+[class~='bg-[var(--settings-profile-card-bg)]'] { --wallpaper-glass-fill: var(--settings-profile-card-bg); }
+.bg-sidebar-item-active { --wallpaper-glass-fill: hsl(var(--sidebar-item-active)); }
+:where(html:is([data-theme='cindy-light'], [data-theme='cindy-dark']):is([data-wallpaper-active='true'], [data-desktop-background='true']) :is(
+  .bg-content-area,
+  .app-wallpaper-surface,
+  aside.bg-sidebar:not([data-sidebar-peek-drawer]),
+  [class~='bg-[var(--panel-bg)]'],
+  [class~='bg-[var(--settings-bg)]']
+)) :is(
+  [class~='bg-[var(--chat-input-bg)]'],
+  [class~='bg-[var(--msg-user-bg)]'],
+  [class~='bg-[var(--msg-tool-card-bg)]'],
+  [class~='bg-[var(--msg-table-header-bg)]'],
+  [class~='bg-[var(--surface-elevated)]'],
+  [class~='bg-[var(--settings-theme-card-bg)]'],
+  [class~='bg-[var(--settings-input-bg)]'],
+  [class~='bg-[var(--settings-profile-card-bg)]'],
+  .bg-sidebar-item-active
+):where(:not(
+  .absolute, .fixed, .sticky,
+  :has(.hljs, [class^='hljs-']),
+  [role='dialog'], [role='alertdialog'], [role='menu'], [role='listbox'], [role='tooltip'],
+  :is([role='dialog'], [role='alertdialog'], [role='menu'], [role='listbox'], [role='tooltip']) *
+)) {
+  background-color: color-mix(in srgb, var(--wallpaper-glass-fill) var(--wallpaper-glass-opacity), transparent);
 }
 
 /* Keep the decoded old canvas above the new one and fade only its opacity.
@@ -2440,14 +2315,16 @@ html[data-wallpaper-transition='true'] :is(.wallpaper-composer-zone, .wallpaper-
 /* Blend video into an opaque theme surface before composing with the UI.
    A separate translucent veil over a hardware video overlay changes brightness
    when P3 content switches Windows HDR output to scRGB. Keep visibility on the
-   video itself; the wrapper opacity is reserved for loading/exit crossfades. */
+   video itself; the wrapper opacity is reserved for loading/exit crossfades.
+   The crossfade uses the same tier and curve as the still-image fade above
+   (DESIGN.md §14.4, maintainer ruling D-11, 2026-11-11). */
 .app-wallpaper-video {
   position: fixed;
   inset: 0;
   z-index: -1;
   pointer-events: none;
   background: var(--surface);
-  transition: opacity var(--motion-base) var(--motion-ease-move);
+  transition: opacity var(--motion-fast) var(--motion-ease-move);
 }
 .app-wallpaper-video video {
   width: 100%;
@@ -2482,4 +2359,65 @@ html[data-wallpaper-blur='true'] .app-wallpaper-video video {
   height: calc(100% + 6 * var(--app-wallpaper-blur));
   max-width: none;
   filter: blur(var(--app-wallpaper-blur));
+}
+
+/* No wallpaper: tint the desktop beneath the main area. */
+html[data-desktop-background='true'] body {
+  isolation: isolate;
+  background: transparent;
+}
+html[data-desktop-background='true'] body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -3;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--surface) var(--desktop-background-veil), transparent);
+}
+/* CINDY's sidebar paints its own tint (below), so the shared veil starts at its
+   visible edge instead of stacking a second coat beneath it. */
+html:is([data-theme='cindy-light'], [data-theme='cindy-dark'])[data-desktop-background='true'] body::before {
+  left: var(--sidebar-visible-width, 0px);
+}
+html[data-desktop-background='true'] :is(.wallpaper-composer-zone, .wallpaper-composer-fade) {
+  background: transparent;
+}
+html[data-desktop-background='true'] .wallpaper-message-viewport [data-scroll-container] {
+  mask-image: linear-gradient(to bottom, black calc(100% - var(--wallpaper-composer-height)), transparent calc(100% - var(--wallpaper-composer-height) + 32px));
+}
+
+/* With artwork, the docked sidebar shares the canvas veil and blur in the main
+   area's color; only its 1px divider separates it (user decision, 2026-11-10). */
+html:is([data-theme='cindy-light'], [data-theme='cindy-dark'])[data-wallpaper-active='true']
+  aside.bg-sidebar:not([data-sidebar-peek-drawer]) > .sidebar-frost {
+  background: transparent;
+}
+/* On the desktop, the docked sidebar has the main area's hue and transparency,
+   one step deeper: the same veil on the aside, a fixed shade on its frost layer
+   above it (user decision, 2026-11-11).
+   On macOS a colorless system blur beneath it adds a fixed frost over the
+   adjustable window blur; Windows shares the whole-window backdrop. */
+/* Derived from existing roles, so no literal colour: the ink black of the light
+   text role, and the sidebar's own near-black coat in dark. */
+html[data-theme='cindy-light'] { --sidebar-desktop-shade: rgb(from var(--text-primary) r g b / 0.04); }
+html[data-theme='cindy-dark'] { --sidebar-desktop-shade: rgb(from var(--surface-translucent-sidebar) r g b / 0.1); }
+html:is([data-theme='cindy-light'], [data-theme='cindy-dark'])[data-desktop-background='true']
+  aside.bg-sidebar:not([data-sidebar-peek-drawer]) {
+  background: color-mix(in srgb, var(--surface) var(--desktop-background-veil), transparent);
+}
+html:is([data-theme='cindy-light'], [data-theme='cindy-dark'])[data-desktop-background='true']
+  aside.bg-sidebar:not([data-sidebar-peek-drawer]) > .sidebar-frost {
+  background: var(--sidebar-desktop-shade);
+}
+/* The peek drawer covers app content, and CSS backdrop blur does not render in
+   the transparent window. The shared veil hides none of that content, so the
+   drawer's own surface coat must cover the text, at max(main area's veil, 90%),
+   in the main area's color (user decision, 2026-11-10). It drops the ineffective
+   blur; its divider and floating-layer elevation stay. */
+html:is([data-theme='cindy-light'], [data-theme='cindy-dark']):is([data-wallpaper-active='true'], [data-desktop-background='true'])
+  aside.bg-sidebar[data-sidebar-peek-drawer] > .sidebar-frost {
+  background: rgb(from var(--surface) r g b /
+    max(0.9, calc(1 - var(--background-visibility, 0))));
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }

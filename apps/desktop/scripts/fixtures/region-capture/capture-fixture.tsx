@@ -1,4 +1,5 @@
 import type { ScreenshotTranslationPreference } from '../../../src/shared/screenshotTranslation';
+import type { RecordingAudioOptions } from '../../../src/shared/recordingAudio';
 import { useMemo, useState } from 'react';
 import type { RegionScreenshotBitmap } from '../../../src/shared/regionScreenshot';
 import { mountPage } from '../../ui-page/harness';
@@ -9,6 +10,8 @@ import { recordingControlsBounds, scrollCaptureLayout, type RecordingPreviewDocu
 
 const qa = { translationPreference: 'ui' as ScreenshotTranslationPreference, translationSaveFails: false, exportedLanguage: '', exportedAction: '', frames: 0, firstFrameAt: 0, keysRequested: false, closed: false, copyAttempts: 0, copied: false, scrollFrames: 0, scrollLimit: 180, manualScroll: null as number | null, idle: false, automatic: false, saved: null as Uint8Array | null, saveAttempts: 0, format: '', exportedHeight: 0, annotationPixels: 0, restored: false };
 Object.assign(window, { captureQa: qa });
+const audioQa = { options: null as RecordingAudioOptions | null, starts: 0, reads: 0, stopped: false };
+Object.assign(window, { captureAudioQa: audioQa });
 
 function frame(scroll = 0) {
   const canvas = document.createElement('canvas');
@@ -73,6 +76,20 @@ mountPage({
       elementsAt: async (_token, _window, x) => snapping ? { window: { id: 1, rect: { x: 100, y: 100, width: 480, height: 360 } }, rects: [x < 320 ? { x: 120, y: 140, width: 180, height: 140 } : { x: 340, y: 140, width: 200, height: 140 }] } : null,
       startLive: async (_token, captureMode, selection) => { selected = selection; return { mode: captureMode, selection, first: frame(qa.manualScroll ?? 0), scrollLayout: scrollCaptureLayout(selection, { width: innerWidth, height: innerHeight })!, recordingLayout: { viewport: { width: innerWidth, height: innerHeight }, controls: recordingControlsBounds(selection, { width: innerWidth, height: innerHeight }, false)! } }; },
       recordingControls: async (_token, expanded, point) => recordingControlsBounds(selected, { width: innerWidth, height: innerHeight }, expanded, point),
+      startAudio: async (_token, options) => { audioQa.starts++; audioQa.options = options; audioQa.stopped = false; return null; },
+      readAudio: async () => {
+        if (audioQa.stopped) throw new Error('audio host stopped');
+        const pcm = new Float32Array(1920);
+        const offset = audioQa.reads++ * 960;
+        for (let i = 0; i < 960; i++) {
+          const time = (offset + i) / 48000;
+          const sample = (audioQa.options?.system ? Math.sin(time * Math.PI * 880) * 0.2 : 0)
+            + (audioQa.options?.microphone ? Math.sin(time * Math.PI * 1320) * 0.2 : 0);
+          pcm[i * 2] = pcm[i * 2 + 1] = sample;
+        }
+        return new Uint8Array(pcm.buffer);
+      },
+      stopAudio: async () => { audioQa.stopped = true; },
       previewRecording: async () => false,
       restoreEditor: async () => { qa.restored = true; return true; },
       holdCapture: async () => {},

@@ -10,6 +10,10 @@ import { deviceDisplayName } from '@/lib/deviceName';
  *
  * 无缓存的离线设备 / 未开启被控 / 与本机无关的设备不进切换栏(归 设置→远程控制 管理)。
  * 本机(isSelf)排除。
+ *
+ * status 只回答「同步到哪一步了」,答不了「这台设备现在在不在」——「在线但还没同步出
+ * 任务来」和「只有断线缓存」在 status 里都是 connecting。所以 presence 单独用 online
+ * 表达(设备目录上报在线,或同步分片是活的),别拿 status 顶替。
  */
 
 import type { RemoteDeviceSummary } from './remoteProjectsStore';
@@ -22,6 +26,14 @@ export interface SwitcherDevice {
   deviceId: string;
   name: string;
   status: DeviceConnectionStatus;
+  /**
+   * 设备 presence(设备现在在不在)—— 与 status 是两回事。
+   *
+   * status 把「在线可控但尚未同步」和「只有断线缓存」都压成 connecting,
+   * 所以它回答不了「这台设备现在在不在」;online 回答的正是这个:
+   * 设备目录说它在线,就是在线(哪怕还没同步出任务来)。
+   */
+  online: boolean;
 }
 
 export interface BuildSwitcherDevicesInput {
@@ -43,6 +55,8 @@ export function buildSwitcherDevices({
   const selfIds = new Set<string>();
   const mobileIds = new Set<string>();
   const onlineControllable = new Set<string>();
+  // presence 单独一套:设备目录说它在线就是在线,不受「本机是否允许控它」这类本地偏好影响。
+  const presenceOnline = new Set<string>();
   for (const d of list) {
     nameById.set(d.deviceId, d.name);
     if (d.isSelf) {
@@ -54,6 +68,7 @@ export function buildSwitcherDevices({
       mobileIds.add(d.deviceId);
       continue;
     }
+    if (d.online) presenceOnline.add(d.deviceId);
     // controlEnabled 是本机「是否允许主动控制该设备」的本地偏好;关掉的设备不进切换栏
     // (与 useDeviceLinkRemoteProjects 的合格判定 disabledControlDeviceIds 同口径)。
     if (d.online && d.remoteControlEnabled && d.controlEnabled) onlineControllable.add(d.deviceId);
@@ -85,7 +100,16 @@ export function buildSwitcherDevices({
     } else if (cachedDevice && cachedDevice.connected !== false) {
       status = 'connected';
     }
-    devices.push({ deviceId, name: deviceDisplayName(deviceId, nameById.get(deviceId), nameSources), status });
+    devices.push({
+      deviceId,
+      name: deviceDisplayName(deviceId, nameById.get(deviceId), nameSources),
+      status,
+      // presence 与 status 分开表达:
+      // - 设备目录上报它在线 → 在线(哪怕还没同步出任务来);
+      // - 同步分片是活的(relay 已连上)→ 同样是在线(设备目录还没加载时也只有这条路)。
+      // 真正离线的缓存设备两者都不满足 → online: false。
+      online: presenceOnline.has(deviceId) || cachedDevice?.connected === true,
+    });
   }
 
   // 统一按稳定身份(名字 → deviceId)排,不含状态/在线/时间 → 状态抖动不改变顺序

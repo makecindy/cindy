@@ -26,6 +26,7 @@ import type {
   ConversationSearchLastActivityFilter,
   ConversationSearchSortBy,
   ConversationSearchStatusFilter,
+  ConversationSearchResponse,
 } from '@cindy/maker-shared/conversation-search';
 
 export const CONVERSATION_SEARCH_DEBOUNCE_MS = 250;
@@ -139,7 +140,22 @@ export function useConversationSearch({
     }
 
     setStatus('searching');
+    setResults([]);
     const seq = ++requestSeq.current;
+    const isCurrent = () => seq === requestSeq.current;
+    const publishResults = (page: ConversationSearchResponse) => {
+      if (!isCurrent()) return;
+      const now = Date.now();
+      const cachedByKey = new Map(
+        remoteSessionStore.getSessions().map((session) => [
+          conversationSearchSessionCacheKey(session),
+          session,
+        ]),
+      );
+      setResults(page.results.map((item) => (
+        toSearchListItem(item, now, unnamedLabel, cachedSessionForSearchResult(item, cachedByKey))
+      )));
+    };
     const timer = setTimeout(() => {
       void searchConversationsAcrossDevices(
         scopedOrigins,
@@ -158,22 +174,15 @@ export function useConversationSearch({
         },
         {
           invoke,
+          isCurrent,
+          onProgress: publishResults,
           getCachedSessions: () => remoteSessionStore.getSessions(),
           projectAliases,
           isDeviceUnresponsive: (deviceId) => unresponsiveDevicesStore.has(deviceId),
         },
       ).then((page) => {
-        if (seq !== requestSeq.current) return;
-        const now = Date.now();
-        const cachedByKey = new Map(
-          remoteSessionStore.getSessions().map((session) => [
-            conversationSearchSessionCacheKey(session),
-            session,
-          ]),
-        );
-        setResults(page.results.map((item) => (
-          toSearchListItem(item, now, unnamedLabel, cachedSessionForSearchResult(item, cachedByKey))
-        )));
+        if (!isCurrent()) return;
+        publishResults(page);
         setStatus('ready');
       }).catch(() => {
         if (seq !== requestSeq.current) return;

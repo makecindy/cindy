@@ -11,6 +11,7 @@ import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import type { PiPackageMutationRequest } from '../../../shared/piPackages.js';
+import { atomicWriteFileSync } from '../../utils/atomicWriteFile.js';
 
 // Windows 未开启 Developer Mode / 无 Create Symbolic Link 权限时，文件 symlink
 // 会返回 EPERM；目录 junction 不受此限制，但本文件的竞态用例必须替换单个文件。
@@ -29,6 +30,13 @@ function canCreateFileSymlink(): boolean {
 }
 
 const canLinkFile = canCreateFileSymlink();
+
+// Peer Mains publish change tokens with an atomic rename. A plain writeFile
+// truncates first, and the directory watcher can observe that empty moment as
+// a missing token, which a recovery test would then count as a token edge.
+function writePeerToken(tokenPath: string, contents: string): void {
+  atomicWriteFileSync(tokenPath, contents);
+}
 
 const runtime = vi.hoisted(() => ({
   userData: '',
@@ -1324,6 +1332,7 @@ describe('Pi package executable-code boundary', () => {
     const request = { action: 'set-enabled' as const, source, enabled: true };
     const grant = issuePiPackageMutationGrant(request);
 
+    // reset-modules: a second Main instance must not share the first instance's inspection cache or grants.
     vi.resetModules();
     const secondStore = await import('../pi-package-store.js');
     await fs.writeFile(
@@ -2099,14 +2108,25 @@ describe('Pi package executable-code boundary', () => {
 
     const store = await import('../pi-package-store.js');
     const snapshotRoot = path.join(runtime.userData, 'aggregate-package-budget');
-    const snapshot = await store.resolveManagedPiPackageResources({
-      snapshotRoot,
-      snapshotLimits: {
-        maxEntries: 7,
-        maxBytes: 1024 * 1024,
-        maxDurationMs: 10_000,
-      },
-    });
+    // 聚合上限的投影只留在内存（不落盘），listPiPackages 只能在 1 秒检查缓存内读到它；
+    // 缓存过期后的重新检查会按磁盘状态重置投影。慢速 Windows runner 上快照阶段会跨过
+    // 这 1 秒（#9850），所以固定时钟，让本用例只验证条目预算，不受耗时影响。
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now());
+    let snapshot: Awaited<ReturnType<typeof store.resolveManagedPiPackageResources>>;
+    let listed: Awaited<ReturnType<typeof store.listPiPackages>>;
+    try {
+      snapshot = await store.resolveManagedPiPackageResources({
+        snapshotRoot,
+        snapshotLimits: {
+          maxEntries: 7,
+          maxBytes: 1024 * 1024,
+          maxDurationMs: 10_000,
+        },
+      });
+      listed = await store.listPiPackages();
+    } finally {
+      clock.mockRestore();
+    }
 
     expect(snapshot.skills).toEqual([
       expect.objectContaining({
@@ -2115,7 +2135,7 @@ describe('Pi package executable-code boundary', () => {
       }),
     ]);
     expect(snapshot.packageRoots).toEqual([path.join(snapshotRoot, '0')]);
-    await expect(store.listPiPackages()).resolves.toMatchObject({
+    expect(listed).toMatchObject({
       packages: [
         { enabled: true },
         { enabled: true, warning: 'inspection-limit' },
@@ -2138,6 +2158,7 @@ describe('Pi package executable-code boundary', () => {
       expect(state.snapshotUnavailablePackages).toEqual([]);
     }
 
+    // reset-modules: simulate a restart so only on-disk state survives; in-memory aggregate projections must not.
     vi.resetModules();
     const nextStore = await import('../pi-package-store.js');
     const recoveredRoot = path.join(runtime.userData, 'aggregate-package-recovered');
@@ -2232,6 +2253,7 @@ describe('Pi package executable-code boundary', () => {
 
     const replacementSource = 'npm:replacement-source-b';
     runtime.listOutput = `User packages:\n  ${replacementSource}\n    ${root}\n`;
+    // reset-modules: simulate a restart so only the persisted inspection-limit can be reused.
     vi.resetModules();
     const replacementStore = await import('../pi-package-store.js');
     await expect(replacementStore.listPiPackages()).resolves.toMatchObject({
@@ -2282,6 +2304,7 @@ describe('Pi package executable-code boundary', () => {
     delete state.snapshotUnavailablePackages[0]!.retryAfterEpochMs;
     await fs.writeFile(statePath, JSON.stringify(state));
 
+    // reset-modules: simulate the upgrade restart that reads a legacy v4 state file.
     vi.resetModules();
     const nextStore = await import('../pi-package-store.js');
     const recoveredRoot = path.join(runtime.userData, 'legacy-v4-recovered-snapshot');
@@ -2325,6 +2348,7 @@ describe('Pi package executable-code boundary', () => {
       return state.snapshotUnavailablePackages.some((entry) => entry.source === source);
     });
 
+    // reset-modules: simulate a restart so the reuse must come from the persisted negative cache.
     vi.resetModules();
     const manifestPath = path.join(root, 'package.json');
     const canonicalManifestPath = path.resolve(await fs.realpath(manifestPath));
@@ -2489,6 +2513,7 @@ describe('Pi package executable-code boundary', () => {
       '# Replaced installation\n',
     );
 
+    // reset-modules: simulate a restart so only the persisted inspection-limit can be reused.
     vi.resetModules();
     const replacementStore = await import('../pi-package-store.js');
     await expect(replacementStore.listPiPackages()).resolves.toMatchObject({
@@ -2555,6 +2580,7 @@ describe('Pi package executable-code boundary', () => {
           ? stableRootStat
           : originalStat(target, options as never)
       ));
+      // reset-modules: simulate a restart so only the persisted inspection-limit can be reused.
       vi.resetModules();
       const replacementStore = await import('../pi-package-store.js');
       const recoveredRoot = path.join(runtime.userData, 'mutated-installation-recovered-snapshot');
@@ -2814,6 +2840,7 @@ describe('Pi package executable-code boundary', () => {
     const firstStore = await import('../pi-package-store.js');
     await mutateAuthorized(firstStore, { action: 'set-enabled', source, enabled: true });
 
+    // reset-modules: a second Main instance shares userData and learns changes only through change tokens.
     vi.resetModules();
     const secondStore = await import('../pi-package-store.js');
     const secondListener = vi.fn();
@@ -3191,6 +3218,7 @@ describe('Pi package executable-code boundary', () => {
         });
         await expect(fs.stat(pendingFile)).rejects.toMatchObject({ code: 'ENOENT' });
 
+        // reset-modules: a peer Main instance must read the committed disable ledger from disk.
         vi.resetModules();
         const peerStore = await import('../pi-package-store.js');
         await expect(peerStore.listPiPackages()).resolves.toMatchObject({
@@ -3259,6 +3287,7 @@ describe('Pi package executable-code boundary', () => {
         });
         expect(JSON.parse(await fs.readFile(pendingFile, 'utf8'))).toEqual([source, pendingSibling]);
 
+        // reset-modules: a peer Main instance must read the pending enable ledger from disk.
         vi.resetModules();
         const peerStore = await import('../pi-package-store.js');
         await expect(peerStore.listPiPackages()).resolves.toMatchObject({
@@ -3309,6 +3338,7 @@ describe('Pi package executable-code boundary', () => {
     }
     let state = JSON.parse(await fs.readFile(stateFile, 'utf8')) as { disabledSources: string[] };
     expect(state.disabledSources).toEqual([source, sibling]);
+    // reset-modules: simulate a restart that recovers the disable ledger from disk.
     vi.resetModules();
     const recoveredStore = await import('../pi-package-store.js');
     await expect(recoveredStore.resolveManagedPiNativePackagePaths()).resolves.toEqual([root]);
@@ -3798,7 +3828,7 @@ describe('Pi package executable-code boundary', () => {
     const unsubscribe = store.onPiPackagesChanged(listener);
     try {
       await new Promise((resolve) => setTimeout(resolve, 50));
-      await fs.writeFile(runtimeToken, 'runtime:isolated-edge\n');
+      writePeerToken(runtimeToken, 'runtime:isolated-edge\n');
       await vi.waitFor(() => expect(listener).toHaveBeenCalledWith('external-runtime'), {
         timeout: 2_000,
       });
@@ -3869,17 +3899,17 @@ describe('Pi package executable-code boundary', () => {
 
       // Recover the old legacy baseline while runtime observation stays down.
       legacyReadBlocked = false;
-      await fs.writeFile(legacyToken, 'runtime:old\n');
+      writePeerToken(legacyToken, 'runtime:old\n');
       // real-wait: observe a full filesystem polling window to reject duplicate or stale runtime events.
       await new Promise((resolve) => setTimeout(resolve, 500));
 
       // Simulate another Main publishing only the runtime edge while its legacy
       // mirror write fails. The legacy file intentionally stays on the old token.
-      await fs.writeFile(runtimeToken, 'runtime:peer-edge\n');
+      writePeerToken(runtimeToken, 'runtime:peer-edge\n');
       // real-wait: observe a full filesystem polling window to reject duplicate or stale runtime events.
       await new Promise((resolve) => setTimeout(resolve, 300));
       runtimeReadBlocked = false;
-      await fs.writeFile(runtimeToken, 'runtime:peer-edge\n');
+      writePeerToken(runtimeToken, 'runtime:peer-edge\n');
 
       await vi.waitFor(() => expect(originListener).toHaveBeenCalledWith('external-runtime'), {
         timeout: 2_000,
@@ -3934,9 +3964,9 @@ describe('Pi package executable-code boundary', () => {
 
       // Legacy is absent, so its successful read established a valid null
       // recovery baseline before another Main publishes only the runtime edge.
-      await fs.writeFile(runtimeToken, 'runtime:peer-only-after-null\n');
+      writePeerToken(runtimeToken, 'runtime:peer-only-after-null\n');
       runtimeReadBlocked = false;
-      await fs.writeFile(runtimeToken, 'runtime:peer-only-after-null\n');
+      writePeerToken(runtimeToken, 'runtime:peer-only-after-null\n');
 
       await vi.waitFor(() => expect(originListener).toHaveBeenCalledWith('external-runtime'), {
         timeout: 2_000,
@@ -3983,7 +4013,7 @@ describe('Pi package executable-code boundary', () => {
         expect.objectContaining({ tokenKind: 'runtime', failureCategory: 'io-failure' }),
       ));
       runtimeReadBlocked = false;
-      await fs.writeFile(runtimeToken, 'runtime:already-present\n');
+      writePeerToken(runtimeToken, 'runtime:already-present\n');
       // real-wait: observe a full filesystem polling window to reject duplicate or stale runtime events.
       await new Promise((resolve) => setTimeout(resolve, 500));
       expect(listener).not.toHaveBeenCalled();
@@ -4020,14 +4050,14 @@ describe('Pi package executable-code boundary', () => {
         'Pi package change token read failed',
         expect.objectContaining({ tokenKind: 'runtime', failureCategory: 'io-failure' }),
       ));
-      await fs.writeFile(legacyToken, 'runtime:legacy-edge\n');
+      writePeerToken(legacyToken, 'runtime:legacy-edge\n');
       await vi.waitFor(() => expect(listener).toHaveBeenCalledWith('external-runtime'), {
         timeout: 2_000,
       });
       expect(listener.mock.calls.filter(([origin]) => origin === 'external-runtime')).toHaveLength(1);
 
       runtimeReadBlocked = false;
-      await fs.writeFile(runtimeToken, 'runtime:old\n');
+      writePeerToken(runtimeToken, 'runtime:old\n');
       // real-wait: observe a full filesystem polling window to reject duplicate or stale runtime events.
       await new Promise((resolve) => setTimeout(resolve, 500));
       expect(listener.mock.calls.filter(([origin]) => origin === 'external-runtime')).toHaveLength(1);
@@ -4064,7 +4094,7 @@ describe('Pi package executable-code boundary', () => {
         'Pi package change token read failed',
         expect.objectContaining({ tokenKind: 'runtime', failureCategory: 'io-failure' }),
       ));
-      await fs.writeFile(legacyToken, 'runtime:legacy-edge\n');
+      writePeerToken(legacyToken, 'runtime:legacy-edge\n');
       await vi.waitFor(() => expect(listener).toHaveBeenCalledWith('external-runtime'), {
         timeout: 2_000,
       });
@@ -4076,7 +4106,7 @@ describe('Pi package executable-code boundary', () => {
       expect(listener.mock.calls.filter(([origin]) => origin === 'external-runtime')).toHaveLength(1);
 
       runtimeReadBlocked = false;
-      await fs.writeFile(runtimeToken, 'runtime:old\n');
+      writePeerToken(runtimeToken, 'runtime:old\n');
       // real-wait: observe a full filesystem polling window to reject duplicate or stale runtime events.
       await new Promise((resolve) => setTimeout(resolve, 500));
       expect(listener.mock.calls.filter(([origin]) => origin === 'external-runtime')).toHaveLength(1);
@@ -4185,10 +4215,8 @@ describe('Pi package executable-code boundary', () => {
     try {
       await vi.waitFor(() => expect(delayedPaths.size).toBe(2));
       const peerToken = `runtime:${Date.now()}-222-peer`;
-      await Promise.all([
-        fs.writeFile(runtimeTokenPath, `${peerToken}\n`),
-        fs.writeFile(legacyTokenPath, `${peerToken}\n`),
-      ]);
+      writePeerToken(runtimeTokenPath, `${peerToken}\n`);
+      writePeerToken(legacyTokenPath, `${peerToken}\n`);
       releaseInitialReads();
 
       await vi.waitFor(() => expect(closeSessionIfCurrent).toHaveBeenCalledWith(
@@ -4308,6 +4336,7 @@ describe('Pi package executable-code boundary', () => {
     const unsubscribe = firstStore.onPiPackagesChanged(listener);
     await new Promise((resolve) => setTimeout(resolve, 50));
 
+    // reset-modules: a second Main instance shares userData and learns changes only through change tokens.
     vi.resetModules();
     const secondStore = await import('../pi-package-store.js');
     await fs.writeFile(
@@ -4327,11 +4356,15 @@ describe('Pi package executable-code boundary', () => {
 
   it('does not let an immediate view publication overwrite a peer runtime invalidation', async () => {
     const { source } = await createPackage();
+    // Keep this race on the directory-watch path. A missing package home is
+    // only observed by the 2 s fallback poll, which would equal the wait below.
+    await fs.mkdir(path.join(runtime.userData, 'pi-package-home'), { recursive: true });
     const firstStore = await import('../pi-package-store.js');
     const listener = vi.fn();
     const unsubscribe = firstStore.onPiPackagesChanged(listener);
     await new Promise((resolve) => setTimeout(resolve, 50));
 
+    // reset-modules: a second Main instance shares userData and learns changes only through change tokens.
     vi.resetModules();
     const secondStore = await import('../pi-package-store.js');
     try {
@@ -4367,6 +4400,40 @@ describe('Pi package executable-code boundary', () => {
     }
   });
 
+  it('reattaches the directory watcher after the package home is replaced', async () => {
+    // Replacing the watched directory leaves a handle bound to the old one on
+    // some platforms without an 'error' event. The fallback poll must replace it,
+    // otherwise every later peer change waits for the 2 s poll.
+    const home = path.join(runtime.userData, 'pi-package-home');
+    await fs.mkdir(home, { recursive: true });
+    const store = await import('../pi-package-store.js');
+    const listener = vi.fn();
+    const unsubscribe = store.onPiPackagesChanged(listener);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const publishPeerRuntimeToken = (tag: string) => {
+      writePeerToken(path.join(home, 'cindy-package-runtime-change-token'), `runtime:${Date.now()}-${tag}\n`);
+    };
+    const waitForNotifications = (count: number, timeout: number) =>
+      vi.waitFor(() => expect(listener.mock.calls.length).toBeGreaterThanOrEqual(count), { timeout, interval: 10 });
+    try {
+      publishPeerRuntimeToken('before-replace');
+      await waitForNotifications(1, 1_500);
+
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.mkdir(home, { recursive: true });
+      // The first edge may arrive through events still queued on the old handle
+      // or through the fallback poll, depending on the platform.
+      publishPeerRuntimeToken('first-after-replace');
+      await waitForNotifications(2, 5_000);
+
+      // The watcher is reattached, so the next edge must not wait for the poll.
+      publishPeerRuntimeToken('second-after-replace');
+      await waitForNotifications(3, 1_000);
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it('fails closed before touching the package tree when the shared lock is unavailable', async () => {
     const { source } = await createPackage();
     const store = await import('../pi-package-store.js');
@@ -4391,6 +4458,7 @@ describe('Pi package executable-code boundary', () => {
       '',
     ].join('\n');
     const firstStore = await import('../pi-package-store.js');
+    // reset-modules: two independent Main instances must serialize through the shared lock.
     vi.resetModules();
     const secondStore = await import('../pi-package-store.js');
 
@@ -4419,6 +4487,7 @@ describe('Pi package executable-code boundary', () => {
       packages: [{ source }],
     });
 
+    // reset-modules: a second Main instance must not share the first instance's inspection cache.
     vi.resetModules();
     const secondStore = await import('../pi-package-store.js');
     runtime.listOutcomes = [
@@ -4463,6 +4532,7 @@ describe('Pi package executable-code boundary', () => {
       extensions: [path.join(canonicalRoot, 'extensions', 'index.ts')],
     });
 
+    // reset-modules: a second Main instance changes approvals behind the first instance's cache.
     vi.resetModules();
     const secondStore = await import('../pi-package-store.js');
     await fs.writeFile(

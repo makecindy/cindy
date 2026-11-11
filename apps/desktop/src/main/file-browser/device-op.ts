@@ -72,8 +72,8 @@ import {
   type RemoteWorkingDirCheckResult,
 } from '../device-link/remote-workdir-guard.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
-import { uploadLocalFile } from '../device-link/mediaTransfer.js';
-import { pushToTopicSubscribers } from '../device-link/dispatch.js';
+import { uploadLocalFile } from '../device-link/mediaTransfer.desktop.js';
+import { pushToTopicSubscribers } from '../device-link/dispatch.desktop.js';
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { sharedTaskFileOperation } from '../device-link/sharedTaskDispatch.js';
 import { assertSharedTaskWorkdir } from '../device-link/sharedTaskFileAccess.js';

@@ -20,6 +20,8 @@ import {
   GHOST_LOCALE_MAX_BYTES,
   GHOST_SKILL_MD_MAX_BYTES,
   declaredAutoApproveTools,
+  ghostHostUiApprovalTokens,
+  declaredGhostControlPoints,
   ghostManifestToAuthorFormat,
   isValidGhostId,
   validateGhostManifestLocaleResource,
@@ -130,6 +132,7 @@ export interface GhostInstallReceipt {
   taskCapabilityApproved?: true;
   targetCapabilityApproved?: true;
   uiCapabilityApproved?: true;
+  approvedHostUi?: string[];
   /** Host-only: historical archive UI entries were absent, non-regular or oversized. Canonical manifest stays intact. */
   unavailableUiResources?: true;
   delegationCapabilityApproved?: true;
@@ -144,6 +147,7 @@ export interface GhostInstallReceipt {
    */
   approvedAutoTools?: string[];
   observeCapabilityApproved?: true;
+  companionsCapabilityApproved?: true;
   schemaVersion: typeof RECEIPT_SCHEMA_VERSION;
   id: string;
   /** Missing is a pre-namespace receipt. null is root; a string is an organization. */
@@ -1293,9 +1297,16 @@ function approvedAutoToolsField(raw: unknown, manifest: GhostManifest): { approv
  */
 function approvedControlPointsField(raw: unknown, manifest: GhostManifest): { approvedControlPoints?: string[] } {
   if (!Array.isArray(raw)) return {};
-  const declared = new Set(manifest.subscribe?.hooks ?? []);
+  const declared = new Set([...(manifest.subscribe?.hooks ?? []), ...declaredGhostControlPoints(manifest)]);
   const points = [...new Set(raw.filter((item): item is string => typeof item === 'string' && declared.has(item as never)))];
   return points.length > 0 ? { approvedControlPoints: points.sort() } : {};
+}
+
+function approvedHostUiField(raw: unknown, manifest: GhostManifest): { approvedHostUi?: string[] } {
+  if (!Array.isArray(raw)) return {};
+  const declared = new Set(ghostHostUiApprovalTokens(manifest));
+  const approvedHostUi = [...new Set(raw.filter((item): item is string => typeof item === 'string' && declared.has(item)))].sort();
+  return approvedHostUi.length ? { approvedHostUi } : {};
 }
 
 export function createGhostInstallReceipt(input: {
@@ -1304,12 +1315,14 @@ export function createGhostInstallReceipt(input: {
   taskCapabilityApproved?: true;
   targetCapabilityApproved?: true;
   uiCapabilityApproved?: true;
+  approvedHostUi?: readonly string[];
   /** Host-only: historical archive UI entries were absent, non-regular or oversized. Canonical manifest stays intact. */
   unavailableUiResources?: true;
   delegationCapabilityApproved?: true;
   approvedControlPoints?: readonly string[];
   approvedAutoTools?: readonly string[];
   observeCapabilityApproved?: true;
+  companionsCapabilityApproved?: true;
   manifest: GhostManifest;
   localeResources: Record<string, GhostManifestLocaleResource>;
   enabled: boolean;
@@ -1346,8 +1359,10 @@ export function createGhostInstallReceipt(input: {
     ...(input.targetCapabilityApproved === true ? { targetCapabilityApproved: true as const } : {}),
     ...(input.delegationCapabilityApproved === true ? { delegationCapabilityApproved: true as const } : {}),
     ...approvedControlPointsField(input.approvedControlPoints, input.manifest),
+    ...approvedHostUiField(input.approvedHostUi, input.manifest),
     ...approvedAutoToolsField(input.approvedAutoTools, input.manifest),
     ...(input.observeCapabilityApproved === true ? { observeCapabilityApproved: true as const } : {}),
+    ...(input.companionsCapabilityApproved === true ? { companionsCapabilityApproved: true as const } : {}),
     ...(input.packageSha256 ? { packageSha256: input.packageSha256 } : {}),
     ...(input.iconDataUrl ? { iconDataUrl: input.iconDataUrl } : {}),
     ...(input.installOrigin !== undefined ? { installOrigin: input.installOrigin } : {}),
@@ -1565,8 +1580,10 @@ function validateReceipt(
       ...(value.targetCapabilityApproved === true ? { targetCapabilityApproved: true as const } : {}),
       ...(value.delegationCapabilityApproved === true ? { delegationCapabilityApproved: true as const } : {}),
       ...approvedControlPointsField(value.approvedControlPoints, manifestResult.manifest),
+      ...approvedHostUiField(value.approvedHostUi, manifestResult.manifest),
       ...approvedAutoToolsField(value.approvedAutoTools, manifestResult.manifest),
       ...(value.observeCapabilityApproved === true ? { observeCapabilityApproved: true as const } : {}),
+      ...(value.companionsCapabilityApproved === true ? { companionsCapabilityApproved: true as const } : {}),
       ...(typeof value.packageSha256 === 'string' ? { packageSha256: value.packageSha256 } : {}),
       ...(typeof value.iconDataUrl === 'string' ? { iconDataUrl: value.iconDataUrl } : {}),
       ...(installOrigin !== undefined ? { installOrigin } : {}),

@@ -130,6 +130,9 @@
   "detail": {
     "useItIn": "Use it in",
     "openPlugin": "Open plugin",
+    "readme": "About",
+    "readmeLoadFailed": "The introduction could not be loaded. Try again.",
+    "readmeUnavailable": "No introduction is available.",
     "computerSettings": "To configure this plugin, open its details in Cindy → Plugins on your computer.",
     "runtimeIssue": "The plugin stopped unexpectedly. Try opening it again or using it in a task.",
     "runtimeFused": "The plugin stopped after repeated failures. Turn it off and on to try again.",
@@ -343,5 +346,31 @@
     "purpose": "Review interactive page permissions",
     "updateHost": "Update Cindy on the execution computer to confirm here. Text tools remain available.",
     "failed": "Could not enable interactive pages. Check the connection and plugin version, then try again."
+  },
+  "openLinkHost": "Open {{host}}",
+  "prStatus": {
+    "checksFailed": "Failed",
+    "checksPending": "Pending",
+    "checksPassed": "Passed",
+    "checksSkipped": "Skipped or neutral",
+    "threadsOpen": "Unresolved review threads: {{count}}",
+    "threadsNone": "No open review threads",
+    "mergeReady": "Ready to merge",
+    "mergeConflict": "Has conflicts",
+    "mergeBehind": "Behind the base branch",
+    "mergeApproval": "Waiting for approval",
+    "mergeChanges": "Changes requested",
+    "mergeWaiting": "Waiting to merge",
+    "merged": "Merged",
+    "closed": "Closed",
+    "draft": "Draft"
+  },
+  "taskArchive": {
+    "now": "Archive now",
+    "pending": "Will archive when you leave this task",
+    "cancel": "Cancel",
+    "cancelled": "Will not auto-archive this time",
+    "archived": "Archived \"{{title}}\"",
+    "undo": "Undo"
   }
 }

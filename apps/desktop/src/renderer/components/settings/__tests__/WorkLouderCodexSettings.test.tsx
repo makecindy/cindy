@@ -15,7 +15,6 @@ beforeAll(() => {
 
 import {
   WORKLOUDER_CODEX_EMPTY_DEVICE_STATE,
-  WORKLOUDER_CREATOR_PROGRAMMABLE_KEYS,
   createWorkLouderCodexDefaultSettings,
 } from '../../../../shared/workLouderCodex';
 
@@ -756,18 +755,6 @@ describe('WorkLouderCodexSettings', () => {
     ).toBeTruthy();
   });
 
-  it('explains the six-light firmware limit when more than six task keys are set', () => {
-    mocks.deviceType = 'creator-micro-2';
-    const layout = createWorkLouderCodexDefaultSettings('creator-micro-2').layout;
-    layout.taskKeys = [...WORKLOUDER_CREATOR_PROGRAMMABLE_KEYS];
-    mocks.layout = layout;
-    render(<WorkLouderCodexSettings model="creator-micro-2" onBack={vi.fn()} />);
-
-    expect(
-      screen.getByText('settings.shortcuts.workLouderCodex.agentKeys.lightingLimit'),
-    ).toBeTruthy();
-  });
-
   it('offers 2U merge on Creator action keys', () => {
     mocks.deviceType = 'creator-micro-2';
     mocks.layout = createWorkLouderCodexDefaultSettings('creator-micro-2').layout;
@@ -799,7 +786,7 @@ describe('WorkLouderCodexSettings', () => {
     });
   });
 
-  it('does not offer a custom assignment for unlit extra task keys', () => {
+  it('does not offer a custom assignment for extra task keys', () => {
     mocks.agentSource = 'custom';
     const layout = createWorkLouderCodexDefaultSettings().layout;
     layout.taskKeys = ['AG00', 'AG01', 'AG02', 'AG03', 'AG04', 'AG05', 'ACT07'];
@@ -807,7 +794,6 @@ describe('WorkLouderCodexSettings', () => {
     render(<WorkLouderCodexSettings onBack={vi.fn()} />);
 
     fireEvent.click(screen.getByRole('button', { name: /ACT07/ }));
-    expect(screen.getByText('settings.shortcuts.workLouderCodex.agentKeys.unlitKey')).toBeTruthy();
     expect(
       screen.queryByRole('combobox', {
         name: 'settings.shortcuts.workLouderCodex.actions.choose',

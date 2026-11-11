@@ -82,11 +82,11 @@ vi.mock('../worktree/WorktreeManager.js', () => ({
   detectCwd: detectCwdMock,
 }));
 
-vi.mock('../messagePersistBroadcaster.js', () => ({
+vi.mock('../messagePersistBroadcaster.desktop.js', () => ({
   setLastAssistantTranscriptUuid: vi.fn(),
 }));
 
-const txMock = vi.fn(async () => ({}));
+const txMock = vi.fn(async (): Promise<string[]> => []);
 
 let sqlite: Database.Database;
 let client: DbClient;
@@ -158,7 +158,7 @@ beforeEach(() => {
   } as unknown as DbClient;
   setCurrentDbClient(client, 'test-user');
   txMock.mockClear();
-  txMock.mockResolvedValue({});
+  txMock.mockResolvedValue([]);
   commitRewindFilesMock.mockReset();
   commitRewindFilesMock.mockResolvedValue({ sdkSessionId: 'fresh-thread' });
   executeCodexFileRewindPlanWithThreadRollbackMock.mockReset();

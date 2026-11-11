@@ -1,3 +1,4 @@
+import { sessionAllowsProjectMove, useSessionProjectMoveSheet } from './SessionProjectMoveSheet';
 import { SessionPrLinks } from './SessionPrLinks';
 import { CodexResetAutoUseControl } from './CodexResetAutoUseControl';
 import { TaskTagLabels, TaskTagsPanel } from './TaskTags';
@@ -25,6 +26,7 @@ import {
   Archive,
   ArchiveRestore,
   Copy,
+  Folder,
   Link2,
   LogOut,
   Pencil,
@@ -236,13 +238,15 @@ export function SessionMenuSheet({
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { t, i18n: i18nInstance } = useTranslation();
+  const projectMove = useSessionProjectMoveSheet();
   const pendingArchiveRef = useRef<(() => void) | null>(null);
   const handleClosed = useCallback(() => {
     const archive = pendingArchiveRef.current;
     pendingArchiveRef.current = null;
     onClosed?.();
+    projectMove.parentClosed();
     archive?.();
-  }, [onClosed]);
+  }, [onClosed, projectMove.parentClosed]);
   const menuUsage = useSessionMenuUsage(
     session,
     usageReader,
@@ -768,6 +772,16 @@ export function SessionMenuSheet({
             ))}
           </View>}
 
+          {!messageOnly && sessionAllowsProjectMove(session) ? (
+            Platform.OS === 'ios' ? <SessionDetailsNativeActions actions={[{
+              label: t('session.menu.moveToProject'), disabled: busy,
+              onPress: () => projectMove.open(session, onClose, tagDeviceId), testID: 'session.moveToProject',
+            }]} /> : <View style={styles.actionGroup}>
+              <MenuActionRow icon={Folder} label={t('session.menu.moveToProject')} disabled={busy}
+                onPress={() => projectMove.open(session, onClose, tagDeviceId)} testID="session.moveToProject" />
+            </View>
+          ) : null}
+
           {workerMode ? null : !messageOnly && isSharedTaskPeer(session.deviceLinkDeviceId) && onLeaveSharing ? (
             Platform.OS === 'ios' ? <SessionDetailsNativeActions actions={[{
               label: t('sharedTask.leave'), danger: true, disabled: leavingSharing,
@@ -1088,6 +1102,7 @@ export function SessionMenuSheet({
         {showingInfo ? infoContent : menuContent}
       </SessionDetailsNative>
         {tagEditor}
+        {projectMove.sheet}
       </>
     );
   }
@@ -1146,6 +1161,7 @@ export function SessionMenuSheet({
       ) : null}
     </SheetModal>
       {tagEditor}
+      {projectMove.sheet}
     </>
   );
 }

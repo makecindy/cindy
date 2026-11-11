@@ -286,19 +286,10 @@ vi.mock("@/session/permissionPresentation", async () => {
     permissionPresentation: (id: string, label?: string) => ({
       Icon,
       label: label ?? id,
-      accent:
-        id === "auto"
-          ? "auto"
-          : id === "bypassPermissions"
-            ? "bypass"
-            : "neutral",
+      accent: "neutral",
+      description: `Description for ${id}`,
     }),
-    permissionAccentColor: (accent: string, colors: AnyProps) =>
-      accent === "auto"
-        ? colors.permAutoAccent
-        : accent === "bypass"
-          ? colors.statusAccent
-          : colors.textSecondary,
+    permissionAccentColor: (_accent: string, colors: AnyProps) => colors.textSecondary,
   };
 });
 vi.mock("@/session/goalStatusLabel", () => ({
@@ -778,7 +769,7 @@ describe("Android permission picker selection matches iOS", () => {
     { id: "bypassPermissions", label: "Full access" },
   ];
 
-  it("tints only the selected icon; text and check stay neutral", () => {
+  it("keeps permission choices neutral and marks the selected mode", () => {
     render(
       createElement(MobilePermissionPickerList, {
         options,
@@ -795,7 +786,7 @@ describe("Android permission picker selection matches iOS", () => {
     ]);
     const icon = (row: Element) =>
       row.querySelector('[data-icon="permission"]')!.getAttribute("data-color");
-    expect(icon(rows[1])).toBe("c.permAutoAccent");
+    expect(icon(rows[1])).toBe("c.textSecondary");
     expect(icon(rows[2])).toBe("c.textSecondary");
     expect(rows[1].querySelector("span")!.getAttribute("data-color")).toBe(
       "c.textPrimary",

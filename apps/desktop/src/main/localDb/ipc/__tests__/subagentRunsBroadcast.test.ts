@@ -55,6 +55,7 @@ vi.mock('@cindy/maker-core/pi-subagent-runs', () => ({
 vi.mock('../../../appSessionState.js', () => ({
   getActiveDataOwnerPushStamp: () => h.activeStamp,
   activeOwnerScopeKey: () => h.ownerScopeKey,
+  isAppSessionBoundaryPending: () => false,
 }));
 vi.mock('../../../device-link/invoke-context.js', () => ({
   isDeviceLinkInvoke: () => h.deviceLinkInvoke,
@@ -100,6 +101,20 @@ describe('Subagent runs broadcast boundary', () => {
     h.sharedTask = false;
     h.ownerScopeKey = 'owner-a:1';
     __resetSubagentReconcileFingerprintsForTests();
+  });
+
+  // A native status read can settle after switching accounts. It must never
+  // reconcile the old account's files into the next account's database (unit).
+  it('rejects a reconciliation whose owner changed during native IO', async () => {
+    registerSubagentRunsIpc();
+    h.listPiSubagentRuns.mockImplementationOnce(async () => {
+      h.ownerScopeKey = 'owner-b:2';
+      return [];
+    });
+    const read = h.ipcHandlers.get('local-db:subagent-runs:list')!;
+    await expect(read({}, { sessionId: 'same-task' })).rejects.toThrow('OWNER_CHANGED');
+    expect(h.persistSubagentTaskUpdate).not.toHaveBeenCalled();
+    expect(h.listSubagentRuns).not.toHaveBeenCalled();
   });
 
   it('serialises reconciliation writes onto the injected durable FIFO', async () => {

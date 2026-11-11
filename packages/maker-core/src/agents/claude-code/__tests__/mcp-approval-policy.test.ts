@@ -1820,6 +1820,18 @@ describe('remote sessions share the same permission semantics', () => {
           'This downstream source was not explicitly selected. Use Cindy capability xd-feishu.',
       },
       {
+        toolNamePrefix: 'mcp__cindy_helper__manage_user_questions',
+        sourceServerId: 'cindy_helper', invocation: 'root-only',
+        denialMessage: 'NATIVE_SUBAGENT_USER_INPUT_NOT_ALLOWED: report the question to the parent agent, which can decide whether to ask the user.',
+      },
+      {
+        toolNamePrefix: 'mcp__cindy_helper__ask_user_question_async',
+        sourceServerId: 'cindy_helper',
+        invocation: 'root-only',
+        denialMessage:
+          'NATIVE_SUBAGENT_USER_INPUT_NOT_ALLOWED: report the question to the parent agent, which can decide whether to ask the user.',
+      },
+      {
         toolNamePrefix: 'AskUserQuestion',
         sourceServerId: 'claude-code',
         invocation: 'root-only',
@@ -1827,7 +1839,7 @@ describe('remote sessions share the same permission semantics', () => {
           'NATIVE_SUBAGENT_USER_INPUT_NOT_ALLOWED: report the question to the parent agent, which can decide whether to ask the user.',
       },
       {
-        toolNamePrefix: 'mcp__cindy_helper__ask_owner',
+        toolNamePrefix: 'mcp__cindy_helper__request_input_handoff',
         sourceServerId: 'cindy_helper',
         invocation: 'root-only',
         denialMessage:
@@ -1942,9 +1954,9 @@ describe('remote sessions share the same permission semantics', () => {
       mcpServerNames: [userServerId],
     });
 
-    expect(remote.remoteStartParams?.toolGuards).toHaveLength(3);
+    expect(remote.remoteStartParams?.toolGuards).toHaveLength(5);
     expect(remote.remoteStartParams?.toolGuards).toContainEqual(expect.objectContaining({
-      toolNamePrefix: 'mcp__cindy_helper__ask_owner', invocation: 'root-only',
+      toolNamePrefix: 'mcp__cindy_helper__request_input_handoff', invocation: 'root-only',
     }));
     await expect(
       remote.onApprovalRequest({
@@ -2027,9 +2039,9 @@ describe('remote sessions share the same permission semantics', () => {
       failedInitMcpServerNames: [userServerId],
     });
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    expect(failed.remoteStartParams?.toolGuards).toHaveLength(3);
+    expect(failed.remoteStartParams?.toolGuards).toHaveLength(5);
     expect(failed.remoteStartParams?.toolGuards).toContainEqual(expect.objectContaining({
-      toolNamePrefix: 'mcp__cindy_helper__ask_owner', invocation: 'root-only',
+      toolNamePrefix: 'mcp__cindy_helper__request_input_handoff', invocation: 'root-only',
     }));
     await expect(
       failed.onApprovalRequest({

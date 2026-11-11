@@ -18,7 +18,7 @@ it('forwards discovery and explicit approval, rejecting invalid inputs and coded
   const pending = [{ workingDir: '/project', configHash: 'snapshot', schedules: [], removedNames: ['Old'] }];
   const listPendingImports = vi.fn().mockResolvedValue(pending);
   const reconcile = vi.fn().mockResolvedValue({ pendingImport: pending[0] });
-  registerProjectAutomationIpc({ onEvent: () => () => {}, listPendingImports, reconcile } as unknown as ProjectAutomationLoader);
+  registerProjectAutomationIpc(async () => ({ onEvent: () => () => {}, listPendingImports, reconcile } as unknown as ProjectAutomationLoader));
   const list = handlers.get('maker:project-automation:pending-imports')!;
   const apply = handlers.get('maker:project-automation:reconcile')!;
   expect(await list()).toEqual(pending);
@@ -30,4 +30,27 @@ it('forwards discovery and explicit approval, rejecting invalid inputs and coded
   expect(reconcile).toHaveBeenCalledTimes(2);
   listPendingImports.mockRejectedValueOnce(new Error('database unavailable'));
   await expect(list()).rejects.toMatchObject({ code: 'INTERNAL' });
+});
+
+// 2026-11-10 startup regression: the registered handler must exist before the
+// loader, then return actual pending imports. Unit; old tests only used ready loaders.
+it('registers before a slow loader and preserves the pending import until it is ready', async () => {
+  let release!: (loader: ProjectAutomationLoader) => void;
+  const ready = new Promise<ProjectAutomationLoader>(resolve => { release = resolve; });
+  registerProjectAutomationIpc(() => ready);
+  const pending = [{ workingDir: '/project', configHash: 'saved', schedules: [] }];
+  const listPendingImports = vi.fn().mockResolvedValue(pending);
+  const read = handlers.get('maker:project-automation:pending-imports')!();
+  expect(listPendingImports).not.toHaveBeenCalled();
+  release({ listPendingImports } as unknown as ProjectAutomationLoader);
+  await expect(read).resolves.toEqual(pending);
+});
+
+it('returns startup failure without touching consent data or applying an import', async () => {
+  registerProjectAutomationIpc(async () => {
+    throw Object.assign(new Error('account changed'), { code: 'PRECONDITION_FAILED' });
+  });
+  await expect(handlers.get('maker:project-automation:reconcile')!({}, {
+    workingDir: '/project', approvedHash: 'saved',
+  })).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
 });

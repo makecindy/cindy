@@ -31,6 +31,13 @@ import { forgeInstallOriginForMembership } from '../forgeOidcInstallConfirmBridg
 import { installedGhostPhysicalRelId, installedGhostStoragePart, pluginInstallStoragePart } from '../../../shared/pluginIdentity';
 import { runGhostSnapshotWorkerRequest } from '../ghostSnapshotWorkerProcess';
 import { writeTestCindyPackage } from './cindyPackageFixture';
+import { PluginMarketLedger } from '../../plugin-market/ledger';
+import { projectPluginPublishingSource } from '../pluginPublishingSource';
+import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixture';
+
+const productionManager = createGhostProductionCallbacks<{ getGhostManager(): GhostManager }>({
+  functions: ['getGhostManager'], initialize: 'let managerSingleton = null;',
+});
 
 const canLinkFile = (() => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ghost-manager-file-link-probe-'));
@@ -86,6 +93,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  manager.disposeNotificationIndex();
   await fs.promises.rm(workDir, { recursive: true, force: true });
 });
 
@@ -102,6 +110,23 @@ function goodManifest(id = 'hello'): Record<string, unknown> {
     tools: [{ name: 'do_thing', description: '做点事' }],
   };
 }
+
+// Unit integration: the index must follow real install/enable/uninstall mutations
+// without another full-list broadcast; gateway-only fixtures cannot cover this.
+it('updates notification candidates through actual installation mutations', async () => {
+  const manifest = { ...goodManifest('listener'), slots: ['tool', 'subscribe'], subscribe: { topics: ['session'] } };
+  const installed = await manager.install(await makeCindy('listener.cindy', manifest), { namespace: null });
+  expect(installed).toMatchObject({ ghost: { manifest: { id: 'listener' } } });
+  const candidates = await manager.listNotificationCandidatesAsync();
+  expect(candidates.map(g => g.manifest.id)).toEqual(['listener']);
+  const id = installedGhostPhysicalRelId(candidates[0]!);
+  await expect(manager.setEnabled(id, false)).resolves.toEqual({ ok: true });
+  await expect(manager.listNotificationCandidatesAsync()).resolves.toEqual([]);
+  await expect(manager.setEnabled(id, true)).resolves.toEqual({ ok: true });
+  expect((await manager.listNotificationCandidatesAsync()).map(g => g.manifest.id)).toEqual(['listener']);
+  await manager.uninstall(id);
+  await expect(manager.listNotificationCandidatesAsync()).resolves.toEqual([]);
+});
 
 describe('official simulator identity migration', () => {
   it.each(['prepared', 'backed-up', 'placed', 'committed'] as const)(
@@ -608,6 +633,27 @@ describe('GhostManager · 存量插件一次性迁移(§5 升级无感)', () => 
     const removed = await makeCindy('observe-removed.cindy', { ...manifest, version: '1.0.2', agent: { errand: true } }, { 'main.js': '// update' });
     const result = await manager.update(removed, { expectedInstalledApproval: ghostInstallApprovalToken(updated.ghost.approval) });
     expect(result).not.toHaveProperty('ghost.observeCapabilityApproved');
+  });
+
+  it('approves companions on its own and keeps it only while the same instance still declares it', async () => {
+    const manifest = { ...goodManifest(), slots: ['tool', 'agent'], agent: { companions: true } };
+    const pkg = await makeCindy('companions.cindy', manifest, { 'main.js': '// plugin' });
+    await manager.install(pkg, { observeCapabilityApproved: true });
+    const selected = manager.list()[0]!;
+    if (selected.approval.state !== 'approved') throw new Error('fixture not approved');
+    const id = installedGhostStoragePart(selected);
+    expect(selected).not.toHaveProperty('companionsCapabilityApproved');
+    expect(await manager.approveTaskCapability(id, selected.approval.revision, () => true, 'observe')).toBe(false);
+    expect(await manager.approveTaskCapability(id, selected.approval.revision, () => false, 'companions')).toBe(false);
+    expect(await manager.approveTaskCapability(id, selected.approval.revision, () => true, 'companions')).toBe(true);
+    expect(manager.list()[0]).toHaveProperty('companionsCapabilityApproved', true);
+    const update = await makeCindy('companions-update.cindy', { ...manifest, version: '1.0.1' }, { 'main.js': '// update' });
+    const updated = await manager.update(update, { expectedInstalledApproval: ghostInstallApprovalToken(manager.list()[0]!.approval) });
+    expect(updated).toHaveProperty('ghost.companionsCapabilityApproved', true);
+    if (!('ghost' in updated)) throw new Error('fixture update failed');
+    const removed = await makeCindy('companions-removed.cindy', { ...manifest, version: '1.0.2', agent: { errand: true } }, { 'main.js': '// update' });
+    const result = await manager.update(removed, { expectedInstalledApproval: ghostInstallApprovalToken(updated.ghost.approval) });
+    expect(result).not.toHaveProperty('ghost.companionsCapabilityApproved');
   });
 
   it.each(['future', { future: true }, ['future'], null, false])('keeps historical unknown tasks %j enabled without task approval', async (tasks) => {
@@ -4206,6 +4252,90 @@ describe('GhostManager · list', () => {
     } finally {
       syncRead.mockRestore();
     }
+  });
+
+  // PB97, unit: listing sources are a single batch, but an intervening ledger
+  // change must restart the scan rather than publish mixed source identities.
+  it('reuses listing source facts and retries when they change across an async yield', async () => {
+    await manager.install(await makeCindy('batch-a.cindy', goodManifest('first')));
+    await manager.install(await makeCindy('batch-b.cindy', goodManifest('second')));
+    let revision = 0;
+    const prepare = vi.fn(() => {
+      const captured = revision;
+      return {
+        project: () => {
+          if (captured === 0) revision = 1;
+          return { publishingSource: undefined };
+        },
+        isCurrent: () => revision === captured,
+      };
+    });
+    const single = vi.fn(() => ({}));
+    manager = new GhostManager({ getRootDir: () => rootDir, sourcesForInstance: single,
+      prepareListingSources: prepare });
+    expect((await manager.listAsync()).map((ghost) => ghost.manifest.id)).toEqual(['first', 'second']);
+    expect(prepare).toHaveBeenCalledTimes(2);
+    expect(single).not.toHaveBeenCalled();
+    prepare.mockClear();
+    expect(manager.list()).toHaveLength(2);
+    expect(prepare).toHaveBeenCalledTimes(1);
+  });
+
+  // PR #9754 review, unit: one approved plugin and a failed ledger snapshot.
+  // The custom projector test above misses the production catch branch. Run
+  // that callback through listAsync: transient IO must recover, persistent IO
+  // must reject within the retry limit instead of publishing unavailable sources.
+  // Empty scans and skipped invalid directories need no source evidence at all.
+  it.each(['empty', 'unprojected', 'transient', 'persistent'] as const)('handles %s listing snapshot failures through production wiring', async (failure) => {
+    if (failure === 'unprojected') {
+      await fs.promises.mkdir(path.join(rootDir, 'broken'), { recursive: true });
+    } else if (failure !== 'empty') {
+      await manager.install(await makeCindy('ledger-retry.cindy', goodManifest()), { namespace: null });
+    }
+    const ledger = new PluginMarketLedger(path.join(workDir, 'market', 'ledger.v1.json'));
+    manager = productionManager({
+      // Keep production source callbacks; unrelated app services stay isolated.
+      GhostManager: class extends GhostManager {
+        constructor(options: GhostManagerOptions) {
+          super({ getRootDir: options.getRootDir, prepareListingSources: options.prepareListingSources });
+        }
+      },
+      brainRootDir: () => rootDir,
+      activeOwnerScopeKey: () => 'owner',
+      broadcastGhostsChanged: vi.fn(),
+      getResolvedMainLocale: () => 'zh-CN',
+      loadGhostTrustRegistry: () => ({}),
+      isTrustedBundledSource: () => false,
+      log: { warn: vi.fn(), info: vi.fn() },
+      getGhostSetupManifestTracker: () => ({ seed: vi.fn() }),
+      getPluginMarketLedger: () => ledger,
+      projectPluginPublishingSource,
+    }).getGhostManager();
+    const unavailable = () => { throw Object.assign(new Error('ledger locked'), { code: 'EBUSY' }); };
+    const snapshot = vi.spyOn(ledger, 'createListingLookup');
+    try {
+      if (failure === 'empty' || failure === 'unprojected') {
+        snapshot.mockImplementation(unavailable);
+        await expect(manager.listAsync()).resolves.toEqual([]);
+        expect(manager.list()).toEqual([]);
+        expect(snapshot).not.toHaveBeenCalled();
+      } else if (failure === 'transient') {
+        snapshot.mockImplementationOnce(unavailable);
+        await expect(manager.listAsync()).resolves.toMatchObject([{
+          enabled: true, approval: { state: 'approved' },
+          publishingSource: { kind: 'local', source: 'manual' },
+        }]);
+        expect(snapshot).toHaveBeenCalledTimes(2);
+      } else {
+        snapshot.mockImplementation(unavailable);
+        await expect(manager.listAsync()).rejects.toThrow('ghost installations changed repeatedly during background scan');
+        expect(snapshot).toHaveBeenCalledTimes(3);
+        // The synchronous path still fails closed without changing approval.
+        expect(manager.list()).toMatchObject([{
+          enabled: true, approval: { state: 'approved' }, publishingSource: { kind: 'unavailable' },
+        }]);
+      }
+    } finally { snapshot.mockRestore(); }
   });
 
   it.each(['owner', 'uninstall'] as const)('async scan does not publish stale approval after %s changes during IO', async (change) => {

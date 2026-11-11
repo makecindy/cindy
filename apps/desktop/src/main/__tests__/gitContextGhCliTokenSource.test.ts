@@ -1,3 +1,4 @@
+import { createGlabCliTokenSource } from '../git-context/glabCliTokenSource';
 /**
  * git-context/ghCliTokenSource 单测 — gh 二进制探测、token 读取、
  * 正/负缓存与 in-flight 去重。execFile / exists 全 mock,零子进程。
@@ -211,5 +212,60 @@ describe('createGhCliTokenSource', () => {
       expect(await src.readTokenDetailed()).toEqual({ ok: false, reason: 'gh-not-logged-in' });
       expect(execFileFn).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+// Unit: GitLab host-bound credentials must not inherit another host's CLI token.
+// Existing gh tests do not exercise per-host caches, glab errors or focus invalidation.
+describe('GitLab CLI credentials', () => {
+  it('uses each host config, isolates caches and retries negative results after invalidation', async () => {
+    let signedIn = false;
+    const exec = vi.fn((_file: string, args: string[], _options: unknown, cb: ExecCb) => {
+      cb(null, args.at(-1) === 'one.example.com' || signedIn ? 'fake-token' : '', '');
+    });
+    const source = createGlabCliTokenSource({
+      exec: exec as unknown as typeof import('node:child_process').execFile,
+      binary: () => 'glab',
+    });
+    expect(await source.readTokenDetailed('one.example.com')).toEqual({
+      ok: true,
+      token: 'fake-token',
+    });
+    expect(await source.readTokenDetailed('two.example.com')).toEqual({
+      ok: false,
+      reason: 'glab-not-logged-in',
+    });
+    signedIn = true;
+    expect((await source.readTokenDetailed('two.example.com')).ok).toBe(false);
+    source.invalidateNegativeCache();
+    expect((await source.readTokenDetailed('two.example.com')).ok).toBe(true);
+    expect((await source.readTokenDetailed('one.example.com')).ok).toBe(true);
+    expect(exec.mock.calls.map((call) => call[1])).toEqual([
+      ['config', 'get', 'token', '--host', 'one.example.com'],
+      ['config', 'get', 'token', '--host', 'two.example.com'],
+      ['config', 'get', 'token', '--host', 'two.example.com'],
+    ]);
+    source.rejectToken('two.example.com');
+    expect(await source.readTokenDetailed('two.example.com')).toEqual({
+      ok: false,
+      reason: 'glab-not-logged-in',
+    });
+    source.invalidateNegativeCache();
+    expect((await source.readTokenDetailed('two.example.com')).ok).toBe(true);
+    expect((await source.readTokenDetailed('one.example.com')).ok).toBe(true);
+    expect(exec).toHaveBeenCalledTimes(4);
+  });
+  it.each([
+    ['ENOENT', 'glab-missing'],
+    [1, 'glab-not-logged-in'],
+    ['ETIMEDOUT', 'no-token'],
+  ])('classifies %s without exposing command stderr', async (code, reason) => {
+    const exec = vi.fn((_file: string, _args: string[], _options: unknown, cb: ExecCb) =>
+      cb(Object.assign(new Error('fake-secret'), { code }), '', 'fake-secret'),
+    );
+    const source = createGlabCliTokenSource({
+      exec: exec as unknown as typeof import('node:child_process').execFile,
+    });
+    expect(await source.readTokenDetailed('git.example.com')).toEqual({ ok: false, reason });
   });
 });
