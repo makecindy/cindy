@@ -1312,7 +1312,11 @@
     "credentialRequired": "Complete Mac password verification. If unavailable, update Cindy on both computers.",
     "handoffEnded": "This input handoff has already finished, so there is no window to show.",
     "handoffUnavailable": "This computer can't show just this window. Update Cindy on it, or turn on remote desktop there.",
-    "handoffWindow": "Input handoff · {{app}}"
+    "handoffWindow": "Input handoff · {{app}}",
+    "screenNotRunning": "The device is off. Start it on the computer, then reconnect.",
+    "liveScreenTitle": "Device screen",
+    "liveScreenConnecting": "Connecting to device screen…",
+    "liveScreenReconnecting": "Reconnecting to device screen…"
   },
   "ipcError": {
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "This SSH task cannot switch Harness. Choose a model in its current Harness, or create a new SSH task with the Harness you need.",
@@ -8079,8 +8083,8 @@
         "workspaceDetail": "When it asks, you either pick the folder yourself or see the full path on a confirmation card before deciding; while it is handling a call you started, subfolders inside the current session's working directory are used directly without an extra prompt. Folders that already have a session are reused, and what gets created is an empty session — nothing starts running on its own.",
         "sessionContext": "Can learn which project folder the current session is working in",
         "sessionContextDetail": "Shares only location facts (session ID and project folder path) while it works for the current session — no file contents, and no file access is granted.",
-        "liveScreen": "View and control device screens on your phone",
-        "liveScreenDetail": "Through remote desktop, your phone can show the device screens it provides (such as simulators) and send touches, buttons and text to them. It connects only when you open it from your phone and shows nothing else on this computer.",
+        "liveScreen": "View and control device screens on your phone or other computers",
+        "liveScreenDetail": "Through remote desktop, your phone or other computers can show the device screens it provides (such as simulators) and send touches, buttons and text to them. It connects only when you open it from one of those devices and shows nothing else on this computer.",
         "preview": "Can open preview pages from the sites below in the sidebar browser",
         "previewDetail": "Only the sites listed below can be opened; every page it opens is attributed to this plugin.",
         "browserExtension": "Lets its bundled browser extension connect to Cindy",

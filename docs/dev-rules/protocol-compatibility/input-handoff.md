@@ -43,3 +43,11 @@
     `screenShape {lease, known?}` 等待形状与 `known` 不同（被控端最多等 6 秒后照常返回）。旧被控端
     对 `screenShape` 返回 `INVALID_REQUEST`，控制端即停止该请求，改用 heartbeat 或按请求的朝向估计。
   - 先发被控端；新手机连旧电脑时不出现入口，旧手机连新电脑行为不变。
+  - **电脑作控制端（2026-11-11）**：Desktop 的远程桌面查看窗口用同一组消息查看另一台电脑上的设备画面，
+    协议、relay 与 IPC allowlist 均无改动。入口在远程任务顶栏（`screens` 里绑定到该任务、正在运行的设备，
+    与手机同为 15 秒一读，仅主窗口在前台且对方声明 `liveScreens` 时读取——每次读取都会让对方电脑询问插件，
+    后台窗口不读，回到前台再读）。目标里的 `screen` 由 Main 绑定：
+    页面发出的 `start` 必须带同一 `{plugin, id}`，否则拒绝（`DESKTOP_UNAVAILABLE`），不能改成整屏或别的设备；
+    该窗口不发送 `lockOnExit` / `idleTimeoutMinutes`、退出不锁屏、不做自动解锁与剪贴板同步，也不轮询
+    `frame`（设备画面只有 WebRTC 视频）。鼠标左键转为 `touch`，滚轮与其它鼠标键不发送（被控端会以
+    `INVALID_REQUEST` 结束会话）；`keyboard` 为真时点按画面后才转发 `key` / `text`。新电脑连旧电脑时不出现入口。

@@ -1299,7 +1299,11 @@
     "credentialRequired": "请完成 Mac 密码验证。若不能验证，请更新两机之 Cindy。",
     "handoffEnded": "此番代书已毕，无可显之窗口。",
     "handoffUnavailable": "此机暂不能仅显此窗口。请于彼机更新 Cindy，或启远程桌面。",
-    "handoffWindow": "代书 · {{app}}"
+    "handoffWindow": "代书 · {{app}}",
+    "screenNotRunning": "设备已闭。请于机上启之，然后重连。",
+    "liveScreenTitle": "设备画面",
+    "liveScreenConnecting": "正连设备画面…",
+    "liveScreenReconnecting": "正重连设备画面…"
   },
   "ipcError": {
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 差事暂不支持易 Harness。请择今 Harness 下之模型，或以所需 Harness 新立 SSH 差事。",
@@ -8016,8 +8020,8 @@
         "workspaceDetail": "其发请求时，或由君亲择卷匣，或于确认卡上观完整路径后再决；其处置君所发之调用时，当前差事工作目录内之子卷匣可径用，不另确认。卷匣已有差事者径复用之，不重立。所立仅为空差事，不自行运行。",
         "sessionContext": "可知当前差事所用之案卷匣位置",
         "sessionContextDetail": "仅于其为当前差事效力时告以位置(差事编号与案卷匣路径)，不含文件内容，亦不因此得文件访问之权。",
-        "liveScreen": "于手机观并操器物之画面",
-        "liveScreenDetail": "借远端桌面，手机可观其所供器物之画面(如模拟器)，并触之、按之、书文字于其上。唯自手机开启时方连，不示此电脑他物。",
+        "liveScreen": "于手机或他电脑观并操器物之画面",
+        "liveScreenDetail": "借远端桌面，手机或他电脑可观其所供器物之画面(如模拟器)，并触之、按之、书文字于其上。唯自手机或他电脑开启时方连，不示此电脑他物。",
         "preview": "可于右侧栏浏览器中启下列网站之预览页",
         "previewDetail": "仅能启下方所列网站；每启一页，皆示为何法器所启。",
         "browserExtension": "可令其自带之浏览器扩充功能连 Cindy",

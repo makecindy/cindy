@@ -303,6 +303,32 @@ export interface RemoteLiveScreen {
   /** Tasks the plugin has bound this screen to. */
   taskIds: string[];
 }
+/**
+ * The running screens a host's `screens` reply binds to one task. The reply is
+ * untrusted: entries of any other shape are dropped.
+ */
+export function taskLiveScreens(
+  value: unknown,
+  taskId: string,
+): RemoteLiveScreen[] {
+  const list = (value as { screens?: unknown } | null)?.screens;
+  if (!Array.isArray(list)) return [];
+  return list.filter(
+    (item): item is RemoteLiveScreen =>
+      !!item &&
+      typeof item === "object" &&
+      typeof item.plugin === "string" &&
+      LIVE_SCREEN_PLUGIN_ID.test(item.plugin) &&
+      typeof item.id === "string" &&
+      LIVE_SCREEN_ID.test(item.id) &&
+      typeof item.name === "string" &&
+      typeof item.pluginName === "string" &&
+      LIVE_SCREEN_PLATFORMS.includes(item.platform) &&
+      item.state === "running" &&
+      Array.isArray(item.taskIds) &&
+      item.taskIds.includes(taskId),
+  );
+}
 export const LIVE_SCREEN_BUTTON_ICONS = [
   "home",
   "back",

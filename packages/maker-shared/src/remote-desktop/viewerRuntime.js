@@ -164,7 +164,9 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
   // Device touch (a plugin live screen): fingers are touches on the device, never
   // a mouse or a local pan/zoom. A device without touch input takes no contacts.
   let deviceTouch = false,
-    deviceTouchMax = 0;
+    deviceTouchMax = 0,
+    // Desktop only: a click on a device that takes typing focuses the keyboard.
+    deviceKeyboard = false;
   const deviceContacts = new Map();
   const mouseButtons = find("mouse-buttons"),
     wheel = find("mouse-wheel"),
@@ -1173,7 +1175,10 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     const contact = deviceContacts.get(e.pointerId);
     let edge;
     if (e.type === "pointerdown") {
+      // A mouse touches the device with its primary button only.
+      if (config.desktop && e.button !== 0) return;
       if (contact || deviceContacts.size >= deviceTouchMax || !insideDesktop(local)) return;
+      if (config.desktop) showKeyboard(deviceKeyboard);
       if (!e.nativeInput) stage.setPointerCapture(e.pointerId);
       let id = 0;
       const used = new Set([...deviceContacts.values()].map((c) => c.id));
@@ -1645,7 +1650,8 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       "wheel",
       (e) => {
         e.preventDefault();
-        if (!control) {
+        // A device screen has no wheel; its host refuses desktop scrolling.
+        if (!control || deviceTouch) {
           wheelRestX = wheelRestY = 0;
           return;
         }
@@ -2692,6 +2698,8 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
           deviceTouch && Number.isInteger(message.maxTouches)
             ? Math.max(0, Math.min(10, message.maxTouches))
             : 0;
+        deviceKeyboard = deviceTouch && message.keyboard === true;
+        if (config.desktop && !deviceKeyboard) showKeyboard(false);
         break;
       case "mode":
         release();

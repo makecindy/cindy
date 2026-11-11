@@ -4257,7 +4257,12 @@ interface ElectronAPI {
   fetchReleaseNotesIndex: () => Promise<string[] | null>;
 
   // ── Device Link (设备互联/跨设备远程控制) ─────────────────────────────
-  openRemoteDesktop: (target: { deviceId: string; name: string; handoff?: string }) => Promise<void>;
+  openRemoteDesktop: (target: {
+    deviceId: string;
+    name: string;
+    handoff?: string;
+    screen?: { plugin: string; id: string; name?: string };
+  }) => Promise<void>;
   remoteDesktopViewer: import('../shared/remoteDesktopViewer').RemoteDesktopViewerApi;
   remoteDesktop: import('../shared/remoteDesktop').RemoteDesktopApi;
   selfHostedRelay: import('../shared/selfHostedRelay').SelfHostedRelayApi;

@@ -9,13 +9,19 @@ import {
 } from 'electron';
 import {
   REMOTE_DESKTOP_CHANNEL,
+  LIVE_SCREEN_ID,
+  LIVE_SCREEN_PLUGIN_ID,
   DeviceLinkError,
   parseClipboardContent,
   parseRemoteDesktopRequest,
 } from '@cindy/device-link';
 import { createHash } from 'node:crypto';
 import { desktopDiagnosticCode } from '../../shared/remoteDesktopDiagnostics';
-import { REMOTE_VIEWER, type RemoteViewerTarget } from '../../shared/remoteDesktopViewer.js';
+import {
+  REMOTE_VIEWER,
+  sameViewerScope,
+  type RemoteViewerTarget,
+} from '../../shared/remoteDesktopViewer.js';
 import {
   activeOwnerScopeKey,
   getPersistedAppSessionMode,
@@ -143,21 +149,37 @@ export class RemoteDesktopViewerWindows {
       typeof target.name !== 'string' ||
       target.name.length > 256 ||
       (target.handoff !== undefined &&
-        (typeof target.handoff !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(target.handoff)))
+        (typeof target.handoff !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(target.handoff))) ||
+      (target.screen !== undefined &&
+        (!target.screen ||
+          typeof target.screen !== 'object' ||
+          target.handoff !== undefined ||
+          typeof target.screen.plugin !== 'string' ||
+          !LIVE_SCREEN_PLUGIN_ID.test(target.screen.plugin) ||
+          typeof target.screen.id !== 'string' ||
+          !LIVE_SCREEN_ID.test(target.screen.id) ||
+          (target.screen.name !== undefined &&
+            (typeof target.screen.name !== 'string' || target.screen.name.length > 256))))
     )
       throwIpcError('INVALID_PARAMS', 'Invalid remote desktop target');
-    // A 代输入 window view is its own window, separate from a whole-desktop viewer.
-    let entry = [...this.entries].find(
-      (e) =>
-        e.connection.target?.deviceId === target.deviceId &&
-        e.connection.target.handoff === target.handoff,
-    );
+    // A 代输入 window view or a device screen is its own window, separate from
+    // a whole-desktop viewer of the same computer.
+    let entry = [...this.entries].find((e) => sameViewerScope(e.connection.target, target));
     if (!entry) entry = [...this.entries].find((e) => !e.connection.target) ?? this.create();
     if (!entry.connection.active)
       entry.connection.bind({
         deviceId: target.deviceId,
         name: target.name,
         ...(target.handoff ? { handoff: target.handoff } : {}),
+        ...(target.screen
+          ? {
+              screen: {
+                plugin: target.screen.plugin,
+                id: target.screen.id,
+                ...(target.screen.name ? { name: target.screen.name } : {}),
+              },
+            }
+          : {}),
       });
     entry.controller.open(sender);
     // The spare shell is created off the next click path, never connects to a peer.
@@ -250,7 +272,10 @@ export class RemoteDesktopViewerWindows {
       localeChannel: REMOTE_VIEWER.LOCALE,
       onCloseRequested: () => this.requestClose(entry),
       resolveNativeTitle: () =>
-        [connection.target?.name, t('remoteDesktop.title')].filter(Boolean).join(' · '),
+        connection.target?.screen
+          ? [connection.target.screen.name, connection.target.name].filter(Boolean).join(' · ') ||
+            t('remoteDesktop.title')
+          : [connection.target?.name, t('remoteDesktop.title')].filter(Boolean).join(' · '),
       onActivityChanged: (win, active) => {
         connection.setActive(active);
         if (!active) this.setInputCaptured(entry, false);

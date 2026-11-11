@@ -1312,7 +1312,11 @@
     "credentialRequired": "Schließe die Überprüfung des Mac-Passworts ab. Falls sie nicht verfügbar ist, aktualisiere Cindy auf beiden Computern.",
     "handoffEnded": "Diese Eingabeübergabe ist bereits abgeschlossen. Es gibt kein Fenster mehr zum Anzeigen.",
     "handoffUnavailable": "Dieser Computer kann nicht nur dieses Fenster anzeigen. Aktualisiere Cindy darauf oder aktiviere dort den Remotedesktop.",
-    "handoffWindow": "Eingabeübergabe · {{app}}"
+    "handoffWindow": "Eingabeübergabe · {{app}}",
+    "screenNotRunning": "Das Gerät ist ausgeschaltet. Starte es auf dem Computer und verbinde dich dann erneut.",
+    "liveScreenTitle": "Gerätebildschirm",
+    "liveScreenConnecting": "Verbindung zum Gerätebildschirm wird hergestellt…",
+    "liveScreenReconnecting": "Verbindung zum Gerätebildschirm wird wiederhergestellt…"
   },
   "ipcError": {
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "Bei dieser SSH-Aufgabe lässt sich der Harness nicht wechseln. Wähle ein Modell im aktuellen Harness oder erstelle eine neue SSH-Aufgabe mit dem benötigten Harness.",
@@ -8079,8 +8083,8 @@
         "workspaceDetail": "Bei einer Anfrage wählst du entweder selbst den Ordner aus oder siehst vor deiner Entscheidung den vollständigen Pfad auf einer Bestätigungskarte. Während es einen von dir gestarteten Aufruf bearbeitet, werden Unterordner im Arbeitsverzeichnis der aktuellen Sitzung direkt ohne zusätzliche Rückfrage verwendet. Ordner, die bereits eine Sitzung haben, werden wiederverwendet. Erstellt wird eine leere Sitzung – nichts startet von selbst.",
         "sessionContext": "Kann erfahren, in welchem Projektordner die aktuelle Sitzung arbeitet",
         "sessionContextDetail": "Teilt nur Angaben zum Speicherort (Sitzungs-ID und Projektordnerpfad), während es für die aktuelle Sitzung arbeitet – keine Dateiinhalte, und es wird kein Dateizugriff gewährt.",
-        "liveScreen": "Geräte-Bildschirme auf dem Telefon ansehen und bedienen",
-        "liveScreenDetail": "Über den Remote-Desktop kann Ihr Telefon die Geräte-Bildschirme anzeigen, die es bereitstellt (zum Beispiel Simulatoren), und Berührungen, Tasten und Text an sie senden. Die Verbindung besteht nur, wenn Sie sie vom Telefon aus öffnen, und es wird nichts anderes von diesem Computer angezeigt.",
+        "liveScreen": "Geräte-Bildschirme auf dem Telefon oder anderen Computern ansehen und bedienen",
+        "liveScreenDetail": "Über den Remote-Desktop können Ihr Telefon oder Ihre anderen Computer die Geräte-Bildschirme anzeigen, die es bereitstellt (zum Beispiel Simulatoren), und Berührungen, Tasten und Text an sie senden. Die Verbindung besteht nur, wenn Sie sie von einem dieser Geräte aus öffnen, und es wird nichts anderes von diesem Computer angezeigt.",
         "preview": "Kann Vorschauseiten der folgenden Websites im Seitenleistenbrowser öffnen",
         "previewDetail": "Nur die unten aufgeführten Websites können geöffnet werden. Jede geöffnete Seite wird diesem Plugin zugeordnet.",
         "browserExtension": "Erlaubt seiner mitgelieferten Browsererweiterung, sich mit Cindy zu verbinden",

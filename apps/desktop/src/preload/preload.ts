@@ -5103,7 +5103,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // ── Device Link (设备互联/跨设备远程控制) ─────────────────────────────
   // 同账号设备经 server relay 互联;此处只暴露开关 + 设备列表管理面,
   // 隧道(远程会话控制)在 M3 接入。
-  openRemoteDesktop: (target: { deviceId: string; name: string; handoff?: string }): Promise<void> =>
+  openRemoteDesktop: (target: {
+    deviceId: string;
+    name: string;
+    handoff?: string;
+    screen?: { plugin: string; id: string; name?: string };
+  }): Promise<void> =>
     ipcRenderer.invoke(REMOTE_VIEWER.OPEN, target),
   remoteDesktop: {
     state: (checkWindowsSupport) => ipcRenderer.invoke(DESKTOP_LOCAL.STATE, checkWindowsSupport),

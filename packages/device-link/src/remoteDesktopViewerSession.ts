@@ -205,12 +205,16 @@ export class RemoteDesktopViewerSession {
     }
   }
 
-  async heartbeat(): Promise<{ controlling: boolean }> {
+  /** `shape` is a live screen's upright size as the host sent it, unchecked. */
+  async heartbeat(): Promise<{ controlling: boolean; shape?: unknown }> {
     const lease = this.active;
     if (!lease) throw new Error("DESKTOP_LEASE_EXPIRED");
     const pendingAtStart = this.controlPending;
     const controlGeneration = this.controlGeneration;
-    const result = await this.request<{ controlling: boolean }>({
+    const result = await this.request<{
+      controlling: boolean;
+      shape?: unknown;
+    }>({
       op: "heartbeat",
       lease: lease.lease,
     });
@@ -231,7 +235,10 @@ export class RemoteDesktopViewerSession {
         await this.control(false);
       }
     }
-    return { controlling: lease.controlling };
+    return {
+      controlling: lease.controlling,
+      ...(result.shape === undefined ? {} : { shape: result.shape }),
+    };
   }
 
   /**

@@ -1330,6 +1330,10 @@
     "handoffEnded": "Esta transferência de controlo já terminou, pelo que não há nenhuma janela para mostrar.",
     "handoffUnavailable": "Este computador não consegue mostrar apenas esta janela. Atualize o Cindy nesse computador ou ative aí o ambiente de trabalho remoto.",
     "handoffWindow": "Transferência de controlo · {{app}}",
+    "screenNotRunning": "O dispositivo está desligado. Inicie-o no computador e volte a ligar.",
+    "liveScreenTitle": "Ecrã do dispositivo",
+    "liveScreenConnecting": "A ligar ao ecrã do dispositivo…",
+    "liveScreenReconnecting": "A voltar a ligar ao ecrã do dispositivo…",
     "idleMinutes_many": "{{count}} minutos"
   },
   "ipcError": {
@@ -8151,8 +8155,8 @@
         "workspaceDetail": "Quando o pede, escolhe a pasta ou vê o caminho completo num cartão de confirmação antes de decidir; enquanto processa uma chamada que iniciou, as subpastas dentro do diretório de trabalho da sessão atual são usadas diretamente, sem um pedido adicional. As pastas que já têm uma sessão são reutilizadas, e o que é criado é uma sessão vazia — nada começa a ser executado por si só.",
         "sessionContext": "Pode saber em que pasta de projeto está a trabalhar a sessão atual",
         "sessionContextDetail": "Partilha apenas informações de localização (ID da sessão e caminho da pasta do projeto) enquanto trabalha para a sessão atual — sem conteúdo de ficheiros e sem conceder acesso a ficheiros.",
-        "liveScreen": "Ver e controlar ecrãs de dispositivos no telemóvel",
-        "liveScreenDetail": "Através do ambiente de trabalho remoto, o telemóvel pode mostrar os ecrãs de dispositivos que fornece (como simuladores) e enviar-lhes toques, botões e texto. Só liga quando o abre a partir do telemóvel e não mostra mais nada deste computador.",
+        "liveScreen": "Ver e controlar ecrãs de dispositivos no telemóvel ou noutros computadores",
+        "liveScreenDetail": "Através do ambiente de trabalho remoto, o telemóvel ou os seus outros computadores podem mostrar os ecrãs de dispositivos que fornece (como simuladores) e enviar-lhes toques, botões e texto. Só liga quando o abre a partir de um desses dispositivos e não mostra mais nada deste computador.",
         "preview": "Pode abrir páginas de pré-visualização dos sites abaixo no navegador da barra lateral",
         "previewDetail": "Só podem ser abertos os sites indicados abaixo; cada página aberta é atribuída a este plugin.",
         "browserExtension": "Permite que a extensão de navegador incluída se ligue a Cindy",

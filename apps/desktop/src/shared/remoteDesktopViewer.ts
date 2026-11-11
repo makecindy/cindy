@@ -31,6 +31,29 @@ export interface RemoteViewerTarget {
   name: string;
   /** 代输入 live view: only the window this waiting request is about (the host picks it). */
   handoff?: string;
+  /**
+   * A plugin live screen (such as a simulator) from that computer's `screens`
+   * list: only that device's picture, with input going to the plugin. `name`
+   * is the listed name, shown until the host's lease confirms it.
+   */
+  screen?: RemoteViewerScreen;
+}
+export interface RemoteViewerScreen {
+  plugin: string;
+  id: string;
+  name?: string;
+}
+/** Two targets open the same viewer window only when they show the same thing. */
+export function sameViewerScope(
+  a: Pick<RemoteViewerTarget, 'deviceId' | 'handoff' | 'screen'> | null | undefined,
+  b: Pick<RemoteViewerTarget, 'deviceId' | 'handoff' | 'screen'>,
+): boolean {
+  return (
+    a?.deviceId === b.deviceId &&
+    a.handoff === b.handoff &&
+    a.screen?.plugin === b.screen?.plugin &&
+    a.screen?.id === b.screen?.id
+  );
 }
 export interface RemoteViewerState {
   target: RemoteViewerTarget | null;

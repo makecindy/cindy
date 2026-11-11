@@ -920,3 +920,41 @@ it('takes no contacts on a device without touch and returns to desktop input whe
   vi.advanceTimersByTime(40);
   expect(events()).toContainEqual({ kind: 'button', button: 0, down: true, x: 0.5, y: 0.5 });
 });
+
+// 测试价值：设备画面（模拟器等）在电脑上用鼠标操作——左键即手指、滚轮与右键不发给设备、
+// 能打字的设备点一下即可键入。被控端对设备画面拒收桌面指针与滚轮并因此结束会话，
+// 既有用例只覆盖整屏远程桌面的鼠标路径。最小输入：一次 deviceTouch 开关；unit tier。
+it('turns the mouse into a finger on a device screen and keeps desktop-only input away from it', () => {
+  const keyboard = document.getElementById('keyboard-input')!;
+  viewer.receive({ type: 'deviceTouch', enabled: true, maxTouches: 5, keyboard: false });
+  messages.length = 0;
+  pointer('pointerdown', 250, 202);
+  pointer('pointermove', 500, 352);
+  pointer('pointerup', 500, 352);
+  expect(events()).toEqual([
+    { kind: 'touch', touches: [{ id: 0, x: 0.25, y: 0.25, phase: 'began' }] },
+    { kind: 'touch', touches: [{ id: 0, x: 0.5, y: 0.5, phase: 'moved' }] },
+    { kind: 'touch', touches: [{ id: 0, x: 0.5, y: 0.5, phase: 'ended' }] },
+  ]);
+  // This device takes no typing: the click must not start forwarding keys.
+  expect(document.activeElement).not.toBe(keyboard);
+  messages.length = 0;
+  pointer('pointerdown', 500, 352, 2);
+  pointer('pointerup', 500, 352, 2);
+  stage.dispatchEvent(new WheelEvent('wheel', { deltaY: 120, bubbles: true, cancelable: true }));
+  vi.advanceTimersByTime(100);
+  expect(events()).toEqual([]);
+  // A device with a keyboard takes typing after a click on it.
+  viewer.receive({ type: 'deviceTouch', enabled: true, maxTouches: 5, keyboard: true });
+  pointer('pointerdown');
+  pointer('pointerup');
+  expect(document.activeElement).toBe(keyboard);
+  messages.length = 0;
+  keyboard.dispatchEvent(new KeyboardEvent('keydown', { code: 'ArrowLeft', bubbles: true }));
+  keyboard.dispatchEvent(new KeyboardEvent('keyup', { code: 'ArrowLeft', bubbles: true }));
+  vi.advanceTimersByTime(100);
+  expect(events()).toEqual([
+    { kind: 'key', code: 'ArrowLeft', down: true },
+    { kind: 'key', code: 'ArrowLeft', down: false },
+  ]);
+});

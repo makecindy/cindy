@@ -38,6 +38,11 @@ import { GlobalDropImportListener } from '@/components/layout/GlobalDropImportLi
 import { SessionShareImportWizard } from '@/components/settings/SessionShareImportWizard';
 import { ControlledBanner } from '@/features/remote-device/ControlledBanner';
 import { TaskRemoteDesktopButton } from '@/features/remote-desktop/TaskRemoteDesktopButton';
+import {
+  TASK_LIVE_SCREEN_LIMIT,
+  TaskLiveScreenButtons,
+} from '@/features/remote-desktop/TaskLiveScreenButtons';
+import { useTaskLiveScreens } from '@/features/remote-desktop/useTaskLiveScreens';
 import { CredentialStoreBanner } from '@/components/layout/CredentialStoreBanner';
 import { useDeviceLinkRemoteProjects } from '@/features/device-link/useDeviceLinkRemoteProjects';
 import { useAgentIslandRemoteSessionsSync } from '@/features/device-link/agentIslandRemoteSessions';
@@ -405,6 +410,13 @@ export function MainLayout() {
     !isSharedTaskPeer(rightSidebarWorkdirInfo.deviceLinkDeviceId)
       ? rightSidebarWorkdirInfo.deviceLinkDeviceId
       : null;
+  // 那台电脑的插件为当前任务开着的设备画面（例如模拟器）：远程桌面入口旁各给一个入口，
+  // 点开只看、只操作那台设备。与手机任务页同源；旧版电脑或读不到时没有入口。
+  const taskLiveScreens = useTaskLiveScreens(remoteDesktopDeviceId, rightSidebarSessionId);
+  // Windows chip 栈按入口个数让位：远程桌面 1 个 + 设备画面若干，每个 28px + 4px 间距。
+  const remoteTaskEntriesWidth = remoteDesktopDeviceId
+    ? (1 + Math.min(taskLiveScreens.length, TASK_LIVE_SCREEN_LIMIT)) * 32
+    : 0;
   // Windows 内容区右上的显示入口始终跟随聊天区，展开时也不移入侧栏。
   const showWindowsRightSidebarTrigger =
     rightSidebarAvailable && rsbWindow.loaded;
@@ -1803,11 +1815,11 @@ export function MainLayout() {
                 style={{
                   ['--content-top-left-actions-inset' as string]:
                     !isMac && rightSidebarSide === 'left'
-                      ? `${(showWindowsRightSidebarTrigger ? 32 : 0) + (remoteDesktopDeviceId ? 32 : 0)}px`
+                      ? `${(showWindowsRightSidebarTrigger ? 32 : 0) + remoteTaskEntriesWidth}px`
                       : '0px',
                   ['--content-top-right-actions-inset' as string]:
                     !isMac && rightSidebarSide === 'right'
-                      ? `${(showWindowsRightSidebarTrigger ? 32 : 0) + (remoteDesktopDeviceId ? 32 : 0)}px`
+                      ? `${(showWindowsRightSidebarTrigger ? 32 : 0) + remoteTaskEntriesWidth}px`
                       : '0px',
                 }}
               >
@@ -1832,11 +1844,19 @@ export function MainLayout() {
                   // 仍在聊天区顶栏右端)。Windows 走下方内容区 chip 栈。
                   trailing={
                     isMac && remoteDesktopDeviceId ? (
-                      <TaskRemoteDesktopButton
-                        key={remoteDesktopDeviceId}
-                        deviceId={remoteDesktopDeviceId}
-                        className={rightSidebarAvailable ? 'mr-1' : 'mr-2'}
-                      />
+                      <>
+                        <TaskLiveScreenButtons
+                          key={`screens:${remoteDesktopDeviceId}`}
+                          deviceId={remoteDesktopDeviceId}
+                          screens={taskLiveScreens}
+                          className="mr-1"
+                        />
+                        <TaskRemoteDesktopButton
+                          key={remoteDesktopDeviceId}
+                          deviceId={remoteDesktopDeviceId}
+                          className={rightSidebarAvailable ? 'mr-1' : 'mr-2'}
+                        />
+                      </>
                     ) : undefined
                   }
                 >
@@ -1868,10 +1888,17 @@ export function MainLayout() {
                       }
                     >
                       {remoteDesktopDeviceId && (
-                        <TaskRemoteDesktopButton
-                          key={remoteDesktopDeviceId}
-                          deviceId={remoteDesktopDeviceId}
-                        />
+                        <>
+                          <TaskLiveScreenButtons
+                            key={`screens:${remoteDesktopDeviceId}`}
+                            deviceId={remoteDesktopDeviceId}
+                            screens={taskLiveScreens}
+                          />
+                          <TaskRemoteDesktopButton
+                            key={remoteDesktopDeviceId}
+                            deviceId={remoteDesktopDeviceId}
+                          />
+                        </>
                       )}
                       {showWindowsRightSidebarTrigger && (
                         <RightSidebarToggle

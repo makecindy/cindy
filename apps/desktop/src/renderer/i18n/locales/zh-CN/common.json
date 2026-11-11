@@ -1299,7 +1299,11 @@
     "credentialRequired": "请完成 Mac 密码验证。如果无法验证，请更新两台电脑上的 Cindy。",
     "handoffEnded": "这次代输入已经结束，没有可显示的窗口。",
     "handoffUnavailable": "这台电脑暂时不能只显示这个窗口。请在那台电脑上更新 Cindy，或开启远程桌面。",
-    "handoffWindow": "代输入 · {{app}}"
+    "handoffWindow": "代输入 · {{app}}",
+    "screenNotRunning": "设备已关闭。请在电脑上启动它，然后重新连接。",
+    "liveScreenTitle": "设备画面",
+    "liveScreenConnecting": "正在连接设备画面…",
+    "liveScreenReconnecting": "正在重新连接设备画面…"
   },
   "ipcError": {
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 任务暂不支持切换 Harness。请选择当前 Harness 下的模型，或使用所需 Harness 新建 SSH 任务。",
@@ -8036,8 +8040,8 @@
         "workspaceDetail": "它发起请求时，由你亲手选择文件夹，或在确认卡上看到完整路径后再决定；它正在处理你发起的调用时，当前任务工作目录内的子文件夹可直接使用，不再单独确认。文件夹已有任务时直接复用，不重复创建。创建的只是空任务，不会自动开始运行。",
         "sessionContext": "可获知当前任务正在使用的项目文件夹位置",
         "sessionContextDetail": "只在它为当前任务干活时告知位置信息(任务编号与项目文件夹路径)，不包含文件内容，也不因此获得文件访问权。",
-        "liveScreen": "在手机上查看与操作设备画面",
-        "liveScreenDetail": "通过远程桌面，你的手机可以查看它提供的设备画面（例如模拟器）并直接触控、按键和输入文字。只在你从手机打开时连接，不会打开电脑的其他内容。",
+        "liveScreen": "在手机或其他电脑上查看与操作设备画面",
+        "liveScreenDetail": "通过远程桌面，你的手机或其他电脑可以查看它提供的设备画面（例如模拟器）并直接触控、按键和输入文字。只在你从这些设备打开时连接，不会打开电脑的其他内容。",
         "preview": "可在右侧栏浏览器中打开以下网站的预览页面",
         "previewDetail": "只能打开下方列出的网站；每次打开都会提示是哪个插件打开的。",
         "browserExtension": "可让它自带的浏览器扩展连接到 Cindy",
