@@ -125,7 +125,7 @@ export function McpSetupPrompt({ request, teammate }: { request: McpSetupRequest
   return <>
     {reusable && <p className="text-13 text-[var(--text-secondary)]">
       {t('settings.mcp.dialog.matchNotice')}{' '}
-      <Button variant="ghost" size="sm" onClick={() => setForceCreate(true)}>
+      <Button variant="secondary" size="sm" onClick={() => setForceCreate(true)}>
         {t('settings.mcp.dialog.createInstead')}
       </Button>
     </p>}

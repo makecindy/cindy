@@ -160,7 +160,7 @@ function releaseGeneration(started: StartedPiBridge): void {
  * bridge 单例懒启动并缓存;每次调用按传入 sessionCtx 产出 per-session 的
  * server URL(带/不带 `?session=`)并做对应的身份注册。
  */
-export async function getPiExtraSpawnConfig(
+async function getPiExtraSpawnConfig(
   providers: McpProvider[], logger: MakerLogger, sessionCtx?: PiExtraSpawnConfigContext,
 ): Promise<PiExtraSpawnConfig | null> {
   // Discard builds racing a save; do not publish mixed generations.
