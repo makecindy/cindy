@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { createSessionShareToolCallbacks } from '../sessionShareTools.js';
 
 // Unit, capability list #10/#15 and plugin authoring §4: a native export must
@@ -19,12 +20,16 @@ describe('native package Host tools', () => {
   const preview = { title: 'Task', agentKind: 'codex' as const, workspaceKind: 'dialogue' as const,
     originalWorkingDir: null, exportedAt: '', appVersion: '', fidelity: 'full' as const,
     messageCount: 1, mediaCount: 0, orcaWorkerCount: 0 };
-  beforeEach(async () => { current = true; directory = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-share-tools-test-')); });
+  beforeEach(async () => {
+    current = true; directory = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-share-tools-test-'));
+    await fs.writeFile(path.join(directory, 'source.cshare'), 'package');
+  });
   afterEach(async () => { await fs.rm(directory, { recursive: true, force: true }); });
   function fixture() {
     const assertCurrent = () => { if (!current) throw new Error('PERMISSION_DENIED'); };
     const handoff = { import: vi.fn(async () => [{ ref, name: 'task.cshare', size: 7, sha256: 'a'.repeat(64) }]),
-      open: vi.fn(async () => ({ file: { close: vi.fn(async () => {}) }, filePath: path.join(directory, 'source.cshare') })),
+      open: vi.fn(async () => ({ file: await fs.open(path.join(directory, 'source.cshare'), 'r'),
+        filePath: path.join(directory, 'source.cshare'), info: { size: 7, sha256: createHash('sha256').update('package').digest('hex') } })),
       touch: vi.fn(async () => {}) };
     const ports = {
       capture: vi.fn(async (context: typeof plugin | { sessionId?: string }) => ({ assertCurrent,
@@ -51,6 +56,9 @@ describe('native package Host tools', () => {
     expect(f.ports.chooseExportPath).not.toHaveBeenCalled();
     const exportedPath = f.ports.exportShare.mock.calls[0][0].targetPath;
     await expect(fs.stat(exportedPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await f.callbacks.import({ attachmentRef: ref, overwrite: false, useWorktree: false }, plugin))
+      .toMatchObject({ ok: true, status: 'imported', session_id: 'imported' });
+    expect(f.ports.inspectShare).toHaveBeenCalledWith(path.join(directory, 'source.cshare'), Buffer.from('package'));
   });
   it('keeps Agent filesystem paths on the existing native path', async () => {
     const f = fixture(), context = { agentKind: 'codex', sessionId: 'caller', workingDir: directory };
@@ -78,6 +86,14 @@ describe('native package Host tools', () => {
     expect(result).toMatchObject({ ok: false, errorCode: 'SHARE_CONFLICT' });
     expect(JSON.stringify(result)).not.toContain(directory);
     expect(f.ports.commitShare).toHaveBeenCalledOnce();
+  });
+  it('rejects a same-size edited handoff before the native importer reads it', async () => {
+    const f = fixture();
+    await fs.writeFile(path.join(directory, 'source.cshare'), 'changed');
+    expect(await f.callbacks.import({ attachmentRef: ref, overwrite: false, useWorktree: false }, plugin))
+      .toMatchObject({ ok: false, errorCode: 'HANDOFF_UNAVAILABLE' });
+    expect(f.ports.inspectShare).not.toHaveBeenCalled();
+    expect(f.ports.commitShare).not.toHaveBeenCalled();
   });
   it.each(['password', 'project'] as const)('opens the existing wizard for %s and never reports import completion', async reason => {
     const f = fixture();

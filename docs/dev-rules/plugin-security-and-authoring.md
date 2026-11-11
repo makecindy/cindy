@@ -207,6 +207,9 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   每次批准查询均重新读取和验证 receipt，不使用授权缓存或同步段去重。
   依赖当前任务的工具必须显式指定目标，缺省保留 `NO_SESSION_CONTEXT`；插件管理、主人代输入、应用更新、反馈不经此入口开放。
   作者契约见 [宿主工具调用](../../apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-host-tools.md)。
+  原生任务包由 `history/export_session` 和 `control/import_session` 开放，均逐次确认，直接复用分享包导出与导入事务。
+  插件仅经本实例既有 handoff 收取与提交包，不接受或返回宿主路径；Agent 保留原生路径调用。
+  加密包和未指定目录的项目包交原生导入向导，返回 `awaiting_user`，不能当成导入完成；工具不收密码。
 - `subscribe.topics` 的 `message` / `task-state` 独立展示和批准，receipt 可选 `approvedEventTopics` 只记录显式事实，不从旧未知声明推断。
   消息仅在持久化后通知，结构化附件使用不透明位置引用；附件读取只覆盖已有宿主授权的本机媒体和 grant / deposit / handoff 引用，复用既有账本和交接。历史 JSON 的 `files.path`、绝对路径、旧文件直读 URL 及跨电脑附件返回 `UNSUPPORTED_CAPABILITY`，不以消息形状授予文件读取权限，不新增可信来源表或确认流程。
   状态只发布生命周期变化（开始、结束、出错、等待权限/回答、排队、取消及归档/恢复/删除），复用宿主规范投影，不含活动摘要、标题标签或工具参数；不发布高频进度和活动变化。

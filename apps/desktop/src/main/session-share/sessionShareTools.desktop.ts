@@ -7,7 +7,7 @@ import { getGhostHandoffStore } from '../cindy-brain/handoffStore.desktop.js';
 import { captureDataOwnerBroadcastScope } from '../device-link/broadcast-tap.js';
 import { handleIncomingShareFile } from '../deepLink.js';
 import { exportSessionShare } from './sessionShareExport.js';
-import { inspectShareFile, cancelShareDraft } from './sessionShareImport.js';
+import { inspectShareFile, inspectShareBytes, cancelShareDraft } from './sessionShareImport.js';
 import { chooseSessionShareExportPath, commitSessionShareOnHost } from './sessionShareHost.desktop.js';
 import { createSessionShareToolCallbacks } from './sessionShareTools.js';
 
@@ -30,7 +30,9 @@ export function createDesktopSessionShareCallbacks() {
       assertCurrent();
       return { pluginId: plugin?.caller.pluginId, assertCurrent };
     },
-    exportShare: exportSessionShare, inspectShare: inspectShareFile, commitShare: commitSessionShareOnHost,
+    exportShare: exportSessionShare,
+    inspectShare: (filePath, bytes) => bytes ? inspectShareBytes(bytes, filePath) : inspectShareFile(filePath),
+    commitShare: commitSessionShareOnHost,
     cancelDraft: cancelShareDraft, chooseExportPath: chooseSessionShareExportPath, handoff: getGhostHandoffStore,
     openImportWizard: filePath => {
       if (!BrowserWindow.getAllWindows().some(win => !win.isDestroyed())) throw new Error('HOST_NOT_READY');

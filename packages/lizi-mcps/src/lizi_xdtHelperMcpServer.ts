@@ -202,6 +202,7 @@ export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number]
     'list_projects(device) 可查询远程项目。',
     '管理任务与项目：当前任务的原生共享邀请/状态（create_shared_task_invitation / get_shared_task_state）在任务宿主执行，支持手机或同账号另一台电脑控制当前任务，不接受其他任务目标；',
     '归档/取消归档、删除（delete_session）、按消息分叉（fork_session）与检查点回退（rewind_session）支持本机与跨电脑（deviceId::sessionId），删除和回退逐次确认；',
+    '原生任务包导入（import_session）仅本机，逐次确认；加密包与未指定目录的项目包交原生向导完成；',
     '改名、移动、标签、排队消息、插话、停止、运行设置（含权限档）、给当前任务新建托管 worktree（create_task_worktree，可指定基线分支）、项目增删改、从其他 AI 编程工具导入任务（scan_importable_sessions / import_sessions）仅本机。',
   ].join(''),
   github: [
@@ -217,6 +218,7 @@ export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number]
     '任务结果附带可直接引用的 sessionUrl，已知 id 要链接用 get_task_digest。',
     '伙伴目录、任务列表、搜索、读取聊天记录、任务摘要（get_task_digest）可跨电脑（device 参数 / deviceId::sessionId）；',
     '任务附件（read_session_attachment）仅支持已有宿主授权的本机媒体和交接引用，历史文件路径与跨电脑附件返回 UNSUPPORTED_CAPABILITY，只返回分块字节和引用，不返回宿主路径。',
+    '原生任务包导出（export_session）仅本机，逐次确认；Agent 沿用原生文件路径，插件只收到本实例 attachment_ref。',
     '搜索还能查到主力电脑离线的伙伴的云端对话；',
     '其余本机。',
   ].join(''),
