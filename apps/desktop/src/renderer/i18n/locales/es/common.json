@@ -12718,47 +12718,47 @@
         "claude-code": {
           "ask": {
             "label": "Permisos predeterminados",
-            "description": "Permite el acceso de lectura y escritura dentro del espacio de trabajo y pide autorización antes de usar permisos elevados, acceso a la red o rutas fuera del espacio de trabajo."
+            "description": "Tú apruebas las acciones cuando es necesario."
           },
           "acceptEdits": {
             "label": "Aceptar ediciones automáticamente",
-            "description": "Acepta automáticamente las solicitudes de edición de archivos para reducir las confirmaciones repetidas. Los comandos o permisos de mayor riesgo siguen sujetos a la política de permisos subyacente."
+            "description": "Las ediciones de archivos se permiten directamente; tú apruebas otras acciones cuando es necesario."
           },
           "auto": {
             "label": "Revisión automática",
-            "description": "Permite el acceso de lectura y escritura dentro del espacio de trabajo y revisa automáticamente las solicitudes de elevación de permisos; las acciones de alto riesgo pueden denegarse o requerir confirmación. Esto reduce las interrupciones, pero puede cometer errores."
+            "description": "Un modelo de IA aprueba las acciones, lo que puede requerir más espera; tú confirmas cuando es necesario."
           },
           "bypassPermissions": {
             "label": "Acceso completo",
-            "description": "Permite editar cualquier archivo y ejecutar comandos con acceso a la red sin otra confirmación. Riesgo máximo; úsalo solo para tareas de confianza."
+            "description": "Las acciones habituales se permiten directamente, incluidos archivos fuera del espacio de trabajo y comandos de red."
           }
         },
         "codex": {
           "ask": {
             "label": "Permisos predeterminados",
-            "description": "Permite el acceso de lectura y escritura dentro del espacio de trabajo y pide autorización antes de usar permisos elevados, acceso a la red o rutas fuera del espacio de trabajo."
+            "description": "Tú apruebas las acciones cuando es necesario."
           },
           "auto": {
             "label": "Revisión automática",
-            "description": "Ejecuta comandos automáticamente dentro del entorno aislado protegido del espacio de trabajo. Las acciones que exceden los límites del entorno aislado pasan a un revisor automático; las acciones de alto riesgo pueden denegarse o requerir confirmación."
+            "description": "Un modelo de IA aprueba las acciones, lo que puede requerir más espera; tú confirmas cuando es necesario."
           },
           "bypassPermissions": {
             "label": "Acceso completo",
-            "description": "Permite editar cualquier archivo y ejecutar comandos con acceso a la red sin otra confirmación. Riesgo máximo; úsalo solo para tareas de confianza."
+            "description": "Las acciones habituales se permiten directamente, incluidos archivos fuera del espacio de trabajo y comandos de red."
           }
         },
         "pi": {
           "ask": {
             "label": "Permisos predeterminados",
-            "description": "Las herramientas de solo lectura se ejecutan directamente; escribir archivos, ejecutar comandos y usar herramientas MCP requiere autorización cada vez."
+            "description": "Tú apruebas las acciones cuando es necesario."
           },
           "auto": {
             "label": "Revisión automática",
-            "description": "La escritura dentro del espacio de trabajo y los comandos seguros se ejecutan automáticamente; la escritura fuera del espacio de trabajo, los comandos riesgosos y las herramientas MCP siguen requiriendo autorización."
+            "description": "Un modelo de IA aprueba las acciones, lo que puede requerir más espera; tú confirmas cuando es necesario."
           },
           "bypassPermissions": {
             "label": "Acceso completo",
-            "description": "Permite editar cualquier archivo y ejecutar comandos con acceso a la red sin otra confirmación. Riesgo máximo; úsalo solo para tareas de confianza."
+            "description": "Las acciones habituales se permiten directamente, incluidos archivos fuera del espacio de trabajo y comandos de red."
           }
         }
       }

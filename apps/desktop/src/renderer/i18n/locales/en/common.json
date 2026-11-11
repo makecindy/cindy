@@ -12618,47 +12618,47 @@
         "claude-code": {
           "ask": {
             "label": "Default permissions",
-            "description": "Allows read/write access inside the workspace and asks before using higher permissions, network access, or paths outside the workspace."
+            "description": "You approve actions when needed."
           },
           "acceptEdits": {
             "label": "Auto accept edits",
-            "description": "Automatically accepts file edit requests to reduce repeated confirmations. Higher-risk commands or permissions still follow the underlying permission policy."
+            "description": "File edits are allowed directly; you approve other actions when needed."
           },
           "auto": {
             "label": "Auto-review",
-            "description": "Allows read/write access inside the workspace and automatically reviews escalation requests; high-risk actions may still be denied or require confirmation. This reduces interruptions, but can make mistakes."
+            "description": "An AI model approves actions, which may take extra time; you confirm when needed."
           },
           "bypassPermissions": {
             "label": "Full access",
-            "description": "Allows editing any file and running networked commands without another confirmation. Highest risk; use only for trusted tasks."
+            "description": "Routine actions are allowed directly, including files outside the workspace and network commands."
           }
         },
         "codex": {
           "ask": {
             "label": "Default permissions",
-            "description": "Allows read/write access inside the workspace and asks before using higher permissions, network access, or paths outside the workspace."
+            "description": "You approve actions when needed."
           },
           "auto": {
             "label": "Auto-review",
-            "description": "Runs commands automatically inside the protected workspace sandbox. Actions that cross the sandbox boundary go to an automatic reviewer; high-risk actions may still be denied or require confirmation."
+            "description": "An AI model approves actions, which may take extra time; you confirm when needed."
           },
           "bypassPermissions": {
             "label": "Full access",
-            "description": "Allows editing any file and running networked commands without another confirmation. Highest risk; use only for trusted tasks."
+            "description": "Routine actions are allowed directly, including files outside the workspace and network commands."
           }
         },
         "pi": {
           "ask": {
             "label": "Default permissions",
-            "description": "Read-only tools run directly; writing files, running commands, and MCP tools ask each time."
+            "description": "You approve actions when needed."
           },
           "auto": {
             "label": "Auto-review",
-            "description": "In-workspace writes and safe commands run automatically; out-of-workspace writes, risky commands, and MCP tools still ask."
+            "description": "An AI model approves actions, which may take extra time; you confirm when needed."
           },
           "bypassPermissions": {
             "label": "Full access",
-            "description": "Allows editing any file and running networked commands without another confirmation. Highest risk; use only for trusted tasks."
+            "description": "Routine actions are allowed directly, including files outside the workspace and network commands."
           }
         }
       }

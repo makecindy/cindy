@@ -12718,47 +12718,47 @@
         "claude-code": {
           "ask": {
             "label": "Permissões predefinidas",
-            "description": "Permite acesso de leitura/escrita no espaço de trabalho e pede confirmação antes de usar permissões superiores, acesso à rede ou caminhos fora do espaço de trabalho."
+            "description": "Aprova as ações quando necessário."
           },
           "acceptEdits": {
             "label": "Aceitar edições automaticamente",
-            "description": "Aceita automaticamente pedidos de edição de ficheiros para reduzir confirmações repetidas. Os comandos ou permissões de maior risco continuam a seguir a política de permissões subjacente."
+            "description": "As edições de ficheiros são permitidas diretamente; aprova as outras ações quando necessário."
           },
           "auto": {
             "label": "Revisão automática",
-            "description": "Permite acesso de leitura/escrita no espaço de trabalho e revê automaticamente os pedidos de elevação de permissões; as ações de alto risco podem continuar a ser recusadas ou a exigir confirmação. Isto reduz as interrupções, mas pode cometer erros."
+            "description": "Um modelo de IA aprova as ações, o que pode exigir mais espera; confirma quando necessário."
           },
           "bypassPermissions": {
             "label": "Acesso total",
-            "description": "Permite editar qualquer ficheiro e executar comandos com acesso à rede sem nova confirmação. Risco máximo; utilizar apenas para tarefas de confiança."
+            "description": "As ações habituais são permitidas diretamente, incluindo ficheiros fora do espaço de trabalho e comandos de rede."
           }
         },
         "codex": {
           "ask": {
             "label": "Permissões predefinidas",
-            "description": "Permite acesso de leitura/escrita no espaço de trabalho e pede confirmação antes de usar permissões superiores, acesso à rede ou caminhos fora do espaço de trabalho."
+            "description": "Aprova as ações quando necessário."
           },
           "auto": {
             "label": "Revisão automática",
-            "description": "Executa comandos automaticamente no ambiente isolado protegido do espaço de trabalho. As ações que ultrapassam os limites desse ambiente são encaminhadas para um revisor automático; as ações de alto risco podem ainda ser recusadas ou exigir confirmação."
+            "description": "Um modelo de IA aprova as ações, o que pode exigir mais espera; confirma quando necessário."
           },
           "bypassPermissions": {
             "label": "Acesso total",
-            "description": "Permite editar qualquer ficheiro e executar comandos com acesso à rede sem nova confirmação. Risco máximo; utilizar apenas para tarefas de confiança."
+            "description": "As ações habituais são permitidas diretamente, incluindo ficheiros fora do espaço de trabalho e comandos de rede."
           }
         },
         "pi": {
           "ask": {
             "label": "Permissões predefinidas",
-            "description": "As ferramentas só de leitura são executadas diretamente; escrever ficheiros, executar comandos e utilizar ferramentas MCP exige confirmação de cada vez."
+            "description": "Aprova as ações quando necessário."
           },
           "auto": {
             "label": "Revisão automática",
-            "description": "As escritas no espaço de trabalho e os comandos seguros são executados automaticamente; as escritas fora do espaço de trabalho, os comandos arriscados e as ferramentas MCP continuam a exigir confirmação."
+            "description": "Um modelo de IA aprova as ações, o que pode exigir mais espera; confirma quando necessário."
           },
           "bypassPermissions": {
             "label": "Acesso total",
-            "description": "Permite editar qualquer ficheiro e executar comandos com acesso à rede sem nova confirmação. Risco máximo; utilizar apenas para tarefas de confiança."
+            "description": "As ações habituais são permitidas diretamente, incluindo ficheiros fora do espaço de trabalho e comandos de rede."
           }
         }
       }
