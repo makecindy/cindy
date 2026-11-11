@@ -1022,12 +1022,12 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
           }
           const authorization = authorizeSendToLeadCaller(resolveRuntimeMcpContext(ctx));
           if (!authorization.ok) return text(authorization.error, true);
-          const resolved = await resolveLead(worker_id);
-          if (!resolved.ok) return text(resolved.error, true);
-          const { link, entry } = resolved;
-          // progress 只是内部进度：只落库，不派发。否则空闲的 Lead 会为一条进度开启新 turn，
-          // 忙碌时它会占住队列;这不是「不打扰」的含义。
+          // progress 只走 Worker link：不 rehydrate Lead（resolveLead 可能拉起/重连 Lead 会话，
+          // 甚至在远端 preflight 上失败），而这条路径根本不用 Lead 会话也不派发消息。
           if (report?.state === 'progress') {
+            const workerResolved = await resolveWorkerLink(deps, ctx, worker_id);
+            if (!workerResolved.ok) return text(workerResolved.error, true);
+            const { link } = workerResolved;
             try {
               await deps.recordWorkerReport?.(link.workerSessionId, report);
             } catch (err) {
@@ -1043,6 +1043,9 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
               lead_session_id: link.leadSessionId,
             });
           }
+          const resolved = await resolveLead(worker_id);
+          if (!resolved.ok) return text(resolved.error, true);
+          const { link, entry } = resolved;
           // 结构化证据与问题必须跟 message 一起送达 Lead 并进入历史；只放进回执就等于没送。
           const deliveredText = report ? formatWorkerReportForLead(report, message) : message;
           if (!entry.session) {

@@ -1,0 +1,16 @@
+======================================================================
+id 4532283363 | reply_to 4528270716 | greptile-apps[bot] | apps/desktop/src/main/maker-ipc/orcaTeamService.ts:2342
+这个取舍成立；按你描述的改动，我会撤回原来的 finding。
+
+`blocked` 是正常结束、等待 Lead 处理的问题，不应因为“需要回答”就记成执行 `error`。现有契约也明确把 Worker 的 `done` 通知过滤掉，并由 Lead 被回报唤起后的那一轮统一面向用户。因此在问题确实随回报送达并唤起 Lead 的前提下，再发一条 Worker 级通知会重复提醒，也会和既有 owner 规则冲突。`failed` 继续走 `error` 则保留了执行失败的区分。
+
+需要保留的边界是：`latestReport.question` 本身不是提醒来源；Worker 的 `done` 也不会被 `shouldNotifyOrcaWorkerEvent` 单独通知。这个方案依赖回报消息确实进入 Lead 并触发后续处理；若只落库而没有唤起 Lead，原 finding 的核心问题仍会存在。按你说明的 P1 修法，这个前提已满足，所以我不认为本 PR 需要新增 Worker 通知。
+======================================================================
+id 4532950725 | reply_to None | chatgpt-codex-connector[bot] | packages/orca-workflow/src/orca-bridge-mcp.ts:1030
+**![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)  Avoid rehydrating the Lead for progress reports**
+
+When a Worker sends `report.state = 'progress'` and its Lead is no longer active in Maker, this branch is reached only after `resolveLead()` calls `ensureCapturedSession()` and `ensureSessionFromMeta()`, which can start a Lead session and run remote preflight. That can launch or reconnect an agent—or fail before `recordWorkerReport()`—even though this path never uses the Lead session or dispatches a message. Resolve the Worker link and persist progress before rehydrating the Lead.
+
+AGENTS.md reference: [AGENTS.md:L136-L137](https://github.com/makecindy/cindy/blob/28407eeb1706c8b75529afa2987f33d5dfaaad9d/AGENTS.md#L136-L137)
+
+Useful? React with 👍 / 👎.

@@ -720,10 +720,12 @@ describe('orca_worker_bridge MCP helpers', () => {
     expect(text).toContain('blocked');
   });
 
-  it('records progress without dispatching it to the Lead', async () => {
+  it('records progress without dispatching it to the Lead or rehydrating it', async () => {
     const lead = makeSession('lead-1');
     const recordWorkerReport = vi.fn(async () => {});
     const h = makeWorkerBridgeLeadHarness(lead, undefined, undefined, { recordWorkerReport });
+    // rehydrate 通道是 resolveLead→ensureCapturedSession；progress 不得触碰它，
+    // 否则空闲/失活的 Lead 会为一条进度被拉起，或卡在远端 preflight 上。
     const json = parseToolJson(await h.server._registeredTools.send_to_lead.handler({
       worker_id: 'worker-1',
       message: '做到一半',
