@@ -2215,8 +2215,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   const TASK_CARD_FOLLOW_MS = 7 * 24 * 60 * 60_000;
   /** A task's message that could not reach the group is retried with backoff, then dropped. */
   const TASK_REPLY_ATTEMPTS = 8;
-  /** A reply this short is its own result in the main group. */
-  const TASK_RESULT_SHORT_CHARS = 280;
+  /** A one-paragraph reply this short is its own result in the main group. */
+  const TASK_RESULT_SHORT_CHARS = 140;
   /** Turn ends a card remembers, so the same end seen again posts nothing again. */
   const TASK_TURNS_KEPT = 20;
   /** Read-modify-write of one card record against the current file, never a stale copy. */
@@ -2263,7 +2263,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     });
     void syncTaskCards(true);
     if (!results.length) return;
-    const result = text.length <= TASK_RESULT_SHORT_CHARS ? text
+    const result = text.length <= TASK_RESULT_SHORT_CHARS && !/\n\s*\n/.test(text.trim()) ? text
       : (await deps.condenseTaskReply?.(text).catch(() => null))?.trim() || line;
     if (!result) return;
     for (const messageId of results) updateTaskCard(messageId, card => ({ ...card, outbox: [...(card.outbox ?? []),
