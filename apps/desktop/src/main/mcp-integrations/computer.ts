@@ -3,7 +3,7 @@ import { agentDesktopInputRevision, desktopInputRevision, hasRemoteDesktopInput,
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readlinkSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statSync } from 'node:fs';
 import type { Stream } from 'node:stream';
 import { app, powerMonitor } from 'electron';
 import { hasProxyEnvConfig, parseOutboundProxyUrl } from '@cindy/anthropic-compat-proxy';
@@ -1944,6 +1944,64 @@ function normalizeToolArgsForDriver(
   };
 }
 
+type DesktopScreenshot = { directory: string; pending: boolean; current: boolean };
+const desktopScreenshots = new Map<string, Set<DesktopScreenshot>>();
+
+function removeDesktopScreenshot(sessionId: string, screenshot: DesktopScreenshot): void {
+  try {
+    // Only directories created by this host call are owned here. Never trust
+    // a returned driver path or an explicit screenshot_out_file for deletion.
+    rmSync(screenshot.directory, { recursive: true, force: true });
+    const owned = desktopScreenshots.get(sessionId);
+    owned?.delete(screenshot);
+    if (owned?.size === 0) desktopScreenshots.delete(sessionId);
+  } catch (err) {
+    // Keep ownership so the next observation or session cleanup can retry.
+    logger.warn('Desktop screenshot cleanup failed', { sessionId, error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+function retireDesktopScreenshots(sessionId: string): void {
+  for (const screenshot of desktopScreenshots.get(sessionId) ?? []) {
+    screenshot.current = false;
+    // An in-flight driver may still write its file. Its finally owns cleanup;
+    // it must not delete a later read's directory, even if the session reopened.
+    if (!screenshot.pending) removeDesktopScreenshot(sessionId, screenshot);
+  }
+}
+
+async function readDesktopState(args: Record<string, unknown>, context?: ComputerMcpCallContext): Promise<unknown> {
+  const sessionId = readSessionIdFromContext(context);
+  if (!sessionId) return callComputerDriverToolImpl('get_desktop_state', args, context);
+  retireDesktopScreenshots(sessionId);
+  if (typeof args.screenshot_out_file === 'string') {
+    return callComputerDriverToolImpl('get_desktop_state', args, context);
+  }
+  const screenshot: DesktopScreenshot = {
+    directory: mkdtempSync(path.join(app.getPath('temp'), 'xdt-maker-cua-desktop-')),
+    pending: true,
+    current: true,
+  };
+  let owned = desktopScreenshots.get(sessionId);
+  if (!owned) {
+    owned = new Set();
+    desktopScreenshots.set(sessionId, owned);
+  }
+  owned.add(screenshot);
+  let usable = false;
+  try {
+    const result = await callComputerDriverToolImpl('get_desktop_state', {
+      ...args,
+      screenshot_out_file: path.join(screenshot.directory, 'get_desktop_state.png'),
+    }, context);
+    usable = !context?.signal?.aborted && !isUnavailableDesktopObservation(result);
+    return result;
+  } finally {
+    screenshot.pending = false;
+    if (!usable || !screenshot.current) removeDesktopScreenshot(sessionId, screenshot);
+  }
+}
+
 function readSessionIdFromContext(
   context: ComputerMcpCallContext | undefined,
 ): string | null {
@@ -3799,7 +3857,9 @@ export async function callComputerDriverTool(
       observations?.windows.set(window, observation);
       if (!desktop) observations?.windows.set(app, observation);
     }
-    const result = await callComputerDriverToolImpl(name, args, context);
+    const result = name === 'get_desktop_state'
+      ? await readDesktopState(args, context)
+      : await callComputerDriverToolImpl(name, args, context);
     if (explicitObservation && startedIdle && !context?.signal?.aborted
       && !(desktop ? isUnavailableDesktopObservation(result) : isUnavailableWindowObservation(result, args)) && computerResultOutcome(name, result).ok
       && revision === desktopInputRevision() && !isHumanDesktopInputActive()
@@ -4002,6 +4062,7 @@ async function cleanupComputerDriverSessionEntry(sessionId: string, entry: CuaMc
 }
 
 export function cleanupComputerDriverSession(sessionId: string): Promise<void> {
+  retireDesktopScreenshots(sessionId);
   inputObservations.delete(sessionId);
   cuaMcpSessionCursorCapabilities.delete(sessionId);
   markCuaMcpSessionClosed(sessionId);
@@ -4037,7 +4098,7 @@ function cleanupComputerDriverSessionInternal(
 }
 
 async function cleanupActiveComputerDriverSessions(): Promise<void> {
-  const sessionIds = Array.from(cuaMcpSessions.keys());
+  const sessionIds = [...new Set([...cuaMcpSessions.keys(), ...desktopScreenshots.keys()])];
   await Promise.allSettled(sessionIds.map((sessionId) => cleanupComputerDriverSession(sessionId)));
   await Promise.allSettled(Array.from(cuaMcpSessionCleanups.values()));
 }

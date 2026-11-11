@@ -1,7 +1,10 @@
 import { EventEmitter } from 'node:events';
 import path from 'node:path';
+import os from 'node:os';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { app } from 'electron';
 import { PassThrough } from 'node:stream';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 import { COMPUTER_TOOLS } from '@cindy/mcps/computer';
 import { readForRecovery } from '../../../../../../packages/lizi-mcps/src/computer/recovery';
@@ -435,6 +438,92 @@ describe('computer mcp integration', () => {
     }
   });
   let revisionSpy: ReturnType<typeof vi.spyOn>;
+  // PR #9919 P1, unit: real dispatch must release only its generated desktop
+  // files. Existing screenshot tests checked arguments, not disk lifetime.
+  describe('desktop screenshot lifetime', () => {
+    let tempRoot: string;
+    let pathSpy: MockInstance<typeof app.getPath>;
+    let files: string[];
+    beforeEach(() => {
+      tempRoot = mkdtempSync(path.join(os.tmpdir(), 'cindy-capture-test-'));
+      const getPath = app.getPath;
+      pathSpy = vi.spyOn(app, 'getPath').mockImplementation((name) => name === 'temp' ? tempRoot : getPath(name));
+      files = [];
+      mcpCallToolMock.mockImplementation(async ({ name, arguments: args }) => {
+        if (name !== 'get_desktop_state') return { structuredContent: { ok: true } };
+        const file = args.screenshot_out_file as string;
+        writeFileSync(file, 'capture');
+        files.push(file);
+        return { structuredContent: { capture_id: file, screenshot_frame_valid: true, screenshot_file_path: file } };
+      });
+    });
+    afterEach(async () => {
+      await cleanupAllComputerDriverSessions();
+      pathSpy.mockRestore();
+      rmSync(tempRoot, { recursive: true, force: true });
+    });
+
+    it('replaces generated files per session and preserves explicit exports', async () => {
+      await callComputerDriverTool('get_desktop_state', {}, { sessionId: 'capture-a' });
+      await callComputerDriverTool('get_desktop_state', {}, { sessionId: 'capture-b' });
+      await callComputerDriverTool('get_desktop_state', {}, { sessionId: 'capture-a' });
+      expect(() => readFileSync(files[0])).toThrow(expect.objectContaining({ code: 'ENOENT' }));
+      expect(readFileSync(files[1], 'utf8')).toBe('capture');
+      expect(readFileSync(files[2], 'utf8')).toBe('capture');
+      const exported = path.join(tempRoot, 'keep.png');
+      await callComputerDriverTool('get_desktop_state', { screenshot_out_file: exported }, { sessionId: 'capture-a' });
+      expect(() => readFileSync(files[2])).toThrow(expect.objectContaining({ code: 'ENOENT' }));
+      await cleanupComputerDriverSession('capture-a');
+      expect(readFileSync(exported, 'utf8')).toBe('capture');
+      expect(readFileSync(files[1], 'utf8')).toBe('capture');
+      await cleanupAllComputerDriverSessions();
+      expect(() => readFileSync(files[1])).toThrow(expect.objectContaining({ code: 'ENOENT' }));
+      expect(readFileSync(exported, 'utf8')).toBe('capture');
+    });
+
+    it.each(['unavailable', 'error', 'cancelled'])('removes generated files after a read is %s', async (outcome) => {
+      const controller = new AbortController();
+      const capture = mcpCallToolMock.getMockImplementation()!;
+      mcpCallToolMock.mockImplementation(async (call, ...rest) => {
+        const result = await capture(call, ...rest);
+        if (call.name !== 'get_desktop_state') return result;
+        if (outcome === 'error') throw new Error('capture failed');
+        if (outcome === 'cancelled') controller.abort();
+        if (outcome === 'unavailable') result.structuredContent.screenshot_frame_valid = false;
+        return result;
+      });
+      await callComputerDriverTool('get_desktop_state', {}, { sessionId: 'capture-failure', signal: controller.signal }).catch(() => undefined);
+      expect(files).toHaveLength(1);
+      expect(() => readFileSync(files[0])).toThrow(expect.objectContaining({ code: 'ENOENT' }));
+    });
+
+    it.each([false, true])('cleans a late read without deleting its successor (session closed: %s)', async (close) => {
+      const entered = createDeferred<void>();
+      const release = createDeferred<void>();
+      const capture = mcpCallToolMock.getMockImplementation()!;
+      let first = true;
+      mcpCallToolMock.mockImplementation(async (call, ...rest) => {
+        if (call.name === 'get_desktop_state' && first) {
+          first = false;
+          entered.resolve();
+          await release.promise;
+        }
+        return capture(call, ...rest);
+      });
+      const context = { sessionId: 'capture-race' };
+      const pending = callComputerDriverTool('get_desktop_state', {}, context);
+      await entered.promise;
+      if (close) await cleanupComputerDriverSession(context.sessionId);
+      await callComputerDriverTool('get_desktop_state', {}, context);
+      release.resolve();
+      await pending;
+      expect(readFileSync(files[0], 'utf8')).toBe('capture');
+      expect(() => readFileSync(files[1])).toThrow(expect.objectContaining({ code: 'ENOENT' }));
+      await cleanupComputerDriverSession(context.sessionId);
+      expect(() => readFileSync(files[0])).toThrow(expect.objectContaining({ code: 'ENOENT' }));
+    });
+  });
+
   let agentRevisionSpy: ReturnType<typeof vi.spyOn>;
   beforeEach(async () => {
     // Each test starts with a fresh process input history; cleanup of a driver

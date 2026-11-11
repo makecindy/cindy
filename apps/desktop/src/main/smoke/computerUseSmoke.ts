@@ -132,9 +132,10 @@ export async function runComputerUseSmokeIfRequested(mainWindow?: BrowserWindow)
       check(content.x >= display.x && content.y >= display.y
         && content.x + content.width <= display.x + display.width
         && content.y + content.height <= display.y + display.height, 'fixture is inside primary display');
-      const captureArgs = { max_image_dimension: 1600, screenshot_out_file: path.join(root, 'desktop.png') };
+      const captureArgs = { max_image_dimension: 1600 };
       const capture = await call('get_desktop_state', { ...captureArgs, session_goal: 'Test desktop pointer' });
       check(capture.ok && capture.data?.capture_id, 'desktop capture returns a credential');
+      check((await fs.stat(capture.data.screenshot_file_path)).size > 0, 'generated desktop screenshot is readable');
       const pointer = {
         target: { kind: 'desktop', display_id: 'primary' },
         capture_id: capture.data.capture_id,
@@ -144,6 +145,8 @@ export async function runComputerUseSmokeIfRequested(mainWindow?: BrowserWindow)
       };
       const fresh = await call('get_desktop_state', captureArgs);
       check(fresh.ok && fresh.data?.capture_id !== capture.data.capture_id, 'new desktop capture replaces the credential');
+      check(!await fs.stat(capture.data.screenshot_file_path).then(() => true, () => false),
+        'superseded desktop screenshot is removed');
       const stale = await call('click', pointer);
       check(!stale.ok, 'old desktop capture is refused');
       check(await window.webContents.executeJavaScript("document.getElementById('count').textContent") === '0', 'refused capture sent no click');
@@ -175,6 +178,14 @@ export async function runComputerUseSmokeIfRequested(mainWindow?: BrowserWindow)
       check(dragged.ok, 'desktop drag is delivered');
       check(Number(await window.webContents.executeJavaScript("document.getElementById('desktop-drag').value")) >= 80,
         'desktop drag moved own slider to the far end');
+      await cleanupComputerDriverSession(sessionId);
+      check(!await fs.stat(after.data.screenshot_file_path).then(() => true, () => false),
+        'session cleanup removes the last generated desktop screenshot');
+      const exportPath = path.join(root, 'exported-desktop.png');
+      const exported = await call('get_desktop_state', { ...captureArgs, screenshot_out_file: exportPath });
+      check(exported.ok, 'explicit desktop screenshot export succeeds');
+      await cleanupComputerDriverSession(sessionId);
+      check((await fs.stat(exportPath)).size > 0, 'session cleanup preserves explicit desktop exports');
       report.ok = true;
       report.mode = 'desktop-pointer';
       return;
