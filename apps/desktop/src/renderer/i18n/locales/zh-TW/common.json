@@ -9362,6 +9362,9 @@
     }
   },
   "quotaCard": {
+    "codexRefreshFailed": "ChatGPT 配額更新失敗，請重試讀取。其他用量資訊仍會保留",
+    "retryQuota": "重試讀取配額",
+    "retryingQuota": "正在讀取配額…",
     "usageCritical": "用量較高",
     "usageWarning": "用量偏高",
     "usageTitle": "用量明細",
@@ -11792,7 +11795,7 @@
       "remove": "移除",
       "removeAria": "移除 {{platform}}",
       "empty": "新增你已有的機器人，或在下方連接個人微信，{{name}} 就會在那裡回覆。",
-      "externalNote": "傳訊息給這個機器人的人都是在和 {{name}} 對話。你自己的訊息依 {{name}} 的權限執行；其他人各有一條隱藏任務，權限受限。",
+      "externalNote": "Telegram 和飛書/Lark 繫結後只接收主人的私訊。群組依各平台的參與設定接收訊息，工具沿用 {{name}} 的權限。獨立任務共用資料與記憶。",
       "sharedMemoryNote": "{{name}} 會把這裡和其它對話裡的資訊一起使用。想隔開記憶，請換一位夥伴。",
       "groups": {
         "title": "群組",

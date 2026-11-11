@@ -11,6 +11,9 @@ const initial: BotGroupPlanView = {
   workDir: null, branch: null, createdAt: 1, updatedAt: 1,
   steps: names.map((botName, position) => ({ position, botId: `bot-${position}`, botName, task: '',
     status: position === 0 ? 'done' : position === 1 ? ctx.case === 'waiting' ? 'done' : 'running' : 'pending',
+    // #9909: a finished turn that published no message answered NO_REPLY and reads as skipped.
+    ...(position === 0 && ctx.case === 'no-reply' ? { resultMessageId: null } : {}),
+    ...(position === 0 && ctx.case !== 'no-reply' && ctx.case !== 'legacy' ? { resultMessageId: 'answered-0' } : {}),
     ...(position === 1 && ctx.case !== 'legacy' ? { executionId: 'queued-attempt', executionStatus: ctx.case === 'running' ? 'running' : 'queued' } : {}),
   })),
 };

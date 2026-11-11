@@ -135,6 +135,7 @@ import {
   readPersistedWindowMaximized,
   type MainWindowMaximizeRecoveryController,
 } from './mainWindowMaximizeRecovery';
+import { installWindowsTransparentTitleBar } from './windowsTransparentTitleBar';
 import {
   commitReplacedNormalBounds,
   fitReplacementStartupBounds,
@@ -4447,6 +4448,9 @@ const createWindow = () => {
     },
   });
   markAppContentWindow(mainWindow);
+  installWindowsTransparentTitleBar(mainWindow, () => {
+    mainWindowMaximizeRecoveryController?.notifyUserUnmaximizeIntent();
+  });
   installSelectionContextMenu(mainWindow);
   installWindowResponsivenessDiagnostics(mainWindow, { label: 'main' });
   mainWindowRef = mainWindow;

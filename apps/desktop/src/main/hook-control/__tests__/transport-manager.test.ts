@@ -3602,6 +3602,78 @@ describe('官方飞书 / Lark provider lane', () => {
     expect(dispatcher.handleDispatch).toHaveBeenCalledTimes(2);
   });
 
+  // 测试价值：公用飞书的 task.dispatch 入口必须按各自已确认的账号绑定派发。
+  // #9898 的自建 bot 私聊收紧不能变成公用应用的单一 owner；原测试只有一个 manager。
+  // 最小输入为同 app 的 A/B 两份绑定与两条私聊，交叉投递必须拒绝；unit，纯内存帧。
+  // 这里不模拟 OAuth 成功，也不代替真实飞书双账号互发验收。
+  it('同一公用飞书应用中已绑定的 A/B 私聊分别派发，解绑 B 不影响 A', () => {
+    const actors = ['a', 'b'].map((id) => {
+      const dispatcher = stubDispatcher();
+      const { manager, transports } = feishuLaneHarness({
+        dispatcher,
+        getAccountFingerprint: () => `account-${id}`,
+        deviceInfo: () => ({ deviceId: `device-${id}`, deviceName: `Device ${id}` }),
+      }, { feishuEnabled: true });
+      manager.sync();
+      const transport = transports[0]!;
+      transport.onWelcome?.({ serverName: 'feishu-hook', features: FEISHU_FEATURES });
+      transport.onStatus('connected', null);
+      const binding = {
+        ...FEISHU_CONFIRMED,
+        bindingId: `binding-${id}`,
+        principalId: `ou_${id}`,
+      };
+      transport.onMessage(makeProviderBindState(binding), () => true);
+      return { id, dispatcher, manager, transport, binding };
+    });
+    const [a, b] = actors;
+    const deliver = (actor: typeof a, principalId: string, requestId: string): HookMessage[] => {
+      const replies: HookMessage[] = [];
+      actor.transport.onMessage(makeTaskDispatch({
+        requestId,
+        externalKey: `feishu:dm:cli_app:${principalId}:g0`,
+        workspace: 'chat',
+        prompt: requestId,
+        source: { im: 'feishu' },
+      }), (reply) => { replies.push(reply); return true; });
+      return replies;
+    };
+
+    for (const actor of actors) {
+      expect(deliver(actor, actor.binding.principalId, `own-${actor.id}`)).toEqual([]);
+      expect(actor.dispatcher.handleDispatch).toHaveBeenCalledWith(
+        expect.stringContaining(`account-${actor.id}:feishu`),
+        expect.objectContaining({
+          requestId: `own-${actor.id}`,
+          externalKey: `feishu:dm:cli_app:ou_${actor.id}:g0`,
+        }),
+        expect.any(Function),
+      );
+    }
+    for (const [recipient, sender] of [[a, b], [b, a]]) {
+      const requestId = `cross-${sender.id}-to-${recipient.id}`;
+      expect(deliver(recipient, sender.binding.principalId, requestId)).toEqual([
+        expect.objectContaining({
+          type: 'task.ack',
+          payload: expect.objectContaining({ requestId, result: 'rejected', reason: 'invalid' }),
+        }),
+      ]);
+      expect(recipient.dispatcher.handleDispatch).toHaveBeenCalledTimes(1);
+    }
+
+    b.transport.onMessage(makeProviderBindUpdate({
+      ...b.binding,
+      state: 'revoked',
+      reason: 'user-revoked',
+      actions: ['retry'],
+    }), () => true);
+    expect(deliver(b, b.binding.principalId, 'revoked-b')).toEqual([]);
+    expect(b.dispatcher.handleDispatch).toHaveBeenCalledTimes(1);
+    expect(deliver(a, a.binding.principalId, 'still-active-a')).toEqual([]);
+    expect(a.dispatcher.handleDispatch).toHaveBeenCalledTimes(2);
+    expect(a.manager.snapshot().feishu.binding?.bindingId).toBe(a.binding.bindingId);
+  });
+
   it.each([
     [
       'Feishu authorize page',
