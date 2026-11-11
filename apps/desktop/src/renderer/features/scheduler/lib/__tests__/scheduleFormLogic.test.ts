@@ -1083,6 +1083,13 @@ describe('scheduleToUserCreateInput', () => {
       agentKind: 'claude-code', ...choice } as Schedule;
     expect(scheduleToUserCreateInput(original)).toMatchObject(choice);
   });
+
+  // 复制不带走前置脚本;门若照搬,副本没有任何信号来源,每轮空跳且不报错。
+  it('does not keep the gate when the signal came from a pre-run hook the copy leaves behind', () => {
+    const original = { id: 'project-check', name: 'Check', source: 'project', agentKind: 'claude-code',
+      silentWhenIdle: true, programChangeGate: true, preRunHook: { command: 'node check.mjs' } } as Schedule;
+    expect(scheduleToUserCreateInput(original)).toMatchObject({ silentWhenIdle: true, programChangeGate: false });
+  });
 });
 
 

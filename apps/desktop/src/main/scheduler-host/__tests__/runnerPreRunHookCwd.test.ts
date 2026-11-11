@@ -245,6 +245,17 @@ describe('MakerScheduleRunner pre-run hook cwd 解析', () => {
     expect(notifier.notify).not.toHaveBeenCalled();
   });
 
+  // PR #8285：main 新增 webhook 触发后，外部事件发起的一轮没有 hook 也不是「没信号」。
+  // 最小失败输入：带门、无 hook 的检查 + ctx.webhook；修复前在门上直接 skipped。
+  it('a webhook event is a program signal for a gated check', async () => {
+    const { runner } = createRunner(vi.fn() as never);
+    const result = runner.fire(
+      baseSchedule({ silentWhenIdle: true, programChangeGate: true, preRunHook: undefined }),
+      { ...createFireContext(), webhook: { source: 'generic' } as never },
+    ).then((value) => value.resultText, (error: Error) => error.message);
+    expect(await result).not.toBe('skipped: no program change signal; model not started');
+  });
+
   it('continuing an interrupted gated check does not treat the cleared hook as no signal', async () => {
     mocks.getSessionRowSnapshot.mockRejectedValue(new Error('past-gate'));
     const { runner } = createRunner(vi.fn() as never);
